@@ -195,10 +195,12 @@ def render_tex(
     sections_data = []
     for sec in hydrated.sections:
         qs = _build_section_questions(sec.questions, meta)
+        render_type = "text" if sec.type != "text" and not qs else sec.type
         sections_data.append(
             {
                 "section_id": sec.section_id,
-                "type": sec.type,
+                "type": render_type,
+                "actual_type": sec.type,
                 "score_per_item": sec.score_per_item,
                 "questions": qs,
                 "describe": sec.describe,
