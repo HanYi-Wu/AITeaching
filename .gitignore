@@ -36,6 +36,8 @@ venv/
 **/llm_overrides.json
 examples/web_sample_project/.solaire
 **/.solaire/previews/
+**/.solaire/platform.db
+**/.solaire/platform_secret
 *.docx
 
 # Rust / Tauri（src-tauri）

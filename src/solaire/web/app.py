@@ -34,7 +34,9 @@ from solaire.primebrush.api import parse_primebrush, render as render_primebrush
 
 from solaire.web import bundled_paths, extension_registry, help_docs, recent_projects, state, system_tools
 from solaire.web.agent_api import router as agent_router
+from solaire.web.auth_api import router as auth_router
 from solaire.web.bank_exchange import export_bank_exchange_zip, import_bank_exchange_zip
+from solaire.web.paper_api import router as paper_router
 from solaire.web.result_service import (
     compute_statistics,
     delete_score_batch,
@@ -141,6 +143,7 @@ from solaire.web.exam_service import (
     write_preview_exam_yaml,
 )
 from solaire.web.project_layout import ensure_project_layout
+from solaire.web.platform_db import init_platform_db
 from solaire.web.security import (
     assert_within_project,
     content_disposition_attachment,
@@ -149,6 +152,7 @@ from solaire.web.security import (
     unique_child_dir,
 )
 from solaire.web.result_service import ResultServiceAdapter
+from solaire.web.school_api import router as school_router
 from solaire.edu_analysis.ports import configure as _configure_edu_analysis
 from solaire.web.remediation_service import create_remediation_draft, plan_remediation_draft
 
@@ -179,6 +183,9 @@ def _resolve_under_templates(root: Path, rel: str) -> Path:
 
 app = FastAPI(title="Solaire Web", version="0.1.0")
 app.include_router(agent_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(school_router, prefix="/api")
+app.include_router(paper_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
@@ -639,6 +646,7 @@ async def project_pick_open() -> dict[str, Any]:
     if not root.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
     ensure_project_layout(root)
+    init_platform_db(root)
     state.set_root(root)
     recent_projects.record_project_opened(root)
     return {"ok": True, "root": str(root)}
@@ -677,6 +685,7 @@ def project_open(body: ProjectOpenBody) -> dict[str, Any]:
     if not root.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
     ensure_project_layout(root)
+    init_platform_db(root)
     state.set_root(root)
     recent_projects.record_project_opened(root)
     return {"ok": True, "root": str(root)}
@@ -699,9 +708,11 @@ def project_create(body: ProjectCreateBody) -> dict[str, Any]:
             )
         shutil.copytree(src, root)
         ensure_project_layout(root)
+        init_platform_db(root)
     else:
         root.mkdir(parents=False)
         ensure_project_layout(root)
+        init_platform_db(root)
         readme = root / "templates" / "README.txt"
         readme.parent.mkdir(parents=True, exist_ok=True)
         readme.write_text("在此目录放置 template.yaml 与 LaTeX 基架（与 exam 解耦）。\n", encoding="utf-8")

@@ -4,9 +4,13 @@ import {
   BarChart3,
   BookMarked,
   BookOpen,
+  ClipboardList,
   FileStack,
+  FolderOpen,
   Layers,
+  LogOut,
   Network,
+  Plus,
   ScrollText,
   Sparkles,
   type LucideIcon,
@@ -21,6 +25,13 @@ import { ToolBarProvider, useToolBar } from "./contexts/ToolBarContext";
 import { AnalysisWorkspace } from "./pages/AnalysisWorkspace";
 import { HelpWorkspace } from "./pages/HelpWorkspace";
 import { LogWorkspace } from "./pages/LogWorkspace";
+import { AdminWorkspace } from "./pages/platform/AdminWorkspace";
+import { PapersWorkspace } from "./pages/platform/PapersWorkspace";
+import { PlatformLogin } from "./pages/platform/PlatformLogin";
+import { PlatformShell } from "./pages/platform/PlatformShell";
+import { SchoolWorkspace } from "./pages/platform/SchoolWorkspace";
+import { StudentWorkspace } from "./pages/platform/StudentWorkspace";
+import { TeacherWorkspace } from "./pages/platform/TeacherWorkspace";
 import { SettingsWorkspace } from "./pages/SettingsWorkspace";
 import { WelcomePage } from "./pages/WelcomePage";
 import { apiGet, apiPost } from "./api/client";
@@ -30,6 +41,15 @@ import { cn } from "./lib/utils";
 import { isTauriShell } from "./lib/tauriEnv";
 import type { AppPage } from "./app/appPages";
 import { BankRoute, ComposeRoute, GraphRoute, TemplateRoute } from "./app/routes";
+import {
+  getCurrentUser,
+  getPlatformStatus,
+  logoutPlatform,
+  setPlatformProjectRoot,
+  type PlatformStatus,
+  type PlatformUser,
+} from "./platform/auth";
+import { resolvePlatformRoute } from "./platform/routing";
 import type { ProjectInfo } from "./types/project";
 
 export default function App() {
@@ -53,6 +73,10 @@ function AppShell() {
   const [composeOpenExamId, setComposeOpenExamId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [assistantOverlayHost, setAssistantOverlayHost] = useState<HTMLDivElement | null>(null);
+  const [platformStatus, setPlatformStatus] = useState<PlatformStatus | null>(null);
+  const [currentUser, setCurrentUser] = useState<PlatformUser | null>(null);
+  const [platformLoading, setPlatformLoading] = useState(true);
+  const [adminProjectMode, setAdminProjectMode] = useState(false);
 
   const refreshInfo = useCallback(async () => {
     try {
@@ -67,6 +91,35 @@ function AppShell() {
   useEffect(() => {
     void refreshInfo();
   }, [refreshInfo]);
+
+  useEffect(() => {
+    setPlatformProjectRoot(info?.bound ? info.root : null);
+  }, [info?.bound, info?.root]);
+
+  const refreshPlatform = useCallback(async () => {
+    setPlatformLoading(true);
+    try {
+      setErr(null);
+      const status = await getPlatformStatus();
+      setPlatformStatus(status);
+      if (status.admin_exists) {
+        const me = await getCurrentUser();
+        setCurrentUser(me.user);
+      } else {
+        setCurrentUser(null);
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setPlatformStatus(null);
+      setCurrentUser(null);
+    } finally {
+      setPlatformLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPlatform();
+  }, [refreshPlatform]);
 
   /**
    * 侧栏开关生命周期：
@@ -142,10 +195,28 @@ function AppShell() {
       await apiPost("/api/project/close", {});
       await refreshInfo();
       setPage("compose");
+      setAdminProjectMode(false);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
   }, [refreshInfo]);
+
+  const onAuthenticated = useCallback((user: PlatformUser) => {
+    setCurrentUser(user);
+    setAdminProjectMode(false);
+    setPage(user.role === "teacher" ? "compose" : user.role);
+  }, []);
+
+  const onLogout = useCallback(async () => {
+    try {
+      await logoutPlatform();
+    } finally {
+      setCurrentUser(null);
+      setAdminProjectMode(false);
+      setPage("compose");
+      setSidebarOpen(false);
+    }
+  }, [setSidebarOpen]);
 
   const openRecentPath = useCallback(
     async (path: string) => {
@@ -159,6 +230,14 @@ function AppShell() {
     },
     [refreshInfo],
   );
+
+  const platformRoute = resolvePlatformRoute({
+    projectBound: Boolean(info?.bound),
+    loading: platformLoading,
+    adminExists: Boolean(platformStatus?.admin_exists),
+    userRole: currentUser?.role ?? null,
+    adminProjectMode,
+  });
 
   return (
     <div
@@ -188,12 +267,75 @@ function AppShell() {
       />
 
       <div className="relative flex min-h-0 flex-1">
-        {!info?.bound ? (
+        {platformRoute === "welcome" ? (
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <WelcomePage onProjectReady={() => void refreshInfo()} onError={(msg) => setErr(msg)} />
           </div>
+        ) : platformRoute === "loading" ? (
+          <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-sm text-slate-500">
+            正在加载平台权限...
+          </div>
+        ) : platformRoute === "bootstrap" ? (
+          <PlatformLogin mode="bootstrap" onAuthenticated={onAuthenticated} onError={setErr} />
+        ) : platformRoute === "login" ? (
+          <PlatformLogin mode="login" onAuthenticated={onAuthenticated} onError={setErr} />
+        ) : platformRoute === "admin" && currentUser ? (
+          <AdminWorkspace
+            user={currentUser}
+            onLogout={() => void onLogout()}
+            onOpenTeacherWorkspace={() => {
+              setAdminProjectMode(true);
+              setPage("compose");
+            }}
+            onError={setErr}
+          />
+        ) : platformRoute === "school" && currentUser ? (
+          <SchoolWorkspace user={currentUser} onLogout={() => void onLogout()} onError={setErr} />
+        ) : platformRoute === "student" && currentUser ? (
+          <StudentWorkspace user={currentUser} onLogout={() => void onLogout()} />
+        ) : currentUser && platformRoute === "teacher" && !info?.bound ? (
+          <PlatformShell
+            roleLabel="教师端"
+            title={currentUser.display_name || currentUser.username}
+            subtitle="登录态已进入平台；打开或新建教学工程后可以组卷、管理试卷和分析成绩。"
+            userName={currentUser.username}
+            onLogout={() => void onLogout()}
+            actions={
+              <>
+                <button
+                  type="button"
+                  onClick={() => void openProjectPicker()}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  打开工程
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewProjectOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  <Plus className="h-4 w-4" />
+                  新建工程
+                </button>
+              </>
+            }
+          >
+            <NewProjectDialog
+              open={newProjectOpen}
+              onOpenChange={setNewProjectOpen}
+              onProjectReady={() => void refreshInfo()}
+              onError={setErr}
+            />
+            <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-base font-semibold text-slate-950">教学工程未打开</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                平台账号、学校、教师、班级和学生数据已经改为全局管理；试题库、模板、导出的试卷和成绩文件仍需要一个本地教学工程作为内容目录。
+              </p>
+            </div>
+          </PlatformShell>
         ) : (
-          <>
+          <TeacherWorkspace>
             <aside className="flex w-16 shrink-0 flex-col border-r border-slate-800 bg-slate-900">
               <nav className="flex flex-1 flex-col gap-1 p-2">
                 <div className="flex flex-1 flex-col gap-1">
@@ -220,6 +362,14 @@ function AppShell() {
                     label={t("app:nav.compose")}
                     active={page === "compose"}
                     onClick={() => setPage("compose")}
+                  />
+                  <SidebarNavButton
+                    icon={ClipboardList}
+                    label="试卷"
+                    active={page === "papers"}
+                    onClick={() => setPage("papers")}
+                    testId="nav-papers"
+                    title="试卷管理"
                   />
                   <SidebarNavButton
                     icon={BarChart3}
@@ -251,6 +401,12 @@ function AppShell() {
                     onClick={() => setPage("log")}
                     title={t("app:nav.logTitle")}
                   />
+                  <SidebarNavButton
+                    icon={LogOut}
+                    label="退出"
+                    onClick={() => void onLogout()}
+                    title="退出登录"
+                  />
                 </div>
               </nav>
             </aside>
@@ -258,7 +414,7 @@ function AppShell() {
             <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
               {!isTauriShell() ? (
                 <MenuBar
-                  projectRoot={info.root}
+                  projectRoot={info?.root ?? null}
                   onNewProject={() => setNewProjectOpen(true)}
                   onOpenProject={() => void openProjectPicker()}
                   onOpenRecentPath={openRecentPath}
@@ -335,6 +491,14 @@ function AppShell() {
                       onFocusConsumed={() => setGraphFocusNodeId(null)}
                     />
                   )}
+                  {page === "papers" && (
+                    <PapersWorkspace
+                      onOpenAnalysis={() => {
+                        setPage("analysis");
+                      }}
+                      onError={setErr}
+                    />
+                  )}
                   {page === "settings" && (
                     <SettingsWorkspace
                       onError={setErr}
@@ -358,7 +522,7 @@ function AppShell() {
                 <AgentSidebar projectBound mode="overlay" overlayHost={assistantOverlayHost} />
               </div>
             </div>
-          </>
+          </TeacherWorkspace>
         )}
       </div>
     </div>
@@ -372,6 +536,7 @@ function SidebarNavButton({
   disabled,
   onClick,
   title,
+  testId,
 }: {
   icon: LucideIcon;
   label: string;
@@ -379,10 +544,12 @@ function SidebarNavButton({
   disabled?: boolean;
   onClick?: () => void;
   title?: string;
+  testId?: string;
 }) {
   return (
     <button
       type="button"
+      data-testid={testId}
       title={title ?? label}
       disabled={disabled}
       onClick={disabled ? undefined : onClick}

@@ -14,8 +14,10 @@ from solaire.web.app import app, ensure_project_layout
 def web_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """FastAPI client with project root bound to tmp_path."""
     import solaire.web.state as st
+    from solaire.web import recent_projects
 
     root = tmp_path.resolve()
     ensure_project_layout(root)
     monkeypatch.setattr(st, "get_root", lambda: root)
+    monkeypatch.setattr(recent_projects, "app_data_dir", lambda: tmp_path / "appdata")
     return TestClient(app)
