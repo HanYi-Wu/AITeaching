@@ -1,0 +1,64 @@
+# PDF 输出（不纳入版本库）
+*.pdf
+
+# Node (Web UI)
+node_modules/
+
+# Python
+.cache/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+*.egg-info/
+src/solaire_education.egg-info/
+.eggs/
+dist/
+build/
+nuitka_build/
+.venv/
+venv/
+.conda-solaire/
+.pixi/
+
+# LaTeX / latexmk 中间文件
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
+*.toc
+*.xdv
+.vscode
+
+# 项目内智能助手模型参数（可能含敏感信息）
+**/llm_overrides.json
+examples/web_sample_project/.solaire
+*.docx
+
+# Rust / Tauri（src-tauri）
+primebrush-rs/target/
+src-tauri/target/
+# 本地 sidecar / 预编译二进制（按需放入，通常不提交）
+src-tauri/binaries/*.exe
+src-tauri/binaries/*.dll
+# 可选：若在此放本地证书/密钥，勿提交（取消注释即可）
+# src-tauri/**/*.pfx
+# src-tauri/**/.env
+# src-tauri/**/.env.*
+
+# 嵌入式 Python：由 scripts/stage-python-runtime.ps1 生成（embeddable + site-packages，体积大）
+# 仅跟踪 README 与本目录 .gitignore；其余见 src-tauri/runtime/python/.gitignore
+src-tauri/runtime/python/*
+!src-tauri/runtime/python/README.txt
+!src-tauri/runtime/python/.gitignore
+
+# 仅本地保留、不推送到公开仓库（产品/架构/状态快照与 Cursor 内部计划）
+/PRD.md
+/ARCHITECTURE.md
+/docs/STATUS.md
+/docs/PROJECT_MAP.md
+/.cursor/
+/.claude/
+web_sample_project

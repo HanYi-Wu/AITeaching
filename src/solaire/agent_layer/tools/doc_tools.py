@@ -1,0 +1,144 @@
+"""Document conversion tools: Word→Markdown, PDF→text, image→OCR."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from solaire.agent_layer.models import InvocationContext, ToolResult
+from solaire.common.security import assert_within_project
+from solaire.web.extension_registry import resolve_exe
+
+
+def _resolve(ctx: InvocationContext, rel: str) -> Path:
+    p = (ctx.project_root / rel).resolve()
+    assert_within_project(ctx.project_root, p)
+    return p
+
+
+def _configured_tesseract_cmd() -> str | None:
+    return resolve_exe("tesseract", "tesseract")
+
+
+def _configured_pandoc_cmd() -> str | None:
+    return resolve_exe("pandoc", "pandoc")
+
+
+def tool_doc_convert_to_markdown(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    rel = str(args.get("path") or "")
+    if not rel:
+        return ToolResult(status="failed", error_message="path 参数必填")
+    try:
+        p = _resolve(ctx, rel)
+    except Exception as e:
+        return ToolResult(status="failed", error_message=str(e))
+    if not p.is_file():
+        return ToolResult(status="failed", error_message=f"文件不存在: {rel}")
+    pandoc_exe = _configured_pandoc_cmd()
+    if pandoc_exe is None:
+        return ToolResult(
+            status="failed",
+            error_message="本机未安装文档转换组件，无法进行转换。请打开「设置 → 扩展组件」安装「文档转换」后重试。",
+        )
+    try:
+        result = subprocess.run(
+            [pandoc_exe, str(p), "-t", "markdown", "--wrap=none"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+        err_tail = (result.stderr or "")[:500]
+        if result.returncode != 0:
+            return ToolResult(status="failed", error_message=f"pandoc 转换失败: {err_tail}")
+        # Windows 下偶发 stdout 为 None（控制台/编码边界），须归一为 str 再写入文件
+        md = result.stdout if isinstance(result.stdout, str) else ""
+        if not md.strip() and err_tail.strip():
+            return ToolResult(
+                status="failed",
+                error_message=f"pandoc 未输出内容，请确认源文件格式受支持。详情：{err_tail[:500]}",
+            )
+        out_rel = str(Path(rel).with_suffix(".md"))
+        out_path = _resolve(ctx, out_rel)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(md, encoding="utf-8")
+        return ToolResult(data={
+            "source": rel,
+            "output": out_rel,
+            "chars": len(md),
+            "preview": md[:2000],
+        })
+    except subprocess.TimeoutExpired:
+        return ToolResult(status="failed", error_message="pandoc 转换超时（60秒）")
+    except Exception as e:
+        return ToolResult(status="failed", error_message=f"转换出错: {e}")
+
+
+def tool_doc_extract_pdf_text(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    rel = str(args.get("path") or "")
+    if not rel:
+        return ToolResult(status="failed", error_message="path 参数必填")
+    try:
+        p = _resolve(ctx, rel)
+    except Exception as e:
+        return ToolResult(status="failed", error_message=str(e))
+    if not p.is_file():
+        return ToolResult(status="failed", error_message=f"文件不存在: {rel}")
+    try:
+        import pdfplumber
+    except ImportError:
+        return ToolResult(
+            status="failed",
+            error_message="无法提取 PDF 文本：缺少必要的阅读组件。请使用官方安装包或维护说明补全本机运行环境后重试。",
+        )
+    try:
+        pages_text: list[str] = []
+        with pdfplumber.open(str(p)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                pages_text.append(text)
+        full = "\n\n---\n\n".join(pages_text)
+        return ToolResult(data={
+            "source": rel,
+            "pages": len(pages_text),
+            "chars": len(full),
+            "content": full[:20000],
+        })
+    except Exception as e:
+        return ToolResult(status="failed", error_message=f"PDF 提取失败: {e}")
+
+
+def tool_doc_ocr_image(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    rel = str(args.get("path") or "")
+    lang = str(args.get("lang") or "chi_sim+eng")
+    if not rel:
+        return ToolResult(status="failed", error_message="path 参数必填")
+    try:
+        p = _resolve(ctx, rel)
+    except Exception as e:
+        return ToolResult(status="failed", error_message=str(e))
+    if not p.is_file():
+        return ToolResult(status="failed", error_message=f"文件不存在: {rel}")
+    try:
+        from PIL import Image
+        import pytesseract
+    except ImportError:
+        return ToolResult(
+            status="failed",
+            error_message="无法使用文字识别：缺少必要的识别组件。请打开「设置 → 扩展组件」查看「文字识别」安装说明后重试。",
+        )
+    try:
+        configured_cmd = _configured_tesseract_cmd()
+        pytesseract.pytesseract.tesseract_cmd = configured_cmd or "tesseract"
+        img = Image.open(str(p))
+        text = pytesseract.image_to_string(img, lang=lang)
+        return ToolResult(data={
+            "source": rel,
+            "lang": lang,
+            "chars": len(text),
+            "content": text[:20000],
+        })
+    except Exception as e:
+        return ToolResult(status="failed", error_message=f"OCR 识别失败: {e}")
