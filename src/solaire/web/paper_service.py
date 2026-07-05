@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import uuid
 import json
+import asyncio
+import base64
+import binascii
+import io
+import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +17,7 @@ from solaire.web.auth_service import utc_now
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import list_exam_results
 from solaire.web.student_service import _load_exam_question_payloads
+from solaire.agent_layer.llm.router import ModelRouter, load_llm_settings
 
 DELIVERY_MODES = {"offline", "online"}
 PUBLICATION_STATUSES = {"draft", "published", "closed", "revoked"}
@@ -712,6 +719,129 @@ def _question_maps(project_root: Path, paper: dict[str, Any]) -> tuple[list[dict
     return questions, by_id, score_by_id
 
 
+def _run_async_blocking(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    box: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            box["result"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - defensive bridge for agent loop calls
+            box["error"] = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    match = re.search(r"\{.*\}", text, flags=re.S)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _clamp_score(value: object, max_score: float) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return None
+    if raw < 0:
+        return 0.0
+    if max_score > 0 and raw > max_score:
+        return max_score
+    return round(raw, 2)
+
+
+def _ocr_images(images: list[Any]) -> tuple[str, list[str]]:
+    if not images:
+        return "", []
+    try:
+        from PIL import Image
+        import pytesseract
+    except ImportError:
+        return "", ["OCR unavailable: missing Pillow or pytesseract"]
+
+    texts: list[str] = []
+    errors: list[str] = []
+    for index, image in enumerate(images, start=1):
+        if not isinstance(image, dict):
+            continue
+        data_url = str(image.get("data_url") or "")
+        if not data_url:
+            continue
+        raw = data_url.split(",", 1)[1] if "," in data_url else data_url
+        try:
+            data = base64.b64decode(raw, validate=True)
+            with Image.open(io.BytesIO(data)) as img:
+                text = pytesseract.image_to_string(img, lang="chi_sim+eng").strip()
+        except (binascii.Error, OSError, RuntimeError, ValueError) as exc:
+            errors.append(f"OCR image {index} failed: {exc}")
+            continue
+        if text:
+            texts.append(text)
+    return "\n\n".join(texts), errors
+
+
+async def _ai_grade_answer(
+    project_root: Path,
+    *,
+    question: dict[str, Any],
+    answer_text: str,
+    ocr_text: str,
+    max_score: float,
+) -> dict[str, Any] | None:
+    settings = load_llm_settings(project_root)
+    if not settings.api_key:
+        return None
+    adapter = ModelRouter(settings=settings).fast()
+    payload = {
+        "question_id": question.get("question_id"),
+        "question_header": question.get("header"),
+        "question_type": question.get("type"),
+        "question_content": question.get("content"),
+        "max_score": max_score,
+        "student_answer_text": answer_text,
+        "ocr_text": ocr_text,
+    }
+    response = await adapter.chat(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "你是考试批改助手。请根据题目、分值、学生答案和 OCR 文本给出批改建议。"
+                    "只返回 JSON：{\"suggested_score\": number|null, \"feedback\": string, \"status\": \"needs_review\"}。"
+                    "不要直接判定为最终成绩，反馈应说明老师需要复核的点。"
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        temperature=0.1,
+        max_tokens=600,
+    )
+    data = _extract_json_object(response.content or "")
+    if data is None:
+        return None
+    return {
+        "suggested_score": _clamp_score(data.get("suggested_score"), max_score),
+        "feedback": str(data.get("feedback") or "").strip() or "AI 已生成建议，请教师复核。",
+        "status": "needs_review",
+    }
+
+
 def publish_online_paper(
     root: Path,
     *,
@@ -997,7 +1127,7 @@ def suggest_ai_grades_for_attempt(
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
     _attempt = _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id)
-    questions, by_id, _score_by_id = _question_maps(project_root, paper)
+    questions, by_id, score_by_id = _question_maps(project_root, paper)
     selected = [str(qid).strip() for qid in (question_ids or []) if str(qid).strip()]
     if not selected:
         selected = [str(item.get("question_id")) for item in questions]
@@ -1017,35 +1147,74 @@ def suggest_ai_grades_for_attempt(
         ).fetchall()
         by_question = {str(row["question_id"]): row_to_dict(row) or {} for row in rows}
         suggestions: list[dict[str, Any]] = []
-        now = utc_now()
         for qid in selected:
             answer = by_question.get(qid)
             if answer is None:
                 continue
             payload = _json_payload(answer.get("answer_payload"))
             has_images = bool(payload.get("images"))
-            feedback = (
-                "图片答案需要 OCR 和教师复核；当前已生成待审核建议。"
-                if has_images
-                else "主观题答案需要教师复核；当前已生成待审核建议。"
-            )
+            ocr_text, ocr_errors = _ocr_images(payload.get("images") if isinstance(payload.get("images"), list) else [])
+            answer_text = str(payload.get("answer") or "").strip()
+            max_score = float(score_by_id.get(qid, 0.0))
+            suggestion = None
+            ai_error: str | None = None
+            try:
+                suggestion = _run_async_blocking(
+                    _ai_grade_answer(
+                        project_root,
+                        question=by_id[qid],
+                        answer_text=answer_text,
+                        ocr_text=ocr_text,
+                        max_score=max_score,
+                    )
+                )
+            except Exception as exc:
+                ai_error = str(exc)
+            if suggestion is None:
+                feedback_parts = []
+                if has_images:
+                    feedback_parts.append("图片答案需要教师复核。")
+                    if ocr_text:
+                        feedback_parts.append("已提取 OCR 文本，可作为参考。")
+                    elif ocr_errors:
+                        feedback_parts.append("OCR 未能清晰识别，请人工查看图片。")
+                else:
+                    feedback_parts.append("主观题答案需要教师复核。")
+                if ai_error:
+                    feedback_parts.append(f"AI 建议生成失败：{ai_error}")
+                elif not load_llm_settings(project_root).api_key:
+                    feedback_parts.append("未配置 AI 模型，暂不能生成自动建议。")
+                feedback = "".join(feedback_parts)
+                suggested_score = None
+                status = "needs_review"
+            else:
+                feedback = str(suggestion.get("feedback") or "AI 已生成建议，请教师复核。")
+                suggested_score = suggestion.get("suggested_score")
+                status = str(suggestion.get("status") or "needs_review")
             con.execute(
                 """
                 UPDATE student_answers
                 SET grading_status = 'needs_review',
+                    ai_suggested_score = ?,
                     ai_feedback = ?,
-                    ai_ocr_text = COALESCE(ai_ocr_text, ?),
+                    ai_ocr_text = ?,
                     responded_at = responded_at
                 WHERE attempt_id = ? AND question_id = ?
                 """,
-                (feedback, "" if not has_images else "OCR pending teacher review", attempt_id, qid),
+                (
+                    suggested_score,
+                    feedback,
+                    ocr_text or "\n".join(ocr_errors),
+                    attempt_id,
+                    qid,
+                ),
             )
             suggestions.append(
                 {
                     "question_id": qid,
-                    "suggested_score": answer.get("ai_suggested_score"),
+                    "suggested_score": suggested_score,
                     "feedback": feedback,
-                    "status": "needs_review",
+                    "status": status,
                 }
             )
     return suggestions
