@@ -1,5 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { ArrowRight, Plus, RefreshCw, School, UserPlus } from "lucide-react";
+import { apiAgentLlmSettingsGet, apiAgentSafetyModeGet, type AgentLlmSettingsResponse } from "../../api/client";
+import { ExtensionsPanel } from "../../components/ExtensionsPanel";
+import { AgentModelSettingsForm } from "../../components/settings/AgentModelSettingsForm";
 import {
   createSchool,
   createSchoolUser,
@@ -23,15 +26,24 @@ export function AdminWorkspace({ user, onLogout, onOpenTeacherWorkspace, onError
   const [schoolUsername, setSchoolUsername] = useState("");
   const [schoolPassword, setSchoolPassword] = useState("");
   const [schoolDisplayName, setSchoolDisplayName] = useState("");
+  const [llmSettings, setLlmSettings] = useState<AgentLlmSettingsResponse | null>(null);
   const [busy, setBusy] = useState(false);
+  const [aiLoading, setAiLoading] = useState(true);
 
   async function refresh() {
     onError(null);
-    const data = await listSchools();
+    setAiLoading(true);
+    const [data, llmData] = await Promise.all([
+      listSchools(),
+      apiAgentLlmSettingsGet(),
+      apiAgentSafetyModeGet().catch(() => null),
+    ]).then(([schoolData, llm]) => [schoolData, llm] as const);
     setSchools(data.schools);
+    setLlmSettings(llmData);
     if (!selectedSchoolId && data.schools.length > 0) {
       setSelectedSchoolId(data.schools[0].id);
     }
+    setAiLoading(false);
   }
 
   useEffect(() => {
@@ -104,7 +116,7 @@ export function AdminWorkspace({ user, onLogout, onOpenTeacherWorkspace, onError
       actions={actions}
       onLogout={onLogout}
     >
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
           <section>
             <div className="mb-3 flex items-center gap-2">
               <School className="h-5 w-5 text-slate-600" />
@@ -136,6 +148,23 @@ export function AdminWorkspace({ user, onLogout, onOpenTeacherWorkspace, onError
           </section>
 
           <aside className="space-y-4">
+            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="mb-3 text-sm font-semibold">AI 模型配置</h2>
+              <AgentModelSettingsForm
+                variant="settings"
+                data={llmSettings}
+                loading={aiLoading}
+                saving={busy}
+                onError={onError}
+                onReload={refresh}
+              />
+            </section>
+
+            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="mb-3 text-sm font-semibold">扩展组件</h2>
+              <ExtensionsPanel onError={onError} />
+            </section>
+
             <form onSubmit={(event) => void submitSchool(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="mb-3 text-sm font-semibold">创建学校</h2>
               <input

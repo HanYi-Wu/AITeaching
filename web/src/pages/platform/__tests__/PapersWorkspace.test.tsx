@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   revokePlatformPaperPublication: vi.fn(),
   uploadPaperScores: vi.fn(),
   analyzePlatformPaper: vi.fn(),
+  listPaperSubmissions: vi.fn(),
+  suggestAiGradesForAttempt: vi.fn(),
+  gradePaperAnswer: vi.fn(),
 }));
 
 vi.mock("../../../platform/auth", async (importOriginal) => {
@@ -27,6 +30,9 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     revokePlatformPaperPublication: mocks.revokePlatformPaperPublication,
     uploadPaperScores: mocks.uploadPaperScores,
     analyzePlatformPaper: mocks.analyzePlatformPaper,
+    listPaperSubmissions: mocks.listPaperSubmissions,
+    suggestAiGradesForAttempt: mocks.suggestAiGradesForAttempt,
+    gradePaperAnswer: mocks.gradePaperAnswer,
   };
 });
 
@@ -56,6 +62,7 @@ describe("PapersWorkspace", () => {
       classes: [{ id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: "Math", subject: "Math" }],
     });
     mocks.listPlatformPaperPublications.mockResolvedValue({ publications: [] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [] });
   });
 
   it("lists exported papers and updates online/offline delivery mode", async () => {
@@ -98,6 +105,7 @@ describe("PapersWorkspace", () => {
       expect(mocks.publishPlatformPaper).toHaveBeenCalledWith("p1", {
         class_ids: ["c1"],
         title: "Midterm",
+        submission_mode: "online",
       }),
     );
     expect((await screen.findAllByText("已发布")).length).toBeGreaterThan(0);
@@ -175,5 +183,107 @@ describe("PapersWorkspace", () => {
     expect(await screen.findByTestId("paper-analysis-completion-rate")).toHaveTextContent("50%");
     expect(screen.getByTestId("paper-analysis-switch-count")).toHaveTextContent("2");
     expect(screen.getByTestId("paper-analysis-flagged-count")).toHaveTextContent("1");
+  });
+
+  it("disables publishing until a paper has questions and sends image submission mode", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({
+      papers: [{ ...offlinePaper, paper_id: "empty", question_count: 0, delivery_mode: "online" as const }],
+    });
+
+    const { rerender } = render(<PapersWorkspace />);
+
+    expect(await screen.findByText("Midterm")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-publish")).toBeDisabled();
+
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    rerender(<PapersWorkspace />);
+    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+    await waitFor(() => expect(screen.getByTestId("paper-publish")).not.toBeDisabled());
+    await userEvent.click(screen.getByLabelText(/Class 1/));
+    await userEvent.click(screen.getByTestId("paper-submission-image-ai"));
+    await userEvent.click(screen.getByTestId("paper-publish"));
+
+    await waitFor(() =>
+      expect(mocks.publishPlatformPaper).toHaveBeenCalledWith("p1", expect.objectContaining({ submission_mode: "image_ai" })),
+    );
+  });
+
+  it("prevents selecting classes that already have an active publication", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online", status: "published" }] });
+    mocks.listPlatformPaperPublications.mockResolvedValue({
+      publications: [
+        {
+          id: "pub1",
+          paper_id: "p1",
+          status: "published",
+          title: "Managed Publication",
+          class_ids: ["c1"],
+          class_names: ["Class 1"],
+          attempt_count: 0,
+          submitted_count: 0,
+          proctor_event_count: 0,
+        },
+      ],
+    });
+
+    render(<PapersWorkspace />);
+
+    const checkbox = await screen.findByTestId("paper-class-c1");
+    expect(checkbox).toBeDisabled();
+    expect(screen.getByText("已发布到该班")).toBeInTheDocument();
+  });
+
+  it("lets a teacher review image submissions with AI suggestions and manual scores", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({
+      submissions: [
+        {
+          attempt_id: "a1",
+          publication_id: "pub1",
+          student_name: "Student One",
+          student_no: "S001",
+          status: "submitted",
+          score: null,
+          max_score: 10,
+          answers: [
+            {
+              question_id: "math/q1",
+              header: "1.1",
+              score_per_item: 5,
+              score: null,
+              grading_status: "pending",
+              feedback: null,
+              ai_suggested_score: null,
+              ai_feedback: null,
+              images: [{ name: "answer.png", mime_type: "image/png", data_url: "data:image/png;base64,ZmFrZQ==" }],
+            },
+          ],
+        },
+      ],
+    });
+    mocks.suggestAiGradesForAttempt.mockResolvedValue({
+      suggestions: [{ question_id: "math/q1", suggested_score: 3, feedback: "AI suggestion", status: "needs_review" }],
+    });
+    mocks.gradePaperAnswer.mockResolvedValue({
+      answer: { question_id: "math/q1", score: 4, feedback: "Reviewed", grading_status: "reviewed" },
+    });
+
+    render(<PapersWorkspace />);
+
+    expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByTestId("paper-load-submissions"));
+    expect(await screen.findByText("Student One")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("paper-ai-grade-a1"));
+    await waitFor(() => expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledWith("p1", "a1", ["math/q1"]));
+    await userEvent.clear(screen.getByTestId("paper-grade-math/q1"));
+    await userEvent.type(screen.getByTestId("paper-grade-math/q1"), "4");
+    await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
+    await waitFor(() =>
+      expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "math/q1", {
+        score: 4,
+        feedback: "AI suggestion",
+        is_correct: null,
+      }),
+    );
   });
 });

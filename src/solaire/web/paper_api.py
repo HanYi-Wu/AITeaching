@@ -12,11 +12,14 @@ from solaire.web import state
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.paper_service import (
     analyze_paper,
+    grade_paper_answer,
     list_paper_publications,
+    list_paper_submissions,
     list_teacher_classes,
     publish_online_paper,
     query_papers,
     revoke_paper_publication,
+    suggest_ai_grades_for_attempt,
     sync_paper_for_exam,
     update_paper_publication,
     update_paper_delivery_mode,
@@ -43,6 +46,7 @@ class PaperPublishBody(BaseModel):
     show_results_immediately: bool = False
     randomize_questions: bool = False
     randomize_answers: bool = False
+    submission_mode: Literal["online", "image_manual", "image_ai"] = "online"
 
 
 class PaperPublicationUpdateBody(BaseModel):
@@ -54,9 +58,21 @@ class PaperPublicationUpdateBody(BaseModel):
     status: str | None = None
 
 
+class PaperAiGradeBody(BaseModel):
+    question_ids: list[str] | None = None
+
+
+class PaperAnswerGradeBody(BaseModel):
+    score: float = Field(..., ge=0)
+    feedback: str | None = None
+    is_correct: bool | None = None
+
+
 def _raise_api_error(exc: Exception) -> None:
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, FileNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, (ValueError, sqlite3.IntegrityError)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise exc
@@ -151,6 +167,70 @@ def papers_publications(
     return {"publications": publications}
 
 
+@router.get("/papers/{paper_id}/submissions")
+def papers_submissions(
+    paper_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        submissions = list_paper_submissions(root, project_root, paper_id=paper_id, user=user)
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"submissions": submissions}
+
+
+@router.post("/papers/{paper_id}/attempts/{attempt_id}/ai-grade")
+def papers_attempt_ai_grade(
+    paper_id: str,
+    attempt_id: str,
+    body: PaperAiGradeBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        suggestions = suggest_ai_grades_for_attempt(
+            root,
+            project_root,
+            paper_id=paper_id,
+            attempt_id=attempt_id,
+            user=user,
+            question_ids=body.question_ids,
+        )
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"suggestions": suggestions}
+
+
+@router.patch("/papers/{paper_id}/attempts/{attempt_id}/answers/{question_id:path}/grade")
+def papers_attempt_answer_grade(
+    paper_id: str,
+    attempt_id: str,
+    question_id: str,
+    body: PaperAnswerGradeBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        answer = grade_paper_answer(
+            root,
+            project_root,
+            paper_id=paper_id,
+            attempt_id=attempt_id,
+            question_id=question_id,
+            user=user,
+            score=body.score,
+            feedback=body.feedback,
+            is_correct=body.is_correct,
+        )
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"answer": answer}
+
+
 @router.patch("/papers/{paper_id}/publications/{publication_id}")
 def papers_publications_update(
     paper_id: str,
@@ -208,12 +288,14 @@ def papers_publish(
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
 ) -> dict[str, Any]:
     root = require_platform_root()
+    project_root = require_content_project_root()
     try:
         publication = publish_online_paper(
             root,
             paper_id=paper_id,
             user=user,
             class_ids=body.class_ids,
+            project_root=project_root,
             title=body.title,
             description=body.description,
             start_at=body.start_at,
@@ -221,6 +303,7 @@ def papers_publish(
             show_results_immediately=body.show_results_immediately,
             randomize_questions=body.randomize_questions,
             randomize_answers=body.randomize_answers,
+            submission_mode=body.submission_mode,
         )
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)

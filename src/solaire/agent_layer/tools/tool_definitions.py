@@ -283,6 +283,47 @@ _RAW_TOOLS: list[RegisteredTool] = [
         vivace_fast_review=True,
     ),
     _fn(
+        "exam.publish_online_paper",
+        "发布已生成的试卷到指定班级，可选择线上答题、图片人工批改或图片 OCR+AI 批改提交方式。",
+        {
+            "type": "object",
+            "properties": {
+                "paper_id": {"type": "string"},
+                "class_ids": {"type": "array", "items": {"type": "string"}},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "submission_mode": {
+                    "type": "string",
+                    "enum": ["online", "image_manual", "image_ai"],
+                    "description": "online 为网页答题，image_manual 为图片提交人工批改，image_ai 为图片提交后 AI 建议批改并由教师审核。",
+                },
+                "show_results_immediately": {"type": "boolean"},
+            },
+            "required": ["paper_id", "class_ids"],
+            "additionalProperties": False,
+        },
+        exam_tools.tool_publish_online_paper,
+        ui_label="正在发布线上试卷...",
+        action_label="发布线上试卷",
+    ),
+    _fn(
+        "exam.ai_grade_submission",
+        "为某次学生提交生成 AI 批改建议；建议不会直接改分，教师仍需审核确认。",
+        {
+            "type": "object",
+            "properties": {
+                "paper_id": {"type": "string"},
+                "attempt_id": {"type": "string"},
+                "question_ids": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["paper_id", "attempt_id"],
+            "additionalProperties": False,
+        },
+        exam_tools.tool_ai_grade_submission,
+        ui_label="正在生成 AI 批改建议...",
+        action_label="生成 AI 批改建议",
+    ),
+    _fn(
         "bank.search_items",
         "在题库中按关键词或题型筛选题目，返回完整标识与内容摘要。",
         {

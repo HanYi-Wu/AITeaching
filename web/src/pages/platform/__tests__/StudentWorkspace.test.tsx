@@ -172,4 +172,100 @@ describe("StudentWorkspace", () => {
     await waitFor(() => expect(screen.getAllByText("Old Quiz").length).toBeGreaterThan(0));
     expect(screen.getByText("80%")).toBeInTheDocument();
   });
+
+  it("submits image answers when the publication requires image upload", async () => {
+    mocks.listStudentPapers.mockResolvedValue({
+      papers: [
+        {
+          publication_id: "pub-img",
+          attempt_id: "attempt-img",
+          exam_id: "image/Math",
+          title: "Image Exam",
+          subject: "Math",
+          status: "not_started",
+          question_count: 1,
+          screen_switch_count: 0,
+          time_spent_seconds: 0,
+          show_results: false,
+          submission_mode: "image_ai",
+        },
+      ],
+    });
+    mocks.listStudentResults.mockResolvedValue({ results: [] });
+    mocks.startStudentPaper.mockResolvedValue({
+      attempt: {
+        id: "attempt-img",
+        publication_id: "pub-img",
+        exam_id: "image/Math",
+        title: "Image Exam",
+        subject: "Math",
+        status: "in_progress",
+        time_spent_seconds: 0,
+        screen_switch_count: 0,
+        show_results: false,
+        submission_mode: "image_ai",
+      },
+      questions: [
+        {
+          question_id: "math/q1",
+          header: "1.1",
+          section_id: "Work",
+          score_per_item: 5,
+          type: "short_answer",
+          content: "Show your work.",
+          options: null,
+        },
+      ],
+    });
+    mocks.saveStudentAnswers.mockResolvedValue({ answer_count: 1 });
+    mocks.submitStudentAttempt.mockResolvedValue({
+      attempt: {
+        id: "attempt-img",
+        publication_id: "pub-img",
+        exam_id: "image/Math",
+        title: "Image Exam",
+        subject: "Math",
+        status: "submitted",
+        score: null,
+        max_score: 5,
+        score_percent: null,
+        time_spent_seconds: 120,
+        screen_switch_count: 0,
+        show_results: false,
+        submission_mode: "image_ai",
+      },
+    });
+
+    const originalReadAsDataURL = FileReader.prototype.readAsDataURL;
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function readAsDataURL(this: FileReader) {
+      Object.defineProperty(this, "result", { value: "data:image/png;base64,ZmFrZQ==", configurable: true });
+      this.onload?.({ target: this } as ProgressEvent<FileReader>);
+    });
+
+    try {
+      render(
+        <StudentWorkspace
+          user={{ id: "s1", role: "student", username: "stu_abcd", display_name: "Student", status: "active" }}
+          onLogout={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("Image Exam")).toBeInTheDocument();
+      await userEvent.click(screen.getByTestId("student-start-pub-img"));
+      const file = new File(["fake"], "answer.png", { type: "image/png" });
+      await userEvent.upload(await screen.findByTestId("student-image-math/q1"), file);
+      await userEvent.click(screen.getByTestId("student-submit-attempt"));
+
+      await waitFor(() =>
+        expect(mocks.saveStudentAnswers).toHaveBeenCalledWith("attempt-img", [
+          {
+            question_id: "math/q1",
+            images: [{ name: "answer.png", mime_type: "image/png", data_url: "data:image/png;base64,ZmFrZQ==" }],
+          },
+        ]),
+      );
+    } finally {
+      FileReader.prototype.readAsDataURL = originalReadAsDataURL;
+    }
+  });
 });

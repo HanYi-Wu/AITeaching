@@ -8,7 +8,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS exam_publications (
   show_results_immediately INTEGER NOT NULL DEFAULT 0,
   randomize_questions INTEGER NOT NULL DEFAULT 0,
   randomize_answers INTEGER NOT NULL DEFAULT 0,
+  submission_mode TEXT NOT NULL DEFAULT 'online',
   status TEXT NOT NULL DEFAULT 'draft',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -136,6 +137,13 @@ CREATE TABLE IF NOT EXISTS student_answers (
   answer_payload TEXT NOT NULL,
   is_correct INTEGER,
   score REAL,
+  grading_status TEXT NOT NULL DEFAULT 'pending',
+  feedback TEXT,
+  ai_suggested_score REAL,
+  ai_feedback TEXT,
+  ai_ocr_text TEXT,
+  graded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  graded_at TEXT,
   responded_at TEXT NOT NULL,
   UNIQUE(attempt_id, question_id)
 );
@@ -194,6 +202,14 @@ def init_platform_db(root: Path) -> None:
         con.executescript(SCHEMA_SQL)
         _ensure_column(con, "students", "user_id", "TEXT REFERENCES users(id) ON DELETE SET NULL")
         _ensure_column(con, "students", "initial_password", "TEXT")
+        _ensure_column(con, "exam_publications", "submission_mode", "TEXT NOT NULL DEFAULT 'online'")
+        _ensure_column(con, "student_answers", "grading_status", "TEXT NOT NULL DEFAULT 'pending'")
+        _ensure_column(con, "student_answers", "feedback", "TEXT")
+        _ensure_column(con, "student_answers", "ai_suggested_score", "REAL")
+        _ensure_column(con, "student_answers", "ai_feedback", "TEXT")
+        _ensure_column(con, "student_answers", "ai_ocr_text", "TEXT")
+        _ensure_column(con, "student_answers", "graded_by", "TEXT REFERENCES users(id) ON DELETE SET NULL")
+        _ensure_column(con, "student_answers", "graded_at", "TEXT")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

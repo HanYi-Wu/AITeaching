@@ -64,12 +64,12 @@ describe("SettingsWorkspace role gating", () => {
     });
   });
 
-  it("hides model configuration for teachers and keeps logs inside settings", async () => {
+  it("hides model and extension configuration for teachers and keeps logs inside settings", async () => {
     renderSettings("teacher");
 
-    expect(await screen.findByTestId("extensions-panel")).toBeInTheDocument();
+    expect(await screen.findByTestId("settings-log")).toBeInTheDocument();
+    expect(screen.queryByTestId("extensions-panel")).not.toBeInTheDocument();
     expect(screen.queryByTestId("model-settings-form")).not.toBeInTheDocument();
-    expect(screen.getByTestId("settings-log")).toBeInTheDocument();
     await waitFor(() => expect(mocks.apiAgentLlmSettingsGet).not.toHaveBeenCalled());
   });
 

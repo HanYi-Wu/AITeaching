@@ -20,6 +20,7 @@ import {
   updateStudentAccount,
   type PlatformUser,
   type StudentAttemptRecord,
+  type StudentAnswerImage,
   type StudentPaperRecord,
   type StudentQuestionRecord,
   type StudentResultRecord,
@@ -55,6 +56,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [activeAttempt, setActiveAttempt] = useState<StudentAttemptRecord | null>(null);
   const [questions, setQuestions] = useState<StudentQuestionRecord[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [imageAnswers, setImageAnswers] = useState<Record<string, StudentAnswerImage[]>>({});
   const [loading, setLoading] = useState(true);
   const startedAtRef = useRef<number | null>(null);
   const hiddenAtRef = useRef<number | null>(null);
@@ -147,6 +149,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setActiveAttempt(data.attempt);
       setQuestions(data.questions);
       setAnswers({});
+      setImageAnswers({});
       startedAtRef.current = Date.now();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -159,21 +162,50 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     setAnswers((current) => ({ ...current, [questionId]: value }));
   }
 
+  function readImageFile(file: File): Promise<StudentAnswerImage> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("failed to read image"));
+      reader.onload = () =>
+        resolve({
+          name: file.name,
+          mime_type: file.type,
+          data_url: String(reader.result || ""),
+        });
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function setQuestionImages(questionId: string, files: FileList | null) {
+    const selected = Array.from(files ?? []);
+    const images = await Promise.all(selected.map(readImageFile));
+    setImageAnswers((current) => ({ ...current, [questionId]: images }));
+  }
+
   async function submitActiveAttempt() {
     if (!activeAttempt) return;
     setBusy("submit");
     setMessage(null);
     try {
-      const payload = questions.map((question) => ({
-        question_id: question.question_id,
-        answer: answers[question.question_id] ?? "",
-      }));
+      const imageMode = activeAttempt.submission_mode === "image_manual" || activeAttempt.submission_mode === "image_ai";
+      const payload = questions.map((question) =>
+        imageMode
+          ? {
+              question_id: question.question_id,
+              images: imageAnswers[question.question_id] ?? [],
+            }
+          : {
+              question_id: question.question_id,
+              answer: answers[question.question_id] ?? "",
+            },
+      );
       await saveStudentAnswers(activeAttempt.id, payload);
       const elapsed = startedAtRef.current ? Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000)) : null;
       await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsed });
       setActiveAttempt(null);
       setQuestions([]);
       setAnswers({});
+      setImageAnswers({});
       startedAtRef.current = null;
       await refresh();
       setMessage("试卷已提交");
@@ -273,6 +305,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                     question={question}
                     value={answers[question.question_id] ?? ""}
                     onChange={(value) => setAnswer(question.question_id, value)}
+                    imageMode={activeAttempt.submission_mode === "image_manual" || activeAttempt.submission_mode === "image_ai"}
+                    images={imageAnswers[question.question_id] ?? []}
+                    onImagesChange={(files) => void setQuestionImages(question.question_id, files)}
                   />
                 ))}
               </div>
@@ -407,10 +442,16 @@ function QuestionAnswer({
   question,
   value,
   onChange,
+  imageMode,
+  images,
+  onImagesChange,
 }: {
   question: StudentQuestionRecord;
   value: string;
   onChange: (value: string) => void;
+  imageMode?: boolean;
+  images?: StudentAnswerImage[];
+  onImagesChange?: (files: FileList | null) => void;
 }) {
   const options = question.options ? Object.entries(question.options) : [];
   return (
@@ -421,7 +462,27 @@ function QuestionAnswer({
         <span>{question.score_per_item} 分</span>
       </div>
       <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-950">{question.content}</p>
-      {options.length > 0 ? (
+      {imageMode ? (
+        <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-3">
+          <input
+            data-testid={`student-image-${question.question_id}`}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={(event) => onImagesChange?.(event.target.files)}
+            className="block w-full text-sm text-slate-700"
+          />
+          {images && images.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+              {images.map((image) => (
+                <span key={image.name} className="rounded bg-white px-2 py-1">
+                  {image.name}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : options.length > 0 ? (
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {options.map(([key, text]) => (
             <label key={key} className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm">

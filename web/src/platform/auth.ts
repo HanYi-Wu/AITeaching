@@ -80,6 +80,14 @@ export type StudentRecord = {
   status: string;
 };
 
+export type PaperSubmissionMode = "online" | "image_manual" | "image_ai";
+
+export type StudentAnswerImage = {
+  name: string;
+  mime_type?: string | null;
+  data_url: string;
+};
+
 export type PlatformPaperRecord = {
   paper_id: string;
   exam_id: string;
@@ -122,10 +130,49 @@ export type PaperPublicationRecord = {
   show_results_immediately?: boolean;
   randomize_questions?: boolean;
   randomize_answers?: boolean;
+  submission_mode?: PaperSubmissionMode;
   start_at?: string | null;
   end_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export type PaperSubmissionAnswerRecord = {
+  question_id: string;
+  header?: string | null;
+  content?: string | null;
+  type?: string | null;
+  score_per_item?: number | null;
+  answer?: unknown;
+  images?: StudentAnswerImage[];
+  score?: number | null;
+  is_correct?: boolean | null;
+  grading_status?: string | null;
+  feedback?: string | null;
+  ai_suggested_score?: number | null;
+  ai_feedback?: string | null;
+  ai_ocr_text?: string | null;
+  responded_at?: string | null;
+};
+
+export type PaperSubmissionRecord = {
+  attempt_id: string;
+  publication_id: string;
+  paper_id?: string;
+  exam_id?: string;
+  title?: string;
+  subject?: string | null;
+  student_id?: string;
+  student_no?: string;
+  student_name?: string;
+  account_username?: string | null;
+  status: string;
+  score?: number | null;
+  max_score?: number | null;
+  submitted_at?: string | null;
+  screen_switch_count?: number;
+  submission_mode?: PaperSubmissionMode;
+  answers: PaperSubmissionAnswerRecord[];
 };
 
 export type TeacherClassAssignmentRecord = {
@@ -195,6 +242,7 @@ export type StudentPaperRecord = {
   screen_switch_count: number;
   show_results: boolean;
   question_count: number;
+  submission_mode?: PaperSubmissionMode;
 };
 
 export type StudentQuestionRecord = {
@@ -217,6 +265,7 @@ export type StudentResultRecord = StudentAttemptRecord & {
   answers: Array<{
     question_id: string;
     answer?: unknown;
+    images?: StudentAnswerImage[];
     score?: number | null;
     is_correct?: boolean | null;
     responded_at?: string | null;
@@ -686,6 +735,7 @@ export function publishPlatformPaper(
     show_results_immediately?: boolean;
     randomize_questions?: boolean;
     randomize_answers?: boolean;
+    submission_mode?: PaperSubmissionMode;
   },
 ): Promise<{ publication: PaperPublicationRecord }> {
   return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/publish`, {
@@ -732,6 +782,33 @@ export function analyzePlatformPaper(paperId: string): Promise<{ analysis: Platf
   return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/analysis`);
 }
 
+export function listPaperSubmissions(paperId: string): Promise<{ submissions: PaperSubmissionRecord[] }> {
+  return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/submissions`);
+}
+
+export function suggestAiGradesForAttempt(
+  paperId: string,
+  attemptId: string,
+  questionIds?: string[] | null,
+): Promise<{ suggestions: Array<{ question_id: string; suggested_score?: number | null; feedback?: string | null; status: string }> }> {
+  return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/attempts/${encodeURIComponent(attemptId)}/ai-grade`, {
+    method: "POST",
+    body: JSON.stringify({ question_ids: questionIds ?? null }),
+  });
+}
+
+export function gradePaperAnswer(
+  paperId: string,
+  attemptId: string,
+  questionId: string,
+  payload: { score: number; feedback?: string | null; is_correct?: boolean | null },
+): Promise<{ answer: PaperSubmissionAnswerRecord }> {
+  return platformRequest(
+    `/api/papers/${encodeURIComponent(paperId)}/attempts/${encodeURIComponent(attemptId)}/answers/${encodeURIComponent(questionId)}/grade`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+  );
+}
+
 export function uploadPaperScores(examId: string, file: File): Promise<{ batch_id: string; student_count: number; question_count: number }> {
   const fd = new FormData();
   fd.append("file", file);
@@ -750,7 +827,7 @@ export function startStudentPaper(
 
 export function saveStudentAnswers(
   attemptId: string,
-  answers: Array<{ question_id: string; answer: unknown }>,
+  answers: Array<{ question_id: string; answer?: unknown; images?: StudentAnswerImage[] }>,
 ): Promise<{ answer_count: number }> {
   return platformRequest(`/api/student/attempts/${encodeURIComponent(attemptId)}/answers`, {
     method: "POST",

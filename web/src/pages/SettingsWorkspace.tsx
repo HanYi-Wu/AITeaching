@@ -46,7 +46,7 @@ export function SettingsWorkspace({
 
   useEffect(() => {
     if (!canManageModelSettings && settingsTab === "model") {
-      setSettingsTab("extensions");
+      setSettingsTab("language");
     }
   }, [canManageModelSettings, settingsTab]);
 
@@ -145,7 +145,7 @@ export function SettingsWorkspace({
         <div>
           <h1 className="text-lg font-semibold text-slate-900">{t("title")}</h1>
           <p className="mt-1 text-sm text-slate-600">
-            {canManageModelSettings ? t("intro") : "管理界面语言、扩展组件和运行日志。"}
+            {canManageModelSettings ? t("intro") : "管理界面语言和运行日志。"}
           </p>
         </div>
         {onSwitchProject && (
@@ -259,7 +259,6 @@ export function SettingsWorkspace({
       ) : (
         <div className="mx-auto mt-6 max-w-2xl space-y-4">
           {languagePanel}
-          <ExtensionsPanel onError={onError} />
         </div>
       )}
 

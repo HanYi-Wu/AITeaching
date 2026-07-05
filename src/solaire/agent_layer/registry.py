@@ -75,7 +75,15 @@ _BANK_GRAPH: tuple[str, ...] = (
     "graph.search_nodes",
 )
 
-_ANALYSIS_FOCUS = _merge_unique(_AGENT_CORE, _FILE_RO, _SUBTASK_PIPELINE, _ALL_MEMORY, _WEB_FETCH, _ALL_ANALYSIS)
+_ANALYSIS_FOCUS = _merge_unique(
+    _AGENT_CORE,
+    _FILE_RO,
+    _SUBTASK_PIPELINE,
+    _ALL_MEMORY,
+    _WEB_FETCH,
+    _ALL_ANALYSIS,
+    ("exam.ai_grade_submission",),
+)
 _BANK_FOCUS = _merge_unique(_AGENT_CORE, _FILE_RO, _SUBTASK_PIPELINE, _WEB_FETCH, _ALL_BANK, _BANK_GRAPH)
 _GRAPH_FOCUS = _merge_unique(_AGENT_CORE, _FILE_RO, _SUBTASK_PIPELINE, _WEB_FETCH, _ALL_GRAPH, _ALL_BANK)
 _COMPOSE_FOCUS = _merge_unique(

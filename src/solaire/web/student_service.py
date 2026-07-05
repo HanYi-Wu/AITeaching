@@ -131,6 +131,7 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
         row = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
+                   ep.submission_mode,
                    pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count
             FROM student_attempts sa
@@ -151,6 +152,7 @@ def _attempt_for_student(root: Path, attempt_id: str, student_id: str) -> dict[s
         row = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
+                   ep.submission_mode,
                    pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count
             FROM student_attempts sa
@@ -183,6 +185,7 @@ def _attempt_payload(row: dict[str, Any]) -> dict[str, Any]:
         "time_spent_seconds": int(row.get("time_spent_seconds") or 0),
         "screen_switch_count": int(row.get("screen_switch_count") or 0),
         "show_results": bool(row.get("show_results_immediately")) or str(row.get("publication_status")) == "closed",
+        "submission_mode": row.get("submission_mode") or "online",
     }
 
 
@@ -261,7 +264,21 @@ def save_student_answers(
         qid = str(answer.get("question_id") or "").strip()
         if not qid:
             continue
-        rows.append((_new_id(), attempt_id, qid, json.dumps({"answer": answer.get("answer")}, ensure_ascii=False), now))
+        payload: dict[str, Any] = {}
+        if "answer" in answer:
+            payload["answer"] = answer.get("answer")
+        images = answer.get("images")
+        if isinstance(images, list):
+            payload["images"] = [
+                {
+                    "name": str(item.get("name") or "image") if isinstance(item, dict) else "image",
+                    "mime_type": str(item.get("mime_type") or "") if isinstance(item, dict) else "",
+                    "data_url": str(item.get("data_url") or "") if isinstance(item, dict) else "",
+                }
+                for item in images
+                if isinstance(item, dict) and str(item.get("data_url") or "").strip()
+            ]
+        rows.append((_new_id(), attempt_id, qid, json.dumps(payload, ensure_ascii=False), now))
     with connect(root) as con:
         con.executemany(
             """
@@ -271,7 +288,14 @@ def save_student_answers(
               answer_payload = excluded.answer_payload,
               responded_at = excluded.responded_at,
               is_correct = NULL,
-              score = NULL
+              score = NULL,
+              grading_status = 'pending',
+              feedback = NULL,
+              ai_suggested_score = NULL,
+              ai_feedback = NULL,
+              ai_ocr_text = NULL,
+              graded_by = NULL,
+              graded_at = NULL
             """,
             rows,
         )
@@ -363,8 +387,8 @@ def submit_student_attempt(
                 total += float(score)
                 scored_any = True
             con.execute(
-                "UPDATE student_answers SET is_correct = ?, score = ? WHERE attempt_id = ? AND question_id = ?",
-                (is_correct, score, attempt_id, qid),
+                "UPDATE student_answers SET is_correct = ?, score = ?, grading_status = ? WHERE attempt_id = ? AND question_id = ?",
+                (is_correct, score, "auto_scored" if score is not None else "pending", attempt_id, qid),
             )
         now = utc_now()
         final_score: float | None = round(total, 2) if scored_any else None
@@ -387,6 +411,7 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
         rows = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
+                   ep.submission_mode,
                    pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count,
                    COALESCE((SELECT SUM(duration_ms) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_duration_ms

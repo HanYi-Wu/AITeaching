@@ -26,6 +26,7 @@ router = APIRouter()
 class StudentAnswerIn(BaseModel):
     question_id: str = Field(..., min_length=1)
     answer: Any = None
+    images: list[dict[str, Any]] | None = None
 
 
 class StudentAnswersBody(BaseModel):

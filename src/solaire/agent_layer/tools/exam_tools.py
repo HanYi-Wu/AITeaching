@@ -8,6 +8,7 @@ from typing import Any
 from solaire.agent_layer.models import InvocationContext, ToolResult
 from solaire.common.security import assert_within_project
 from solaire.exam_compiler.facade import SelectedSection, load_template
+from solaire.web.platform_db import connect, default_platform_root, init_platform_db, row_to_dict
 from solaire.web.exam_service import (
     VALIDATE_EXAM_NAME,
     discard_build_yaml_backup,
@@ -20,6 +21,7 @@ from solaire.web.exam_service import (
     write_exam_yaml,
     snapshot_build_yaml_before_export,
 )
+from solaire.web.paper_service import publish_online_paper, suggest_ai_grades_for_attempt
 from solaire.web.exam_workspace_service import (
     exam_id_from_labels,
     mark_exported,
@@ -291,4 +293,93 @@ def tool_export_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResul
             "student_pdf": s_name,
             "teacher_pdf": t_name,
         },
+    )
+
+
+def _platform_actor() -> dict[str, Any] | None:
+    root = default_platform_root()
+    init_platform_db(root)
+    with connect(root) as con:
+        row = con.execute(
+            """
+            SELECT id, school_id, role, username, display_name, email, status
+            FROM users
+            WHERE status = 'active' AND role IN ('admin', 'teacher')
+            ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END
+            LIMIT 1
+            """
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    actor = _platform_actor()
+    if actor is None:
+        return ToolResult(
+            status="failed",
+            error_code="platform_user_required",
+            error_message="需要先创建管理员或教师账号，才能通过 AI 发布线上试卷。",
+        )
+    paper_id = str(args.get("paper_id") or "").strip()
+    class_ids = [str(item).strip() for item in (args.get("class_ids") or []) if str(item).strip()]
+    if not paper_id or not class_ids:
+        return ToolResult(
+            status="failed",
+            error_code="invalid_arguments",
+            error_message="paper_id 和 class_ids 不能为空。",
+        )
+    try:
+        publication = publish_online_paper(
+            default_platform_root(),
+            paper_id=paper_id,
+            user=actor,
+            class_ids=class_ids,
+            project_root=ctx.project_root,
+            title=str(args.get("title") or "").strip() or None,
+            description=str(args.get("description") or "").strip() or None,
+            submission_mode=str(args.get("submission_mode") or "online"),
+            show_results_immediately=bool(args.get("show_results_immediately")),
+        )
+    except (ValueError, PermissionError, FileNotFoundError) as e:
+        return ToolResult(status="failed", error_code="publish_failed", error_message=str(e))
+    return ToolResult(
+        status="succeeded",
+        data={"publication": publication},
+        summary_for_llm=f"已发布试卷到 {len(class_ids)} 个班级。",
+    )
+
+
+def tool_ai_grade_submission(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    actor = _platform_actor()
+    if actor is None:
+        return ToolResult(
+            status="failed",
+            error_code="platform_user_required",
+            error_message="需要先创建管理员或教师账号，才能通过 AI 批改提交。",
+        )
+    paper_id = str(args.get("paper_id") or "").strip()
+    attempt_id = str(args.get("attempt_id") or "").strip()
+    if not paper_id or not attempt_id:
+        return ToolResult(
+            status="failed",
+            error_code="invalid_arguments",
+            error_message="paper_id 和 attempt_id 不能为空。",
+        )
+    raw_qids = args.get("question_ids")
+    question_ids = [str(item).strip() for item in raw_qids if str(item).strip()] if isinstance(raw_qids, list) else None
+    try:
+        suggestions = suggest_ai_grades_for_attempt(
+            default_platform_root(),
+            ctx.project_root,
+            paper_id=paper_id,
+            attempt_id=attempt_id,
+            user=actor,
+            question_ids=question_ids,
+        )
+    except (ValueError, PermissionError, FileNotFoundError) as e:
+        return ToolResult(status="failed", error_code="ai_grade_failed", error_message=str(e))
+    return ToolResult(
+        status="succeeded",
+        data={"suggestions": suggestions},
+        summary_for_llm=f"已生成 {len(suggestions)} 条 AI 批改建议，等待教师审核。",
     )

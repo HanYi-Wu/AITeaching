@@ -39,6 +39,7 @@ import {
   listTeacherAssignedClasses,
   publishPlatformPaper,
   syncPlatformPaperFromExam,
+  type PaperSubmissionMode,
   type TeacherClassRecord,
 } from "../platform/auth";
 import type { ExamDoc, ExamWorkspaceSummary, QuestionRow, RightSelection, TemplateRow } from "../types/compose";
@@ -152,6 +153,7 @@ export function ComposeWorkspace({
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishClasses, setPublishClasses] = useState<TeacherClassRecord[]>([]);
   const [publishClassIds, setPublishClassIds] = useState<string[]>([]);
+  const [publishSubmissionMode, setPublishSubmissionMode] = useState<PaperSubmissionMode>("online");
   const [publishBusy, setPublishBusy] = useState(false);
 
   const currentExamIdRef = useRef<string | null>(null);
@@ -1327,12 +1329,17 @@ export function ComposeWorkspace({
   ]);
 
   async function openPublishDialog() {
+    if (!countsOk) {
+      onError("请先满足试卷题量要求后再发布线上试卷。");
+      return;
+    }
     setPublishBusy(true);
     onError(null);
     try {
       const data = await listTeacherAssignedClasses();
       setPublishClasses(data.classes);
       setPublishClassIds([]);
+      setPublishSubmissionMode("online");
       setPublishDialogOpen(true);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1364,6 +1371,7 @@ export function ComposeWorkspace({
       await publishPlatformPaper(synced.paper.paper_id, {
         class_ids: publishClassIds,
         title: exportLabel.trim() || synced.paper.title,
+        submission_mode: publishSubmissionMode,
       });
       setMsg("已发布为线上答题试卷");
       setPublishDialogOpen(false);
@@ -1505,7 +1513,7 @@ export function ComposeWorkspace({
         <button
           type="button"
           className="rounded-md border border-emerald-300 bg-white px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-          disabled={busy || publishBusy || !selectedTpl}
+          disabled={busy || publishBusy || !selectedTpl || !countsOk}
           onClick={() => void openPublishDialog()}
           title="发布线上试卷"
         >
@@ -1727,6 +1735,29 @@ export function ComposeWorkspace({
                   暂无可发布班级，请先在学校端给教师分配班级。
                 </p>
               ) : null}
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              {[
+                ["online", "网页答题"],
+                ["image_manual", "图片人工批改"],
+                ["image_ai", "图片 OCR+AI"],
+              ].map(([mode, label]) => (
+                <label
+                  key={mode}
+                  className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+                    publishSubmissionMode === mode ? "border-emerald-700 bg-emerald-50" : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="compose-publish-submission-mode"
+                    value={mode}
+                    checked={publishSubmissionMode === mode}
+                    onChange={() => setPublishSubmissionMode(mode as PaperSubmissionMode)}
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
             </div>
             <div className="mt-6 flex flex-wrap justify-end gap-2">
               <button

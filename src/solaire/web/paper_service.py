@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import uuid
+import json
 from pathlib import Path
 from typing import Any
 
 from solaire.web.auth_service import utc_now
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import list_exam_results
+from solaire.web.student_service import _load_exam_question_payloads
 
 DELIVERY_MODES = {"offline", "online"}
 PUBLICATION_STATUSES = {"draft", "published", "closed", "revoked"}
+SUBMISSION_MODES = {"online", "image_manual", "image_ai"}
 MAX_PAGE_SIZE = 100
 
 
@@ -607,12 +610,115 @@ def _validate_publish_classes(root: Path, user: dict[str, Any], class_ids: list[
     return unique_ids
 
 
+def _paper_exam_question_payloads(project_root: Path, paper: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    return _load_exam_question_payloads(project_root, str(paper.get("exam_id") or ""))
+
+
+def _ensure_publishable_paper(project_root: Path | None, paper: dict[str, Any]) -> None:
+    if project_root is None:
+        return
+    questions, _answer_keys = _paper_exam_question_payloads(project_root, paper)
+    if len(questions) <= 0:
+        raise ValueError("paper must contain at least one question before publish")
+
+
+def _ensure_class_not_already_published(root: Path, *, paper_id: str, class_ids: list[str]) -> None:
+    if not class_ids:
+        return
+    placeholders = ",".join("?" for _ in class_ids)
+    with connect(root) as con:
+        rows = con.execute(
+            f"""
+            SELECT c.name, c.id
+            FROM exam_publications ep
+            JOIN publication_classes pc ON pc.publication_id = ep.id
+            JOIN classes c ON c.id = pc.class_id
+            WHERE ep.paper_id = ?
+              AND ep.status <> 'revoked'
+              AND pc.class_id IN ({placeholders})
+            ORDER BY c.name
+            """,
+            (paper_id, *class_ids),
+        ).fetchall()
+    if rows:
+        class_names = ", ".join(str(row["name"] or row["id"]) for row in rows)
+        raise ValueError(f"paper already published to class: {class_names}")
+
+
+def _json_payload(value: object) -> dict[str, Any]:
+    try:
+        payload = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _answer_public_payload(row: dict[str, Any], question: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = _json_payload(row.get("answer_payload"))
+    images = payload.get("images") if isinstance(payload.get("images"), list) else []
+    return {
+        "question_id": row.get("question_id"),
+        "answer": payload.get("answer"),
+        "images": images,
+        "score": row.get("score"),
+        "is_correct": None if row.get("is_correct") is None else bool(row.get("is_correct")),
+        "grading_status": row.get("grading_status") or "pending",
+        "feedback": row.get("feedback"),
+        "ai_suggested_score": row.get("ai_suggested_score"),
+        "ai_feedback": row.get("ai_feedback"),
+        "ai_ocr_text": row.get("ai_ocr_text"),
+        "responded_at": row.get("responded_at"),
+        "header": (question or {}).get("header"),
+        "content": (question or {}).get("content"),
+        "type": (question or {}).get("type"),
+        "score_per_item": (question or {}).get("score_per_item"),
+    }
+
+
+def _paper_attempt_row(root: Path, *, paper_id: str, attempt_id: str) -> dict[str, Any]:
+    with connect(root) as con:
+        row = con.execute(
+            """
+            SELECT
+              sa.*,
+              ep.paper_id,
+              ep.title AS publication_title,
+              ep.submission_mode,
+              pr.exam_id,
+              pr.subject,
+              pr.title AS paper_title,
+              s.student_no,
+              s.display_name AS student_name,
+              u.username AS account_username
+            FROM student_attempts sa
+            JOIN exam_publications ep ON ep.id = sa.publication_id
+            JOIN paper_records pr ON pr.id = ep.paper_id
+            JOIN students s ON s.id = sa.student_id
+            LEFT JOIN users u ON u.id = s.user_id
+            WHERE sa.id = ? AND ep.paper_id = ?
+            """,
+            (attempt_id, paper_id),
+        ).fetchone()
+    data = row_to_dict(row)
+    if data is None:
+        raise ValueError("attempt not found for this paper")
+    return data
+
+
+def _question_maps(project_root: Path, paper: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
+    questions, _answer_keys = _paper_exam_question_payloads(project_root, paper)
+    by_id = {str(item.get("question_id")): item for item in questions}
+    score_by_id = {qid: float(item.get("score_per_item") or 0) for qid, item in by_id.items()}
+    return questions, by_id, score_by_id
+
+
 def publish_online_paper(
     root: Path,
     *,
     paper_id: str,
     user: dict[str, Any],
     class_ids: list[str],
+    project_root: Path | None = None,
     title: str | None = None,
     description: str | None = None,
     start_at: str | None = None,
@@ -620,12 +726,19 @@ def publish_online_paper(
     show_results_immediately: bool = False,
     randomize_questions: bool = False,
     randomize_answers: bool = False,
+    submission_mode: str = "online",
 ) -> dict[str, Any]:
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("Only teachers and admins can publish papers")
     selected_class_ids = _validate_publish_classes(root, user, class_ids)
     paper = get_paper(root, paper_id)
+    _ensure_paper_access(paper, user)
+    _ensure_publishable_paper(project_root, paper)
+    _ensure_class_not_already_published(root, paper_id=paper_id, class_ids=selected_class_ids)
+    clean_submission_mode = submission_mode.strip() or "online"
+    if clean_submission_mode not in SUBMISSION_MODES:
+        raise ValueError("submission_mode must be online, image_manual, or image_ai")
     now = utc_now()
     publication_id = _new_id()
     teacher_id = str(user["id"])
@@ -637,9 +750,9 @@ def publish_online_paper(
             """
             INSERT INTO exam_publications (
               id, paper_id, teacher_id, title, description, start_at, end_at,
-              show_results_immediately, randomize_questions, randomize_answers, status, created_at, updated_at
+              show_results_immediately, randomize_questions, randomize_answers, submission_mode, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
             """,
             (
                 publication_id,
@@ -652,6 +765,7 @@ def publish_online_paper(
                 1 if show_results_immediately else 0,
                 1 if randomize_questions else 0,
                 1 if randomize_answers else 0,
+                clean_submission_mode,
                 now,
                 now,
             ),
@@ -685,4 +799,253 @@ def publish_online_paper(
         raise RuntimeError("failed to publish paper")
     publication["class_ids"] = selected_class_ids
     publication["attempt_count"] = len(student_rows)
+    publication["submission_mode"] = clean_submission_mode
     return publication
+
+
+def list_paper_submissions(
+    root: Path,
+    project_root: Path,
+    *,
+    paper_id: str,
+    user: dict[str, Any],
+) -> list[dict[str, Any]]:
+    init_platform_db(root)
+    paper = get_paper(root, paper_id)
+    _ensure_paper_access(paper, user)
+    questions, by_id, _score_by_id = _question_maps(project_root, paper)
+    order_index = {str(item.get("question_id")): index for index, item in enumerate(questions)}
+    with connect(root) as con:
+        attempt_rows = con.execute(
+            """
+            SELECT
+              sa.*,
+              ep.paper_id,
+              ep.title AS publication_title,
+              ep.submission_mode,
+              pr.exam_id,
+              pr.subject,
+              pr.title AS paper_title,
+              s.student_no,
+              s.display_name AS student_name,
+              u.username AS account_username,
+              COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count
+            FROM student_attempts sa
+            JOIN exam_publications ep ON ep.id = sa.publication_id
+            JOIN paper_records pr ON pr.id = ep.paper_id
+            JOIN students s ON s.id = sa.student_id
+            LEFT JOIN users u ON u.id = s.user_id
+            WHERE ep.paper_id = ?
+            ORDER BY sa.submitted_at DESC, s.display_name, s.student_no
+            """,
+            (paper_id,),
+        ).fetchall()
+        answer_rows = con.execute(
+            """
+            SELECT ans.*
+            FROM student_answers ans
+            JOIN student_attempts sa ON sa.id = ans.attempt_id
+            JOIN exam_publications ep ON ep.id = sa.publication_id
+            WHERE ep.paper_id = ?
+            ORDER BY ans.responded_at
+            """,
+            (paper_id,),
+        ).fetchall()
+
+    answers_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    for row in answer_rows:
+        answer = row_to_dict(row) or {}
+        qid = str(answer.get("question_id") or "")
+        answers_by_attempt.setdefault(str(answer.get("attempt_id")), []).append(
+            _answer_public_payload(answer, by_id.get(qid)),
+        )
+
+    submissions: list[dict[str, Any]] = []
+    for row in attempt_rows:
+        attempt = row_to_dict(row) or {}
+        attempt_answers = answers_by_attempt.get(str(attempt.get("id")), [])
+        attempt_answers.sort(key=lambda item: order_index.get(str(item.get("question_id")), 999999))
+        submissions.append(
+            {
+                "attempt_id": attempt.get("id"),
+                "publication_id": attempt.get("publication_id"),
+                "paper_id": paper_id,
+                "exam_id": attempt.get("exam_id"),
+                "title": attempt.get("publication_title") or attempt.get("paper_title"),
+                "subject": attempt.get("subject"),
+                "student_id": attempt.get("student_id"),
+                "student_no": attempt.get("student_no"),
+                "student_name": attempt.get("student_name"),
+                "account_username": attempt.get("account_username"),
+                "status": attempt.get("status"),
+                "score": attempt.get("score"),
+                "max_score": attempt.get("max_score"),
+                "submitted_at": attempt.get("submitted_at"),
+                "screen_switch_count": int(attempt.get("screen_switch_count") or 0),
+                "submission_mode": attempt.get("submission_mode") or "online",
+                "answers": attempt_answers,
+            }
+        )
+    return submissions
+
+
+def _recompute_attempt_score(root: Path, *, attempt_id: str, score_by_id: dict[str, float]) -> dict[str, Any]:
+    with connect(root) as con:
+        rows = con.execute(
+            "SELECT question_id, score FROM student_answers WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchall()
+        total = 0.0
+        max_score = 0.0
+        scored_any = False
+        for row in rows:
+            score = row["score"]
+            if score is None:
+                continue
+            qid = str(row["question_id"])
+            total += float(score)
+            max_score += float(score_by_id.get(qid, 0.0))
+            scored_any = True
+        final_score = round(total, 2) if scored_any else None
+        final_max = round(max_score, 2) if scored_any else None
+        con.execute(
+            "UPDATE student_attempts SET score = ?, max_score = ? WHERE id = ?",
+            (final_score, final_max, attempt_id),
+        )
+        row = con.execute("SELECT * FROM student_attempts WHERE id = ?", (attempt_id,)).fetchone()
+    attempt = row_to_dict(row)
+    if attempt is None:
+        raise RuntimeError("failed to update attempt score")
+    return attempt
+
+
+def grade_paper_answer(
+    root: Path,
+    project_root: Path,
+    *,
+    paper_id: str,
+    attempt_id: str,
+    question_id: str,
+    user: dict[str, Any],
+    score: float,
+    feedback: str | None = None,
+    is_correct: bool | None = None,
+) -> dict[str, Any]:
+    init_platform_db(root)
+    paper = get_paper(root, paper_id)
+    _ensure_paper_access(paper, user)
+    attempt = _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id)
+    _questions, by_id, score_by_id = _question_maps(project_root, paper)
+    if question_id not in by_id:
+        raise ValueError("question not found in paper")
+    max_score = float(score_by_id.get(question_id, 0.0))
+    clean_score = float(score)
+    if clean_score < 0 or (max_score > 0 and clean_score > max_score):
+        raise ValueError("score is out of range")
+    clean_feedback = feedback.strip() if feedback and feedback.strip() else None
+    now = utc_now()
+    answer_id = _new_id()
+    with connect(root) as con:
+        con.execute(
+            """
+            INSERT INTO student_answers (
+              id, attempt_id, question_id, answer_payload, is_correct, score,
+              grading_status, feedback, graded_by, graded_at, responded_at
+            )
+            VALUES (?, ?, ?, '{}', ?, ?, 'reviewed', ?, ?, ?, ?)
+            ON CONFLICT(attempt_id, question_id) DO UPDATE SET
+              is_correct = excluded.is_correct,
+              score = excluded.score,
+              grading_status = 'reviewed',
+              feedback = excluded.feedback,
+              graded_by = excluded.graded_by,
+              graded_at = excluded.graded_at
+            """,
+            (
+                answer_id,
+                attempt_id,
+                question_id,
+                None if is_correct is None else (1 if is_correct else 0),
+                clean_score,
+                clean_feedback,
+                str(user.get("id") or ""),
+                now,
+                now,
+            ),
+        )
+        row = con.execute(
+            "SELECT * FROM student_answers WHERE attempt_id = ? AND question_id = ?",
+            (attempt_id, question_id),
+        ).fetchone()
+    _recompute_attempt_score(root, attempt_id=str(attempt["id"]), score_by_id=score_by_id)
+    answer = row_to_dict(row)
+    if answer is None:
+        raise RuntimeError("failed to grade answer")
+    return _answer_public_payload(answer, by_id.get(question_id))
+
+
+def suggest_ai_grades_for_attempt(
+    root: Path,
+    project_root: Path,
+    *,
+    paper_id: str,
+    attempt_id: str,
+    user: dict[str, Any],
+    question_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    init_platform_db(root)
+    paper = get_paper(root, paper_id)
+    _ensure_paper_access(paper, user)
+    _attempt = _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id)
+    questions, by_id, _score_by_id = _question_maps(project_root, paper)
+    selected = [str(qid).strip() for qid in (question_ids or []) if str(qid).strip()]
+    if not selected:
+        selected = [str(item.get("question_id")) for item in questions]
+    missing = [qid for qid in selected if qid not in by_id]
+    if missing:
+        raise ValueError(f"question not found in paper: {missing[0]}")
+
+    with connect(root) as con:
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM student_answers
+            WHERE attempt_id = ?
+              AND question_id IN ({','.join('?' for _ in selected)})
+            """,
+            (attempt_id, *selected),
+        ).fetchall()
+        by_question = {str(row["question_id"]): row_to_dict(row) or {} for row in rows}
+        suggestions: list[dict[str, Any]] = []
+        now = utc_now()
+        for qid in selected:
+            answer = by_question.get(qid)
+            if answer is None:
+                continue
+            payload = _json_payload(answer.get("answer_payload"))
+            has_images = bool(payload.get("images"))
+            feedback = (
+                "图片答案需要 OCR 和教师复核；当前已生成待审核建议。"
+                if has_images
+                else "主观题答案需要教师复核；当前已生成待审核建议。"
+            )
+            con.execute(
+                """
+                UPDATE student_answers
+                SET grading_status = 'needs_review',
+                    ai_feedback = ?,
+                    ai_ocr_text = COALESCE(ai_ocr_text, ?),
+                    responded_at = responded_at
+                WHERE attempt_id = ? AND question_id = ?
+                """,
+                (feedback, "" if not has_images else "OCR pending teacher review", attempt_id, qid),
+            )
+            suggestions.append(
+                {
+                    "question_id": qid,
+                    "suggested_score": answer.get("ai_suggested_score"),
+                    "feedback": feedback,
+                    "status": "needs_review",
+                }
+            )
+    return suggestions
