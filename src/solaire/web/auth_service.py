@@ -114,6 +114,50 @@ def authenticate_user(root: Path, username: str, password: str) -> dict[str, obj
     return _public_user(user)
 
 
+def update_user_credentials(
+    root: Path,
+    *,
+    user_id: str,
+    username: str | None = None,
+    current_password: str,
+    new_password: str | None = None,
+) -> dict[str, object]:
+    init_platform_db(root)
+    with connect(root) as con:
+        row = con.execute("SELECT * FROM users WHERE id = ? AND status = 'active'", (user_id,)).fetchone()
+        user = row_to_dict(row)
+        if user is None:
+            raise ValueError("active user not found")
+        if not verify_password(current_password, str(user["password_hash"])):
+            raise ValueError("current password is invalid")
+        updates: list[str] = []
+        params: list[object] = []
+        if username is not None:
+            clean_username = _validate_username(username)
+            existing = con.execute(
+                "SELECT 1 FROM users WHERE username = ? AND id <> ?",
+                (clean_username, user_id),
+            ).fetchone()
+            if existing is not None:
+                raise ValueError("username already exists")
+            updates.append("username = ?")
+            params.append(clean_username)
+        if new_password:
+            updates.append("password_hash = ?")
+            params.append(hash_password(new_password))
+        if not updates:
+            return _public_user(user)
+        updates.append("updated_at = ?")
+        params.append(utc_now())
+        params.append(user_id)
+        con.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", tuple(params))
+        updated = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    data = row_to_dict(updated)
+    if data is None:
+        raise RuntimeError("failed to update user")
+    return _public_user(data)
+
+
 def create_session(root: Path, user_id: str) -> str:
     init_platform_db(root)
     token = secrets.token_urlsafe(32)

@@ -23,7 +23,7 @@ def _norm(rel: str) -> str:
 
 
 def _is_under_agent_plans(project_root: Path, rel: str) -> bool:
-    """项目内相对路径是否位于 .solaire/agent/plans/ 下（含该目录本身下的文件）。"""
+    """内容目录相对路径是否位于 .solaire/agent/plans/ 下（含该目录本身下的文件）。"""
     raw = _norm(rel)
     if ".." in raw.split("/"):
         return False
@@ -88,7 +88,7 @@ def tool_file_write(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     if not _plan_mode_write_path_ok(ctx, rel):
         return ToolResult(
             status="failed",
-            error_message="计划模式下仅允许写入项目内 `.solaire/agent/plans/` 目录下的文件",
+            error_message="计划模式下仅允许写入内容目录 `.solaire/agent/plans/` 目录下的文件",
         )
     body = str(content)
     if ctx.session and ctx.session.plan_mode_active and _norm(rel).lower().endswith(".md"):
@@ -122,7 +122,7 @@ def tool_file_edit(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     if not _plan_mode_write_path_ok(ctx, rel):
         return ToolResult(
             status="failed",
-            error_message="计划模式下仅允许编辑项目内 `.solaire/agent/plans/` 目录下的文件",
+            error_message="计划模式下仅允许编辑内容目录 `.solaire/agent/plans/` 目录下的文件",
         )
     try:
         p = _resolve(ctx, rel)

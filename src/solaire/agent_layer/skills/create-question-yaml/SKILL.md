@@ -14,7 +14,7 @@ metadata:
 ## 工作流程
 
 1. 按字段组织单题正文（字段清单与样例见 `agent.read_skill_reference`，`name`=`create_question_yaml`，`path`=`references/yaml-template.md`）
-2. 需要参照现有题时可用 `bank.get_item` 或 `file.read` 读取项目内 YAML
+2. 需要参照现有题时可用 `bank.get_item` 或 `file.read` 读取内容目录中的 YAML
 3. 新建调用 `bank.create_item`；改题调用 `bank.update_item`
 4. 校验失败时根据返回信息逐项修正，避免猜测合法取值
 
@@ -38,4 +38,3 @@ metadata:
 ## 注意事项
 
 - 题干中若含教育绘图围栏（PrimeBrush），勿手写非法 `op`；复杂图稿可切换 `primebrush_diagrams` 技能并对照其 `references/`
-

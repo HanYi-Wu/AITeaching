@@ -1,7 +1,7 @@
 ---
 name: create_exam_template
 description: >
-  在项目内起草或修改试卷模板 YAML（小节结构、版式、默认卷面参数），写入后可用预览工具校验。
+  在内容目录中起草或修改试卷模板 YAML（小节结构、版式、默认卷面参数），写入后可用预览工具校验。
   当教师提到新建模板、改模板、试卷结构、章节分值、单栏双栏、LaTeX 基架名等关键词时激活此技能。
 metadata:
   author: solaire-builtin
@@ -14,7 +14,7 @@ metadata:
 ## 概念
 
 - **试卷模板**是 `templates/` 下的 `*.yaml`，描述「有哪些小节、每节抽几题、默认分值、版式与 LaTeX 主文件」等；**不等于**某次考试的选题结果。
-- **`template_id`** 应与文件用途一致且在项目内可区分；**`latex_base`** 指向 Jinja 主模板文件名（通常与内置或项目内 `*.tex.j2` 对应）。
+- **`template_id`** 应与文件用途一致且在内容目录中可区分；**`latex_base`** 指向 Jinja 主模板文件名（通常与内置或内容目录中的 `*.tex.j2` 对应）。
 - **`type: text`** 的小节为说明块，**`required_count` 必须为 0**。
 
 ## 参考索引（语法与示例）

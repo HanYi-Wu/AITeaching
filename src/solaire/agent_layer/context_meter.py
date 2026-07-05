@@ -22,7 +22,7 @@ def context_meter_for_session(
     *,
     project_ctx: dict[str, Any],
 ) -> dict[str, int]:
-    """基于当前会话落盘状态与项目上下文，估算下一轮请求前的上下文用量（与编排层同一套 build + 分词）。"""
+    """基于当前会话落盘状态与内容上下文，估算下一轮请求前的上下文用量（与编排层同一套 build + 分词）。"""
     settings = load_llm_settings(project_root)
     cm = ContextManager(include_subtask_tool=True)
     full_ctx = {**project_ctx, "_project_root": project_root}

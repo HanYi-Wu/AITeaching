@@ -160,9 +160,8 @@ from solaire.web.remediation_service import create_remediation_draft, plan_remed
 _configure_edu_analysis(result_port=ResultServiceAdapter())
 
 def _require_root() -> Path:
-    r = state.get_root()
-    if r is None:
-        raise HTTPException(status_code=400, detail="No project open; call POST /api/project/open first")
+    r = state.get_content_root()
+    ensure_project_layout(r)
     return r
 
 
@@ -575,8 +574,9 @@ def serve_resource_file(rel_path: str) -> FileResponse:
 
 @app.get("/api/project/info")
 def project_info() -> dict[str, Any]:
-    r = state.get_root()
-    return {"bound": r is not None, "root": str(r) if r else None}
+    r = state.get_content_root()
+    ensure_project_layout(r)
+    return {"bound": True, "root": str(r)}
 
 
 @app.get("/api/recent-projects")
@@ -674,7 +674,7 @@ async def project_pick_parent() -> dict[str, Any]:
 
 @app.post("/api/project/close")
 def project_close() -> dict[str, Any]:
-    """取消当前项目绑定，便于在界面中重新选择项目。"""
+    """取消显式内容目录绑定，之后回到默认内容目录。"""
     state.clear_root()
     return {"ok": True}
 

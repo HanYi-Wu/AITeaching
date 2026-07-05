@@ -15,7 +15,7 @@ _AGENT_PLANS_SEGMENTS = (".solaire", "agent", "plans")
 
 
 def normalize_rel_path(rel: str) -> str:
-    """项目内相对路径规范化（ POSIX、去首尾空白，非法含 .. 时返回空）。"""
+    """内容目录相对路径规范化（ POSIX、去首尾空白，非法含 .. 时返回空）。"""
     s = str(rel).replace("\\", "/").strip().strip("/")
     if not s or ".." in s.split("/"):
         return ""
@@ -54,7 +54,7 @@ def validate_plan_markdown_body(content: str) -> tuple[bool, str]:
 
 
 def validate_agent_plan_rel_path(project_root: Path, rel: str) -> tuple[bool, str]:
-    """校验项目内计划文件路径：位于 .solaire/agent/plans/ 且正文符合 harness。"""
+    """校验内容目录计划文件路径：位于 .solaire/agent/plans/ 且正文符合 harness。"""
     raw = normalize_rel_path(rel)
     if not raw:
         return False, "无效的计划文件路径"
@@ -129,7 +129,7 @@ def steps_from_plan_body(text: str) -> list[dict[str, Any]]:
 
 
 def load_plan_steps_from_rel_path(project_root: Path, rel_path: str) -> list[dict[str, Any]]:
-    """读项目内计划文件并返回 set_plan 用 steps。"""
+    """读内容目录计划文件并返回 set_plan 用 steps。"""
     rel = normalize_rel_path(rel_path)
     if not rel or ".." in rel.split("/"):
         return []

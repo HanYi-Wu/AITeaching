@@ -19,13 +19,13 @@
   },
   "menu": {
     "file": "文件",
-    "fileNew": "新建项目…",
-    "fileOpen": "打开项目…",
+    "fileNew": "新建内容库…",
+    "fileOpen": "打开内容库…",
     "fileRecent": "最近打开",
-    "fileRecentEmpty": "暂无最近项目",
+    "fileRecentEmpty": "暂无最近内容库",
     "fileSave": "保存",
     "filePreferences": "偏好设置…",
-    "fileCloseProject": "关闭当前项目",
+    "fileCloseProject": "关闭当前内容库",
     "fileWelcome": "返回欢迎页",
     "view": "视图",
     "viewAssistant": "切换智能助手"
@@ -35,7 +35,7 @@
     "dirty": "未保存"
   },
   "header": {
-    "project": "项目："
+    "project": "内容库："
   },
   "titleBar": {
     "minimize": "最小化",
@@ -44,23 +44,23 @@
     "close": "关闭"
   },
   "route": {
-    "composeSummary": "请先打开或创建项目后再组卷；绑定项目后即可使用侧栏智能助手协助校验与导出。",
-    "bankSummary": "请先打开或创建项目后再管理题库。",
-    "templateSummary": "请先打开或创建项目后再编辑试卷模板。",
-    "graphSummary": "请先打开或创建项目后再维护知识图谱。"
+    "composeSummary": "内容库就绪后即可组卷；可使用侧栏智能助手协助校验与导出。",
+    "bankSummary": "内容库就绪后即可管理题库。",
+    "templateSummary": "内容库就绪后即可编辑试卷模板。",
+    "graphSummary": "内容库就绪后即可维护知识图谱。"
   },
   "project": {
-    "openTitle": "打开项目",
+    "openTitle": "打开内容库",
     "openIntroBefore": "网页无法直接读取磁盘路径。点击下方按钮时，由",
     "openIntroStrong": "本机后端",
     "openIntroMid": "弹出系统文件夹对话框（与浏览器在同一台电脑、同一用户会话下运行）。也可手动输入绝对路径；若需启动后端时自动打开某文件夹作为项目根，请同时设置 ",
     "openIntroAnd": " 与 ",
     "openIntroAfter": "。",
     "pickFolder": "选取文件夹…",
-    "rootLabel": "项目根路径（可手动粘贴）",
+    "rootLabel": "内容库根路径（可手动粘贴）",
     "rootPlaceholder": "例如 D:\\work\\my_project",
     "openButton": "打开",
-    "newTitle": "新建项目",
+    "newTitle": "新建内容库",
     "pickParent": "选取父文件夹…",
     "parentLabel": "父目录",
     "parentPlaceholder": "例如 D:\\work",

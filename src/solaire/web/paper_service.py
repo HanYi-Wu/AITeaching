@@ -154,6 +154,159 @@ def update_paper_delivery_mode(root: Path, paper_id: str, delivery_mode: str, us
     return paper
 
 
+def _score_percent(score: object, max_score: object) -> float | None:
+    if score is None:
+        return None
+    try:
+        raw = float(score)
+    except (TypeError, ValueError):
+        return None
+    try:
+        max_raw = float(max_score)
+    except (TypeError, ValueError):
+        max_raw = 0
+    if max_raw > 0:
+        return round(raw / max_raw * 100, 2)
+    return round(raw, 2)
+
+
+def analyze_paper(root: Path, *, paper_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    init_platform_db(root)
+    paper = get_paper(root, paper_id)
+    role = str(user.get("role") or "")
+    if role == "teacher" and paper.get("owner_teacher_id") not in (None, user.get("id")):
+        raise PermissionError("Teacher can only analyze own papers")
+    if role == "school" and paper.get("school_id") not in (None, user.get("school_id")):
+        raise PermissionError("School can only analyze own papers")
+    if role not in {"admin", "school", "teacher"}:
+        raise PermissionError("Only admin, school, and teacher users can analyze papers")
+
+    with connect(root) as con:
+        publication_rows = con.execute(
+            "SELECT * FROM exam_publications WHERE paper_id = ? ORDER BY created_at DESC",
+            (paper_id,),
+        ).fetchall()
+        attempt_rows = con.execute(
+            """
+            SELECT
+              sa.*,
+              s.student_no,
+              s.display_name,
+              u.username AS account_username
+            FROM student_attempts sa
+            JOIN exam_publications ep ON ep.id = sa.publication_id
+            JOIN students s ON s.id = sa.student_id
+            LEFT JOIN users u ON u.id = s.user_id
+            WHERE ep.paper_id = ?
+            ORDER BY s.display_name, s.student_no
+            """,
+            (paper_id,),
+        ).fetchall()
+        event_rows = con.execute(
+            """
+            SELECT pe.*
+            FROM proctor_events pe
+            JOIN exam_publications ep ON ep.id = pe.publication_id
+            WHERE ep.paper_id = ?
+            ORDER BY pe.occurred_at
+            """,
+            (paper_id,),
+        ).fetchall()
+
+    events_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    for row in event_rows:
+        event = row_to_dict(row) or {}
+        events_by_attempt.setdefault(str(event.get("attempt_id")), []).append(event)
+
+    students: list[dict[str, Any]] = []
+    score_values: list[float] = []
+    time_values: list[int] = []
+    completed = 0
+    in_progress = 0
+    not_started = 0
+    flagged_student_ids: set[str] = set()
+    for row in attempt_rows:
+        attempt = row_to_dict(row) or {}
+        status = str(attempt.get("status") or "not_started")
+        if status in {"submitted", "completed"} or attempt.get("submitted_at"):
+            completed += 1
+            status_group = "completed"
+        elif status == "in_progress" or attempt.get("started_at"):
+            in_progress += 1
+            status_group = "in_progress"
+        else:
+            not_started += 1
+            status_group = "not_started"
+        score_percent = _score_percent(attempt.get("score"), attempt.get("max_score"))
+        if score_percent is not None:
+            score_values.append(score_percent)
+        time_spent = int(attempt.get("time_spent_seconds") or 0)
+        if time_spent > 0:
+            time_values.append(time_spent)
+        attempt_events = events_by_attempt.get(str(attempt.get("id")), [])
+        screen_switch_count = len(attempt_events)
+        if screen_switch_count:
+            flagged_student_ids.add(str(attempt.get("student_id")))
+        students.append(
+            {
+                "student_id": attempt.get("student_id"),
+                "student_no": attempt.get("student_no"),
+                "display_name": attempt.get("display_name"),
+                "account_username": attempt.get("account_username"),
+                "status": status_group,
+                "score": attempt.get("score"),
+                "max_score": attempt.get("max_score"),
+                "score_percent": score_percent,
+                "started_at": attempt.get("started_at"),
+                "submitted_at": attempt.get("submitted_at"),
+                "time_spent_seconds": time_spent,
+                "screen_switch_count": screen_switch_count,
+                "screen_switch_duration_ms": sum(int(event.get("duration_ms") or 0) for event in attempt_events),
+            }
+        )
+    students.sort(
+        key=lambda item: (
+            -int(item.get("screen_switch_count") or 0),
+            str(item.get("display_name") or ""),
+            str(item.get("student_no") or ""),
+        )
+    )
+
+    total = len(students)
+    completion_rate = round(completed / total * 100, 2) if total else 0
+    average_score = round(sum(score_values) / len(score_values), 2) if score_values else None
+    average_time_seconds = round(sum(time_values) / len(time_values), 2) if time_values else None
+    screen_switch_count = len(event_rows)
+    screen_switch_duration_ms = sum(int(row["duration_ms"] or 0) for row in event_rows)
+
+    return {
+        "paper": {
+            "paper_id": paper["id"],
+            "exam_id": paper["exam_id"],
+            "title": paper["title"],
+            "subject": paper["subject"],
+            "delivery_mode": paper["delivery_mode"],
+            "status": paper["status"],
+        },
+        "summary": {
+            "total_students": total,
+            "completed_students": completed,
+            "in_progress_students": in_progress,
+            "not_started_students": not_started,
+            "completion_rate": completion_rate,
+            "average_score": average_score,
+            "average_time_seconds": average_time_seconds,
+            "publication_count": len(publication_rows),
+        },
+        "proctoring": {
+            "screen_switch_count": screen_switch_count,
+            "screen_switch_duration_ms": screen_switch_duration_ms,
+            "flagged_student_count": len(flagged_student_ids),
+        },
+        "students": students,
+    }
+
+
 def list_teacher_classes(root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     init_platform_db(root)
     role = user.get("role")

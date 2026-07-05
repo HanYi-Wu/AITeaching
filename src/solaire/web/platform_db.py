@@ -8,7 +8,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -56,9 +56,11 @@ CREATE TABLE IF NOT EXISTS classes (
 CREATE TABLE IF NOT EXISTS students (
   id TEXT PRIMARY KEY,
   school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   student_no TEXT NOT NULL,
   display_name TEXT NOT NULL,
   email TEXT,
+  initial_password TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -190,7 +192,15 @@ def connect(root: Path) -> sqlite3.Connection:
 def init_platform_db(root: Path) -> None:
     with connect(root) as con:
         con.executescript(SCHEMA_SQL)
+        _ensure_column(con, "students", "user_id", "TEXT REFERENCES users(id) ON DELETE SET NULL")
+        _ensure_column(con, "students", "initial_password", "TEXT")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    rows = con.execute(f"PRAGMA table_info({table})").fetchall()
+    if column not in {str(row["name"]) for row in rows}:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   updatePlatformPaperDeliveryMode: vi.fn(),
   publishPlatformPaper: vi.fn(),
   uploadPaperScores: vi.fn(),
+  analyzePlatformPaper: vi.fn(),
 }));
 
 vi.mock("../../../platform/auth", async (importOriginal) => {
@@ -21,6 +22,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     updatePlatformPaperDeliveryMode: mocks.updatePlatformPaperDeliveryMode,
     publishPlatformPaper: mocks.publishPlatformPaper,
     uploadPaperScores: mocks.uploadPaperScores,
+    analyzePlatformPaper: mocks.analyzePlatformPaper,
   };
 });
 
@@ -94,5 +96,43 @@ describe("PapersWorkspace", () => {
       }),
     );
     expect((await screen.findAllByText("已发布")).length).toBeGreaterThan(0);
+  });
+
+  it("loads paper analysis with screen-switch risk", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.analyzePlatformPaper.mockResolvedValue({
+      analysis: {
+        paper: {
+          paper_id: "p1",
+          exam_id: "midterm/Math",
+          title: "Midterm",
+          subject: "Math",
+          delivery_mode: "online",
+          status: "published",
+        },
+        summary: {
+          total_students: 2,
+          completed_students: 1,
+          in_progress_students: 1,
+          not_started_students: 0,
+          completion_rate: 50,
+          average_score: 80,
+          average_time_seconds: 1200,
+          publication_count: 1,
+        },
+        proctoring: { screen_switch_count: 2, screen_switch_duration_ms: 3000, flagged_student_count: 1 },
+        students: [],
+      },
+    });
+
+    render(<PapersWorkspace />);
+
+    expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByTestId("paper-load-analysis"));
+
+    await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("p1"));
+    expect(await screen.findByTestId("paper-analysis-completion-rate")).toHaveTextContent("50%");
+    expect(screen.getByTestId("paper-analysis-switch-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("paper-analysis-flagged-count")).toHaveTextContent("1");
   });
 });

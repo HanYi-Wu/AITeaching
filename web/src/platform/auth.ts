@@ -48,9 +48,13 @@ export type ClassRecord = {
 export type StudentRecord = {
   id: string;
   school_id: string;
+  user_id?: string | null;
   student_no: string;
   display_name: string;
   email?: string | null;
+  account_username?: string | null;
+  initial_password?: string | null;
+  class_names?: string | null;
   status: string;
 };
 
@@ -88,6 +92,45 @@ export type PaperPublicationRecord = {
   status: string;
   class_ids: string[];
   attempt_count?: number;
+};
+
+export type PlatformPaperAnalysis = {
+  paper: {
+    paper_id: string;
+    exam_id: string;
+    title: string;
+    subject: string;
+    delivery_mode: "offline" | "online";
+    status: string;
+  };
+  summary: {
+    total_students: number;
+    completed_students: number;
+    in_progress_students: number;
+    not_started_students: number;
+    completion_rate: number;
+    average_score?: number | null;
+    average_time_seconds?: number | null;
+    publication_count: number;
+  };
+  proctoring: {
+    screen_switch_count: number;
+    screen_switch_duration_ms: number;
+    flagged_student_count: number;
+  };
+  students: Array<{
+    student_id: string;
+    student_no: string;
+    display_name: string;
+    account_username?: string | null;
+    status: "completed" | "in_progress" | "not_started";
+    score?: number | null;
+    max_score?: number | null;
+    score_percent?: number | null;
+    time_spent_seconds: number;
+    screen_switch_count: number;
+    screen_switch_duration_ms: number;
+  }>;
 };
 
 export function sessionStorageKeyForProject(_projectRoot: string | null): string {
@@ -228,6 +271,28 @@ export function createTeacher(payload: {
   return platformRequest("/api/school/teachers", { method: "POST", body: JSON.stringify(payload) });
 }
 
+export function importTeachers(payload: {
+  teachers: Array<{ username: string; password?: string | null; display_name?: string | null; email?: string | null; subjects?: string[] }>;
+}): Promise<{ imported: number; teachers: TeacherRecord[] }> {
+  return platformRequest("/api/school/teachers/import", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function importTeachersFile(file: File): Promise<{ imported: number; teachers: TeacherRecord[] }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return platformRequest("/api/school/teachers/import-file", { method: "POST", body: fd });
+}
+
+export function updateTeacher(
+  teacherId: string,
+  payload: { display_name?: string | null; email?: string | null; subjects?: string[] | null; password?: string | null; status?: string | null },
+): Promise<{ teacher: TeacherRecord }> {
+  return platformRequest(`/api/school/teachers/${encodeURIComponent(teacherId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listClasses(): Promise<{ classes: ClassRecord[] }> {
   return platformRequest("/api/school/classes");
 }
@@ -240,6 +305,33 @@ export function createClass(payload: {
   return platformRequest("/api/school/classes", { method: "POST", body: JSON.stringify(payload) });
 }
 
+export function importClasses(payload: {
+  classes: Array<{ name: string; grade?: string | null }>;
+}): Promise<{ imported: number; classes: ClassRecord[] }> {
+  return platformRequest("/api/school/classes/import", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function importClassesFile(file: File): Promise<{ imported: number; classes: ClassRecord[] }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return platformRequest("/api/school/classes/import-file", { method: "POST", body: fd });
+}
+
+export function updateClass(
+  classId: string,
+  payload: { name?: string | null; grade?: string | null },
+): Promise<{ class: ClassRecord }> {
+  return platformRequest(`/api/school/classes/${encodeURIComponent(classId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listStudents(classId?: string | null): Promise<{ students: StudentRecord[] }> {
+  const qs = classId ? `?class_id=${encodeURIComponent(classId)}` : "";
+  return platformRequest(`/api/school/students${qs}`);
+}
+
 export function importStudents(payload: {
   class_id?: string | null;
   students: Array<{ student_no: string; display_name: string; email?: string | null }>;
@@ -247,11 +339,43 @@ export function importStudents(payload: {
   return platformRequest("/api/school/students/import", { method: "POST", body: JSON.stringify(payload) });
 }
 
+export function importStudentsFile(
+  file: File,
+  classId?: string | null,
+): Promise<{ imported: number; students: StudentRecord[] }> {
+  const fd = new FormData();
+  if (classId) fd.append("class_id", classId);
+  fd.append("file", file);
+  return platformRequest("/api/school/students/import-file", { method: "POST", body: fd });
+}
+
+export function updateStudent(
+  studentId: string,
+  payload: { student_no?: string | null; display_name?: string | null; email?: string | null; status?: string | null },
+): Promise<{ student: StudentRecord }> {
+  return platformRequest(`/api/school/students/${encodeURIComponent(studentId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function exportStudentAccounts(): Promise<Blob> {
+  const token = loadSessionToken();
+  const url = await resolveApiUrl("/api/school/students/export.xlsx");
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    await readJson(response);
+  }
+  return response.blob();
+}
+
 export function assignTeacherClass(payload: {
   teacher_id: string;
   class_id: string;
-  subject: string;
-}): Promise<{ assignment: { teacher_id: string; class_id: string; subject: string } }> {
+  subject?: string | null;
+}): Promise<{ assignment: { teacher_id: string; class_id: string; subject?: string } }> {
   return platformRequest("/api/school/teacher-class-assignments", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -323,8 +447,20 @@ export function publishPlatformPaper(
   });
 }
 
+export function analyzePlatformPaper(paperId: string): Promise<{ analysis: PlatformPaperAnalysis }> {
+  return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/analysis`);
+}
+
 export function uploadPaperScores(examId: string, file: File): Promise<{ batch_id: string; student_count: number; question_count: number }> {
   const fd = new FormData();
   fd.append("file", file);
   return platformRequest(`/api/exams/${encodeURIComponent(examId)}/scores`, { method: "POST", body: fd });
+}
+
+export function updateStudentAccount(payload: {
+  username?: string | null;
+  current_password: string;
+  new_password?: string | null;
+}): Promise<{ user: PlatformUser }> {
+  return platformRequest("/api/student/account", { method: "PATCH", body: JSON.stringify(payload) });
 }

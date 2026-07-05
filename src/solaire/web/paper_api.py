@@ -11,11 +11,13 @@ from pydantic import BaseModel, Field
 from solaire.web import state
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.paper_service import (
+    analyze_paper,
     list_papers,
     list_teacher_classes,
     publish_online_paper,
     update_paper_delivery_mode,
 )
+from solaire.web.project_layout import ensure_project_layout
 
 router = APIRouter()
 
@@ -44,9 +46,8 @@ def _raise_api_error(exc: Exception) -> None:
 
 
 def require_content_project_root():
-    root = state.get_root()
-    if root is None:
-        raise HTTPException(status_code=400, detail="No project open for paper files")
+    root = state.get_content_root()
+    ensure_project_layout(root)
     return root
 
 
@@ -73,6 +74,19 @@ def papers_update(
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"paper": paper}
+
+
+@router.get("/papers/{paper_id}/analysis")
+def papers_analysis(
+    paper_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    try:
+        analysis = analyze_paper(root, paper_id=paper_id, user=user)
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"analysis": analysis}
 
 
 @router.get("/teacher/classes")

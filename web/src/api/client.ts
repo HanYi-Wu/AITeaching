@@ -903,7 +903,7 @@ export async function apiAgentConfig(): Promise<AgentConfig> {
 
 export type AgentLlmSettingsResponse = {
   persist_available: boolean;
-  /** `global`：未打开项目，写入本机用户目录；`project`：已打开项目，写入项目内文件 */
+  /** `global`：写入本机用户目录；`project`：写入内容目录中的覆盖文件 */
   persist_scope?: "global" | "project";
   provider: AgentLlmProvider;
   provider_options: AgentConfigProviderOption[];
@@ -1065,7 +1065,7 @@ export type AgentChatStreamBody = {
   skill_id?: string | null;
   /** 附件文件列表 */
   file_attachments?: AgentFileAttachment[] | null;
-  /** 教师批准执行的计划文件项目内相对路径 */
+  /** 教师批准执行的计划文件内容目录相对路径 */
   execution_plan_path?: string | null;
   /** 取消界面待执行计划时，与计划路径一致则清除服务端状态 */
   clear_pending_plan_path?: string | null;

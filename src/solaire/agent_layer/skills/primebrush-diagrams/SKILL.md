@@ -37,7 +37,7 @@ metadata:
 
 1. 确认题型与插图位置（`content` / `analysis` / 题组材料等）。
 2. 用 `agent.read_skill_reference` 打开上表对应文件，**逐字段**抄写结构；几何题先列点再连线。
-3. 写入题目：优先 `bank.update_item` 带完整题干；或配合 `file.edit` 修改题库 YAML（路径须在项目内）。
+3. 写入题目：优先 `bank.update_item` 带完整题干；或配合 `file.edit` 修改题库 YAML（路径须在内容目录中）。
 4. 若教师需要组卷验证，提醒使用 `exam.validate_paper`（见 `smart_compose` 技能）。
 
 ## 注意事项

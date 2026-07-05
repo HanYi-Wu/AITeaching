@@ -6,7 +6,9 @@ import yaml
 from fastapi.testclient import TestClient
 
 from solaire.exam_compiler.models import ExamConfig, SelectedSection
+from solaire.web import recent_projects, state
 from solaire.web.app import ensure_project_layout
+from solaire.web.platform_db import connect, default_platform_root
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -140,3 +142,107 @@ def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClie
     assert body["publication"]["status"] == "published"
     assert body["publication"]["paper_id"] == paper["paper_id"]
     assert body["publication"]["class_ids"] == [class_id]
+
+
+def test_teacher_paper_workspace_works_without_opening_project(tmp_path: Path, monkeypatch) -> None:
+    state.clear_root()
+    monkeypatch.setattr(recent_projects, "app_data_dir", lambda: tmp_path / "appdata")
+    client = TestClient(__import__("solaire.web.app", fromlist=["app"]).app)
+    admin_token = _bootstrap_admin(client)
+    _create_school_teacher_class(client, admin_token)
+    teacher_headers = _headers(_teacher_token(client))
+
+    info = client.get("/api/project/info")
+    assert info.status_code == 200
+    assert info.json()["bound"] is True
+    assert "workspace" in str(info.json()["root"])
+
+    listed = client.get("/api/papers", headers=teacher_headers)
+    assert listed.status_code == 200
+    assert listed.json()["papers"] == []
+
+
+def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
+    web_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _, _, class_id = _create_school_teacher_class(web_client, admin_token)
+    _write_exam(tmp_path)
+
+    school_login = web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"})
+    school_headers = _headers(str(school_login.json()["token"]))
+    imported = web_client.post(
+        "/api/school/students/import",
+        json={
+            "class_id": class_id,
+            "students": [
+                {"student_no": "S001", "display_name": "Student One"},
+                {"student_no": "S002", "display_name": "Student Two"},
+            ],
+        },
+        headers=school_headers,
+    )
+    assert imported.status_code == 200
+
+    teacher_headers = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+    published = web_client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "title": "Online Midterm"},
+        headers=teacher_headers,
+    )
+    assert published.status_code == 200
+    publication_id = published.json()["publication"]["id"]
+
+    platform_root = default_platform_root()
+    with connect(platform_root) as con:
+        attempts = con.execute(
+            "SELECT id, student_id FROM student_attempts WHERE publication_id = ? ORDER BY student_id",
+            (publication_id,),
+        ).fetchall()
+        con.execute(
+            """
+            UPDATE student_attempts
+            SET status = 'submitted', score = 80, max_score = 100,
+                started_at = '2026-07-04T08:00:00+00:00',
+                submitted_at = '2026-07-04T08:30:00+00:00',
+                time_spent_seconds = 1800
+            WHERE id = ?
+            """,
+            (str(attempts[0]["id"]),),
+        )
+        con.execute(
+            """
+            UPDATE student_attempts
+            SET status = 'in_progress',
+                started_at = '2026-07-04T08:10:00+00:00',
+                time_spent_seconds = 600
+            WHERE id = ?
+            """,
+            (str(attempts[1]["id"]),),
+        )
+        con.executemany(
+            """
+            INSERT INTO proctor_events (
+              id, attempt_id, student_id, publication_id, event_type, occurred_at, duration_ms, payload_json
+            )
+            VALUES (?, ?, ?, ?, 'visibility_hidden', '2026-07-04T08:15:00+00:00', ?, '{}')
+            """,
+            [
+                ("event1", str(attempts[0]["id"]), str(attempts[0]["student_id"]), publication_id, 1200),
+                ("event2", str(attempts[0]["id"]), str(attempts[0]["student_id"]), publication_id, 800),
+            ],
+        )
+
+    analysis = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=teacher_headers)
+    assert analysis.status_code == 200
+    body = analysis.json()["analysis"]
+    assert body["summary"]["total_students"] == 2
+    assert body["summary"]["completed_students"] == 1
+    assert body["summary"]["in_progress_students"] == 1
+    assert body["summary"]["completion_rate"] == 50
+    assert body["summary"]["average_score"] == 80
+    assert body["proctoring"]["screen_switch_count"] == 2
+    assert body["proctoring"]["flagged_student_count"] == 1
+    assert body["students"][0]["screen_switch_count"] == 2

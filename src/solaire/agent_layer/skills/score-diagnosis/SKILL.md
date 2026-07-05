@@ -1,14 +1,14 @@
 ---
 name: score_diagnosis
 description: >
-  基于项目内考试数据列举数据集与内置分析任务，运行流水线并解读作业输出。
+  基于内容库中的考试数据列举数据集与内置分析任务，运行流水线并解读作业输出。
   当教师提到成绩分析、考试诊断、跑内置统计、学情作业结果等关键词时激活此技能。
 metadata:
   author: solaire-builtin
   version: "1.1"
   label: 成绩诊断报告
   tool_patterns: "analysis.list_datasets analysis.list_builtins analysis.run_builtin analysis.save_script analysis.run_script analysis.get_job analysis.create_remediation_draft agent.switch_focus agent.activate_skill agent.read_skill_reference agent.enter_plan_mode agent.exit_plan_mode agent.set_task_plan agent.update_task_step agent.run_subtask agent.run_tool_pipeline memory.read_index memory.read_topic memory.search file.read file.list file.search"
-  suggested_user_input: 请根据当前项目里已有的考试成绩，帮我做一份成绩诊断要点。
+  suggested_user_input: 请根据当前内容库里已有的考试成绩，帮我做一份成绩诊断要点。
 ---
 
 ## 工作流程
@@ -27,4 +27,3 @@ metadata:
 
 - 不得伪造数据集或作业状态
 - 作业失败时保留错误信息中的关键词，便于排查或改选其它内置任务
-

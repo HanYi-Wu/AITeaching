@@ -6,7 +6,6 @@ describe("platform route resolution", () => {
   it("starts on platform bootstrap or login even when no project is open", () => {
     expect(
       resolvePlatformRoute({
-        projectBound: false,
         loading: false,
         adminExists: false,
         userRole: null,
@@ -15,7 +14,6 @@ describe("platform route resolution", () => {
     ).toBe("bootstrap");
     expect(
       resolvePlatformRoute({
-        projectBound: false,
         loading: false,
         adminExists: true,
         userRole: null,
@@ -27,7 +25,6 @@ describe("platform route resolution", () => {
   it("routes bootstrap and anonymous login explicitly", () => {
     expect(
       resolvePlatformRoute({
-        projectBound: true,
         loading: false,
         adminExists: false,
         userRole: null,
@@ -36,7 +33,6 @@ describe("platform route resolution", () => {
     ).toBe("bootstrap");
     expect(
       resolvePlatformRoute({
-        projectBound: true,
         loading: false,
         adminExists: true,
         userRole: null,
@@ -48,7 +44,6 @@ describe("platform route resolution", () => {
   it("routes authenticated roles without relying on nested JSX order", () => {
     expect(
       resolvePlatformRoute({
-        projectBound: true,
         loading: false,
         adminExists: false,
         userRole: "admin",
@@ -57,7 +52,6 @@ describe("platform route resolution", () => {
     ).toBe("admin");
     expect(
       resolvePlatformRoute({
-        projectBound: true,
         loading: false,
         adminExists: true,
         userRole: "admin",
@@ -66,7 +60,6 @@ describe("platform route resolution", () => {
     ).toBe("admin");
     expect(
       resolvePlatformRoute({
-        projectBound: true,
         loading: false,
         adminExists: true,
         userRole: "admin",
@@ -75,7 +68,6 @@ describe("platform route resolution", () => {
     ).toBe("teacher");
     expect(
       resolvePlatformRoute({
-        projectBound: true,
         loading: false,
         adminExists: true,
         userRole: "school",
@@ -84,7 +76,6 @@ describe("platform route resolution", () => {
     ).toBe("school");
     expect(
       resolvePlatformRoute({
-        projectBound: true,
         loading: false,
         adminExists: true,
         userRole: "teacher",
@@ -93,7 +84,6 @@ describe("platform route resolution", () => {
     ).toBe("teacher");
     expect(
       resolvePlatformRoute({
-        projectBound: true,
         loading: false,
         adminExists: true,
         userRole: "student",

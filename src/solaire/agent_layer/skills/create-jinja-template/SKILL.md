@@ -15,7 +15,7 @@ metadata:
 ## 概念
 
 - **卷面主模板**是 `*.tex.j2` 文件，由组卷管线渲染为 `.tex` 再编译 PDF；试卷 YAML 里的 **版式模板**（`latex_base`）必须与其**文件名**一致。
-- 项目内优先使用与 `template.yaml` **同目录**的 `*.tex.j2`，便于单模板隔离修改；查找顺序见 `references/jinja-reference.md`。
+- 内容目录中优先使用与 `template.yaml` **同目录**的 `*.tex.j2`，便于单模板隔离修改；查找顺序见 `references/jinja-reference.md`。
 - 本技能与 `create_exam_template`（起草 `template.yaml`）配合：一个管「结构与小节」，一个管「LaTeX 版式骨架」。
 
 ## 工作流程

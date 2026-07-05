@@ -82,7 +82,7 @@ export function AdminWorkspace({ user, onLogout, onOpenTeacherWorkspace, onError
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
             <ArrowRight className="h-4 w-4" />
-            项目工作区
+            教师端
           </button>
           <button
             type="button"

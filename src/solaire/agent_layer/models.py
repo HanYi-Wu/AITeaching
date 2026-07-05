@@ -68,7 +68,7 @@ class SessionState(BaseModel):
     # Phase 4: Plan Mode -- 编排层行为状态
     plan_mode_active: bool = False
     current_plan_path: str | None = None
-    # 教师点「执行」时锁定的计划文件（项目内相对路径）；与 task_plan 对齐
+    # 教师点「执行」时锁定的计划文件（内容目录相对路径）；与 task_plan 对齐
     execution_plan_path: str | None = None
     # 最近一次助手 `plan_ready` 对应的计划路径（规范化相对路径）；须与 execution 请求匹配
     pending_plan_path: str | None = None

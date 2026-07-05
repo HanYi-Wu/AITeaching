@@ -16,6 +16,7 @@ from solaire.web.auth_service import (
     get_session_user,
     has_admin,
     revoke_session,
+    update_user_credentials,
 )
 from solaire.web.platform_db import default_platform_root, init_platform_db
 
@@ -31,6 +32,12 @@ class BootstrapAdminBody(BaseModel):
 class LoginBody(BaseModel):
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
+
+
+class StudentAccountUpdateBody(BaseModel):
+    username: str | None = Field(default=None, min_length=3)
+    current_password: str = Field(..., min_length=1)
+    new_password: str | None = Field(default=None, min_length=6)
 
 
 def require_platform_root() -> Path:
@@ -114,6 +121,29 @@ def auth_me_route(
     x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
 ) -> dict[str, Any]:
     return {"user": current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)}
+
+
+@router.patch("/student/account")
+def student_account_update(
+    body: StudentAccountUpdateBody,
+    authorization: Annotated[str | None, Header()] = None,
+    x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
+) -> dict[str, Any]:
+    user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
+    if user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Student role required")
+    root = require_platform_root()
+    try:
+        updated = update_user_credentials(
+            root,
+            user_id=str(user["id"]),
+            username=body.username,
+            current_password=body.current_password,
+            new_password=body.new_password,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"user": updated}
 
 
 @router.post("/auth/logout")

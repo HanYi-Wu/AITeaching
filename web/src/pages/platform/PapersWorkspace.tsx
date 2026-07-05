@@ -2,11 +2,13 @@ import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { BarChart3, CheckCircle2, ClipboardList, RefreshCw, Upload, Wifi } from "lucide-react";
 import { resolveApiUrl } from "../../api/client";
 import {
+  analyzePlatformPaper,
   listPlatformPapers,
   listTeacherAssignedClasses,
   publishPlatformPaper,
   updatePlatformPaperDeliveryMode,
   uploadPaperScores,
+  type PlatformPaperAnalysis,
   type PlatformPaperRecord,
   type TeacherClassRecord,
 } from "../../platform/auth";
@@ -39,6 +41,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<PlatformPaperAnalysis | null>(null);
   const [loading, setLoading] = useState(true);
 
   const selectedPaper = useMemo(
@@ -150,9 +153,24 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     }
   }
 
+  async function loadSelectedAnalysis() {
+    if (!selectedPaper) return;
+    setBusy(`analysis:${selectedPaper.paper_id}`);
+    setMessage(null);
+    try {
+      const result = await analyzePlatformPaper(selectedPaper.paper_id);
+      setAnalysis(result.analysis);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const modeBusy = selectedPaper ? busy === `mode:${selectedPaper.paper_id}` : false;
   const publishBusy = selectedPaper ? busy === `publish:${selectedPaper.paper_id}` : false;
   const scoresBusy = selectedPaper ? busy === `scores:${selectedPaper.paper_id}` : false;
+  const analysisBusy = selectedPaper ? busy === `analysis:${selectedPaper.paper_id}` : false;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-slate-50 text-slate-950">
@@ -184,7 +202,10 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
               <button
                 key={paper.paper_id}
                 type="button"
-                onClick={() => setSelectedPaperId(paper.paper_id)}
+                onClick={() => {
+                  setSelectedPaperId(paper.paper_id);
+                  setAnalysis(null);
+                }}
                 className={`w-full rounded-lg border p-3 text-left transition ${
                   selectedPaper?.paper_id === paper.paper_id
                     ? "border-slate-900 bg-slate-50"
@@ -341,8 +362,39 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                     </div>
                     <button
                       type="button"
+                      data-testid="paper-load-analysis"
+                      disabled={analysisBusy}
+                      onClick={() => void loadSelectedAnalysis()}
+                      className="inline-flex w-full items-center justify-center rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                    >
+                      {analysisBusy ? "加载中..." : "查看分析摘要"}
+                    </button>
+                    {analysis ? (
+                      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-md bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">完成率</p>
+                          <p data-testid="paper-analysis-completion-rate" className="mt-1 text-lg font-semibold">
+                            {analysis.summary.completion_rate}%
+                          </p>
+                        </div>
+                        <div className="rounded-md bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">切屏</p>
+                          <p data-testid="paper-analysis-switch-count" className="mt-1 text-lg font-semibold">
+                            {analysis.proctoring.screen_switch_count}
+                          </p>
+                        </div>
+                        <div className="rounded-md bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">风险</p>
+                          <p data-testid="paper-analysis-flagged-count" className="mt-1 text-lg font-semibold">
+                            {analysis.proctoring.flagged_student_count}
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
                       onClick={() => onOpenAnalysis?.(selectedPaper.exam_id)}
-                      className="inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      className="mt-3 inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                     >
                       打开分析
                     </button>

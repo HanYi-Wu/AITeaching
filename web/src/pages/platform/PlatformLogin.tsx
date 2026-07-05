@@ -76,7 +76,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
     <PlatformShell
       roleLabel="平台入口"
       title={isBootstrap ? "创建管理员账户" : "登录平台"}
-      subtitle={isBootstrap ? "首次使用当前项目时需要初始化管理员。" : "使用平台账号进入对应端。"}
+      subtitle={isBootstrap ? "首次使用平台时需要初始化管理员。" : "使用平台账号进入对应端。"}
     >
       <div className="flex min-h-[calc(100vh-9rem)] items-center justify-center">
       <form
@@ -93,7 +93,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
               {isBootstrap ? "创建管理员账户" : "登录平台"}
             </h1>
             <p className="text-sm text-slate-500">
-              {isBootstrap ? "首次使用当前项目时需要初始化管理员。" : "使用管理员、学校、教师或学生账户进入。"}
+              {isBootstrap ? "首次使用平台时需要初始化管理员。" : "使用管理员、学校、教师或学生账户进入。"}
             </p>
           </div>
         </div>

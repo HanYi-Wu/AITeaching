@@ -6,19 +6,16 @@ import {
   BookOpen,
   ClipboardList,
   FileStack,
-  FolderOpen,
   Layers,
   LogOut,
   Network,
-  Plus,
   ScrollText,
+  Settings,
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { AgentSidebar } from "./components/AgentSidebar";
 import { DesktopTitleBar } from "./components/DesktopTitleBar";
-import { NewProjectDialog } from "./components/NewProjectDialog";
-import { MenuBar } from "./components/layout/MenuBar";
 import { ToolBar } from "./components/layout/ToolBar";
 import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
 import { ToolBarProvider, useToolBar } from "./contexts/ToolBarContext";
@@ -28,13 +25,11 @@ import { LogWorkspace } from "./pages/LogWorkspace";
 import { AdminWorkspace } from "./pages/platform/AdminWorkspace";
 import { PapersWorkspace } from "./pages/platform/PapersWorkspace";
 import { PlatformLogin } from "./pages/platform/PlatformLogin";
-import { PlatformShell } from "./pages/platform/PlatformShell";
 import { SchoolWorkspace } from "./pages/platform/SchoolWorkspace";
 import { StudentWorkspace } from "./pages/platform/StudentWorkspace";
 import { TeacherWorkspace } from "./pages/platform/TeacherWorkspace";
 import { SettingsWorkspace } from "./pages/SettingsWorkspace";
-import { WelcomePage } from "./pages/WelcomePage";
-import { apiGet, apiPost } from "./api/client";
+import { apiGet } from "./api/client";
 import { dispatchSolaireSave } from "./lib/saveEvents";
 import { installImeCompositionTracker, isImeComposingKeyboardEvent } from "./lib/ime";
 import { cn } from "./lib/utils";
@@ -63,7 +58,7 @@ export default function App() {
 }
 
 function AppShell() {
-  const { t } = useTranslation(["app", "common", "welcome"]);
+  const { t } = useTranslation(["app", "common"]);
   const { toggleSidebar, sidebarOpen, setSidebarOpen } = useAgentContext();
   const { left: toolBarLeft, right: toolBarRight } = useToolBar();
   const [page, setPage] = useState<AppPage>("compose");
@@ -71,7 +66,6 @@ function AppShell() {
   const [err, setErr] = useState<string | null>(null);
   const [graphFocusNodeId, setGraphFocusNodeId] = useState<string | null>(null);
   const [composeOpenExamId, setComposeOpenExamId] = useState<string | null>(null);
-  const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [assistantOverlayHost, setAssistantOverlayHost] = useState<HTMLDivElement | null>(null);
   const [platformStatus, setPlatformStatus] = useState<PlatformStatus | null>(null);
   const [currentUser, setCurrentUser] = useState<PlatformUser | null>(null);
@@ -123,9 +117,9 @@ function AppShell() {
 
   /**
    * 侧栏开关生命周期：
-   * - 未绑定项目时强制关闭；
-   * - 从欢迎页进入项目（bound: false → true）时强制关闭，避免沿用旧状态导致误开；
-   * - 首次启动即已绑定项目时不走「从欢迎进入」分支，避免多余一次 setState。
+   * - 内容目录尚未就绪时强制关闭；
+   * - 平台状态从未就绪进入就绪时强制关闭，避免沿用旧状态导致误开；
+   * - 首次启动即已就绪时不走状态切换分支，避免多余一次 setState。
    */
   const prevBoundRef = useRef<boolean | undefined>(undefined);
   useLayoutEffect(() => {
@@ -157,54 +151,10 @@ function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [sidebarOpen, setSidebarOpen]);
 
-  const openProjectPicker = useCallback(async () => {
-    setErr(null);
-    try {
-      const w = typeof window !== "undefined" ? window : undefined;
-      const isTauri =
-        w &&
-        ("__TAURI_INTERNALS__" in w ||
-          (w as unknown as { __TAURI__?: unknown }).__TAURI__ !== undefined);
-      if (isTauri) {
-        const { open } = await import("@tauri-apps/plugin-dialog");
-        const sel = await open({ directory: true, multiple: false, title: t("welcome:pickFolderTitle") });
-        const path = Array.isArray(sel) ? sel[0] : sel;
-        if (typeof path === "string" && path) {
-          await apiPost("/api/project/open", { root: path });
-          await refreshInfo();
-        }
-      } else {
-        await apiPost("/api/project/pick-open", {});
-        await refreshInfo();
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (
-        !msg.includes("取消") &&
-        !msg.includes("未选择") &&
-        !/cancel/i.test(msg)
-      ) {
-        setErr(msg);
-      }
-    }
-  }, [refreshInfo, t]);
-
-  const closeProject = useCallback(async () => {
-    setErr(null);
-    try {
-      await apiPost("/api/project/close", {});
-      await refreshInfo();
-      setPage("compose");
-      setAdminProjectMode(false);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  }, [refreshInfo]);
-
   const onAuthenticated = useCallback((user: PlatformUser) => {
     setCurrentUser(user);
     setAdminProjectMode(false);
-    setPage(user.role === "teacher" ? "compose" : user.role);
+    setPage(user.role === "teacher" ? "papers" : user.role);
   }, []);
 
   const onLogout = useCallback(async () => {
@@ -213,26 +163,12 @@ function AppShell() {
     } finally {
       setCurrentUser(null);
       setAdminProjectMode(false);
-      setPage("compose");
+      setPage("papers");
       setSidebarOpen(false);
     }
   }, [setSidebarOpen]);
 
-  const openRecentPath = useCallback(
-    async (path: string) => {
-      setErr(null);
-      try {
-        await apiPost("/api/project/open", { root: path });
-        await refreshInfo();
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e));
-      }
-    },
-    [refreshInfo],
-  );
-
   const platformRoute = resolvePlatformRoute({
-    projectBound: Boolean(info?.bound),
     loading: platformLoading,
     adminExists: Boolean(platformStatus?.admin_exists),
     userRole: currentUser?.role ?? null,
@@ -246,32 +182,10 @@ function AppShell() {
         isTauriShell() && "box-border overflow-hidden rounded-lg",
       )}
     >
-      <DesktopTitleBar
-        menu={
-          isTauriShell() && info?.bound ? (
-            <MenuBar
-              variant="titlebar"
-              projectRoot={info.root}
-              onNewProject={() => setNewProjectOpen(true)}
-              onOpenProject={() => void openProjectPicker()}
-              onOpenRecentPath={openRecentPath}
-              onCloseProject={() => void closeProject()}
-              onFileSave={() => dispatchSolaireSave()}
-              onPreferences={() => setPage("settings")}
-              onGoWelcome={() => void closeProject()}
-              setPage={setPage}
-              toggleAssistant={() => toggleSidebar()}
-            />
-          ) : undefined
-        }
-      />
+      <DesktopTitleBar />
 
       <div className="relative flex min-h-0 flex-1">
-        {platformRoute === "welcome" ? (
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <WelcomePage onProjectReady={() => void refreshInfo()} onError={(msg) => setErr(msg)} />
-          </div>
-        ) : platformRoute === "loading" ? (
+        {platformRoute === "loading" ? (
           <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-sm text-slate-500">
             正在加载平台权限...
           </div>
@@ -285,7 +199,7 @@ function AppShell() {
             onLogout={() => void onLogout()}
             onOpenTeacherWorkspace={() => {
               setAdminProjectMode(true);
-              setPage("compose");
+              setPage("papers");
             }}
             onError={setErr}
           />
@@ -293,47 +207,6 @@ function AppShell() {
           <SchoolWorkspace user={currentUser} onLogout={() => void onLogout()} onError={setErr} />
         ) : platformRoute === "student" && currentUser ? (
           <StudentWorkspace user={currentUser} onLogout={() => void onLogout()} />
-        ) : currentUser && platformRoute === "teacher" && !info?.bound ? (
-          <PlatformShell
-            roleLabel="教师端"
-            title={currentUser.display_name || currentUser.username}
-            subtitle="登录态已进入平台；打开或新建教学工程后可以组卷、管理试卷和分析成绩。"
-            userName={currentUser.username}
-            onLogout={() => void onLogout()}
-            actions={
-              <>
-                <button
-                  type="button"
-                  onClick={() => void openProjectPicker()}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-                >
-                  <FolderOpen className="h-4 w-4" />
-                  打开工程
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewProjectOpen(true)}
-                  className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                >
-                  <Plus className="h-4 w-4" />
-                  新建工程
-                </button>
-              </>
-            }
-          >
-            <NewProjectDialog
-              open={newProjectOpen}
-              onOpenChange={setNewProjectOpen}
-              onProjectReady={() => void refreshInfo()}
-              onError={setErr}
-            />
-            <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-base font-semibold text-slate-950">教学工程未打开</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                平台账号、学校、教师、班级和学生数据已经改为全局管理；试题库、模板、导出的试卷和成绩文件仍需要一个本地教学工程作为内容目录。
-              </p>
-            </div>
-          </PlatformShell>
         ) : (
           <TeacherWorkspace>
             <aside className="flex w-16 shrink-0 flex-col border-r border-slate-800 bg-slate-900">
@@ -395,6 +268,13 @@ function AppShell() {
                     title={t("app:nav.helpTitle")}
                   />
                   <SidebarNavButton
+                    icon={Settings}
+                    label="设置"
+                    active={page === "settings"}
+                    onClick={() => setPage("settings")}
+                    title="设置"
+                  />
+                  <SidebarNavButton
                     icon={ScrollText}
                     label={t("app:nav.log")}
                     active={page === "log"}
@@ -412,27 +292,6 @@ function AppShell() {
             </aside>
 
             <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-              {!isTauriShell() ? (
-                <MenuBar
-                  projectRoot={info?.root ?? null}
-                  onNewProject={() => setNewProjectOpen(true)}
-                  onOpenProject={() => void openProjectPicker()}
-                  onOpenRecentPath={openRecentPath}
-                  onCloseProject={() => void closeProject()}
-                  onFileSave={() => dispatchSolaireSave()}
-                  onPreferences={() => setPage("settings")}
-                  onGoWelcome={() => void closeProject()}
-                  setPage={setPage}
-                  toggleAssistant={() => toggleSidebar()}
-                />
-              ) : null}
-              <NewProjectDialog
-                open={newProjectOpen}
-                onOpenChange={setNewProjectOpen}
-                onProjectReady={() => void refreshInfo()}
-                onError={setErr}
-              />
-
               <ToolBar left={toolBarLeft} right={toolBarRight} />
 
               {err && (
@@ -500,13 +359,7 @@ function AppShell() {
                     />
                   )}
                   {page === "settings" && (
-                    <SettingsWorkspace
-                      onError={setErr}
-                      onSwitchProject={async () => {
-                        await refreshInfo();
-                        setPage("compose");
-                      }}
-                    />
+                    <SettingsWorkspace onError={setErr} />
                   )}
                   {page === "help" && <HelpWorkspace onError={setErr} />}
                   {page === "analysis" && (

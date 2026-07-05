@@ -1,14 +1,14 @@
 ---
 name: outline_graph_import
 description: >
-  将大纲、课标或复习材料中的要点层级整理为图谱节点与关系，并批量写入当前项目。
+  将大纲、课标或复习材料中的要点层级整理为图谱节点与关系，并批量写入当前内容库。
   当教师提到导入大纲、课标整理、知识点结构化、批量建要点等关键词时激活此技能。
 metadata:
   author: solaire-builtin
   version: "2.1"
   label: 课标大纲导入图谱
   tool_patterns: "graph.list_graphs graph.create_graph graph.delete_graph graph.list_nodes graph.search_nodes graph.create_node graph.batch_create_nodes graph.update_node graph.delete_node graph.list_relations graph.create_relation graph.update_relation graph.batch_create_relations graph.delete_relation graph.bind_question graph.batch_bind_questions graph.attach_resource file.write file.list file.read file.search web.search agent.switch_focus agent.activate_skill agent.read_skill_reference agent.enter_plan_mode agent.exit_plan_mode agent.set_task_plan agent.update_task_step agent.run_subtask agent.run_tool_pipeline memory.read_index memory.read_topic memory.search"
-  suggested_user_input: 请根据我提供的高考大纲内容，整理成知识要点并批量写入当前项目的知识图谱。
+  suggested_user_input: 请根据我提供的高考大纲内容，整理成知识要点并批量写入当前内容库的知识图谱。
 ---
 
 ## 节点类型与连接规则

@@ -24,7 +24,7 @@ export function PlatformShell({ roleLabel, title, subtitle, userName, actions, o
           {userName ? <p className="mt-1 truncate text-sm text-slate-400">{userName}</p> : null}
         </div>
         <div className="min-h-0 flex-1 p-4 text-sm leading-6 text-slate-400">
-          <p>项目级权限、学校账号、教师班级和学生答题统一在这里管理。</p>
+          <p>平台权限、学校账号、教师班级和学生答题统一在这里管理。</p>
         </div>
         {onLogout ? (
           <div className="border-t border-slate-800 p-3">

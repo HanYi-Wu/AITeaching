@@ -25,7 +25,7 @@ export function SettingsWorkspace({
   onSwitchProject,
 }: {
   onError: (msg: string | null) => void;
-  /** 已打开项目时可选：切换项目并回到欢迎页 */
+  /** 可选：切换内容目录并回到入口页 */
   onSwitchProject?: () => void | Promise<void>;
 }) {
   const { t, i18n } = useTranslation(["settings", "common"]);

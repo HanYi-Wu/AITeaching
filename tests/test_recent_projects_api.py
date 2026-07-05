@@ -88,7 +88,9 @@ def test_project_close_unbinds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     r = client.post("/api/project/close")
     assert r.status_code == 200
     assert r.json() == {"ok": True}
-    assert client.get("/api/project/info").json()["bound"] is False
+    info = client.get("/api/project/info").json()
+    assert info["bound"] is True
+    assert Path(info["root"]) == tmp_path / "workspace"
 
 
 def test_project_create_empty_default_template(
@@ -142,4 +144,3 @@ def test_project_create_math_template_unavailable(
         json={"parent": str(parent), "name": "x", "template": "math"},
     )
     assert r.status_code == 503
-

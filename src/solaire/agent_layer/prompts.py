@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-# 进入提示词的项目级字段白名单（减小动态层抖动；其它键仅用于 HTTP/观测不下发 LLM）
+# 进入提示词的内容目录字段白名单（减小动态层抖动；其它键仅用于 HTTP/观测不下发 LLM）
 PROJECT_CTX_WHITELIST: frozenset[str] = frozenset(
-    {"project_label", "exam_summary", "template_count", "graph_node_count"}
+    {"content_label", "exam_summary", "template_count", "graph_node_count"}
 )
 
 
@@ -53,7 +53,7 @@ def _layer_goal() -> str:
         "## 任务范围\n"
         "在授权范围内：列举考试数据、运行内置分析、保存与运行分析脚本、查询作业结果、"
         "检索与维护题库中的独立题目、读取与维护知识图谱、将题目挂接到知识点、"
-        "批量维护要点与挂接、读取项目内文件（写入能力视当前聚焦域而定）、文档格式转换（Word/PDF/OCR）、"
+        "批量维护要点与挂接、读取内容目录文件（写入能力视当前聚焦域而定）、文档格式转换（Word/PDF/OCR）、"
         "联网检索公开资料（可选配置）、"
         "以及组卷相关能力（校验与导出需确认）。"
         "超出工具能力时请明确说明，并建议教师手动操作路径。"
@@ -71,10 +71,10 @@ _FOCUS_LABEL: dict[str, str] = {
 
 
 def _layer_context(project_ctx: dict[str, Any]) -> str:
-    # 仅输出白名单内的项目级统计；界面信息放在 format_page_context_brief
+    # 仅输出白名单内的内容目录统计；界面信息放在 format_page_context_brief
     ctx = whitelist_project_ctx_for_prompt(project_ctx)
-    lines = ["## 项目状态"]
-    lines.append(f"- 项目路径：{ctx.get('project_label', '当前项目')}")
+    lines = ["## 内容状态"]
+    lines.append(f"- 内容目录：{ctx.get('content_label', '默认内容库')}")
     if exams := ctx.get("exam_summary"):
         lines.append(f"- 考试数据概览：{exams}")
     if "template_count" in ctx:
@@ -161,7 +161,7 @@ def _layer_plan_mode() -> str:
         "- 计划文件须以 YAML 围栏开头（`---`），含 `name`、`overview`、`todos` 字段，再以 `---` 结束。\n"
         "- todos 为列表，每项含 `id`、`content`、`status`（如 pending）。\n"
         "- 仅允许只读工具与 `.solaire/agent/plans/` 下的 file.write / file.edit。\n"
-        "- 落盘后调用 `agent.exit_plan_mode`，参数 `plan_file_path` 为写入的项目内相对路径。\n"
+        "- 落盘后调用 `agent.exit_plan_mode`，参数 `plan_file_path` 为写入的内容目录相对路径。\n"
     )
 
 
@@ -169,7 +169,7 @@ def _layer_plan_execution(execution_plan_path: str) -> str:
     path = execution_plan_path.strip()
     return (
         "## 计划执行（当前生效）\n"
-        f"- 已批准按计划文件执行：项目内路径 `{path}`。\n"
+        f"- 已批准按计划文件执行：内容目录路径 `{path}`。\n"
         "- 请严格按下方「当前任务步骤」逐项推进；每完成一步请调用 `agent.update_task_step` 更新序号与状态。\n"
         "- 全部步骤完成后再作总结答复。\n"
     )
@@ -265,7 +265,7 @@ def build_dynamic_system_prompt(
     page_context_brief: str | None = None,
     include_focus_info: bool = True,
 ) -> str:
-    """随项目摘要、计划状态变化的提示层（任务步骤与界面速览为短动态）。"""
+    """随内容摘要、计划状态变化的提示层（任务步骤与界面速览为短动态）。"""
     chunks: list[str] = []
     if skill_guidance and skill_guidance.strip():
         chunks.append("## 当前协助重点\n" + skill_guidance.strip())
@@ -371,7 +371,7 @@ def build_system_prompt_cached(
     """返回 (cacheable_prefix, dynamic_suffix)。
 
     DeepSeek KV Cache 按字节前缀匹配消息数组。将稳定部分（角色+约束+工具）
-    与动态部分（项目摘要/界面/计划状态）拆成两条 system 消息后，前缀在多次
+    与动态部分（内容摘要/界面/计划状态）拆成两条 system 消息后，前缀在多次
     请求间保持一致，从而命中缓存。
     """
     stable = build_stable_system_prompt()

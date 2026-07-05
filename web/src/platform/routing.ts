@@ -1,7 +1,6 @@
 import type { PlatformRole } from "./roles";
 
 export type PlatformRoute =
-  | "welcome"
   | "loading"
   | "bootstrap"
   | "login"
@@ -11,7 +10,6 @@ export type PlatformRoute =
   | "student";
 
 export type PlatformRouteInput = {
-  projectBound: boolean;
   loading: boolean;
   adminExists: boolean;
   userRole: PlatformRole | null;

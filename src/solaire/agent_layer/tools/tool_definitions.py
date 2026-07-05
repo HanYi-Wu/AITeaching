@@ -91,7 +91,7 @@ def _analysis(
 _RAW_TOOLS: list[RegisteredTool] = [
     _analysis(
         "analysis.list_datasets",
-        "列出当前项目中可用的考试成绩数据集（考试与批次）。",
+        "列出当前内容库中可用的考试成绩数据集（考试与批次）。",
         {"type": "object", "properties": {}, "additionalProperties": False},
         risk=ToolRisk.READ,
         ui_label="正在读取考试数据列表…",
@@ -192,7 +192,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
     ),
     _fn(
         "exam.list_templates",
-        "列出项目内试卷模板（路径、小节与版式信息）。",
+        "列出内容目录中的试卷模板（路径、小节与版式信息）。",
         {"type": "object", "properties": {}, "additionalProperties": False},
         exam_tools.tool_list_templates,
         risk=ToolRisk.READ,
@@ -847,7 +847,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
         {
             "type": "object",
             "properties": {
-                "plan_file_path": {"type": "string", "description": "计划文件的项目内相对路径"},
+                "plan_file_path": {"type": "string", "description": "计划文件的内容目录相对路径"},
             },
             "additionalProperties": False,
         },
@@ -893,11 +893,11 @@ _RAW_TOOLS: list[RegisteredTool] = [
     # File tools
     _fn(
         "file.read",
-        "读取项目内文本文件。支持 offset/limit 按行范围读取大文件。",
+        "读取内容目录中的文本文件。支持 offset/limit 按行范围读取大文件。",
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "项目内相对路径"},
+                "path": {"type": "string", "description": "内容目录相对路径"},
                 "offset": {"type": "integer", "description": "起始行号（0-based），默认 0"},
                 "limit": {"type": "integer", "description": "读取行数，默认全部"},
             },
@@ -914,7 +914,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "项目内相对路径"},
+                "path": {"type": "string", "description": "内容目录相对路径"},
                 "content": {"type": "string", "description": "文件内容"},
             },
             "required": ["path", "content"],
@@ -929,7 +929,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "项目内相对路径"},
+                "path": {"type": "string", "description": "内容目录相对路径"},
                 "old_string": {"type": "string", "description": "要替换的原文（须在文件中唯一）"},
                 "new_string": {"type": "string", "description": "替换后的内容"},
                 "replace_all": {"type": "boolean", "description": "是否替换所有匹配项，默认 false"},
@@ -946,7 +946,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "项目内相对路径，默认根目录"},
+                "path": {"type": "string", "description": "内容目录相对路径，默认根目录"},
                 "pattern": {"type": "string", "description": "文件名匹配模式（如 *.yaml），默认 *"},
             },
             "additionalProperties": False,
@@ -980,7 +980,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "DOCX 文件的项目内相对路径"},
+                "path": {"type": "string", "description": "DOCX 文件的内容目录相对路径"},
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -995,7 +995,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "PDF 文件的项目内相对路径"},
+                "path": {"type": "string", "description": "PDF 文件的内容目录相对路径"},
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -1010,7 +1010,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "图片文件的项目内相对路径"},
+                "path": {"type": "string", "description": "图片文件的内容目录相对路径"},
                 "lang": {"type": "string", "description": "OCR 语言，默认 chi_sim+eng"},
             },
             "required": ["path"],
@@ -1046,8 +1046,8 @@ _CONFIRM_LABELS: dict[str, str] = {
     "analysis.create_remediation_draft": "生成补练卷草稿",
     "agent.run_subtask": "分步深入分析子任务",
     "agent.run_tool_pipeline": "按序执行多步工具",
-    "file.write": "写入项目文件",
-    "file.edit": "编辑项目文件",
+    "file.write": "写入内容目录文件",
+    "file.edit": "编辑内容目录文件",
 }
 
 

@@ -35,9 +35,11 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 
 def _require_root() -> Path:
-    r = state.get_root()
-    if r is None:
-        raise HTTPException(status_code=400, detail="未打开项目")
+    r = state.get_content_root()
+    (r / "resource").mkdir(parents=True, exist_ok=True)
+    (r / "result").mkdir(parents=True, exist_ok=True)
+    (r / "templates").mkdir(parents=True, exist_ok=True)
+    (r / ".solaire").mkdir(parents=True, exist_ok=True)
     return r
 
 
@@ -60,6 +62,7 @@ def _project_ctx(root: Path) -> dict[str, Any]:
         graph_subjects = []
     return {
         "project_label": root.name,
+        "content_label": root.name,
         "exam_summary": exam_summary,
         "template_count": template_count,
         "graph_node_count": total_node_count,
@@ -93,7 +96,7 @@ class AgentChatBody(BaseModel):
     file_attachments: list[FileAttachment] | None = Field(default=None, description="附件文件列表")
     execution_plan_path: str | None = Field(
         default=None,
-        description="教师批准执行的计划文件项目内相对路径（与 exit_plan_mode 一致）",
+        description="教师批准执行的计划文件内容目录相对路径（与 exit_plan_mode 一致）",
     )
     clear_pending_plan_path: str | None = Field(
         default=None,
@@ -110,7 +113,7 @@ class MemoryPutBody(BaseModel):
 
 
 class LLMSettingsPutBody(BaseModel):
-    """写入项目内覆盖；字段为 None 表示不修改该项。"""
+    """写入内容目录覆盖；字段为 None 表示不修改该项。"""
 
     provider: str | None = None
     main_model: str | None = None
@@ -270,7 +273,7 @@ def agent_session_get(session_id: str) -> dict[str, Any]:
 
 @router.get("/sessions/{session_id}/context-meter")
 def agent_session_context_meter(session_id: str) -> dict[str, Any]:
-    """按当前会话与项目上下文估算上下文用量（与 SSE `context_metrics` 同源逻辑）。"""
+    """按当前会话与内容上下文估算上下文用量（与 SSE `context_metrics` 同源逻辑）。"""
     root = _require_root()
     s = load_session(root, session_id)
     if s is None:

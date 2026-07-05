@@ -74,12 +74,12 @@ def tool_switch_focus(ctx: InvocationContext, args: dict[str, Any]) -> ToolResul
 # ---------------------------------------------------------------------------
 
 _PLAN_MODE_INSTRUCTIONS = """\
-你已进入计划模式（与 Cursor 类 harness 类似：先只读探索，再将计划落盘到项目内）。
+你已进入计划模式（与 Cursor 类 harness 类似：先只读探索，再将计划落盘到内容目录）。
 
 1. 仅允许调用只读工具了解当前状况。
 2. 禁止执行写入或破坏性操作；唯一例外：用 `file.write` 写入 `.solaire/agent/plans/` 下的 `.md` 计划文件，或用 `file.edit` 修改该目录内已有计划。
 3. 计划文件必须以 YAML 围栏开头：首行 ---，YAML 内须含 name、overview、todos；再以独占一行的 --- 结束围栏，其后为 Markdown 正文。todos 为列表，建议每项含 id、content、status。
-4. 落盘后调用 `agent.exit_plan_mode`，传入 plan_file_path 为本文件的项目内相对路径（如 .solaire/agent/plans/xxx.md）。
+4. 落盘后调用 `agent.exit_plan_mode`，传入 plan_file_path 为本文件的内容目录相对路径（如 .solaire/agent/plans/xxx.md）。
 
 请开始分析当前任务并制定计划。"""
 

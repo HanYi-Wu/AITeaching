@@ -65,7 +65,7 @@
   "pasteYamlTextareaPh": "在此粘贴题目列表…",
   "importToCollection": "写入当前题集",
   "emptyList": "暂无题目",
-  "emptyListHint": "可使用顶栏「新建题目」或「导入题库」添加；内容保存在当前项目的题库目录中。",
+  "emptyListHint": "可使用顶栏「新建题目」或「导入题库」添加；内容保存在当前内容库的题库目录中。",
   "emptyFilter": "没有符合筛选条件的题目",
   "emptyFilterHint": "试试调整科目、题集、题型或搜索关键词。",
   "groupNItems": "题组 · {{n}} 小题",
