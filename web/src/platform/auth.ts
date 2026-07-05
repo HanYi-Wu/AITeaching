@@ -178,6 +178,58 @@ export type PlatformPaperAnalysis = {
   }>;
 };
 
+export type StudentPaperRecord = {
+  publication_id: string;
+  attempt_id: string;
+  paper_id?: string;
+  exam_id: string;
+  title: string;
+  subject?: string | null;
+  status: "not_started" | "in_progress" | "submitted" | "completed" | string;
+  started_at?: string | null;
+  submitted_at?: string | null;
+  score?: number | null;
+  max_score?: number | null;
+  score_percent?: number | null;
+  time_spent_seconds: number;
+  screen_switch_count: number;
+  show_results: boolean;
+  question_count: number;
+};
+
+export type StudentQuestionRecord = {
+  question_id: string;
+  header: string;
+  section_id: string;
+  score_per_item: number;
+  type: string;
+  content: string;
+  options?: Record<string, string> | null;
+};
+
+export type StudentAttemptRecord = Omit<StudentPaperRecord, "attempt_id" | "question_count"> & {
+  id: string;
+};
+
+export type StudentResultRecord = StudentAttemptRecord & {
+  attempt_id: string;
+  screen_switch_duration_ms?: number;
+  answers: Array<{
+    question_id: string;
+    answer?: unknown;
+    score?: number | null;
+    is_correct?: boolean | null;
+    responded_at?: string | null;
+  }>;
+  analysis?: {
+    correct_count?: number | null;
+    wrong_count?: number | null;
+    answered_count?: number;
+    screen_switch_count?: number;
+    screen_switch_duration_ms?: number;
+  };
+};
+
 export function sessionStorageKeyForProject(_projectRoot: string | null): string {
   return LEGACY_SESSION_STORAGE_KEY;
 }
@@ -611,6 +663,14 @@ export async function updatePlatformPaperDeliveryMode(
   return { paper: normalizePaper(data.paper) };
 }
 
+export async function syncPlatformPaperFromExam(examId: string): Promise<{ paper: PlatformPaperRecord }> {
+  const data = await platformRequest<{ paper: Partial<PlatformPaperRecord> & { id?: string } }>("/api/papers/from-exam", {
+    method: "POST",
+    body: JSON.stringify({ exam_id: examId }),
+  });
+  return { paper: normalizePaper(data.paper) };
+}
+
 export function listTeacherAssignedClasses(): Promise<{ classes: TeacherClassRecord[] }> {
   return platformRequest("/api/teacher/classes");
 }
@@ -676,6 +736,50 @@ export function uploadPaperScores(examId: string, file: File): Promise<{ batch_i
   const fd = new FormData();
   fd.append("file", file);
   return platformRequest(`/api/exams/${encodeURIComponent(examId)}/scores`, { method: "POST", body: fd });
+}
+
+export function listStudentPapers(): Promise<{ papers: StudentPaperRecord[] }> {
+  return platformRequest("/api/student/papers");
+}
+
+export function startStudentPaper(
+  publicationId: string,
+): Promise<{ attempt: StudentAttemptRecord; questions: StudentQuestionRecord[] }> {
+  return platformRequest(`/api/student/publications/${encodeURIComponent(publicationId)}/start`, { method: "POST" });
+}
+
+export function saveStudentAnswers(
+  attemptId: string,
+  answers: Array<{ question_id: string; answer: unknown }>,
+): Promise<{ answer_count: number }> {
+  return platformRequest(`/api/student/attempts/${encodeURIComponent(attemptId)}/answers`, {
+    method: "POST",
+    body: JSON.stringify({ answers }),
+  });
+}
+
+export function recordStudentProctorEvent(
+  attemptId: string,
+  payload: { event_type: string; duration_ms?: number | null; payload?: Record<string, unknown> | null },
+): Promise<{ event: { id: string; event_type: string } }> {
+  return platformRequest(`/api/student/attempts/${encodeURIComponent(attemptId)}/proctor-events`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function submitStudentAttempt(
+  attemptId: string,
+  payload: { time_spent_seconds?: number | null },
+): Promise<{ attempt: StudentAttemptRecord }> {
+  return platformRequest(`/api/student/attempts/${encodeURIComponent(attemptId)}/submit`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listStudentResults(): Promise<{ results: StudentResultRecord[] }> {
+  return platformRequest("/api/student/results");
 }
 
 export function updateStudentAccount(payload: {

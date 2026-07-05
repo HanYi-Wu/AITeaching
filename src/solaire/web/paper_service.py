@@ -148,6 +148,47 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
     return papers
 
 
+def sync_paper_for_exam(
+    project_root: Path,
+    platform_root: Path,
+    user: dict[str, Any],
+    *,
+    exam_id: str,
+) -> dict[str, Any]:
+    init_platform_db(platform_root)
+    clean_exam_id = exam_id.strip()
+    if not clean_exam_id:
+        raise ValueError("exam_id is required")
+    if user.get("role") not in {"admin", "teacher"}:
+        raise PermissionError("Only teachers and admins can sync papers")
+    exams = list_exam_results(project_root)
+    matched = next((exam for exam in exams if str(exam.get("exam_id") or "") == clean_exam_id), None)
+    if matched is None:
+        raise ValueError("exam not found")
+    record = _paper_record_for_exam(platform_root, matched, user)
+    stats = _publication_stats(platform_root, str(record["id"]))
+    return {
+        "paper_id": record["id"],
+        "exam_id": record["exam_id"],
+        "title": record["title"],
+        "subject": record["subject"],
+        "delivery_mode": record["delivery_mode"],
+        "status": record["status"],
+        "owner_teacher_id": record["owner_teacher_id"],
+        "school_id": record["school_id"],
+        "question_count": int(matched.get("question_count") or 0),
+        "section_count": int(matched.get("section_count") or 0),
+        "score_batch_count": int(matched.get("score_batch_count") or 0),
+        "has_score": bool(matched.get("has_score")),
+        "has_pdf": bool(matched.get("has_pdf")),
+        "has_docx": bool(matched.get("has_docx")),
+        "latest_batch_id": matched.get("latest_batch_id"),
+        "exam_dir": matched.get("exam_dir"),
+        "mtime": matched.get("mtime"),
+        **stats,
+    }
+
+
 def query_papers(
     project_root: Path,
     platform_root: Path,

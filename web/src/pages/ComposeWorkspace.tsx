@@ -35,6 +35,12 @@ import {
 } from "../lib/metadataFilters";
 import { isTauriShell } from "../lib/tauriEnv";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../lib/ime";
+import {
+  listTeacherAssignedClasses,
+  publishPlatformPaper,
+  syncPlatformPaperFromExam,
+  type TeacherClassRecord,
+} from "../platform/auth";
 import type { ExamDoc, ExamWorkspaceSummary, QuestionRow, RightSelection, TemplateRow } from "../types/compose";
 
 type GraphBindingNode = { id: string; canonical_name: string; node_kind?: string };
@@ -74,7 +80,6 @@ export function ComposeWorkspace({
   toolBarActive = true,
   openExamId = null,
   onOpenExamConsumed,
-  onOpenPapers,
 }: {
   onError: (s: string | null) => void;
   /** 为 false 时不占用顶栏工具栏（父级隐藏组卷视图时使用） */
@@ -144,6 +149,10 @@ export function ComposeWorkspace({
   const [dlgHistorySourceExamId, setDlgHistorySourceExamId] = useState("");
   /** 从历史复制时的新考试标签（学科沿用源导出） */
   const [dlgHistoryExportLabel, setDlgHistoryExportLabel] = useState("");
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishClasses, setPublishClasses] = useState<TeacherClassRecord[]>([]);
+  const [publishClassIds, setPublishClassIds] = useState<string[]>([]);
+  const [publishBusy, setPublishBusy] = useState(false);
 
   const currentExamIdRef = useRef<string | null>(null);
   currentExamIdRef.current = currentExamId;
@@ -1275,6 +1284,98 @@ export function ComposeWorkspace({
     templateRef,
   ]);
 
+  const persistDraftForPublish = useCallback(async (): Promise<ExamDoc | null> => {
+    if (isImeCompositionActive()) return null;
+    if (!selectedTpl || !templatePath.trim()) {
+      onError(t("compose:errors.selectTemplateForDraft"));
+      return null;
+    }
+    onError(null);
+    try {
+      const selected_items = buildSelectedItemsForApi();
+      const body = {
+        name: draftName.trim() || undefined,
+        subject: subject.trim(),
+        export_label: exportLabel.trim(),
+        template_ref: templateRef,
+        template_path: templatePath,
+        selected_items,
+      };
+      const response = currentExamId
+        ? await apiPut<{ exam: ExamDoc }>(`/api/exams/${encodeURIComponent(currentExamId)}`, body)
+        : await apiPost<{ exam: ExamDoc }>("/api/exams", body);
+      applyExamDocument(response.exam);
+      void refreshExamSummaries();
+      return response.exam;
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }, [
+    applyExamDocument,
+    buildSelectedItemsForApi,
+    currentExamId,
+    draftName,
+    exportLabel,
+    onError,
+    refreshExamSummaries,
+    selectedTpl,
+    subject,
+    t,
+    templatePath,
+    templateRef,
+  ]);
+
+  async function openPublishDialog() {
+    setPublishBusy(true);
+    onError(null);
+    try {
+      const data = await listTeacherAssignedClasses();
+      setPublishClasses(data.classes);
+      setPublishClassIds([]);
+      setPublishDialogOpen(true);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPublishBusy(false);
+    }
+  }
+
+  function togglePublishClass(classId: string) {
+    setPublishClassIds((current) =>
+      current.includes(classId) ? current.filter((id) => id !== classId) : [...current, classId],
+    );
+  }
+
+  async function publishCurrentPaperOnline() {
+    if (publishClassIds.length === 0) {
+      onError("请先选择要发布的班级");
+      return;
+    }
+    setPublishBusy(true);
+    onError(null);
+    try {
+      const saved = await persistDraftForPublish();
+      const examId = String(saved?.exam_id ?? currentExamIdRef.current ?? "").trim();
+      if (!examId) {
+        throw new Error("保存试卷失败，无法取得试卷编号");
+      }
+      const synced = await syncPlatformPaperFromExam(examId);
+      await publishPlatformPaper(synced.paper.paper_id, {
+        class_ids: publishClassIds,
+        title: exportLabel.trim() || synced.paper.title,
+      });
+      setMsg("已发布为线上答题试卷");
+      setPublishDialogOpen(false);
+      setPublishClassIds([]);
+      dispatchExamsChanged({ examId });
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPublishBusy(false);
+    }
+  }
+
   async function deleteExamById(examId: string, opts?: { exported?: boolean }) {
     const ok = opts?.exported
       ? await confirmDialog(t("compose:messages.confirmDeleteExportedExam"))
@@ -1404,8 +1505,8 @@ export function ComposeWorkspace({
         <button
           type="button"
           className="rounded-md border border-emerald-300 bg-white px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-          disabled={busy || !onOpenPapers}
-          onClick={() => onOpenPapers?.()}
+          disabled={busy || publishBusy || !selectedTpl}
+          onClick={() => void openPublishDialog()}
           title="发布线上试卷"
         >
           发布线上试卷
@@ -1428,7 +1529,7 @@ export function ComposeWorkspace({
     subject,
     templates,
     exportedExamRows,
-    onOpenPapers,
+    publishBusy,
   ]);
 
   useEffect(() => {
@@ -1582,6 +1683,68 @@ export function ComposeWorkspace({
                 onClick={() => void confirmNewPaperDialog()}
               >
                 {t("compose:newPaperDialogConfirm")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {publishDialogOpen ? (
+        <div
+          className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="publish-online-dialog-title"
+        >
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+            <h2 id="publish-online-dialog-title" className="text-base font-semibold text-slate-900">
+              发布线上答题试卷
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              将当前组卷保存为试卷，并发布给选中的班级。线上发布不依赖 PDF 编译。
+            </p>
+            <div className="mt-4 max-h-72 space-y-2 overflow-auto rounded-lg border border-slate-200 p-2">
+              {publishClasses.map((klass) => (
+                <label
+                  key={klass.id}
+                  className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-slate-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={publishClassIds.includes(klass.id)}
+                    onChange={() => togglePublishClass(klass.id)}
+                    className="h-4 w-4"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-slate-900">{klass.name}</span>
+                    <span className="block truncate text-xs text-slate-500">
+                      {[klass.grade, klass.subject ?? klass.subject_hint].filter(Boolean).join(" · ") || "未分组"}
+                    </span>
+                  </span>
+                </label>
+              ))}
+              {publishClasses.length === 0 ? (
+                <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                  暂无可发布班级，请先在学校端给教师分配班级。
+                </p>
+              ) : null}
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800"
+                disabled={publishBusy}
+                onClick={() => setPublishDialogOpen(false)}
+              >
+                {t("common:cancel")}
+              </button>
+              <button
+                type="button"
+                data-testid="compose-publish-online-confirm"
+                className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
+                disabled={publishBusy || publishClassIds.length === 0}
+                onClick={() => void publishCurrentPaperOnline()}
+              >
+                {publishBusy ? "发布中..." : "发布线上试卷"}
               </button>
             </div>
           </div>

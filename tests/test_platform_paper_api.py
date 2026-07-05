@@ -144,6 +144,27 @@ def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClie
     assert body["publication"]["class_ids"] == [class_id]
 
 
+def test_teacher_syncs_paper_from_exam_id_for_compose_direct_publish(web_client: TestClient, tmp_path: Path) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _, _, class_id = _create_school_teacher_class(web_client, admin_token)
+    exam_id = _write_exam(tmp_path)
+    teacher_headers = _headers(_teacher_token(web_client))
+
+    synced = web_client.post("/api/papers/from-exam", json={"exam_id": exam_id}, headers=teacher_headers)
+    assert synced.status_code == 200
+    paper = synced.json()["paper"]
+    assert paper["exam_id"] == exam_id
+    assert paper["delivery_mode"] == "offline"
+
+    published = web_client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "title": "Compose Online"},
+        headers=teacher_headers,
+    )
+    assert published.status_code == 200
+    assert published.json()["publication"]["paper_id"] == paper["paper_id"]
+
+
 def test_teacher_filters_papers_and_manages_publication_history(web_client: TestClient, tmp_path: Path) -> None:
     admin_token = _bootstrap_admin(web_client)
     _, _, class_id = _create_school_teacher_class(web_client, admin_token)

@@ -37,6 +37,7 @@ from solaire.web.agent_api import router as agent_router
 from solaire.web.auth_api import router as auth_router
 from solaire.web.bank_exchange import export_bank_exchange_zip, import_bank_exchange_zip
 from solaire.web.paper_api import router as paper_router
+from solaire.web.student_api import router as student_router
 from solaire.web.result_service import (
     compute_statistics,
     delete_score_batch,
@@ -185,6 +186,7 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
 app.include_router(paper_router, prefix="/api")
+app.include_router(student_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,

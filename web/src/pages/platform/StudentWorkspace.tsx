@@ -1,6 +1,29 @@
-import { FormEvent, ReactNode, useState } from "react";
-import { BarChart3, ClipboardList, History, Save } from "lucide-react";
-import { updateStudentAccount, type PlatformUser } from "../../platform/auth";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  ClipboardList,
+  History,
+  RefreshCw,
+  Save,
+  Send,
+  ShieldAlert,
+} from "lucide-react";
+import {
+  listStudentPapers,
+  listStudentResults,
+  recordStudentProctorEvent,
+  saveStudentAnswers,
+  startStudentPaper,
+  submitStudentAttempt,
+  updateStudentAccount,
+  type PlatformUser,
+  type StudentAttemptRecord,
+  type StudentPaperRecord,
+  type StudentQuestionRecord,
+  type StudentResultRecord,
+} from "../../platform/auth";
 import { PlatformShell } from "./PlatformShell";
 
 type Props = {
@@ -8,17 +31,95 @@ type Props = {
   onLogout: () => void;
 };
 
+function statusLabel(status: string): string {
+  if (status === "submitted" || status === "completed") return "已提交";
+  if (status === "in_progress") return "答题中";
+  return "待作答";
+}
+
+function scoreText(score?: number | null, maxScore?: number | null): string {
+  if (score === null || score === undefined) return "待公布";
+  if (maxScore === null || maxScore === undefined) return `${score}`;
+  return `${score}/${maxScore}`;
+}
+
 export function StudentWorkspace({ user, onLogout }: Props) {
   const [profile, setProfile] = useState(user);
   const [username, setUsername] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [papers, setPapers] = useState<StudentPaperRecord[]>([]);
+  const [results, setResults] = useState<StudentResultRecord[]>([]);
+  const [activeAttempt, setActiveAttempt] = useState<StudentAttemptRecord | null>(null);
+  const [questions, setQuestions] = useState<StudentQuestionRecord[]>([]);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const startedAtRef = useRef<number | null>(null);
+  const hiddenAtRef = useRef<number | null>(null);
+
+  const pendingPapers = useMemo(
+    () => papers.filter((paper) => paper.status !== "submitted" && paper.status !== "completed"),
+    [papers],
+  );
+  const latestResult = results[0] ?? null;
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const [paperData, resultData] = await Promise.all([listStudentPapers(), listStudentResults()]);
+      setPapers(paperData.papers);
+      setResults(resultData.results);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!activeAttempt || activeAttempt.status !== "in_progress") {
+      return;
+    }
+    const attemptId = activeAttempt.id;
+    const sendEvent = (eventType: string, durationMs?: number | null, payload?: Record<string, unknown>) => {
+      void recordStudentProctorEvent(attemptId, {
+        event_type: eventType,
+        duration_ms: durationMs ?? null,
+        payload: payload ?? null,
+      }).catch(() => {
+        /* best effort proctor event */
+      });
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        hiddenAtRef.current = Date.now();
+        return;
+      }
+      if (hiddenAtRef.current != null) {
+        const duration = Date.now() - hiddenAtRef.current;
+        hiddenAtRef.current = null;
+        sendEvent("visibility_hidden", duration, { source: "visibilitychange" });
+      }
+    };
+    const onBlur = () => sendEvent("window_blur", 0, { source: "window.blur" });
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [activeAttempt]);
 
   async function submitAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setBusy(true);
+    setBusy("account");
     setMessage(null);
     try {
       const result = await updateStudentAccount({
@@ -34,7 +135,52 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  }
+
+  async function startPaper(paper: StudentPaperRecord) {
+    setBusy(`start:${paper.publication_id}`);
+    setMessage(null);
+    try {
+      const data = await startStudentPaper(paper.publication_id);
+      setActiveAttempt(data.attempt);
+      setQuestions(data.questions);
+      setAnswers({});
+      startedAtRef.current = Date.now();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function setAnswer(questionId: string, value: string) {
+    setAnswers((current) => ({ ...current, [questionId]: value }));
+  }
+
+  async function submitActiveAttempt() {
+    if (!activeAttempt) return;
+    setBusy("submit");
+    setMessage(null);
+    try {
+      const payload = questions.map((question) => ({
+        question_id: question.question_id,
+        answer: answers[question.question_id] ?? "",
+      }));
+      await saveStudentAnswers(activeAttempt.id, payload);
+      const elapsed = startedAtRef.current ? Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000)) : null;
+      await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsed });
+      setActiveAttempt(null);
+      setQuestions([]);
+      setAnswers({});
+      startedAtRef.current = null;
+      await refresh();
+      setMessage("试卷已提交");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -47,63 +193,259 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       onLogout={onLogout}
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="grid gap-4 md:grid-cols-3">
-          <InfoCard icon={<ClipboardList className="mb-3 h-5 w-5 text-slate-600" />} title="待答试卷" text="线上发布和作答将在下一阶段接入。" />
-          <InfoCard icon={<History className="mb-3 h-5 w-5 text-slate-600" />} title="历史成绩" text="提交记录会在答题系统接入后显示。" />
-          <InfoCard icon={<BarChart3 className="mb-3 h-5 w-5 text-slate-600" />} title="分析反馈" text="教师发布结果后展示个人分析。" />
+        <section className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-3">
+            <MetricCard icon={<ClipboardList className="h-5 w-5" />} label="待答试卷" value={pendingPapers.length} />
+            <MetricCard icon={<History className="h-5 w-5" />} label="历史成绩" value={results.length} />
+            <MetricCard
+              icon={<ShieldAlert className="h-5 w-5" />}
+              label="切屏记录"
+              value={results.reduce((sum, item) => sum + Number(item.screen_switch_count || 0), 0)}
+            />
+          </div>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-slate-950">待答试卷</h2>
+                <p className="mt-1 text-sm text-slate-500">老师发布到你所在班级的线上试卷会显示在这里。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void refresh()}
+                disabled={loading}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                <RefreshCw className="h-4 w-4" />
+                刷新
+              </button>
+            </div>
+            <div className="space-y-2">
+              {pendingPapers.map((paper) => (
+                <div key={paper.publication_id} className="rounded-lg border border-slate-200 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-slate-950">{paper.title}</p>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                        <span>{paper.subject || "未分科"}</span>
+                        <span>{paper.question_count} 题</span>
+                        <span>{statusLabel(paper.status)}</span>
+                        {paper.screen_switch_count ? <span>切屏 {paper.screen_switch_count}</span> : null}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid={`student-start-${paper.publication_id}`}
+                      disabled={busy === `start:${paper.publication_id}`}
+                      onClick={() => void startPaper(paper)}
+                      className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      {paper.status === "in_progress" ? "继续答题" : "开始答题"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {!loading && pendingPapers.length === 0 ? (
+                <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">暂无待答试卷</p>
+              ) : null}
+            </div>
+          </section>
+
+          {activeAttempt ? (
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="font-semibold text-slate-950">{activeAttempt.title}</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {activeAttempt.subject || "未分科"} · {questions.length} 题
+                  </p>
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4" />
+                  已开启切屏检测
+                </div>
+              </div>
+              <div className="space-y-4">
+                {questions.map((question) => (
+                  <QuestionAnswer
+                    key={question.question_id}
+                    question={question}
+                    value={answers[question.question_id] ?? ""}
+                    onChange={(value) => setAnswer(question.question_id, value)}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                data-testid="student-submit-attempt"
+                disabled={busy === "submit"}
+                onClick={() => void submitActiveAttempt()}
+                className="mt-5 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <Send className="h-4 w-4" />
+                提交试卷
+              </button>
+            </section>
+          ) : null}
+
+          {message ? (
+            <div className="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
+              {message}
+            </div>
+          ) : null}
         </section>
 
-        <aside className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-semibold text-slate-950">账号设置</h2>
-          <form onSubmit={(event) => void submitAccount(event)} className="space-y-3">
-            <input
-              data-testid="student-account-username"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="新用户名"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-            />
-            <input
-              data-testid="student-account-current-password"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="当前密码"
-              type="password"
-              value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
-              required
-            />
-            <input
-              data-testid="student-account-new-password"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="新密码"
-              type="password"
-              minLength={6}
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-            />
-            <button
-              data-testid="student-account-save"
-              type="submit"
-              disabled={busy}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            >
-              <Save className="h-4 w-4" />
-              保存账号
-            </button>
-          </form>
-          {message ? <p className="mt-3 text-sm text-slate-600">{message}</p> : null}
+        <aside className="space-y-5">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <BarChart3 className="h-5 w-5 text-slate-600" />
+              <h2 className="text-sm font-semibold text-slate-950">成绩与分析</h2>
+            </div>
+            <div className="space-y-3">
+              {results.map((result) => (
+                <article key={result.attempt_id} className="rounded-md border border-slate-200 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-950">{result.title}</p>
+                      <p className="mt-1 text-xs text-slate-500">{result.subject || "未分科"}</p>
+                    </div>
+                    <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-800">
+                      {result.score_percent ?? "-"}%
+                    </span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="rounded bg-slate-50 p-2">
+                      <p className="text-slate-500">得分</p>
+                      <p className="mt-1 font-semibold text-slate-950">{scoreText(result.score, result.max_score)}</p>
+                    </div>
+                    <div className="rounded bg-slate-50 p-2">
+                      <p className="text-slate-500">正确</p>
+                      <p className="mt-1 font-semibold text-slate-950">{result.analysis?.correct_count ?? "-"}</p>
+                    </div>
+                    <div className="rounded bg-slate-50 p-2">
+                      <p className="text-slate-500">切屏</p>
+                      <p className="mt-1 font-semibold text-slate-950">{result.screen_switch_count}</p>
+                    </div>
+                  </div>
+                </article>
+              ))}
+              {!loading && results.length === 0 ? <p className="text-sm text-slate-500">暂无历史成绩</p> : null}
+            </div>
+          </section>
+
+          {latestResult ? (
+            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-sm font-semibold text-slate-950">最近一次分析</h2>
+              <p className="mt-2 text-sm text-slate-600">{latestResult.title}</p>
+              <div className="mt-3 space-y-2 text-sm text-slate-600">
+                <p>答题数：{latestResult.analysis?.answered_count ?? 0}</p>
+                <p>错题数：{latestResult.analysis?.wrong_count ?? "-"}</p>
+                <p>切屏时长：{Math.round(Number(latestResult.screen_switch_duration_ms || 0) / 1000)} 秒</p>
+              </div>
+            </section>
+          ) : null}
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold text-slate-950">账号设置</h2>
+            <form onSubmit={(event) => void submitAccount(event)} className="space-y-3">
+              <input
+                data-testid="student-account-username"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="新用户名"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+              />
+              <input
+                data-testid="student-account-current-password"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="当前密码"
+                type="password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                required
+              />
+              <input
+                data-testid="student-account-new-password"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="新密码"
+                type="password"
+                minLength={6}
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+              />
+              <button
+                data-testid="student-account-save"
+                type="submit"
+                disabled={busy === "account"}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                保存账号
+              </button>
+            </form>
+          </section>
         </aside>
       </div>
     </PlatformShell>
   );
 }
 
-function InfoCard({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
+function MetricCard({ icon, label, value }: { icon: ReactNode; label: string; value: number }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      {icon}
-      <h2 className="font-semibold">{title}</h2>
-      <p className="mt-2 text-sm text-slate-500">{text}</p>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-slate-600">{icon}</div>
+        <p className="text-2xl font-semibold text-slate-950">{value}</p>
+      </div>
+      <p className="mt-3 text-sm text-slate-500">{label}</p>
     </section>
+  );
+}
+
+function QuestionAnswer({
+  question,
+  value,
+  onChange,
+}: {
+  question: StudentQuestionRecord;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const options = question.options ? Object.entries(question.options) : [];
+  return (
+    <article className="rounded-lg border border-slate-200 p-4">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <span>{question.header}</span>
+        <span>{question.section_id}</span>
+        <span>{question.score_per_item} 分</span>
+      </div>
+      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-950">{question.content}</p>
+      {options.length > 0 ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {options.map(([key, text]) => (
+            <label key={key} className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm">
+              <input
+                type="radio"
+                name={`question-${question.question_id}`}
+                value={key}
+                checked={value === key}
+                onChange={() => onChange(key)}
+              />
+              <span>
+                {key}. {text}
+              </span>
+            </label>
+          ))}
+        </div>
+      ) : (
+        <textarea
+          data-testid={`student-answer-${question.question_id}`}
+          className="mt-3 min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )}
+    </article>
   );
 }

@@ -17,6 +17,7 @@ from solaire.web.paper_service import (
     publish_online_paper,
     query_papers,
     revoke_paper_publication,
+    sync_paper_for_exam,
     update_paper_publication,
     update_paper_delivery_mode,
 )
@@ -27,6 +28,10 @@ router = APIRouter()
 
 class PaperUpdateBody(BaseModel):
     delivery_mode: Literal["offline", "online"]
+
+
+class PaperFromExamBody(BaseModel):
+    exam_id: str = Field(..., min_length=1)
 
 
 class PaperPublishBody(BaseModel):
@@ -90,6 +95,20 @@ def papers_list(
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return result
+
+
+@router.post("/papers/from-exam")
+def papers_from_exam(
+    body: PaperFromExamBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    platform_root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        paper = sync_paper_for_exam(project_root, platform_root, user, exam_id=body.exam_id)
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"paper": paper}
 
 
 @router.patch("/papers/{paper_id}")
