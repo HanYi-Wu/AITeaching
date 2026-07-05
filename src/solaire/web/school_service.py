@@ -1074,3 +1074,21 @@ def remove_teacher_class_assignment(
 def get_school(root: Path, *, school_id: str) -> dict[str, Any]:
     init_platform_db(root)
     return _fetch_required(root, "SELECT * FROM schools WHERE id = ?", (school_id,), "school not found")
+
+
+def update_school_ai_enabled(root: Path, *, school_id: str, ai_enabled: bool) -> dict[str, Any]:
+    init_platform_db(root)
+    now = utc_now()
+    with connect(root) as con:
+        existing = con.execute("SELECT 1 FROM schools WHERE id = ?", (school_id,)).fetchone()
+        if existing is None:
+            raise ValueError("school not found")
+        con.execute(
+            "UPDATE schools SET ai_enabled = ?, updated_at = ? WHERE id = ?",
+            (1 if ai_enabled else 0, now, school_id),
+        )
+        row = con.execute("SELECT * FROM schools WHERE id = ?", (school_id,)).fetchone()
+    school = row_to_dict(row)
+    if school is None:
+        raise RuntimeError("failed to update school")
+    return school

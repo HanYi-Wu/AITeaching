@@ -9,7 +9,6 @@ import {
   Layers,
   LogOut,
   Network,
-  ScrollText,
   Settings,
   Sparkles,
   type LucideIcon,
@@ -21,7 +20,6 @@ import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
 import { ToolBarProvider, useToolBar } from "./contexts/ToolBarContext";
 import { AnalysisWorkspace } from "./pages/AnalysisWorkspace";
 import { HelpWorkspace } from "./pages/HelpWorkspace";
-import { LogWorkspace } from "./pages/LogWorkspace";
 import { AdminWorkspace } from "./pages/platform/AdminWorkspace";
 import { PapersWorkspace } from "./pages/platform/PapersWorkspace";
 import { PlatformLogin } from "./pages/platform/PlatformLogin";
@@ -168,6 +166,10 @@ function AppShell() {
     }
   }, [setSidebarOpen]);
 
+  const openPapersPage = useCallback(() => {
+    setPage("papers");
+  }, []);
+
   const platformRoute = resolvePlatformRoute({
     loading: platformLoading,
     adminExists: Boolean(platformStatus?.admin_exists),
@@ -210,6 +212,7 @@ function AppShell() {
         ) : (
           <TeacherWorkspace>
             <aside className="flex w-16 shrink-0 flex-col border-r border-slate-800 bg-slate-900">
+              {currentUser ? <TeacherUserBadge user={currentUser} /> : null}
               <nav className="flex flex-1 flex-col gap-1 p-2">
                 <div className="flex flex-1 flex-col gap-1">
                   <SidebarNavButton
@@ -275,13 +278,6 @@ function AppShell() {
                     title="设置"
                   />
                   <SidebarNavButton
-                    icon={ScrollText}
-                    label={t("app:nav.log")}
-                    active={page === "log"}
-                    onClick={() => setPage("log")}
-                    title={t("app:nav.logTitle")}
-                  />
-                  <SidebarNavButton
                     icon={LogOut}
                     label="退出"
                     onClick={() => void onLogout()}
@@ -326,6 +322,7 @@ function AppShell() {
                         toolBarActive={page === "compose"}
                         openExamId={composeOpenExamId}
                         onOpenExamConsumed={() => setComposeOpenExamId(null)}
+                        onOpenPapers={openPapersPage}
                       />
                     </div>
                   )}
@@ -359,7 +356,7 @@ function AppShell() {
                     />
                   )}
                   {page === "settings" && (
-                    <SettingsWorkspace onError={setErr} />
+                    <SettingsWorkspace onError={setErr} userRole={currentUser?.role} />
                   )}
                   {page === "help" && <HelpWorkspace onError={setErr} />}
                   {page === "analysis" && (
@@ -370,13 +367,32 @@ function AppShell() {
                       }}
                     />
                   )}
-                  {page === "log" && <LogWorkspace />}
                 </main>
                 <AgentSidebar projectBound mode="overlay" overlayHost={assistantOverlayHost} />
               </div>
             </div>
           </TeacherWorkspace>
         )}
+      </div>
+    </div>
+  );
+}
+
+function TeacherUserBadge({ user }: { user: PlatformUser }) {
+  const displayName = user.display_name || user.username;
+  const initial = (displayName.trim()[0] || user.username.trim()[0] || "U").toUpperCase();
+  return (
+    <div className="border-b border-slate-800 p-2">
+      <div
+        className="flex min-w-0 flex-col items-center gap-1 rounded-lg px-1 py-2 text-center"
+        title={`${displayName} / ${user.username}`}
+      >
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-900">
+          {initial}
+        </span>
+        <span className="block max-w-12 truncate text-[10px] font-medium leading-tight text-slate-200">
+          {displayName}
+        </span>
       </div>
     </div>
   );

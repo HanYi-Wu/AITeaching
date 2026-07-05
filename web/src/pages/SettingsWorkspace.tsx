@@ -19,14 +19,18 @@ import { useAgentContext } from "../contexts/AgentContext";
 import { changeAppLanguage } from "../i18n/changeLanguage";
 import type { AppLang } from "../i18n/tauriLocale";
 import { SOLAIRE_SAVE_EVENT } from "../lib/saveEvents";
+import type { PlatformRole } from "../platform/roles";
+import { LogWorkspace } from "./LogWorkspace";
 
 export function SettingsWorkspace({
   onError,
   onSwitchProject,
+  userRole,
 }: {
   onError: (msg: string | null) => void;
   /** 可选：切换内容目录并回到入口页 */
   onSwitchProject?: () => void | Promise<void>;
+  userRole?: PlatformRole;
 }) {
   const { t, i18n } = useTranslation(["settings", "common"]);
   const { setPageContext } = useAgentContext();
@@ -38,6 +42,13 @@ export function SettingsWorkspace({
   const [safetyOptions, setSafetyOptions] = useState<AgentSafetyModeOption[]>([]);
   const [settingsTab, setSettingsTab] = useState("model");
   const modelFormRef = useRef<AgentModelSettingsFormHandle>(null);
+  const canManageModelSettings = userRole === "admin";
+
+  useEffect(() => {
+    if (!canManageModelSettings && settingsTab === "model") {
+      setSettingsTab("extensions");
+    }
+  }, [canManageModelSettings, settingsTab]);
 
   useEffect(() => {
     setPageContext({
@@ -48,6 +59,12 @@ export function SettingsWorkspace({
   }, [setPageContext, t, settingsTab]);
 
   const load = useCallback(async () => {
+    if (!canManageModelSettings) {
+      setData(null);
+      setSafetyOptions([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setMsg(null);
     onError(null);
@@ -61,7 +78,7 @@ export function SettingsWorkspace({
     } finally {
       setLoading(false);
     }
-  }, [onError]);
+  }, [canManageModelSettings, onError]);
 
   useEffect(() => {
     void load();
@@ -69,12 +86,12 @@ export function SettingsWorkspace({
 
   useEffect(() => {
     const onSave = () => {
-      if (settingsTab !== "model" || !data || loading) return;
+      if (!canManageModelSettings || settingsTab !== "model" || !data || loading) return;
       void modelFormRef.current?.save();
     };
     window.addEventListener(SOLAIRE_SAVE_EVENT, onSave);
     return () => window.removeEventListener(SOLAIRE_SAVE_EVENT, onSave);
-  }, [settingsTab, data, loading]);
+  }, [canManageModelSettings, settingsTab, data, loading]);
 
   const handleSwitchProject = async () => {
     if (!onSwitchProject) return;
@@ -92,7 +109,7 @@ export function SettingsWorkspace({
   };
 
   const handleSaveSafetyMode = async () => {
-    if (!data) return;
+    if (!canManageModelSettings || !data) return;
     setSaving(true);
     setMsg(null);
     onError(null);
@@ -107,14 +124,29 @@ export function SettingsWorkspace({
     }
   };
 
-  const uiLang: AppLang = i18n.language.startsWith("en") ? "en" : "zh";
+  const uiLang: AppLang = (i18n.language || "zh").startsWith("en") ? "en" : "zh";
+  const languagePanel = (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <label className="block text-sm font-medium text-slate-700">{t("settings:uiLanguage")}</label>
+      <select
+        className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+        value={uiLang}
+        onChange={(e) => void changeAppLanguage(e.target.value as AppLang)}
+      >
+        <option value="zh">{t("settings:langZh")}</option>
+        <option value="en">{t("settings:langEn")}</option>
+      </select>
+    </div>
+  );
 
   return (
     <div className="h-full overflow-auto p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-lg font-semibold text-slate-900">{t("title")}</h1>
-          <p className="mt-1 text-sm text-slate-600">{t("intro")}</p>
+          <p className="mt-1 text-sm text-slate-600">
+            {canManageModelSettings ? t("intro") : "管理界面语言、扩展组件和运行日志。"}
+          </p>
         </div>
         {onSwitchProject && (
           <button
@@ -129,6 +161,7 @@ export function SettingsWorkspace({
         )}
       </div>
 
+      {canManageModelSettings ? (
       <Tabs value={settingsTab} onValueChange={setSettingsTab} className="mt-6">
         <TabsList className="mb-1 w-full max-w-lg sm:w-auto">
           <TabsTrigger value="model" className="flex-1 sm:flex-none">
@@ -152,17 +185,7 @@ export function SettingsWorkspace({
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <label className="block text-sm font-medium text-slate-700">{t("settings:uiLanguage")}</label>
-                <select
-                  className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                  value={uiLang}
-                  onChange={(e) => void changeAppLanguage(e.target.value as AppLang)}
-                >
-                  <option value="zh">{t("settings:langZh")}</option>
-                  <option value="en">{t("settings:langEn")}</option>
-                </select>
-              </div>
+              {languagePanel}
 
               {data ? (
                 data.persist_scope === "global" ? (
@@ -233,6 +256,16 @@ export function SettingsWorkspace({
           )}
         </TabsContent>
       </Tabs>
+      ) : (
+        <div className="mx-auto mt-6 max-w-2xl space-y-4">
+          {languagePanel}
+          <ExtensionsPanel onError={onError} />
+        </div>
+      )}
+
+      <div className="mx-auto mt-6 max-w-5xl">
+        <LogWorkspace embedded />
+      </div>
     </div>
   );
 }

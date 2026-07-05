@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   deleteClass: vi.fn(),
   downloadSchoolImportTemplate: vi.fn(),
   exportStudentAccounts: vi.fn(),
+  getSchoolAiSettings: vi.fn(),
   importClassesFile: vi.fn(),
   importStudents: vi.fn(),
   importStudentsFile: vi.fn(),
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   resetStudentPassword: vi.fn(),
   resetTeacherPassword: vi.fn(),
   updateClass: vi.fn(),
+  updateSchoolAiSettings: vi.fn(),
   updateStudent: vi.fn(),
   updateTeacher: vi.fn(),
 }));
@@ -41,6 +43,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     deleteClass: mocks.deleteClass,
     downloadSchoolImportTemplate: mocks.downloadSchoolImportTemplate,
     exportStudentAccounts: mocks.exportStudentAccounts,
+    getSchoolAiSettings: mocks.getSchoolAiSettings,
     importClassesFile: mocks.importClassesFile,
     importStudents: mocks.importStudents,
     importStudentsFile: mocks.importStudentsFile,
@@ -53,6 +56,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     resetStudentPassword: mocks.resetStudentPassword,
     resetTeacherPassword: mocks.resetTeacherPassword,
     updateClass: mocks.updateClass,
+    updateSchoolAiSettings: mocks.updateSchoolAiSettings,
     updateStudent: mocks.updateStudent,
     updateTeacher: mocks.updateTeacher,
   };
@@ -93,6 +97,16 @@ describe("SchoolWorkspace", () => {
     });
     mocks.listTeacherClassAssignments.mockResolvedValue({ assignments: [], total: 0, page: 1, page_size: 10, total_pages: 1 });
     mocks.assignTeacherClass.mockResolvedValue({ assignment: { teacher_id: "t1", class_id: "c1" } });
+    mocks.getSchoolAiSettings.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: false,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 0, created_at: "", updated_at: "" },
+    });
+    mocks.updateSchoolAiSettings.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+    });
   });
 
   it("assigns a teacher to a class without requiring a subject", async () => {
@@ -120,5 +134,22 @@ describe("SchoolWorkspace", () => {
         class_id: "c1",
       }),
     );
+  });
+
+  it("lets the school enable AI only through the school switch", async () => {
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    const toggle = await screen.findByTestId("school-ai-toggle");
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(mocks.updateSchoolAiSettings).toHaveBeenCalledWith(true));
   });
 });

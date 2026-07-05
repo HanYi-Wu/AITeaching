@@ -74,6 +74,7 @@ export function ComposeWorkspace({
   toolBarActive = true,
   openExamId = null,
   onOpenExamConsumed,
+  onOpenPapers,
 }: {
   onError: (s: string | null) => void;
   /** 为 false 时不占用顶栏工具栏（父级隐藏组卷视图时使用） */
@@ -81,6 +82,7 @@ export function ComposeWorkspace({
   /** 外部页面请求打开某个考试工作区（如分析页生成补练卷后跳转）。 */
   openExamId?: string | null;
   onOpenExamConsumed?: () => void;
+  onOpenPapers?: () => void;
 }) {
   const { t } = useTranslation(["compose", "common", "lib"]);
   const { setPageContext } = useAgentContext();
@@ -1399,6 +1401,15 @@ export function ComposeWorkspace({
         >
           {t("compose:exportWord")}
         </button>
+        <button
+          type="button"
+          className="rounded-md border border-emerald-300 bg-white px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+          disabled={busy || !onOpenPapers}
+          onClick={() => onOpenPapers?.()}
+          title="发布线上试卷"
+        >
+          发布线上试卷
+        </button>
       </div>
     );
     setToolBar({ left, right });
@@ -1417,6 +1428,7 @@ export function ComposeWorkspace({
     subject,
     templates,
     exportedExamRows,
+    onOpenPapers,
   ]);
 
   useEffect(() => {

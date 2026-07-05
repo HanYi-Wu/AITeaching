@@ -10,6 +10,10 @@ export function ToolBar({
   right?: ReactNode;
   className?: string;
 }) {
+  if (left == null && right == null) {
+    return null;
+  }
+
   return (
     <div
       className={cn(

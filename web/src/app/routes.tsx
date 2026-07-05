@@ -15,6 +15,7 @@ export function ComposeRoute({
   toolBarActive = true,
   openExamId = null,
   onOpenExamConsumed,
+  onOpenPapers,
 }: {
   info: ProjectInfo | null;
   onRefreshInfo: () => Promise<void>;
@@ -23,6 +24,7 @@ export function ComposeRoute({
   toolBarActive?: boolean;
   openExamId?: string | null;
   onOpenExamConsumed?: () => void;
+  onOpenPapers?: () => void;
 }) {
   const { t } = useTranslation("app");
   const { setPageContext } = useAgentContext();
@@ -47,6 +49,7 @@ export function ComposeRoute({
       toolBarActive={toolBarActive}
       openExamId={openExamId}
       onOpenExamConsumed={onOpenExamConsumed}
+      onOpenPapers={onOpenPapers}
     />
   );
 }

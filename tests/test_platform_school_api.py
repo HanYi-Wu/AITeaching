@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
@@ -98,6 +99,35 @@ def test_school_assigns_teacher_to_class_without_subject(web_client: TestClient)
     )
     assert assigned.status_code == 200
     assert assigned.json()["assignment"] == {"teacher_id": teacher_id, "class_id": class_id}
+
+
+def test_school_ai_toggle_requires_admin_configured_api(
+    web_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in ("SOLAIRE_LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    school_headers, _ = _school_headers(web_client)
+
+    initial = web_client.get("/api/school/ai-settings", headers=school_headers)
+    assert initial.status_code == 200
+    assert initial.json()["ai_available"] is False
+    assert initial.json()["ai_enabled"] is False
+
+    blocked = web_client.patch("/api/school/ai-settings", json={"ai_enabled": True}, headers=school_headers)
+    assert blocked.status_code == 400
+
+    configured = web_client.put("/api/agent/llm-settings", json={"api_key": "sk-test-key-abcdef"})
+    assert configured.status_code == 200
+
+    enabled = web_client.patch("/api/school/ai-settings", json={"ai_enabled": True}, headers=school_headers)
+    assert enabled.status_code == 200
+    assert enabled.json()["ai_available"] is True
+    assert enabled.json()["ai_enabled"] is True
+
+    disabled = web_client.patch("/api/school/ai-settings", json={"ai_enabled": False}, headers=school_headers)
+    assert disabled.status_code == 200
+    assert disabled.json()["ai_enabled"] is False
 
 
 def test_school_imports_teachers_classes_and_students_from_json(web_client: TestClient) -> None:

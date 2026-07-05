@@ -33,6 +33,12 @@ export type SchoolRecord = {
   updated_at: string;
 };
 
+export type SchoolAiSettings = {
+  school: SchoolRecord;
+  ai_available: boolean;
+  ai_enabled: boolean;
+};
+
 export type PagedResult = {
   total?: number;
   page?: number;
@@ -303,6 +309,17 @@ export function createSchoolUser(
   return platformRequest(`/api/schools/${encodeURIComponent(schoolId)}/school-users`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function getSchoolAiSettings(): Promise<SchoolAiSettings> {
+  return platformRequest("/api/school/ai-settings");
+}
+
+export function updateSchoolAiSettings(aiEnabled: boolean): Promise<SchoolAiSettings> {
+  return platformRequest("/api/school/ai-settings", {
+    method: "PATCH",
+    body: JSON.stringify({ ai_enabled: aiEnabled }),
   });
 }
 

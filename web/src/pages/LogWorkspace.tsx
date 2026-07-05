@@ -17,7 +17,7 @@ function useLogs() {
   return useSyncExternalStore(subscribeLogs, getLogSnapshot, getLogSnapshot);
 }
 
-export function LogWorkspace() {
+export function LogWorkspace({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation(["log", "common"]);
   const { setPageContext } = useAgentContext();
   const entries = useLogs();
@@ -25,12 +25,13 @@ export function LogWorkspace() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
+    if (embedded) return;
     setPageContext({
       current_page: "log",
       summary: t("log:pageSummary"),
     });
     return () => setPageContext(null);
-  }, [setPageContext, t]);
+  }, [embedded, setPageContext, t]);
 
   const filtered = useMemo(() => {
     if (levelFilter === "all") {
@@ -48,8 +49,8 @@ export function LogWorkspace() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-50">
-      <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
+    <div className={cn("flex min-h-0 flex-col bg-slate-50", embedded ? "h-[28rem] rounded-lg border border-slate-200" : "h-full")}>
+      <div className={cn("shrink-0 border-b border-slate-200 bg-white", embedded ? "rounded-t-lg px-4 py-3" : "px-6 py-4")}>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 text-slate-800">
             <ScrollText className="h-5 w-5" strokeWidth={1.75} />

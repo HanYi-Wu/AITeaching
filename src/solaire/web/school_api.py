@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from io import BytesIO
 from typing import Annotated, Any
@@ -12,6 +13,8 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel, Field
 
+from solaire.agent_layer.llm.llm_overrides import load_overrides_raw
+from solaire.web import state
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.school_service import (
     assign_teacher_class,
@@ -37,6 +40,7 @@ from solaire.web.school_service import (
     remove_teacher_class_assignment,
     reset_student_password,
     reset_teacher_password,
+    update_school_ai_enabled,
     update_class,
     update_student,
     update_teacher,
@@ -79,6 +83,10 @@ class BulkStatusBody(BaseModel):
 
 class ResetPasswordBody(BaseModel):
     password: str | None = None
+
+
+class SchoolAiSettingsBody(BaseModel):
+    ai_enabled: bool
 
 
 class ClassCreateBody(BaseModel):
@@ -133,6 +141,26 @@ def _require_school(user: dict[str, Any]) -> str:
     if not isinstance(school_id, str) or not school_id:
         raise HTTPException(status_code=403, detail="School account is not bound to a school")
     return school_id
+
+
+def _admin_ai_available() -> bool:
+    root = state.get_root()
+    if root is not None and load_overrides_raw(root).get("api_key"):
+        return True
+    return any(
+        os.environ.get(key)
+        for key in ("SOLAIRE_LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY")
+    )
+
+
+def _school_ai_payload(root, school_id: str) -> dict[str, Any]:
+    school = get_school(root, school_id=school_id)
+    ai_enabled = bool(int(school.get("ai_enabled") or 0))
+    return {
+        "school": school,
+        "ai_available": _admin_ai_available(),
+        "ai_enabled": ai_enabled,
+    }
 
 
 def _raise_api_error(exc: Exception) -> None:
@@ -258,6 +286,29 @@ def school_users_create(
     except (ValueError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"school": school, "user": created}
+
+
+@router.get("/school/ai-settings")
+def school_ai_settings_get(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    return _school_ai_payload(root, school_id)
+
+
+@router.patch("/school/ai-settings")
+def school_ai_settings_update(
+    body: SchoolAiSettingsBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    if body.ai_enabled and not _admin_ai_available():
+        raise HTTPException(status_code=400, detail="AI API is not configured by admin")
+    try:
+        update_school_ai_enabled(root, school_id=school_id, ai_enabled=body.ai_enabled)
+    except (ValueError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return _school_ai_payload(root, school_id)
 
 
 @router.get("/school/teachers")

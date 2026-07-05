@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Sparkles,
   Trash2,
   Upload,
   UserCheck,
@@ -21,6 +22,7 @@ import {
   deleteClass,
   downloadSchoolImportTemplate,
   exportStudentAccounts,
+  getSchoolAiSettings,
   importClassesFile,
   importStudents,
   importStudentsFile,
@@ -33,10 +35,12 @@ import {
   resetStudentPassword,
   resetTeacherPassword,
   updateClass,
+  updateSchoolAiSettings,
   updateStudent,
   updateTeacher,
   type ClassRecord,
   type PlatformUser,
+  type SchoolAiSettings,
   type StudentRecord,
   type TeacherClassAssignmentRecord,
   type TeacherRecord,
@@ -101,6 +105,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
   const [classes, setClasses] = useState<ClassRecord[]>([]);
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [assignments, setAssignments] = useState<TeacherClassAssignmentRecord[]>([]);
+  const [aiSettings, setAiSettings] = useState<SchoolAiSettings | null>(null);
   const [teacherMeta, setTeacherMeta] = useState<PageMeta>(DEFAULT_META);
   const [classMeta, setClassMeta] = useState<PageMeta>(DEFAULT_META);
   const [studentMeta, setStudentMeta] = useState<PageMeta>(DEFAULT_META);
@@ -135,7 +140,8 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
 
   async function refresh() {
     onError(null);
-    const [teacherData, allTeacherData, classData, allClassData, studentData, assignmentData] = await Promise.all([
+    const [aiData, teacherData, allTeacherData, classData, allClassData, studentData, assignmentData] = await Promise.all([
+      getSchoolAiSettings(),
       listTeachers(teacherQuery),
       listTeachers({ page: 1, pageSize: 100, status: "active" }),
       listClasses(classQuery),
@@ -143,6 +149,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
       listStudents(studentClassFilter || null, studentQuery),
       listTeacherClassAssignments(assignmentQuery),
     ]);
+    setAiSettings(aiData);
     setTeachers(teacherData.teachers);
     setTeacherChoices(allTeacherData.teachers);
     setClasses(allClassData.classes);
@@ -266,6 +273,13 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     event.preventDefault();
     await run(async () => {
       await assignTeacherClass({ teacher_id: assignTeacherId, class_id: assignClassId });
+    });
+  }
+
+  async function setSchoolAiEnabled(enabled: boolean) {
+    await run(async () => {
+      await updateSchoolAiSettings(enabled);
+      setNotice(enabled ? "学校 AI 功能已开启" : "学校 AI 功能已关闭");
     });
   }
 
@@ -778,6 +792,40 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
         </section>
 
         <aside className="space-y-4">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-700">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-slate-950">AI 功能开关</h2>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  管理学校端和教师端是否允许使用已配置的 AI 能力。
+                </p>
+              </div>
+            </div>
+            <label className="mt-4 flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+              <span className="font-medium text-slate-800">启用 AI</span>
+              <input
+                data-testid="school-ai-toggle"
+                type="checkbox"
+                className="h-4 w-4"
+                checked={Boolean(aiSettings?.ai_enabled)}
+                disabled={busy || !aiSettings || (!aiSettings.ai_available && !aiSettings.ai_enabled)}
+                onChange={(event) => void setSchoolAiEnabled(event.target.checked)}
+              />
+            </label>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              {!aiSettings
+                ? "正在读取 AI 状态。"
+                : !aiSettings.ai_available
+                  ? "管理员尚未配置 AI API，学校暂不能开启。"
+                  : aiSettings.ai_enabled
+                    ? "当前学校已开启 AI。"
+                    : "当前学校已关闭 AI。"}
+            </p>
+          </section>
+
           <form onSubmit={(event) => void submitTeacher(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">添加教师</h2>
             <input className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="用户名" value={teacherUsername} onChange={(event) => setTeacherUsername(event.target.value)} required />
