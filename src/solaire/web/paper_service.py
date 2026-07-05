@@ -11,6 +11,8 @@ from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import list_exam_results
 
 DELIVERY_MODES = {"offline", "online"}
+PUBLICATION_STATUSES = {"draft", "published", "closed", "revoked"}
+MAX_PAGE_SIZE = 100
 
 
 def _new_id() -> str:
@@ -23,6 +25,31 @@ def _clean_subject(value: object) -> str:
 
 def _clean_title(value: object, fallback: str) -> str:
     return str(value or "").strip() or fallback
+
+
+def _page(items: list[dict[str, Any]], *, page: int = 1, page_size: int = 10) -> dict[str, Any]:
+    clean_page = max(1, int(page or 1))
+    clean_page_size = max(1, min(MAX_PAGE_SIZE, int(page_size or 10)))
+    total = len(items)
+    total_pages = max(1, (total + clean_page_size - 1) // clean_page_size)
+    if clean_page > total_pages:
+        clean_page = total_pages
+    start = (clean_page - 1) * clean_page_size
+    return {
+        "items": items[start : start + clean_page_size],
+        "total": total,
+        "page": clean_page,
+        "page_size": clean_page_size,
+        "total_pages": total_pages,
+    }
+
+
+def _contains_query(item: dict[str, Any], query: str, fields: list[str]) -> bool:
+    needle = query.strip().lower()
+    if not needle:
+        return True
+    values = [str(item.get(field) or "") for field in fields]
+    return needle in " ".join(values).lower()
 
 
 def _paper_record_for_exam(root: Path, exam: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -74,7 +101,7 @@ def _paper_record_for_exam(root: Path, exam: dict[str, Any], user: dict[str, Any
 def _publication_stats(root: Path, paper_id: str) -> dict[str, int]:
     with connect(root) as con:
         publication_count = con.execute(
-            "SELECT COUNT(*) AS n FROM exam_publications WHERE paper_id = ?",
+            "SELECT COUNT(*) AS n FROM exam_publications WHERE paper_id = ? AND status <> 'revoked'",
             (paper_id,),
         ).fetchone()["n"]
         published_class_count = con.execute(
@@ -82,7 +109,7 @@ def _publication_stats(root: Path, paper_id: str) -> dict[str, int]:
             SELECT COUNT(DISTINCT pc.class_id) AS n
             FROM publication_classes pc
             JOIN exam_publications ep ON ep.id = pc.publication_id
-            WHERE ep.paper_id = ?
+            WHERE ep.paper_id = ? AND ep.status <> 'revoked'
             """,
             (paper_id,),
         ).fetchone()["n"]
@@ -121,6 +148,36 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
     return papers
 
 
+def query_papers(
+    project_root: Path,
+    platform_root: Path,
+    user: dict[str, Any],
+    *,
+    q: str | None = None,
+    delivery_mode: str | None = None,
+    status: str | None = None,
+    subject: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
+) -> dict[str, Any]:
+    papers = list_papers(project_root, platform_root, user)
+    if delivery_mode and delivery_mode != "all":
+        papers = [paper for paper in papers if str(paper.get("delivery_mode") or "") == delivery_mode]
+    if status and status != "all":
+        papers = [paper for paper in papers if str(paper.get("status") or "") == status]
+    if subject and subject != "all":
+        papers = [paper for paper in papers if str(paper.get("subject") or "") == subject]
+    if q:
+        papers = [
+            paper
+            for paper in papers
+            if _contains_query(paper, q, ["title", "exam_id", "subject", "delivery_mode", "status"])
+        ]
+    papers.sort(key=lambda item: str(item.get("mtime") or item.get("updated_at") or ""), reverse=True)
+    result = _page(papers, page=page, page_size=page_size)
+    return {"papers": result.pop("items"), **result}
+
+
 def get_paper(root: Path, paper_id: str) -> dict[str, Any]:
     init_platform_db(root)
     with connect(root) as con:
@@ -129,6 +186,17 @@ def get_paper(root: Path, paper_id: str) -> dict[str, Any]:
     if paper is None:
         raise ValueError("paper not found")
     return paper
+
+
+def _ensure_paper_access(paper: dict[str, Any], user: dict[str, Any]) -> None:
+    role = str(user.get("role") or "")
+    if role == "admin":
+        return
+    if role == "school" and paper.get("school_id") in (None, user.get("school_id")):
+        return
+    if role == "teacher" and paper.get("owner_teacher_id") in (None, user.get("id")):
+        return
+    raise PermissionError("No permission for this paper")
 
 
 def update_paper_delivery_mode(root: Path, paper_id: str, delivery_mode: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -152,6 +220,127 @@ def update_paper_delivery_mode(root: Path, paper_id: str, delivery_mode: str, us
     if paper is None:
         raise RuntimeError("failed to update paper")
     return paper
+
+
+def list_paper_publications(root: Path, *, paper_id: str, user: dict[str, Any]) -> list[dict[str, Any]]:
+    init_platform_db(root)
+    paper = get_paper(root, paper_id)
+    _ensure_paper_access(paper, user)
+    with connect(root) as con:
+        rows = con.execute(
+            """
+            SELECT
+              ep.*,
+              u.display_name AS teacher_name,
+              u.username AS teacher_username,
+              GROUP_CONCAT(DISTINCT c.id) AS class_ids,
+              GROUP_CONCAT(DISTINCT c.name) AS class_names,
+              COUNT(DISTINCT sa.id) AS attempt_count,
+              COUNT(DISTINCT CASE WHEN sa.status IN ('submitted', 'completed') OR sa.submitted_at IS NOT NULL THEN sa.id END) AS submitted_count,
+              COUNT(DISTINCT pe.id) AS proctor_event_count
+            FROM exam_publications ep
+            LEFT JOIN users u ON u.id = ep.teacher_id
+            LEFT JOIN publication_classes pc ON pc.publication_id = ep.id
+            LEFT JOIN classes c ON c.id = pc.class_id
+            LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
+            LEFT JOIN proctor_events pe ON pe.publication_id = ep.id
+            WHERE ep.paper_id = ?
+            GROUP BY ep.id
+            ORDER BY ep.created_at DESC
+            """,
+            (paper_id,),
+        ).fetchall()
+    publications: list[dict[str, Any]] = []
+    for row in rows:
+        item = row_to_dict(row) or {}
+        item["show_results_immediately"] = bool(item.get("show_results_immediately"))
+        item["randomize_questions"] = bool(item.get("randomize_questions"))
+        item["randomize_answers"] = bool(item.get("randomize_answers"))
+        item["class_ids"] = [part for part in str(item.pop("class_ids") or "").split(",") if part]
+        item["class_names"] = [part for part in str(item.pop("class_names") or "").split(",") if part]
+        item["attempt_count"] = int(item.get("attempt_count") or 0)
+        item["submitted_count"] = int(item.get("submitted_count") or 0)
+        item["proctor_event_count"] = int(item.get("proctor_event_count") or 0)
+        publications.append(item)
+    return publications
+
+
+def update_paper_publication(
+    root: Path,
+    *,
+    paper_id: str,
+    publication_id: str,
+    user: dict[str, Any],
+    title: str | None = None,
+    description: str | None = None,
+    start_at: str | None = None,
+    end_at: str | None = None,
+    show_results_immediately: bool | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    init_platform_db(root)
+    paper = get_paper(root, paper_id)
+    _ensure_paper_access(paper, user)
+    now = utc_now()
+    updates: list[str] = ["updated_at = ?"]
+    params: list[object] = [now]
+    if title is not None:
+        updates.append("title = ?")
+        params.append(_clean_title(title, str(paper["title"])))
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description.strip() or None)
+    if start_at is not None:
+        updates.append("start_at = ?")
+        params.append(start_at.strip() or None)
+    if end_at is not None:
+        updates.append("end_at = ?")
+        params.append(end_at.strip() or None)
+    if show_results_immediately is not None:
+        updates.append("show_results_immediately = ?")
+        params.append(1 if show_results_immediately else 0)
+    if status is not None:
+        clean_status = status.strip() or "published"
+        if clean_status not in PUBLICATION_STATUSES:
+            raise ValueError("invalid publication status")
+        updates.append("status = ?")
+        params.append(clean_status)
+    params.extend([publication_id, paper_id])
+    with connect(root) as con:
+        publication = con.execute(
+            "SELECT teacher_id FROM exam_publications WHERE id = ? AND paper_id = ?",
+            (publication_id, paper_id),
+        ).fetchone()
+        if publication is None:
+            raise ValueError("publication not found")
+        if user.get("role") == "teacher" and str(publication["teacher_id"]) != str(user.get("id")):
+            raise PermissionError("Teacher can only manage own publications")
+        con.execute(
+            f"UPDATE exam_publications SET {', '.join(updates)} WHERE id = ? AND paper_id = ?",
+            tuple(params),
+        )
+    matches = [item for item in list_paper_publications(root, paper_id=paper_id, user=user) if item["id"] == publication_id]
+    if not matches:
+        raise RuntimeError("failed to update publication")
+    return matches[0]
+
+
+def revoke_paper_publication(root: Path, *, paper_id: str, publication_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    publication = update_paper_publication(
+        root,
+        paper_id=paper_id,
+        publication_id=publication_id,
+        user=user,
+        status="revoked",
+    )
+    with connect(root) as con:
+        active = con.execute(
+            "SELECT 1 FROM exam_publications WHERE paper_id = ? AND status <> 'revoked' LIMIT 1",
+            (paper_id,),
+        ).fetchone()
+        if active is None:
+            con.execute("UPDATE paper_records SET status = 'draft', updated_at = ? WHERE id = ?", (utc_now(), paper_id))
+    return publication
 
 
 def _score_percent(score: object, max_score: object) -> float | None:

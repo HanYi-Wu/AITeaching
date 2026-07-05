@@ -6,8 +6,12 @@ import { SchoolWorkspace } from "../SchoolWorkspace";
 
 const mocks = vi.hoisted(() => ({
   assignTeacherClass: vi.fn(),
+  bulkUpdateStudents: vi.fn(),
+  bulkUpdateTeachers: vi.fn(),
   createClass: vi.fn(),
   createTeacher: vi.fn(),
+  deleteClass: vi.fn(),
+  downloadSchoolImportTemplate: vi.fn(),
   exportStudentAccounts: vi.fn(),
   importClassesFile: vi.fn(),
   importStudents: vi.fn(),
@@ -15,7 +19,11 @@ const mocks = vi.hoisted(() => ({
   importTeachersFile: vi.fn(),
   listClasses: vi.fn(),
   listStudents: vi.fn(),
+  listTeacherClassAssignments: vi.fn(),
   listTeachers: vi.fn(),
+  removeTeacherClassAssignment: vi.fn(),
+  resetStudentPassword: vi.fn(),
+  resetTeacherPassword: vi.fn(),
   updateClass: vi.fn(),
   updateStudent: vi.fn(),
   updateTeacher: vi.fn(),
@@ -26,8 +34,12 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
   return {
     ...actual,
     assignTeacherClass: mocks.assignTeacherClass,
+    bulkUpdateStudents: mocks.bulkUpdateStudents,
+    bulkUpdateTeachers: mocks.bulkUpdateTeachers,
     createClass: mocks.createClass,
     createTeacher: mocks.createTeacher,
+    deleteClass: mocks.deleteClass,
+    downloadSchoolImportTemplate: mocks.downloadSchoolImportTemplate,
     exportStudentAccounts: mocks.exportStudentAccounts,
     importClassesFile: mocks.importClassesFile,
     importStudents: mocks.importStudents,
@@ -35,7 +47,11 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     importTeachersFile: mocks.importTeachersFile,
     listClasses: mocks.listClasses,
     listStudents: mocks.listStudents,
+    listTeacherClassAssignments: mocks.listTeacherClassAssignments,
     listTeachers: mocks.listTeachers,
+    removeTeacherClassAssignment: mocks.removeTeacherClassAssignment,
+    resetStudentPassword: mocks.resetStudentPassword,
+    resetTeacherPassword: mocks.resetTeacherPassword,
     updateClass: mocks.updateClass,
     updateStudent: mocks.updateStudent,
     updateTeacher: mocks.updateTeacher,
@@ -75,6 +91,7 @@ describe("SchoolWorkspace", () => {
         },
       ],
     });
+    mocks.listTeacherClassAssignments.mockResolvedValue({ assignments: [], total: 0, page: 1, page_size: 10, total_pages: 1 });
     mocks.assignTeacherClass.mockResolvedValue({ assignment: { teacher_id: "t1", class_id: "c1" } });
   });
 

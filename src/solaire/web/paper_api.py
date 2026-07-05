@@ -5,16 +5,19 @@ from __future__ import annotations
 import sqlite3
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from solaire.web import state
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.paper_service import (
     analyze_paper,
-    list_papers,
+    list_paper_publications,
     list_teacher_classes,
     publish_online_paper,
+    query_papers,
+    revoke_paper_publication,
+    update_paper_publication,
     update_paper_delivery_mode,
 )
 from solaire.web.project_layout import ensure_project_layout
@@ -37,6 +40,15 @@ class PaperPublishBody(BaseModel):
     randomize_answers: bool = False
 
 
+class PaperPublicationUpdateBody(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    start_at: str | None = None
+    end_at: str | None = None
+    show_results_immediately: bool | None = None
+    status: str | None = None
+
+
 def _raise_api_error(exc: Exception) -> None:
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -52,14 +64,32 @@ def require_content_project_root():
 
 
 @router.get("/papers")
-def papers_list(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def papers_list(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    q: str | None = None,
+    delivery_mode: str | None = None,
+    status: str | None = None,
+    subject: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
     platform_root = require_platform_root()
     project_root = require_content_project_root()
     try:
-        papers = list_papers(project_root, platform_root, user)
+        result = query_papers(
+            project_root,
+            platform_root,
+            user,
+            q=q,
+            delivery_mode=delivery_mode,
+            status=status,
+            subject=subject,
+            page=page,
+            page_size=page_size,
+        )
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
-    return {"papers": papers}
+    return result
 
 
 @router.patch("/papers/{paper_id}")
@@ -87,6 +117,59 @@ def papers_analysis(
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"analysis": analysis}
+
+
+@router.get("/papers/{paper_id}/publications")
+def papers_publications(
+    paper_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    try:
+        publications = list_paper_publications(root, paper_id=paper_id, user=user)
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"publications": publications}
+
+
+@router.patch("/papers/{paper_id}/publications/{publication_id}")
+def papers_publications_update(
+    paper_id: str,
+    publication_id: str,
+    body: PaperPublicationUpdateBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    try:
+        publication = update_paper_publication(
+            root,
+            paper_id=paper_id,
+            publication_id=publication_id,
+            user=user,
+            title=body.title,
+            description=body.description,
+            start_at=body.start_at,
+            end_at=body.end_at,
+            show_results_immediately=body.show_results_immediately,
+            status=body.status,
+        )
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"publication": publication}
+
+
+@router.delete("/papers/{paper_id}/publications/{publication_id}")
+def papers_publications_revoke(
+    paper_id: str,
+    publication_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    try:
+        publication = revoke_paper_publication(root, paper_id=paper_id, publication_id=publication_id, user=user)
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"publication": publication}
 
 
 @router.get("/teacher/classes")

@@ -7,7 +7,7 @@ import sqlite3
 from io import BytesIO
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel, Field
@@ -15,10 +15,13 @@ from pydantic import BaseModel, Field
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.school_service import (
     assign_teacher_class,
+    bulk_update_students,
+    bulk_update_teachers,
     create_class,
     create_school,
     create_school_user,
     create_teacher,
+    delete_class,
     get_school,
     import_classes,
     import_students,
@@ -27,6 +30,13 @@ from solaire.web.school_service import (
     list_schools,
     list_students,
     list_teachers,
+    list_teacher_class_assignments,
+    query_classes,
+    query_students,
+    query_teachers,
+    remove_teacher_class_assignment,
+    reset_student_password,
+    reset_teacher_password,
     update_class,
     update_student,
     update_teacher,
@@ -60,6 +70,15 @@ class TeacherUpdateBody(BaseModel):
     subjects: list[str] | None = None
     password: str | None = None
     status: str | None = None
+
+
+class BulkStatusBody(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    status: str = Field(..., min_length=1)
+
+
+class ResetPasswordBody(BaseModel):
+    password: str | None = None
 
 
 class ClassCreateBody(BaseModel):
@@ -177,6 +196,26 @@ def _students_export_workbook(students: list[dict[str, Any]]) -> bytes:
     return stream.getvalue()
 
 
+def _template_workbook(headers: tuple[str, ...], examples: list[tuple[object, ...]], title: str) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title
+    ws.append(headers)
+    for row in examples:
+        ws.append(row)
+    stream = BytesIO()
+    wb.save(stream)
+    return stream.getvalue()
+
+
+def _workbook_response(data: bytes, filename: str) -> StreamingResponse:
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/schools")
 def schools_list(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
     _require_admin(user)
@@ -222,10 +261,27 @@ def school_users_create(
 
 
 @router.get("/school/teachers")
-def school_teachers_list(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def school_teachers_list(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    q: str | None = None,
+    status: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
     school_id = _require_school(user)
     root = require_platform_root()
-    return {"teachers": list_teachers(root, school_id=school_id)}
+    return query_teachers(root, school_id=school_id, q=q, status=status, page=page, page_size=page_size)
+
+
+@router.get("/school/teachers/template.xlsx")
+def school_teachers_template(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> StreamingResponse:
+    _require_school(user)
+    data = _template_workbook(
+        ("username", "password", "display_name", "email", "subjects"),
+        [("teacher_zhang", "teacher123", "张老师", "teacher@example.com", "数学,物理")],
+        "teachers",
+    )
+    return _workbook_response(data, "teachers_import_template.xlsx")
 
 
 @router.post("/school/teachers")
@@ -303,11 +359,54 @@ def school_teachers_update(
     return {"teacher": teacher}
 
 
-@router.get("/school/classes")
-def school_classes_list(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+@router.post("/school/teachers/bulk-status")
+def school_teachers_bulk_status(
+    body: BulkStatusBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
     school_id = _require_school(user)
     root = require_platform_root()
-    return {"classes": list_classes(root, school_id=school_id)}
+    try:
+        return bulk_update_teachers(root, school_id=school_id, teacher_ids=body.ids, status=body.status)
+    except (ValueError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+
+
+@router.post("/school/teachers/{teacher_id}/reset-password")
+def school_teachers_reset_password(
+    teacher_id: str,
+    body: ResetPasswordBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    try:
+        return reset_teacher_password(root, school_id=school_id, teacher_id=teacher_id, password=body.password)
+    except (ValueError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+
+
+@router.get("/school/classes")
+def school_classes_list(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    q: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    return query_classes(root, school_id=school_id, q=q, page=page, page_size=page_size)
+
+
+@router.get("/school/classes/template.xlsx")
+def school_classes_template(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> StreamingResponse:
+    _require_school(user)
+    data = _template_workbook(
+        ("name", "grade"),
+        [("高一 1 班", "高一"), ("高一 2 班", "高一")],
+        "classes",
+    )
+    return _workbook_response(data, "classes_import_template.xlsx")
 
 
 @router.post("/school/classes")
@@ -374,14 +473,42 @@ def school_classes_update(
     return {"class": klass}
 
 
+@router.delete("/school/classes/{class_id}")
+def school_classes_delete(
+    class_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    try:
+        return delete_class(root, school_id=school_id, class_id=class_id)
+    except (ValueError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+
+
 @router.get("/school/students")
 def school_students_list(
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
     class_id: str | None = None,
+    q: str | None = None,
+    status: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
 ) -> dict[str, Any]:
     school_id = _require_school(user)
     root = require_platform_root()
-    return {"students": list_students(root, school_id=school_id, class_id=class_id)}
+    return query_students(root, school_id=school_id, class_id=class_id, q=q, status=status, page=page, page_size=page_size)
+
+
+@router.get("/school/students/template.xlsx")
+def school_students_template(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> StreamingResponse:
+    _require_school(user)
+    data = _template_workbook(
+        ("student_no", "display_name", "email", "class_name"),
+        [("S001", "学生一", "student@example.com", "高一 1 班")],
+        "students",
+    )
+    return _workbook_response(data, "students_import_template.xlsx")
 
 
 @router.post("/school/students/import")
@@ -426,6 +553,33 @@ def school_students_update(
     return {"student": student}
 
 
+@router.post("/school/students/bulk-status")
+def school_students_bulk_status(
+    body: BulkStatusBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    try:
+        return bulk_update_students(root, school_id=school_id, student_ids=body.ids, status=body.status)
+    except (ValueError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+
+
+@router.post("/school/students/{student_id}/reset-password")
+def school_students_reset_password(
+    student_id: str,
+    body: ResetPasswordBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    try:
+        return reset_student_password(root, school_id=school_id, student_id=student_id, password=body.password)
+    except (ValueError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+
+
 @router.post("/school/students/import-file")
 async def school_students_import_file(
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
@@ -449,11 +603,19 @@ def school_students_export(
     school_id = _require_school(user)
     root = require_platform_root()
     data = _students_export_workbook(list_students(root, school_id=school_id))
-    return StreamingResponse(
-        BytesIO(data),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="student_accounts.xlsx"'},
-    )
+    return _workbook_response(data, "student_accounts.xlsx")
+
+
+@router.get("/school/teacher-class-assignments")
+def school_teacher_class_assignments_list(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    q: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    return list_teacher_class_assignments(root, school_id=school_id, q=q, page=page, page_size=page_size)
 
 
 @router.post("/school/teacher-class-assignments")
@@ -474,3 +636,24 @@ def school_teacher_class_assignments_create(
     except (ValueError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"assignment": assignment}
+
+
+@router.delete("/school/teacher-class-assignments")
+def school_teacher_class_assignments_delete(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    teacher_id: str = Query(..., min_length=1),
+    class_id: str = Query(..., min_length=1),
+    subject: str | None = None,
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    try:
+        return remove_teacher_class_assignment(
+            root,
+            school_id=school_id,
+            teacher_id=teacher_id,
+            class_id=class_id,
+            subject=subject,
+        )
+    except (ValueError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)

@@ -33,6 +33,20 @@ export type SchoolRecord = {
   updated_at: string;
 };
 
+export type PagedResult = {
+  total?: number;
+  page?: number;
+  page_size?: number;
+  total_pages?: number;
+};
+
+export type ListQuery = {
+  q?: string | null;
+  status?: string | null;
+  page?: number;
+  pageSize?: number;
+};
+
 export type TeacherRecord = PlatformUser & {
   subjects: string[];
 };
@@ -43,6 +57,8 @@ export type ClassRecord = {
   name: string;
   grade?: string | null;
   subject_hint?: string | null;
+  student_count?: number;
+  teacher_count?: number;
 };
 
 export type StudentRecord = {
@@ -87,11 +103,34 @@ export type PaperPublicationRecord = {
   id: string;
   paper_id: string;
   teacher_id?: string;
+  teacher_name?: string | null;
+  teacher_username?: string | null;
   title: string;
   description?: string | null;
   status: string;
   class_ids: string[];
+  class_names?: string[];
   attempt_count?: number;
+  submitted_count?: number;
+  proctor_event_count?: number;
+  show_results_immediately?: boolean;
+  randomize_questions?: boolean;
+  randomize_answers?: boolean;
+  start_at?: string | null;
+  end_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type TeacherClassAssignmentRecord = {
+  teacher_id: string;
+  class_id: string;
+  subject?: string | null;
+  teacher_username: string;
+  teacher_name: string;
+  teacher_status: string;
+  class_name: string;
+  class_grade?: string | null;
 };
 
 export type PlatformPaperAnalysis = {
@@ -161,6 +200,16 @@ export function loadSessionToken(): string | null {
 export function clearSessionToken(): void {
   localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
   clearProjectScopedSessionTokens();
+}
+
+function buildQuery(params: Record<string, string | number | null | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined || value === "") continue;
+    qs.set(key, String(value));
+  }
+  const text = qs.toString();
+  return text ? `?${text}` : "";
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -257,8 +306,15 @@ export function createSchoolUser(
   });
 }
 
-export function listTeachers(): Promise<{ teachers: TeacherRecord[] }> {
-  return platformRequest("/api/school/teachers");
+export function listTeachers(params: ListQuery = {}): Promise<{ teachers: TeacherRecord[] } & PagedResult> {
+  return platformRequest(
+    `/api/school/teachers${buildQuery({
+      q: params.q,
+      status: params.status,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  );
 }
 
 export function createTeacher(payload: {
@@ -293,8 +349,34 @@ export function updateTeacher(
   });
 }
 
-export function listClasses(): Promise<{ classes: ClassRecord[] }> {
-  return platformRequest("/api/school/classes");
+export function bulkUpdateTeachers(payload: {
+  ids: string[];
+  status: "active" | "disabled";
+}): Promise<{ updated: number }> {
+  return platformRequest("/api/school/teachers/bulk-status", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function resetTeacherPassword(
+  teacherId: string,
+  password?: string | null,
+): Promise<{ teacher: TeacherRecord; password: string }> {
+  return platformRequest(`/api/school/teachers/${encodeURIComponent(teacherId)}/reset-password`, {
+    method: "POST",
+    body: JSON.stringify({ password: password || null }),
+  });
+}
+
+export function listClasses(params: Pick<ListQuery, "q" | "page" | "pageSize"> = {}): Promise<{ classes: ClassRecord[] } & PagedResult> {
+  return platformRequest(
+    `/api/school/classes${buildQuery({
+      q: params.q,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  );
 }
 
 export function createClass(payload: {
@@ -327,9 +409,23 @@ export function updateClass(
   });
 }
 
-export function listStudents(classId?: string | null): Promise<{ students: StudentRecord[] }> {
-  const qs = classId ? `?class_id=${encodeURIComponent(classId)}` : "";
-  return platformRequest(`/api/school/students${qs}`);
+export function deleteClass(classId: string): Promise<{ deleted: boolean; class_id: string }> {
+  return platformRequest(`/api/school/classes/${encodeURIComponent(classId)}`, { method: "DELETE" });
+}
+
+export function listStudents(
+  classId?: string | null,
+  params: ListQuery = {},
+): Promise<{ students: StudentRecord[] } & PagedResult> {
+  return platformRequest(
+    `/api/school/students${buildQuery({
+      class_id: classId,
+      q: params.q,
+      status: params.status,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  );
 }
 
 export function importStudents(payload: {
@@ -359,9 +455,29 @@ export function updateStudent(
   });
 }
 
-export async function exportStudentAccounts(): Promise<Blob> {
+export function bulkUpdateStudents(payload: {
+  ids: string[];
+  status: "active" | "disabled";
+}): Promise<{ updated: number }> {
+  return platformRequest("/api/school/students/bulk-status", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function resetStudentPassword(
+  studentId: string,
+  password?: string | null,
+): Promise<{ student: StudentRecord; password: string }> {
+  return platformRequest(`/api/school/students/${encodeURIComponent(studentId)}/reset-password`, {
+    method: "POST",
+    body: JSON.stringify({ password: password || null }),
+  });
+}
+
+async function downloadAuthorizedBlob(path: string): Promise<Blob> {
   const token = loadSessionToken();
-  const url = await resolveApiUrl("/api/school/students/export.xlsx");
+  const url = await resolveApiUrl(path);
   const headers = new Headers();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(url, { headers });
@@ -369,6 +485,14 @@ export async function exportStudentAccounts(): Promise<Blob> {
     await readJson(response);
   }
   return response.blob();
+}
+
+export function exportStudentAccounts(): Promise<Blob> {
+  return downloadAuthorizedBlob("/api/school/students/export.xlsx");
+}
+
+export function downloadSchoolImportTemplate(kind: "teachers" | "classes" | "students"): Promise<Blob> {
+  return downloadAuthorizedBlob(`/api/school/${kind}/template.xlsx`);
 }
 
 export function assignTeacherClass(payload: {
@@ -380,6 +504,33 @@ export function assignTeacherClass(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function listTeacherClassAssignments(
+  params: Pick<ListQuery, "q" | "page" | "pageSize"> = {},
+): Promise<{ assignments: TeacherClassAssignmentRecord[] } & PagedResult> {
+  return platformRequest(
+    `/api/school/teacher-class-assignments${buildQuery({
+      q: params.q,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  );
+}
+
+export function removeTeacherClassAssignment(payload: {
+  teacher_id: string;
+  class_id: string;
+  subject?: string | null;
+}): Promise<{ deleted: number }> {
+  return platformRequest(
+    `/api/school/teacher-class-assignments${buildQuery({
+      teacher_id: payload.teacher_id,
+      class_id: payload.class_id,
+      subject: payload.subject,
+    })}`,
+    { method: "DELETE" },
+  );
 }
 
 function normalizePaper(raw: Partial<PlatformPaperRecord> & { id?: string }): PlatformPaperRecord {
@@ -405,9 +556,28 @@ function normalizePaper(raw: Partial<PlatformPaperRecord> & { id?: string }): Pl
   };
 }
 
-export async function listPlatformPapers(): Promise<{ papers: PlatformPaperRecord[] }> {
-  const data = await platformRequest<{ papers: Array<Partial<PlatformPaperRecord> & { id?: string }> }>("/api/papers");
-  return { papers: data.papers.map(normalizePaper) };
+export async function listPlatformPapers(
+  params: (ListQuery & { deliveryMode?: "offline" | "online" | "all" | null; subject?: string | null }) = {},
+): Promise<{ papers: PlatformPaperRecord[] } & PagedResult> {
+  const data = await platformRequest<
+    { papers: Array<Partial<PlatformPaperRecord> & { id?: string }> } & PagedResult
+  >(
+    `/api/papers${buildQuery({
+      q: params.q,
+      status: params.status,
+      delivery_mode: params.deliveryMode,
+      subject: params.subject,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  );
+  return {
+    papers: data.papers.map(normalizePaper),
+    total: data.total,
+    page: data.page,
+    page_size: data.page_size,
+    total_pages: data.total_pages,
+  };
 }
 
 export async function updatePlatformPaperDeliveryMode(
@@ -445,6 +615,40 @@ export function publishPlatformPaper(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function listPlatformPaperPublications(
+  paperId: string,
+): Promise<{ publications: PaperPublicationRecord[] }> {
+  return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/publications`);
+}
+
+export function updatePlatformPaperPublication(
+  paperId: string,
+  publicationId: string,
+  payload: {
+    title?: string | null;
+    description?: string | null;
+    start_at?: string | null;
+    end_at?: string | null;
+    show_results_immediately?: boolean | null;
+    status?: string | null;
+  },
+): Promise<{ publication: PaperPublicationRecord }> {
+  return platformRequest(
+    `/api/papers/${encodeURIComponent(paperId)}/publications/${encodeURIComponent(publicationId)}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+  );
+}
+
+export function revokePlatformPaperPublication(
+  paperId: string,
+  publicationId: string,
+): Promise<{ publication: PaperPublicationRecord }> {
+  return platformRequest(
+    `/api/papers/${encodeURIComponent(paperId)}/publications/${encodeURIComponent(publicationId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export function analyzePlatformPaper(paperId: string): Promise<{ analysis: PlatformPaperAnalysis }> {

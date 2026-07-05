@@ -144,6 +144,56 @@ def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClie
     assert body["publication"]["class_ids"] == [class_id]
 
 
+def test_teacher_filters_papers_and_manages_publication_history(web_client: TestClient, tmp_path: Path) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _, _, class_id = _create_school_teacher_class(web_client, admin_token)
+    _write_exam(tmp_path, label="midterm", subject="Math")
+    _write_exam(tmp_path, label="final", subject="English")
+    teacher_headers = _headers(_teacher_token(web_client))
+
+    listed = web_client.get("/api/papers?page=1&page_size=1&q=term", headers=teacher_headers)
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 2
+    assert len(listed.json()["papers"]) == 1
+
+    filtered = web_client.get("/api/papers?subject=English", headers=teacher_headers)
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 1
+    assert filtered.json()["papers"][0]["subject"] == "English"
+
+    paper = web_client.get("/api/papers?subject=Math", headers=teacher_headers).json()["papers"][0]
+    published = web_client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "title": "Managed Publication"},
+        headers=teacher_headers,
+    )
+    assert published.status_code == 200
+    publication_id = published.json()["publication"]["id"]
+
+    publications = web_client.get(f"/api/papers/{paper['paper_id']}/publications", headers=teacher_headers)
+    assert publications.status_code == 200
+    assert publications.json()["publications"][0]["title"] == "Managed Publication"
+    assert publications.json()["publications"][0]["class_names"] == ["Class 1"]
+
+    closed = web_client.patch(
+        f"/api/papers/{paper['paper_id']}/publications/{publication_id}",
+        json={"status": "closed", "show_results_immediately": True},
+        headers=teacher_headers,
+    )
+    assert closed.status_code == 200
+    assert closed.json()["publication"]["status"] == "closed"
+    assert closed.json()["publication"]["show_results_immediately"] is True
+
+    revoked = web_client.delete(
+        f"/api/papers/{paper['paper_id']}/publications/{publication_id}",
+        headers=teacher_headers,
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["publication"]["status"] == "revoked"
+    refreshed = web_client.get("/api/papers?subject=Math", headers=teacher_headers).json()["papers"][0]
+    assert refreshed["publication_count"] == 0
+
+
 def test_teacher_paper_workspace_works_without_opening_project(tmp_path: Path, monkeypatch) -> None:
     state.clear_root()
     monkeypatch.setattr(recent_projects, "app_data_dir", lambda: tmp_path / "appdata")

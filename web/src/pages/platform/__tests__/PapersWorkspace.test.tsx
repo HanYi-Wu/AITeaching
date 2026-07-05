@@ -5,10 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PapersWorkspace } from "../PapersWorkspace";
 
 const mocks = vi.hoisted(() => ({
+  listPlatformPaperPublications: vi.fn(),
   listPlatformPapers: vi.fn(),
   listTeacherAssignedClasses: vi.fn(),
   updatePlatformPaperDeliveryMode: vi.fn(),
   publishPlatformPaper: vi.fn(),
+  revokePlatformPaperPublication: vi.fn(),
   uploadPaperScores: vi.fn(),
   analyzePlatformPaper: vi.fn(),
 }));
@@ -17,10 +19,12 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../platform/auth")>();
   return {
     ...actual,
+    listPlatformPaperPublications: mocks.listPlatformPaperPublications,
     listPlatformPapers: mocks.listPlatformPapers,
     listTeacherAssignedClasses: mocks.listTeacherAssignedClasses,
     updatePlatformPaperDeliveryMode: mocks.updatePlatformPaperDeliveryMode,
     publishPlatformPaper: mocks.publishPlatformPaper,
+    revokePlatformPaperPublication: mocks.revokePlatformPaperPublication,
     uploadPaperScores: mocks.uploadPaperScores,
     analyzePlatformPaper: mocks.analyzePlatformPaper,
   };
@@ -51,6 +55,7 @@ describe("PapersWorkspace", () => {
     mocks.listTeacherAssignedClasses.mockResolvedValue({
       classes: [{ id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: "Math", subject: "Math" }],
     });
+    mocks.listPlatformPaperPublications.mockResolvedValue({ publications: [] });
   });
 
   it("lists exported papers and updates online/offline delivery mode", async () => {
@@ -62,12 +67,12 @@ describe("PapersWorkspace", () => {
     render(<PapersWorkspace />);
 
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
-    expect(screen.getByText("线下")).toBeInTheDocument();
+    expect(screen.getAllByText("线下").length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole("button", { name: "设为线上" }));
 
     await waitFor(() => expect(mocks.updatePlatformPaperDeliveryMode).toHaveBeenCalledWith("p1", "online"));
-    expect(await screen.findByText("线上")).toBeInTheDocument();
+    expect((await screen.findAllByText("线上")).length).toBeGreaterThan(0);
   });
 
   it("publishes an online paper to selected classes", async () => {
@@ -96,6 +101,42 @@ describe("PapersWorkspace", () => {
       }),
     );
     expect((await screen.findAllByText("已发布")).length).toBeGreaterThan(0);
+  });
+
+  it("shows and revokes publication history", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online", status: "published" }] });
+    mocks.listPlatformPaperPublications.mockResolvedValue({
+      publications: [
+        {
+          id: "pub1",
+          paper_id: "p1",
+          status: "published",
+          title: "Managed Publication",
+          class_ids: ["c1"],
+          class_names: ["Class 1"],
+          attempt_count: 3,
+          submitted_count: 1,
+          proctor_event_count: 2,
+        },
+      ],
+    });
+    mocks.revokePlatformPaperPublication.mockResolvedValue({
+      publication: {
+        id: "pub1",
+        paper_id: "p1",
+        status: "revoked",
+        title: "Managed Publication",
+        class_ids: ["c1"],
+      },
+    });
+
+    render(<PapersWorkspace />);
+
+    expect(await screen.findByText("Managed Publication")).toBeInTheDocument();
+    expect(screen.getByText("1/3")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "撤回发布" }));
+
+    await waitFor(() => expect(mocks.revokePlatformPaperPublication).toHaveBeenCalledWith("p1", "pub1"));
   });
 
   it("loads paper analysis with screen-switch risk", async () => {

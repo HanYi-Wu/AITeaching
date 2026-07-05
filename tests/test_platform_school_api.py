@@ -169,11 +169,12 @@ def test_school_imports_teachers_classes_and_students_from_excel(web_client: Tes
     students = web_client.post(
         "/api/school/students/import-file",
         data={"class_id": class_id},
-        files={"file": _xlsx_upload([{"student_no": "S100", "display_name": "Student Xlsx"}])},
+        files={"file": _xlsx_upload([{"student_no": "S100", "display_name": "Student Xlsx", "email": None}])},
         headers=school_headers,
     )
     assert students.status_code == 200
     assert students.json()["students"][0]["account_username"].startswith("stu_")
+    assert students.json()["students"][0]["email"] is None
 
 
 def test_school_exports_student_initial_accounts(web_client: TestClient) -> None:
@@ -247,6 +248,129 @@ def test_school_updates_teachers_classes_and_students(web_client: TestClient) ->
     assert updated_student.json()["student"]["student_no"] == "M002"
     assert updated_student.json()["student"]["display_name"] == "New Student"
     assert updated_student.json()["student"]["account_username"] == student["account_username"]
+
+
+def test_school_management_paginates_bulk_updates_resets_and_removes_assignments(web_client: TestClient) -> None:
+    school_headers, _ = _school_headers(web_client)
+    first_teacher = web_client.post(
+        "/api/school/teachers",
+        json={"username": "teacher_page_a", "password": "teacher123", "display_name": "Teacher Page A", "subjects": []},
+        headers=school_headers,
+    ).json()["teacher"]
+    second_teacher = web_client.post(
+        "/api/school/teachers",
+        json={"username": "teacher_page_b", "password": "teacher123", "display_name": "Teacher Page B", "subjects": []},
+        headers=school_headers,
+    ).json()["teacher"]
+    first_class = web_client.post(
+        "/api/school/classes",
+        json={"name": "Page Class A", "grade": "G10"},
+        headers=school_headers,
+    ).json()["class"]
+    second_class = web_client.post(
+        "/api/school/classes",
+        json={"name": "Page Class B", "grade": "G10"},
+        headers=school_headers,
+    ).json()["class"]
+    student = web_client.post(
+        "/api/school/students/import",
+        json={"class_id": first_class["id"], "students": [{"student_no": "P001", "display_name": "Paged Student"}]},
+        headers=school_headers,
+    ).json()["students"][0]
+
+    teachers_page = web_client.get("/api/school/teachers?page=1&page_size=1&q=Page", headers=school_headers)
+    assert teachers_page.status_code == 200
+    assert teachers_page.json()["total"] == 2
+    assert len(teachers_page.json()["teachers"]) == 1
+
+    classes_page = web_client.get("/api/school/classes?page=1&page_size=1&q=Page", headers=school_headers)
+    assert classes_page.status_code == 200
+    assert classes_page.json()["total"] == 2
+    assert classes_page.json()["classes"][0]["student_count"] == 0
+
+    students_page = web_client.get("/api/school/students?page=1&page_size=1&q=Paged", headers=school_headers)
+    assert students_page.status_code == 200
+    assert students_page.json()["total"] == 1
+    assert students_page.json()["students"][0]["account_username"].startswith("stu_")
+
+    disabled_teacher = web_client.post(
+        "/api/school/teachers/bulk-status",
+        json={"ids": [second_teacher["id"]], "status": "disabled"},
+        headers=school_headers,
+    )
+    assert disabled_teacher.status_code == 200
+    assert disabled_teacher.json()["updated"] == 1
+    assert web_client.post("/api/auth/login", json={"username": "teacher_page_b", "password": "teacher123"}).status_code == 401
+
+    teacher_reset = web_client.post(
+        f"/api/school/teachers/{second_teacher['id']}/reset-password",
+        json={},
+        headers=school_headers,
+    )
+    assert teacher_reset.status_code == 200
+    assert teacher_reset.json()["teacher"]["status"] == "active"
+    assert web_client.post(
+        "/api/auth/login",
+        json={"username": "teacher_page_b", "password": teacher_reset.json()["password"]},
+    ).status_code == 200
+
+    disabled_student = web_client.post(
+        "/api/school/students/bulk-status",
+        json={"ids": [student["id"]], "status": "disabled"},
+        headers=school_headers,
+    )
+    assert disabled_student.status_code == 200
+    assert disabled_student.json()["updated"] == 1
+    assert web_client.post(
+        "/api/auth/login",
+        json={"username": student["account_username"], "password": student["initial_password"]},
+    ).status_code == 401
+
+    student_reset = web_client.post(
+        f"/api/school/students/{student['id']}/reset-password",
+        json={},
+        headers=school_headers,
+    )
+    assert student_reset.status_code == 200
+    assert student_reset.json()["student"]["status"] == "active"
+    assert web_client.post(
+        "/api/auth/login",
+        json={"username": student["account_username"], "password": student_reset.json()["password"]},
+    ).status_code == 200
+
+    assigned = web_client.post(
+        "/api/school/teacher-class-assignments",
+        json={"teacher_id": first_teacher["id"], "class_id": first_class["id"]},
+        headers=school_headers,
+    )
+    assert assigned.status_code == 200
+    assignments = web_client.get("/api/school/teacher-class-assignments?q=Teacher%20Page", headers=school_headers)
+    assert assignments.status_code == 200
+    assert assignments.json()["total"] == 1
+    removed = web_client.delete(
+        f"/api/school/teacher-class-assignments?teacher_id={first_teacher['id']}&class_id={first_class['id']}",
+        headers=school_headers,
+    )
+    assert removed.status_code == 200
+    assert removed.json()["deleted"] == 1
+
+    deleted_class = web_client.delete(f"/api/school/classes/{second_class['id']}", headers=school_headers)
+    assert deleted_class.status_code == 200
+    assert web_client.get("/api/school/classes?q=Page%20Class%20B", headers=school_headers).json()["total"] == 0
+
+
+def test_school_downloads_import_templates(web_client: TestClient) -> None:
+    school_headers, _ = _school_headers(web_client)
+    for path, expected_headers in [
+        ("/api/school/teachers/template.xlsx", ("username", "password", "display_name", "email", "subjects")),
+        ("/api/school/classes/template.xlsx", ("name", "grade")),
+        ("/api/school/students/template.xlsx", ("student_no", "display_name", "email", "class_name")),
+    ]:
+        response = web_client.get(path, headers=school_headers)
+        assert response.status_code == 200
+        wb = load_workbook(BytesIO(response.content))
+        rows = list(wb.active.iter_rows(values_only=True))
+        assert rows[0] == expected_headers
 
 
 def test_same_student_number_can_exist_in_different_schools(web_client: TestClient) -> None:
