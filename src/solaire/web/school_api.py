@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from io import BytesIO
 from typing import Annotated, Any
@@ -13,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel, Field
 
-from solaire.agent_layer.llm.llm_overrides import load_overrides_raw
+from solaire.agent_layer.llm.router import ModelRouter, load_llm_settings
 from solaire.web import state
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.school_service import (
@@ -129,6 +128,22 @@ class TeacherClassAssignmentBody(BaseModel):
     subject: str | None = None
 
 
+class SchoolAiChatBody(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+
+
+SCHOOL_AI_CAPABILITIES: tuple[dict[str, str], ...] = (
+    {"id": "teachers.list", "label": "查询教师", "description": "按姓名、账号、学科或状态查询教师账号。"},
+    {"id": "teachers.import", "label": "导入教师", "description": "指导 JSON/Excel 批量导入教师账号和学科。"},
+    {"id": "teachers.manage", "label": "管理教师", "description": "说明启停教师、重置密码、维护邮箱和学科。"},
+    {"id": "classes.manage", "label": "管理班级", "description": "创建、导入、编辑、删除班级并查看人数。"},
+    {"id": "students.import", "label": "导入学生", "description": "指导学生 JSON/Excel 导入、班级绑定和初始账号导出。"},
+    {"id": "students.manage", "label": "管理学生", "description": "说明学生账号、初始密码、状态、重置密码和导出。"},
+    {"id": "assignments.manage", "label": "分配班级", "description": "将教师分配到一个或多个班级，供教师发布试卷。"},
+    {"id": "ai.toggle", "label": "学校 AI 开关", "description": "在管理员配置 API 后，学校可开启或关闭学校和教师 AI 功能。"},
+)
+
+
 def _require_admin(user: dict[str, Any]) -> None:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")
@@ -144,13 +159,7 @@ def _require_school(user: dict[str, Any]) -> str:
 
 
 def _admin_ai_available() -> bool:
-    root = state.get_root()
-    if root is not None and load_overrides_raw(root).get("api_key"):
-        return True
-    return any(
-        os.environ.get(key)
-        for key in ("SOLAIRE_LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY")
-    )
+    return bool(load_llm_settings(state.get_root()).api_key)
 
 
 def _school_ai_payload(root, school_id: str) -> dict[str, Any]:
@@ -161,6 +170,30 @@ def _school_ai_payload(root, school_id: str) -> dict[str, Any]:
         "ai_available": _admin_ai_available(),
         "ai_enabled": ai_enabled,
     }
+
+
+def _school_ai_stats(root, school_id: str) -> dict[str, int]:
+    teachers = query_teachers(root, school_id=school_id, page=1, page_size=1)
+    classes = query_classes(root, school_id=school_id, page=1, page_size=1)
+    students = query_students(root, school_id=school_id, page=1, page_size=1)
+    assignments = list_teacher_class_assignments(root, school_id=school_id, page=1, page_size=1)
+    return {
+        "teachers": int(teachers.get("total") or 0),
+        "classes": int(classes.get("total") or 0),
+        "students": int(students.get("total") or 0),
+        "assignments": int(assignments.get("total") or 0),
+    }
+
+
+def _local_school_ai_reply(message: str, stats: dict[str, int]) -> str:
+    clean = message.strip()
+    return (
+        "学校端 AI 已接入独立管理能力接口。当前学校数据："
+        f"教师 {stats['teachers']} 人、班级 {stats['classes']} 个、学生 {stats['students']} 人、"
+        f"教师班级分配 {stats['assignments']} 条。"
+        "你可以围绕教师导入、学生账号、班级管理、教师分配和 AI 开关继续提问。"
+        f"本次问题：{clean}"
+    )
 
 
 def _raise_api_error(exc: Exception) -> None:
@@ -309,6 +342,71 @@ def school_ai_settings_update(
     except (ValueError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return _school_ai_payload(root, school_id)
+
+
+@router.get("/school/ai/capabilities")
+def school_ai_capabilities(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    payload = _school_ai_payload(root, school_id)
+    return {
+        **payload,
+        "capabilities": list(SCHOOL_AI_CAPABILITIES),
+        "stats": _school_ai_stats(root, school_id),
+    }
+
+
+@router.post("/school/ai/chat")
+async def school_ai_chat(
+    body: SchoolAiChatBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    payload = _school_ai_payload(root, school_id)
+    if not payload["ai_available"]:
+        raise HTTPException(status_code=400, detail="AI API is not configured by admin")
+    if not payload["ai_enabled"]:
+        raise HTTPException(status_code=400, detail="School AI is disabled")
+    stats = _school_ai_stats(root, school_id)
+    capabilities = list(SCHOOL_AI_CAPABILITIES)
+    prompt = (
+        "你是学校端管理助手，只能回答和学校端权限、教师、学生、班级、教师班级分配、学生初始账号导出、"
+        "学校 AI 开关相关的问题。不要假装已经执行后台操作；需要执行时指出用户应使用哪个页面或接口。\n"
+        f"当前数据：教师 {stats['teachers']} 人，班级 {stats['classes']} 个，学生 {stats['students']} 人，"
+        f"教师班级分配 {stats['assignments']} 条。\n"
+        f"可用能力：{json.dumps(capabilities, ensure_ascii=False)}"
+    )
+    try:
+        adapter = ModelRouter(load_llm_settings(state.get_root())).fast()
+        response = await adapter.chat(
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": body.message.strip()},
+            ],
+            temperature=0.2,
+            max_tokens=900,
+        )
+        reply = (response.content or "").strip() or _local_school_ai_reply(body.message, stats)
+        source = "llm" if response.content else "local"
+    except Exception as exc:  # Keep the school management page usable if provider calls fail.
+        reply = _local_school_ai_reply(body.message, stats)
+        source = "local"
+        return {
+            **payload,
+            "reply": reply,
+            "source": source,
+            "capabilities": capabilities,
+            "stats": stats,
+            "error": str(exc),
+        }
+    return {
+        **payload,
+        "reply": reply,
+        "source": source,
+        "capabilities": capabilities,
+        "stats": stats,
+    }
 
 
 @router.get("/school/teachers")

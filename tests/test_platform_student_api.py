@@ -135,7 +135,12 @@ def test_student_answers_online_paper_and_views_result_analysis(web_client: Test
     paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
     published = web_client.post(
         f"/api/papers/{paper['paper_id']}/publish",
-        json={"class_ids": [class_id], "title": "Online Midterm", "show_results_immediately": True},
+        json={
+            "class_ids": [class_id],
+            "title": "Online Midterm",
+            "show_results_immediately": True,
+            "max_screen_switches": 2,
+        },
         headers=teacher_headers,
     )
     assert published.status_code == 200
@@ -151,6 +156,9 @@ def test_student_answers_online_paper_and_views_result_analysis(web_client: Test
     assert assigned["publication_id"] == publication_id
     assert assigned["status"] == "not_started"
     assert assigned["question_count"] == 2
+    assert assigned["time_limit_minutes"] is None
+    assert "screen_switch_count" not in assigned
+    assert "screen_switch_limit" not in assigned
 
     started = web_client.post(f"/api/student/publications/{publication_id}/start", headers=student_headers)
     assert started.status_code == 200
@@ -196,8 +204,59 @@ def test_student_answers_online_paper_and_views_result_analysis(web_client: Test
     assert result["score"] == 5.0
     assert result["max_score"] == 10.0
     assert result["score_percent"] == 50.0
-    assert result["screen_switch_count"] == 1
+    assert "screen_switch_count" not in result
+    assert "screen_switch_limit" not in result
+    assert "screen_switch_exceeded" not in result
     assert result["analysis"]["correct_count"] == 1
     assert result["analysis"]["wrong_count"] == 1
     assert result["answers"][0]["is_correct"] is True
     assert result["answers"][1]["is_correct"] is False
+
+
+def test_paused_publication_blocks_student_collection_and_exposes_time_limit(
+    web_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    school_headers, _ = _school_headers(web_client, admin_token)
+    class_id, student_account = _create_teacher_class_student(web_client, school_headers)
+    _write_online_exam(tmp_path)
+    teacher_headers = _teacher_headers(web_client)
+    paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+
+    published = web_client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "title": "Timed Midterm", "time_limit_minutes": 45},
+        headers=teacher_headers,
+    )
+    assert published.status_code == 200
+    assert published.json()["publication"]["time_limit_minutes"] == 45
+    publication_id = published.json()["publication"]["id"]
+
+    student_login = web_client.post("/api/auth/login", json=student_account)
+    assert student_login.status_code == 200
+    student_headers = _headers(str(student_login.json()["token"]))
+
+    listed = web_client.get("/api/student/papers", headers=student_headers)
+    assert listed.status_code == 200
+    assigned = listed.json()["papers"][0]
+    assert assigned["time_limit_minutes"] == 45
+    assert assigned["can_answer"] is True
+
+    paused = web_client.patch(
+        f"/api/papers/{paper['paper_id']}/publications/{publication_id}",
+        json={"status": "paused"},
+        headers=teacher_headers,
+    )
+    assert paused.status_code == 200
+    assert paused.json()["publication"]["status"] == "paused"
+
+    relisted = web_client.get("/api/student/papers", headers=student_headers)
+    assert relisted.status_code == 200
+    paused_paper = relisted.json()["papers"][0]
+    assert paused_paper["publication_status"] == "paused"
+    assert paused_paper["can_answer"] is False
+
+    started = web_client.post(f"/api/student/publications/{publication_id}/start", headers=student_headers)
+    assert started.status_code == 400
+    assert "not open" in started.json()["detail"]

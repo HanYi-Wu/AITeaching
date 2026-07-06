@@ -3,6 +3,44 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from fastapi.testclient import TestClient
+
+
+def _headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _bootstrap_admin(client: TestClient) -> str:
+    r = client.post(
+        "/api/auth/bootstrap-admin",
+        json={"username": "admin", "password": "secret123", "display_name": "Administrator"},
+    )
+    assert r.status_code == 200
+    return str(r.json()["token"])
+
+
+def _teacher_headers(client: TestClient) -> dict[str, str]:
+    admin_token = _bootstrap_admin(client)
+    school = client.post("/api/schools", json={"name": "Graph School"}, headers=_headers(admin_token))
+    assert school.status_code == 200
+    school_id = str(school.json()["school"]["id"])
+    account = client.post(
+        f"/api/schools/{school_id}/school-users",
+        json={"username": "graph_school", "password": "secret123", "display_name": "Graph School"},
+        headers=_headers(admin_token),
+    )
+    assert account.status_code == 200
+    school_login = client.post("/api/auth/login", json={"username": "graph_school", "password": "secret123"})
+    assert school_login.status_code == 200
+    teacher = client.post(
+        "/api/school/teachers",
+        json={"username": "graph_teacher", "password": "teacher123", "display_name": "Graph Teacher"},
+        headers=_headers(str(school_login.json()["token"])),
+    )
+    assert teacher.status_code == 200
+    teacher_login = client.post("/api/auth/login", json={"username": "graph_teacher", "password": "teacher123"})
+    assert teacher_login.status_code == 200
+    return _headers(str(teacher_login.json()["token"]))
 
 
 def _write_choice_question(root: Path, qid: str) -> None:
@@ -191,3 +229,53 @@ def test_graph_taxonomy_and_auto_node_id(web_client, tmp_path: Path) -> None:
         for x in rels
     )
 
+
+def test_graph_export_import_creates_new_graph(web_client, tmp_path: Path) -> None:
+    created = web_client.post("/api/graph/graphs", json={"display_name": "数学"})
+    assert created.status_code == 200, created.text
+    slug = created.json()["slug"]
+    node = web_client.post(
+        "/api/graph/nodes",
+        params={"graph": slug},
+        json={"id": "math/algebra", "canonical_name": "代数", "subject": "数学", "aliases": []},
+    )
+    assert node.status_code == 200, node.text
+
+    exported = web_client.get(f"/api/graph/graphs/{slug}/export")
+    assert exported.status_code == 200, exported.text
+    bundle = exported.json()["bundle"]
+    assert bundle["display_name"] == "数学"
+    assert bundle["state"]["nodes"][0]["id"] == "math/algebra"
+
+    imported = web_client.post("/api/graph/graphs/import", json={"bundle": bundle})
+    assert imported.status_code == 200, imported.text
+    imported_slug = imported.json()["slug"]
+    assert imported_slug != slug
+    imported_nodes = web_client.get("/api/graph/nodes", params={"graph": imported_slug})
+    assert imported_nodes.status_code == 200, imported_nodes.text
+    assert imported_nodes.json()["nodes"][0]["canonical_name"] == "代数"
+
+
+def test_teacher_graph_is_isolated_from_global_graph(web_client, tmp_path: Path) -> None:
+    global_node = web_client.post(
+        "/api/graph/nodes",
+        json={"id": "global/node", "canonical_name": "全局节点", "subject": "数学", "aliases": []},
+    )
+    assert global_node.status_code == 200, global_node.text
+    teacher_headers = _teacher_headers(web_client)
+
+    teacher_initial = web_client.get("/api/graph/nodes", headers=teacher_headers)
+    assert teacher_initial.status_code == 200, teacher_initial.text
+    assert teacher_initial.json()["nodes"] == []
+
+    teacher_node = web_client.post(
+        "/api/graph/nodes",
+        json={"id": "teacher/node", "canonical_name": "教师节点", "subject": "数学", "aliases": []},
+        headers=teacher_headers,
+    )
+    assert teacher_node.status_code == 200, teacher_node.text
+    teacher_nodes = web_client.get("/api/graph/nodes", headers=teacher_headers).json()["nodes"]
+    assert {node["id"] for node in teacher_nodes} == {"teacher/node"}
+
+    global_nodes = web_client.get("/api/graph/nodes").json()["nodes"]
+    assert {node["id"] for node in global_nodes} == {"global/node"}

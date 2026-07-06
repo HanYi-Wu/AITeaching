@@ -685,9 +685,10 @@ def import_students(
                 con.execute(
                     """
                     INSERT INTO users (
-                      id, school_id, role, username, password_hash, display_name, email, status, created_at, updated_at
+                      id, school_id, role, username, password_hash, display_name, email, status,
+                      must_change_password, created_at, updated_at
                     )
-                    VALUES (?, ?, 'student', ?, ?, ?, ?, 'active', ?, ?)
+                    VALUES (?, ?, 'student', ?, ?, ?, ?, 'active', 1, ?, ?)
                     """,
                     (user_id, school_id, account_username, hash_password(initial_password), display_name, email, now, now),
                 )
@@ -712,9 +713,10 @@ def import_students(
                     con.execute(
                         """
                         INSERT INTO users (
-                          id, school_id, role, username, password_hash, display_name, email, status, created_at, updated_at
+                          id, school_id, role, username, password_hash, display_name, email, status,
+                          must_change_password, created_at, updated_at
                         )
-                        VALUES (?, ?, 'student', ?, ?, ?, ?, 'active', ?, ?)
+                        VALUES (?, ?, 'student', ?, ?, ?, ?, 'active', 1, ?, ?)
                         """,
                         (
                             user_id,
@@ -895,9 +897,10 @@ def reset_student_password(
             con.execute(
                 """
                 INSERT INTO users (
-                  id, school_id, role, username, password_hash, display_name, email, status, created_at, updated_at
+                  id, school_id, role, username, password_hash, display_name, email, status,
+                  must_change_password, created_at, updated_at
                 )
-                VALUES (?, ?, 'student', ?, ?, ?, ?, 'active', ?, ?)
+                VALUES (?, ?, 'student', ?, ?, ?, ?, 'active', 1, ?, ?)
                 """,
                 (
                     user_id,
@@ -914,7 +917,8 @@ def reset_student_password(
             con.execute(
                 """
                 UPDATE users
-                SET password_hash = ?, display_name = ?, email = ?, status = 'active', updated_at = ?
+                SET password_hash = ?, display_name = ?, email = ?, status = 'active',
+                    must_change_password = 1, updated_at = ?
                 WHERE id = ? AND school_id = ? AND role = 'student'
                 """,
                 (hash_password(new_password), student.get("display_name"), student.get("email"), now, user_id, school_id),

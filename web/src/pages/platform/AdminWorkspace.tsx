@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
-import { ArrowRight, Plus, RefreshCw, School, UserPlus } from "lucide-react";
-import { apiAgentLlmSettingsGet, apiAgentSafetyModeGet, type AgentLlmSettingsResponse } from "../../api/client";
+import { Bot, Plus, RefreshCw, School, UserPlus } from "lucide-react";
+import { apiAgentLlmSettingsGet, type AgentLlmSettingsResponse } from "../../api/client";
 import { ExtensionsPanel } from "../../components/ExtensionsPanel";
 import { AgentModelSettingsForm } from "../../components/settings/AgentModelSettingsForm";
 import {
@@ -15,11 +15,10 @@ import { PlatformShell } from "./PlatformShell";
 type Props = {
   user: PlatformUser;
   onLogout: () => void;
-  onOpenTeacherWorkspace: () => void;
   onError: (message: string | null) => void;
 };
 
-export function AdminWorkspace({ user, onLogout, onOpenTeacherWorkspace, onError }: Props) {
+export function AdminWorkspace({ user, onLogout, onError }: Props) {
   const [schools, setSchools] = useState<SchoolRecord[]>([]);
   const [schoolName, setSchoolName] = useState("");
   const [selectedSchoolId, setSelectedSchoolId] = useState("");
@@ -33,17 +32,16 @@ export function AdminWorkspace({ user, onLogout, onOpenTeacherWorkspace, onError
   async function refresh() {
     onError(null);
     setAiLoading(true);
-    const [data, llmData] = await Promise.all([
-      listSchools(),
-      apiAgentLlmSettingsGet(),
-      apiAgentSafetyModeGet().catch(() => null),
-    ]).then(([schoolData, llm]) => [schoolData, llm] as const);
-    setSchools(data.schools);
-    setLlmSettings(llmData);
-    if (!selectedSchoolId && data.schools.length > 0) {
-      setSelectedSchoolId(data.schools[0].id);
+    try {
+      const [schoolData, llmData] = await Promise.all([listSchools(), apiAgentLlmSettingsGet()]);
+      setSchools(schoolData.schools);
+      setLlmSettings(llmData);
+      if (!selectedSchoolId && schoolData.schools.length > 0) {
+        setSelectedSchoolId(schoolData.schools[0].id);
+      }
+    } finally {
+      setAiLoading(false);
     }
-    setAiLoading(false);
   }
 
   useEffect(() => {
@@ -87,152 +85,145 @@ export function AdminWorkspace({ user, onLogout, onOpenTeacherWorkspace, onError
   }
 
   const actions = (
-    <>
-          <button
-            type="button"
-            onClick={onOpenTeacherWorkspace}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            <ArrowRight className="h-4 w-4" />
-            教师端
-          </button>
-          <button
-            type="button"
-            onClick={() => void refresh().catch((e) => onError(e instanceof Error ? e.message : String(e)))}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            <RefreshCw className="h-4 w-4" />
-            刷新
-          </button>
-    </>
+    <button
+      type="button"
+      onClick={() => void refresh().catch((e) => onError(e instanceof Error ? e.message : String(e)))}
+      className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+    >
+      <RefreshCw className="h-4 w-4" />
+      刷新
+    </button>
   );
 
   return (
     <PlatformShell
       roleLabel="管理员"
       title={user.display_name || user.username}
-      subtitle="配置学校账号和平台级能力。"
+      subtitle="配置平台级 AI 能力、学校账号和系统组件。"
       userName={user.username}
       actions={actions}
       onLogout={onLogout}
     >
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <section>
-            <div className="mb-3 flex items-center gap-2">
-              <School className="h-5 w-5 text-slate-600" />
-              <h2 className="text-base font-semibold">学校管理</h2>
-            </div>
-            <div className="grid gap-3">
-              {schools.map((school) => (
-                <button
-                  key={school.id}
-                  type="button"
-                  onClick={() => setSelectedSchoolId(school.id)}
-                  className={`rounded-lg border p-4 text-left shadow-sm ${
-                    selectedSchoolId === school.id ? "border-slate-900 bg-white" : "border-slate-200 bg-white"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-medium">{school.name}</p>
-                    <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{school.status}</span>
-                  </div>
-                  <p className="mt-1 text-sm text-slate-500">AI：{school.ai_enabled ? "已开启" : "未开启"}</p>
-                </button>
-              ))}
-              {schools.length === 0 && (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
-                  暂无学校。
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_440px]">
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <School className="h-5 w-5 text-slate-600" />
+            <h2 className="text-base font-semibold">学校管理</h2>
+          </div>
+          <div className="grid gap-3">
+            {schools.map((school) => (
+              <button
+                key={school.id}
+                type="button"
+                onClick={() => setSelectedSchoolId(school.id)}
+                className={`rounded-lg border p-4 text-left shadow-sm ${
+                  selectedSchoolId === school.id ? "border-slate-900 bg-white" : "border-slate-200 bg-white"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-medium">{school.name}</p>
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{school.status}</span>
                 </div>
-              )}
+                <p className="mt-1 text-sm text-slate-500">AI：{school.ai_enabled ? "学校已开启" : "学校未开启"}</p>
+              </button>
+            ))}
+            {schools.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
+                暂无学校。
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <aside className="space-y-4">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <Bot className="h-5 w-5 text-slate-600" />
+              <h2 className="text-sm font-semibold">平台 AI 配置</h2>
             </div>
+            <AgentModelSettingsForm
+              variant="settings"
+              data={llmSettings}
+              loading={aiLoading}
+              saving={busy}
+              onError={onError}
+              onReload={refresh}
+            />
           </section>
 
-          <aside className="space-y-4">
-            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="mb-3 text-sm font-semibold">AI 模型配置</h2>
-              <AgentModelSettingsForm
-                variant="settings"
-                data={llmSettings}
-                loading={aiLoading}
-                saving={busy}
-                onError={onError}
-                onReload={refresh}
-              />
-            </section>
+          <form onSubmit={(event) => void submitSchool(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold">创建学校</h2>
+            <input
+              value={schoolName}
+              onChange={(event) => setSchoolName(event.target.value)}
+              placeholder="学校名称"
+              className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+              required
+            />
+            <button
+              type="submit"
+              disabled={busy}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              <Plus className="h-4 w-4" />
+              创建
+            </button>
+          </form>
 
-            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="mb-3 text-sm font-semibold">扩展组件</h2>
-              <ExtensionsPanel onError={onError} />
-            </section>
+          <form onSubmit={(event) => void submitSchoolUser(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold">创建学校端账号</h2>
+            <select
+              value={selectedSchoolId}
+              onChange={(event) => setSelectedSchoolId(event.target.value)}
+              className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+              required
+            >
+              <option value="">选择学校</option>
+              {schools.map((school) => (
+                <option key={school.id} value={school.id}>
+                  {school.name}
+                </option>
+              ))}
+            </select>
+            <input
+              value={schoolUsername}
+              onChange={(event) => setSchoolUsername(event.target.value)}
+              placeholder="用户名"
+              className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+              required
+            />
+            <input
+              value={schoolDisplayName}
+              onChange={(event) => setSchoolDisplayName(event.target.value)}
+              placeholder="显示名称"
+              className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+              required
+            />
+            <input
+              value={schoolPassword}
+              onChange={(event) => setSchoolPassword(event.target.value)}
+              placeholder="初始密码"
+              type="password"
+              minLength={6}
+              className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+              required
+            />
+            <button
+              type="submit"
+              disabled={busy || !selectedSchoolId}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              <UserPlus className="h-4 w-4" />
+              创建账号
+            </button>
+          </form>
 
-            <form onSubmit={(event) => void submitSchool(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="mb-3 text-sm font-semibold">创建学校</h2>
-              <input
-                value={schoolName}
-                onChange={(event) => setSchoolName(event.target.value)}
-                placeholder="学校名称"
-                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                required
-              />
-              <button
-                type="submit"
-                disabled={busy}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-              >
-                <Plus className="h-4 w-4" />
-                创建
-              </button>
-            </form>
-
-            <form onSubmit={(event) => void submitSchoolUser(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="mb-3 text-sm font-semibold">创建学校端账号</h2>
-              <select
-                value={selectedSchoolId}
-                onChange={(event) => setSelectedSchoolId(event.target.value)}
-                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                required
-              >
-                <option value="">选择学校</option>
-                {schools.map((school) => (
-                  <option key={school.id} value={school.id}>
-                    {school.name}
-                  </option>
-                ))}
-              </select>
-              <input
-                value={schoolUsername}
-                onChange={(event) => setSchoolUsername(event.target.value)}
-                placeholder="用户名"
-                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                required
-              />
-              <input
-                value={schoolDisplayName}
-                onChange={(event) => setSchoolDisplayName(event.target.value)}
-                placeholder="显示名称"
-                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                required
-              />
-              <input
-                value={schoolPassword}
-                onChange={(event) => setSchoolPassword(event.target.value)}
-                placeholder="初始密码"
-                type="password"
-                minLength={6}
-                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                required
-              />
-              <button
-                type="submit"
-                disabled={busy || !selectedSchoolId}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-              >
-                <UserPlus className="h-4 w-4" />
-                创建账号
-              </button>
-            </form>
-          </aside>
-        </div>
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold">扩展组件</h2>
+            <ExtensionsPanel onError={onError} />
+          </section>
+        </aside>
+      </div>
     </PlatformShell>
   );
 }

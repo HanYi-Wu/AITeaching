@@ -337,7 +337,11 @@ def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> T
             project_root=ctx.project_root,
             title=str(args.get("title") or "").strip() or None,
             description=str(args.get("description") or "").strip() or None,
+            start_at=str(args.get("start_at") or "").strip() or None,
+            end_at=str(args.get("end_at") or "").strip() or None,
             submission_mode=str(args.get("submission_mode") or "online"),
+            max_screen_switches=int(args.get("max_screen_switches") or 0),
+            time_limit_minutes=int(args.get("time_limit_minutes") or 0) or None,
             show_results_immediately=bool(args.get("show_results_immediately")),
         )
     except (ValueError, PermissionError, FileNotFoundError) as e:

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   updatePlatformPaperDeliveryMode: vi.fn(),
   publishPlatformPaper: vi.fn(),
   revokePlatformPaperPublication: vi.fn(),
+  updatePlatformPaperPublication: vi.fn(),
   uploadPaperScores: vi.fn(),
   analyzePlatformPaper: vi.fn(),
   listPaperSubmissions: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     updatePlatformPaperDeliveryMode: mocks.updatePlatformPaperDeliveryMode,
     publishPlatformPaper: mocks.publishPlatformPaper,
     revokePlatformPaperPublication: mocks.revokePlatformPaperPublication,
+    updatePlatformPaperPublication: mocks.updatePlatformPaperPublication,
     uploadPaperScores: mocks.uploadPaperScores,
     analyzePlatformPaper: mocks.analyzePlatformPaper,
     listPaperSubmissions: mocks.listPaperSubmissions,
@@ -105,7 +107,11 @@ describe("PapersWorkspace", () => {
       expect(mocks.publishPlatformPaper).toHaveBeenCalledWith("p1", {
         class_ids: ["c1"],
         title: "Midterm",
+        start_at: null,
+        end_at: null,
         submission_mode: "online",
+        max_screen_switches: 0,
+        time_limit_minutes: null,
       }),
     );
     expect((await screen.findAllByText("已发布")).length).toBeGreaterThan(0);
@@ -125,8 +131,19 @@ describe("PapersWorkspace", () => {
           attempt_count: 3,
           submitted_count: 1,
           proctor_event_count: 2,
+          max_screen_switches: 1,
+          time_limit_minutes: 60,
         },
       ],
+    });
+    mocks.updatePlatformPaperPublication.mockResolvedValue({
+      publication: {
+        id: "pub1",
+        paper_id: "p1",
+        status: "paused",
+        title: "Managed Publication",
+        class_ids: ["c1"],
+      },
     });
     mocks.revokePlatformPaperPublication.mockResolvedValue({
       publication: {
@@ -142,6 +159,11 @@ describe("PapersWorkspace", () => {
 
     expect(await screen.findByText("Managed Publication")).toBeInTheDocument();
     expect(screen.getByText("1/3")).toBeInTheDocument();
+    expect(screen.getByText("限时 60 分钟")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "暂停收取提交" }));
+    await waitFor(() =>
+      expect(mocks.updatePlatformPaperPublication).toHaveBeenCalledWith("p1", "pub1", { status: "paused" }),
+    );
     await userEvent.click(screen.getByRole("button", { name: "撤回发布" }));
 
     await waitFor(() => expect(mocks.revokePlatformPaperPublication).toHaveBeenCalledWith("p1", "pub1"));
@@ -169,8 +191,30 @@ describe("PapersWorkspace", () => {
           average_time_seconds: 1200,
           publication_count: 1,
         },
-        proctoring: { screen_switch_count: 2, screen_switch_duration_ms: 3000, flagged_student_count: 1 },
-        students: [],
+        proctoring: {
+          screen_switch_count: 2,
+          screen_switch_duration_ms: 3000,
+          flagged_student_count: 1,
+          exceeded_student_count: 1,
+        },
+        students: [
+          {
+            student_id: "s1",
+            student_no: "S001",
+            display_name: "Student One",
+            account_username: "stu_s001",
+            status: "completed",
+            score: 80,
+            max_score: 100,
+            score_percent: 80,
+            time_spent_seconds: 1200,
+            screen_switch_count: 2,
+            screen_switch_limit: 1,
+            screen_switch_exceeded: true,
+            screen_switch_duration_ms: 3000,
+            class_names: ["Class 1"],
+          },
+        ],
       },
     });
 
@@ -183,6 +227,9 @@ describe("PapersWorkspace", () => {
     expect(await screen.findByTestId("paper-analysis-completion-rate")).toHaveTextContent("50%");
     expect(screen.getByTestId("paper-analysis-switch-count")).toHaveTextContent("2");
     expect(screen.getByTestId("paper-analysis-flagged-count")).toHaveTextContent("1");
+    expect(screen.getByText("学生个人分析")).toBeInTheDocument();
+    expect(screen.getByText("Student One")).toBeInTheDocument();
+    expect(screen.getByText("2/1 次")).toBeInTheDocument();
   });
 
   it("disables publishing until a paper has questions and sends image submission mode", async () => {
@@ -198,13 +245,19 @@ describe("PapersWorkspace", () => {
     mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
     rerender(<PapersWorkspace />);
     await userEvent.click(screen.getByRole("button", { name: "刷新" }));
-    await waitFor(() => expect(screen.getByTestId("paper-publish")).not.toBeDisabled());
+    await waitFor(() => expect(screen.getByTestId("paper-publish")).toBeDisabled());
     await userEvent.click(screen.getByLabelText(/Class 1/));
+    expect(screen.getByTestId("paper-publish")).not.toBeDisabled();
     await userEvent.click(screen.getByTestId("paper-submission-image-ai"));
+    await userEvent.clear(screen.getByTestId("paper-time-limit"));
+    await userEvent.type(screen.getByTestId("paper-time-limit"), "45");
     await userEvent.click(screen.getByTestId("paper-publish"));
 
     await waitFor(() =>
-      expect(mocks.publishPlatformPaper).toHaveBeenCalledWith("p1", expect.objectContaining({ submission_mode: "image_ai" })),
+      expect(mocks.publishPlatformPaper).toHaveBeenCalledWith(
+        "p1",
+        expect.objectContaining({ submission_mode: "image_ai", max_screen_switches: 0, time_limit_minutes: 45 }),
+      ),
     );
   });
 
@@ -233,7 +286,7 @@ describe("PapersWorkspace", () => {
     expect(screen.getByText("已发布到该班")).toBeInTheDocument();
   });
 
-  it("lets a teacher review image submissions with AI suggestions and manual scores", async () => {
+  it("lets a teacher review image submissions on a separate grading page", async () => {
     mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
     mocks.listPaperSubmissions.mockResolvedValue({
       submissions: [
@@ -261,9 +314,6 @@ describe("PapersWorkspace", () => {
         },
       ],
     });
-    mocks.suggestAiGradesForAttempt.mockResolvedValue({
-      suggestions: [{ question_id: "math/q1", suggested_score: 3, feedback: "AI suggestion", status: "needs_review" }],
-    });
     mocks.gradePaperAnswer.mockResolvedValue({
       answer: { question_id: "math/q1", score: 4, feedback: "Reviewed", grading_status: "reviewed" },
     });
@@ -271,17 +321,17 @@ describe("PapersWorkspace", () => {
     render(<PapersWorkspace />);
 
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
-    await userEvent.click(screen.getByTestId("paper-load-submissions"));
+    await userEvent.click(screen.getByTestId("paper-tab-grading"));
     expect(await screen.findByText("Student One")).toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("paper-ai-grade-a1"));
-    await waitFor(() => expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledWith("p1", "a1", ["math/q1"]));
+    expect(screen.queryByTestId("paper-ai-grade-a1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("paper-answer-image-math/q1")).toBeInTheDocument();
     await userEvent.clear(screen.getByTestId("paper-grade-math/q1"));
     await userEvent.type(screen.getByTestId("paper-grade-math/q1"), "4");
     await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
     await waitFor(() =>
       expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "math/q1", {
         score: 4,
-        feedback: "AI suggestion",
+        feedback: null,
         is_correct: null,
       }),
     );

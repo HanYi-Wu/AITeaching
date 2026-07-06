@@ -68,13 +68,13 @@ describe("AdminWorkspace", () => {
       <AdminWorkspace
         user={{ id: "admin1", role: "admin", username: "admin", display_name: "Admin", status: "active" }}
         onLogout={vi.fn()}
-        onOpenTeacherWorkspace={vi.fn()}
         onError={vi.fn()}
       />,
     );
 
     expect(await screen.findByTestId("admin-model-settings-form")).toBeInTheDocument();
     expect(screen.getByTestId("admin-extensions-panel")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "教师端" })).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.apiAgentLlmSettingsGet).toHaveBeenCalled());
   });
 });

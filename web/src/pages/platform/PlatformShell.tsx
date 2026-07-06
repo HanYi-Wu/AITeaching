@@ -13,17 +13,19 @@ type Props = {
 
 export function PlatformShell({ roleLabel, title, subtitle, userName, actions, onLogout, children }: Props) {
   return (
-    <div className="flex h-full min-h-0 min-w-0 w-full flex-1 bg-slate-50 text-slate-950">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-950 text-slate-100">
-        <div className="border-b border-slate-800 p-5">
-          <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600 text-white">
+    <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-slate-50 text-slate-950 lg:flex-row">
+      <aside className="flex w-full shrink-0 flex-col border-b border-slate-800 bg-slate-950 text-slate-100 lg:w-64 lg:border-b-0 lg:border-r">
+        <div className="flex items-center gap-3 border-b border-slate-800 p-4 lg:block lg:p-5">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white lg:mb-4">
             <ShieldCheck className="h-5 w-5" />
           </div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Solaire Platform</p>
-          <h1 className="mt-1 text-lg font-semibold text-white">{roleLabel}</h1>
-          {userName ? <p className="mt-1 truncate text-sm text-slate-400">{userName}</p> : null}
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Solaire Platform</p>
+            <h1 className="mt-1 text-lg font-semibold text-white">{roleLabel}</h1>
+            {userName ? <p className="mt-1 truncate text-sm text-slate-400">{userName}</p> : null}
+          </div>
         </div>
-        <div className="min-h-0 flex-1 p-4 text-sm leading-6 text-slate-400">
+        <div className="hidden min-h-0 flex-1 p-4 text-sm leading-6 text-slate-400 lg:block">
           <p>平台权限、学校账号、教师班级和学生答题统一在这里管理。</p>
         </div>
         {onLogout ? (
@@ -40,15 +42,15 @@ export function PlatformShell({ roleLabel, title, subtitle, userName, actions, o
         ) : null}
       </aside>
       <div className="flex min-w-0 w-full flex-1 flex-col">
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-4">
+        <header className="flex shrink-0 flex-col gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{roleLabel}</p>
             <h2 className="truncate text-xl font-semibold text-slate-950">{title}</h2>
             {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
           </div>
-          {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+          {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
         </header>
-        <main className="min-h-0 flex-1 overflow-auto p-6">{children}</main>
+        <main className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">{children}</main>
       </div>
     </div>
   );

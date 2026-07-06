@@ -19,6 +19,7 @@ PASSWORDS = {
     "demo_school": "school123",
     "demo_teacher": "teacher123",
     "demo_student": "student123",
+    "demo_student2": "student123",
 }
 
 
@@ -36,6 +37,7 @@ def upsert_user(
     school_id: str | None = None,
 ) -> dict[str, object]:
     now = utc_now()
+    must_change_password = 1 if role == "student" else 0
     with connect(root) as con:
         row = con.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         if row is None:
@@ -43,21 +45,23 @@ def upsert_user(
             con.execute(
                 """
                 INSERT INTO users (
-                  id, school_id, role, username, password_hash, display_name, email, status, created_at, updated_at
+                  id, school_id, role, username, password_hash, display_name, email, status,
+                  must_change_password, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, NULL, 'active', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, 'active', ?, ?, ?)
                 """,
-                (user_id, school_id, role, username, hash_password(password), display_name, now, now),
+                (user_id, school_id, role, username, hash_password(password), display_name, must_change_password, now, now),
             )
         else:
             user_id = str(row["id"])
             con.execute(
                 """
                 UPDATE users
-                SET school_id = ?, role = ?, password_hash = ?, display_name = ?, status = 'active', updated_at = ?
+                SET school_id = ?, role = ?, password_hash = ?, display_name = ?, status = 'active',
+                    must_change_password = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (school_id, role, hash_password(password), display_name, now, user_id),
+                (school_id, role, hash_password(password), display_name, must_change_password, now, user_id),
             )
         updated = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     user = row_to_dict(updated)
@@ -122,12 +126,21 @@ def get_or_create_class(root: Path, school_id: str) -> dict[str, object]:
     return klass
 
 
-def ensure_student(root: Path, *, school_id: str, class_id: str, user_id: str) -> dict[str, object]:
+def ensure_student(
+    root: Path,
+    *,
+    school_id: str,
+    class_id: str,
+    user_id: str,
+    student_no: str,
+    display_name: str,
+    initial_password: str,
+) -> dict[str, object]:
     now = utc_now()
     with connect(root) as con:
         row = con.execute(
-            "SELECT * FROM students WHERE school_id = ? AND student_no = 'S001'",
-            (school_id,),
+            "SELECT * FROM students WHERE school_id = ? AND student_no = ?",
+            (school_id, student_no),
         ).fetchone()
         if row is None:
             student_id = new_id()
@@ -136,19 +149,19 @@ def ensure_student(root: Path, *, school_id: str, class_id: str, user_id: str) -
                 INSERT INTO students (
                   id, school_id, user_id, student_no, display_name, email, initial_password, status, created_at, updated_at
                 )
-                VALUES (?, ?, ?, 'S001', '演示学生', NULL, ?, 'active', ?, ?)
+                VALUES (?, ?, ?, ?, ?, NULL, ?, 'active', ?, ?)
                 """,
-                (student_id, school_id, user_id, PASSWORDS["demo_student"], now, now),
+                (student_id, school_id, user_id, student_no, display_name, initial_password, now, now),
             )
         else:
             student_id = str(row["id"])
             con.execute(
                 """
                 UPDATE students
-                SET user_id = ?, display_name = '演示学生', initial_password = ?, status = 'active', updated_at = ?
+                SET user_id = ?, display_name = ?, initial_password = ?, status = 'active', updated_at = ?
                 WHERE id = ?
                 """,
-                (user_id, PASSWORDS["demo_student"], now, student_id),
+                (user_id, display_name, initial_password, now, student_id),
             )
         con.execute(
             "INSERT OR IGNORE INTO class_students (class_id, student_id) VALUES (?, ?)",
@@ -205,10 +218,11 @@ def publish_demo_exam(
     class_id: str,
     exam_id: str,
     submission_mode: str,
-) -> None:
+    max_screen_switches: int,
+) -> dict[str, object]:
     paper = sync_paper_for_exam(project_root, platform_root, teacher, exam_id=exam_id)
     try:
-        publish_online_paper(
+        return publish_online_paper(
             platform_root,
             paper_id=str(paper["paper_id"]),
             user=teacher,
@@ -217,10 +231,122 @@ def publish_demo_exam(
             title=str(paper["title"]),
             submission_mode=submission_mode,
             show_results_immediately=True,
+            max_screen_switches=max_screen_switches,
         )
     except ValueError as exc:
         if "already published" not in str(exc):
             raise
+    with connect(platform_root) as con:
+        row = con.execute(
+            """
+            SELECT ep.*
+            FROM exam_publications ep
+            JOIN publication_classes pc ON pc.publication_id = ep.id
+            WHERE ep.paper_id = ? AND pc.class_id = ? AND ep.status <> 'revoked'
+            ORDER BY ep.created_at DESC
+            LIMIT 1
+            """,
+            (str(paper["paper_id"]), class_id),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("failed to find existing demo publication")
+        con.execute(
+            """
+            UPDATE exam_publications
+            SET submission_mode = ?, show_results_immediately = 1, max_screen_switches = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (submission_mode, max_screen_switches, utc_now(), str(row["id"])),
+        )
+        updated = con.execute("SELECT * FROM exam_publications WHERE id = ?", (str(row["id"]),)).fetchone()
+    publication = row_to_dict(updated)
+    if publication is None:
+        raise RuntimeError("failed to load existing demo publication")
+    return publication
+
+
+def seed_demo_attempts(root: Path, *, publication_id: str, class_id: str) -> None:
+    now = utc_now()
+    with connect(root) as con:
+        students = con.execute(
+            """
+            SELECT s.id, s.student_no
+            FROM students s
+            JOIN class_students cs ON cs.student_id = s.id
+            WHERE cs.class_id = ?
+            ORDER BY s.student_no
+            """,
+            (class_id,),
+        ).fetchall()
+        for row in students:
+            con.execute(
+                """
+                INSERT OR IGNORE INTO student_attempts (id, publication_id, student_id, status)
+                VALUES (?, ?, ?, 'not_started')
+                """,
+                (new_id(), publication_id, str(row["id"])),
+            )
+        attempts = con.execute(
+            """
+            SELECT sa.id, sa.student_id, s.student_no
+            FROM student_attempts sa
+            JOIN students s ON s.id = sa.student_id
+            WHERE sa.publication_id = ?
+            ORDER BY s.student_no
+            """,
+            (publication_id,),
+        ).fetchall()
+        con.execute("DELETE FROM proctor_events WHERE publication_id = ?", (publication_id,))
+        for attempt in attempts:
+            if str(attempt["student_no"]) == "S001":
+                con.execute(
+                    """
+                    UPDATE student_attempts
+                    SET status = 'submitted', score = 8, max_score = 10,
+                        started_at = '2026-07-04T08:00:00+00:00',
+                        submitted_at = '2026-07-04T08:28:00+00:00',
+                        time_spent_seconds = 1680
+                    WHERE id = ?
+                    """,
+                    (str(attempt["id"]),),
+                )
+                events = [
+                    ("visibility_hidden", 1100),
+                    ("window_blur", 0),
+                ]
+            else:
+                con.execute(
+                    """
+                    UPDATE student_attempts
+                    SET status = 'in_progress',
+                        started_at = '2026-07-04T08:05:00+00:00',
+                        submitted_at = NULL,
+                        score = NULL,
+                        max_score = NULL,
+                        time_spent_seconds = 600
+                    WHERE id = ?
+                    """,
+                    (str(attempt["id"]),),
+                )
+                events = [("visibility_hidden", 700)]
+            for event_type, duration_ms in events:
+                con.execute(
+                    """
+                    INSERT INTO proctor_events (
+                      id, attempt_id, student_id, publication_id, event_type, occurred_at, duration_ms, payload_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, '{}')
+                    """,
+                    (
+                        new_id(),
+                        str(attempt["id"]),
+                        str(attempt["student_id"]),
+                        publication_id,
+                        event_type,
+                        now,
+                        duration_ms,
+                    ),
+                )
 
 
 def main() -> None:
@@ -265,18 +391,44 @@ def main() -> None:
         display_name="演示学生",
         school_id=school_id,
     )
-    ensure_student(platform_root, school_id=school_id, class_id=class_id, user_id=str(student_user["id"]))
+    student_user2 = upsert_user(
+        platform_root,
+        username="demo_student2",
+        password=PASSWORDS["demo_student2"],
+        role="student",
+        display_name="演示学生二",
+        school_id=school_id,
+    )
+    ensure_student(
+        platform_root,
+        school_id=school_id,
+        class_id=class_id,
+        user_id=str(student_user["id"]),
+        student_no="S001",
+        display_name="演示学生",
+        initial_password=PASSWORDS["demo_student"],
+    )
+    ensure_student(
+        platform_root,
+        school_id=school_id,
+        class_id=class_id,
+        user_id=str(student_user2["id"]),
+        student_no="S002",
+        display_name="演示学生二",
+        initial_password=PASSWORDS["demo_student2"],
+    )
     ensure_teacher_links(platform_root, school_id=school_id, teacher_id=str(teacher["id"]), class_id=class_id)
 
     online_exam = write_exam(project_root, label="demo-online", title="演示线上答题")
     image_exam = write_exam(project_root, label="demo-image", title="演示图片AI批改")
-    publish_demo_exam(
+    online_publication = publish_demo_exam(
         platform_root,
         project_root,
         teacher=teacher,
         class_id=class_id,
         exam_id=online_exam,
         submission_mode="online",
+        max_screen_switches=1,
     )
     publish_demo_exam(
         platform_root,
@@ -285,7 +437,9 @@ def main() -> None:
         class_id=class_id,
         exam_id=image_exam,
         submission_mode="image_ai",
+        max_screen_switches=0,
     )
+    seed_demo_attempts(platform_root, publication_id=str(online_publication["id"]), class_id=class_id)
 
     print(f"platform_root={platform_root}")
     print(f"content_root={project_root}")

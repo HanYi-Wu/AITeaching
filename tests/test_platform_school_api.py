@@ -103,10 +103,12 @@ def test_school_assigns_teacher_to_class_without_subject(web_client: TestClient)
 
 def test_school_ai_toggle_requires_admin_configured_api(
     web_client: TestClient,
+    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for key in ("SOLAIRE_LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("SOLAIRE_USER_CONFIG_DIR", str(tmp_path / "user-ai"))
     school_headers, _ = _school_headers(web_client)
 
     initial = web_client.get("/api/school/ai-settings", headers=school_headers)
@@ -124,6 +126,11 @@ def test_school_ai_toggle_requires_admin_configured_api(
     assert enabled.status_code == 200
     assert enabled.json()["ai_available"] is True
     assert enabled.json()["ai_enabled"] is True
+
+    capabilities = web_client.get("/api/school/ai/capabilities", headers=school_headers)
+    assert capabilities.status_code == 200
+    assert capabilities.json()["ai_available"] is True
+    assert "teachers.manage" in {item["id"] for item in capabilities.json()["capabilities"]}
 
     disabled = web_client.patch("/api/school/ai-settings", json={"ai_enabled": False}, headers=school_headers)
     assert disabled.status_code == 200
@@ -175,6 +182,7 @@ def test_school_imports_teachers_classes_and_students_from_json(web_client: Test
     )
     assert login.status_code == 200
     assert login.json()["user"]["role"] == "student"
+    assert login.json()["user"]["must_change_password"] is True
 
 
 def test_school_imports_teachers_classes_and_students_from_excel(web_client: TestClient) -> None:
@@ -433,7 +441,7 @@ def test_same_student_number_can_exist_in_different_schools(web_client: TestClie
     assert first.json()["students"][0]["account_username"] != second.json()["students"][0]["account_username"]
 
 
-def test_student_can_change_generated_username_and_password(web_client: TestClient) -> None:
+def test_student_first_login_changes_password_then_username(web_client: TestClient) -> None:
     school_headers, _ = _school_headers(web_client)
     imported = web_client.post(
         "/api/school/students/import",
@@ -445,9 +453,21 @@ def test_student_can_change_generated_username_and_password(web_client: TestClie
         "/api/auth/login",
         json={"username": student["account_username"], "password": student["initial_password"]},
     )
+    assert login.status_code == 200
+    assert login.json()["user"]["must_change_password"] is True
     student_headers = _headers(str(login.json()["token"]))
 
-    changed = web_client.patch(
+    blocked_username = web_client.patch(
+        "/api/student/account",
+        json={
+            "username": "student_custom_001",
+            "current_password": student["initial_password"],
+        },
+        headers=student_headers,
+    )
+    assert blocked_username.status_code == 400
+
+    blocked_both = web_client.patch(
         "/api/student/account",
         json={
             "username": "student_custom_001",
@@ -456,13 +476,33 @@ def test_student_can_change_generated_username_and_password(web_client: TestClie
         },
         headers=student_headers,
     )
+    assert blocked_both.status_code == 400
+
+    changed = web_client.patch(
+        "/api/student/account",
+        json={
+            "current_password": student["initial_password"],
+            "new_password": "changed123",
+        },
+        headers=student_headers,
+    )
     assert changed.status_code == 200
-    assert changed.json()["user"]["username"] == "student_custom_001"
+    assert changed.json()["user"]["username"] == student["account_username"]
+    assert changed.json()["user"]["must_change_password"] is False
 
     old_login = web_client.post(
         "/api/auth/login",
         json={"username": student["account_username"], "password": student["initial_password"]},
     )
     assert old_login.status_code == 401
-    new_login = web_client.post("/api/auth/login", json={"username": "student_custom_001", "password": "changed123"})
+    new_login = web_client.post("/api/auth/login", json={"username": student["account_username"], "password": "changed123"})
     assert new_login.status_code == 200
+    student_headers = _headers(str(new_login.json()["token"]))
+
+    changed_username = web_client.patch(
+        "/api/student/account",
+        json={"username": "student_custom_001", "current_password": "changed123"},
+        headers=student_headers,
+    )
+    assert changed_username.status_code == 200
+    assert changed_username.json()["user"]["username"] == "student_custom_001"

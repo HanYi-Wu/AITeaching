@@ -56,6 +56,7 @@ def _public_user(row: dict[str, object]) -> dict[str, object]:
         "display_name": row["display_name"],
         "email": row.get("email"),
         "status": row["status"],
+        "must_change_password": bool(int(row.get("must_change_password") or 0)),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -123,6 +124,10 @@ def update_user_credentials(
     new_password: str | None = None,
 ) -> dict[str, object]:
     init_platform_db(root)
+    wants_username = username is not None and username.strip() != ""
+    wants_password = bool(new_password)
+    if wants_username and wants_password:
+        raise ValueError("change username or password, not both")
     with connect(root) as con:
         row = con.execute("SELECT * FROM users WHERE id = ? AND status = 'active'", (user_id,)).fetchone()
         user = row_to_dict(row)
@@ -132,7 +137,9 @@ def update_user_credentials(
             raise ValueError("current password is invalid")
         updates: list[str] = []
         params: list[object] = []
-        if username is not None:
+        if wants_username:
+            if bool(int(user.get("must_change_password") or 0)):
+                raise ValueError("password change is required before username changes")
             clean_username = _validate_username(username)
             existing = con.execute(
                 "SELECT 1 FROM users WHERE username = ? AND id <> ?",
@@ -145,6 +152,7 @@ def update_user_credentials(
         if new_password:
             updates.append("password_hash = ?")
             params.append(hash_password(new_password))
+            updates.append("must_change_password = 0")
         if not updates:
             return _public_user(user)
         updates.append("updated_at = ?")

@@ -118,14 +118,20 @@ describe("SchoolWorkspace", () => {
       />,
     );
 
-    expect(await screen.findByText("Teacher Li")).toBeInTheDocument();
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("默认学科")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("学科")).not.toBeInTheDocument();
-    expect(screen.getByTestId("students-export-link")).toBeInTheDocument();
     expect(screen.getByTestId("teachers-import-file")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("school-page-classes"));
     expect(screen.getByTestId("classes-import-file")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("school-page-students"));
+    expect(screen.getByTestId("students-export-link")).toBeInTheDocument();
     expect(screen.getByTestId("students-import-file")).toBeInTheDocument();
 
+    await userEvent.click(screen.getByTestId("school-page-assignments"));
     await userEvent.click(screen.getByTestId("assign-teacher-class"));
 
     await waitFor(() =>
@@ -145,6 +151,7 @@ describe("SchoolWorkspace", () => {
       />,
     );
 
+    await userEvent.click(await screen.findByTestId("school-page-ai"));
     const toggle = await screen.findByTestId("school-ai-toggle");
     expect(toggle).not.toBeChecked();
 

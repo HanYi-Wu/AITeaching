@@ -8,7 +8,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL,
   email TEXT,
   status TEXT NOT NULL DEFAULT 'active',
+  must_change_password INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -106,6 +107,8 @@ CREATE TABLE IF NOT EXISTS exam_publications (
   randomize_questions INTEGER NOT NULL DEFAULT 0,
   randomize_answers INTEGER NOT NULL DEFAULT 0,
   submission_mode TEXT NOT NULL DEFAULT 'online',
+  max_screen_switches INTEGER NOT NULL DEFAULT 0,
+  time_limit_minutes INTEGER,
   status TEXT NOT NULL DEFAULT 'draft',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -116,6 +119,21 @@ CREATE TABLE IF NOT EXISTS publication_classes (
   class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
   PRIMARY KEY(publication_id, class_id)
 );
+
+CREATE TRIGGER IF NOT EXISTS publication_classes_one_active_per_paper
+BEFORE INSERT ON publication_classes
+WHEN EXISTS (
+  SELECT 1
+  FROM publication_classes existing_pc
+  JOIN exam_publications existing_ep ON existing_ep.id = existing_pc.publication_id
+  JOIN exam_publications incoming_ep ON incoming_ep.id = NEW.publication_id
+  WHERE existing_pc.class_id = NEW.class_id
+    AND existing_ep.paper_id = incoming_ep.paper_id
+    AND existing_ep.status <> 'revoked'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'paper already published to class');
+END;
 
 CREATE TABLE IF NOT EXISTS student_attempts (
   id TEXT PRIMARY KEY,
@@ -200,9 +218,12 @@ def connect(root: Path) -> sqlite3.Connection:
 def init_platform_db(root: Path) -> None:
     with connect(root) as con:
         con.executescript(SCHEMA_SQL)
+        _ensure_column(con, "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "students", "user_id", "TEXT REFERENCES users(id) ON DELETE SET NULL")
         _ensure_column(con, "students", "initial_password", "TEXT")
         _ensure_column(con, "exam_publications", "submission_mode", "TEXT NOT NULL DEFAULT 'online'")
+        _ensure_column(con, "exam_publications", "max_screen_switches", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(con, "exam_publications", "time_limit_minutes", "INTEGER")
         _ensure_column(con, "student_answers", "grading_status", "TEXT NOT NULL DEFAULT 'pending'")
         _ensure_column(con, "student_answers", "feedback", "TEXT")
         _ensure_column(con, "student_answers", "ai_suggested_score", "REAL")
@@ -210,6 +231,7 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "student_answers", "ai_ocr_text", "TEXT")
         _ensure_column(con, "student_answers", "graded_by", "TEXT REFERENCES users(id) ON DELETE SET NULL")
         _ensure_column(con, "student_answers", "graded_at", "TEXT")
+        _dedupe_active_publication_classes(con)
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -217,6 +239,40 @@ def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition:
     rows = con.execute(f"PRAGMA table_info({table})").fetchall()
     if column not in {str(row["name"]) for row in rows}:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _dedupe_active_publication_classes(con: sqlite3.Connection) -> None:
+    rows = con.execute(
+        """
+        SELECT ep.id, ep.paper_id, pc.class_id
+        FROM exam_publications ep
+        JOIN publication_classes pc ON pc.publication_id = ep.id
+        WHERE ep.status <> 'revoked'
+        ORDER BY ep.paper_id, pc.class_id, ep.created_at DESC, ep.id DESC
+        """
+    ).fetchall()
+    seen: set[tuple[str, str]] = set()
+    duplicate_links: list[tuple[str, str]] = []
+    for row in rows:
+        key = (str(row["paper_id"]), str(row["class_id"]))
+        publication_id = str(row["id"])
+        if key in seen:
+            duplicate_links.append((publication_id, str(row["class_id"])))
+        else:
+            seen.add(key)
+    if duplicate_links:
+        con.executemany(
+            "DELETE FROM publication_classes WHERE publication_id = ? AND class_id = ?",
+            duplicate_links,
+        )
+        con.execute(
+            """
+            UPDATE exam_publications
+            SET status = 'revoked', updated_at = datetime('now')
+            WHERE status <> 'revoked'
+              AND id NOT IN (SELECT DISTINCT publication_id FROM publication_classes)
+            """
+        )
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:

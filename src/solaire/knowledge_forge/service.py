@@ -553,6 +553,48 @@ def rename_graph(project_root: Path, slug: str, new_display_name: str) -> None:
     _save_meta(project_root, meta)
 
 
+def export_graph(project_root: Path, slug: str) -> dict[str, Any]:
+    """Export one subject graph as a portable JSON-serializable bundle."""
+    ensure_graph_layout(project_root)
+    meta = _load_meta(project_root)
+    subject = next((sm for sm in meta.subjects if sm.slug == slug), None)
+    if subject is None:
+        raise FileNotFoundError(f"科目图谱不存在: {slug!r}")
+    state = _load_subject_state(project_root, slug)
+    return {
+        "kind": "solaire.graph",
+        "version": 1,
+        "slug": slug,
+        "display_name": subject.display_name,
+        "levels": meta.levels,
+        "state": state.model_dump(mode="json"),
+    }
+
+
+def import_graph(project_root: Path, bundle: dict[str, Any], *, slug: str | None = None) -> str:
+    """Import a graph bundle as a new subject graph and return the new slug."""
+    ensure_graph_layout(project_root)
+    if not isinstance(bundle, dict):
+        raise ValueError("graph bundle must be an object")
+    raw_state = bundle.get("state") if isinstance(bundle.get("state"), dict) else bundle
+    state = GraphState.model_validate(raw_state)
+    display_name = str(bundle.get("display_name") or bundle.get("name") or "导入图谱").strip() or "导入图谱"
+    slug_hint = slug or str(bundle.get("slug") or "").strip() or None
+    new_slug = create_graph(project_root, display_name, slug_hint)
+    _save_subject_state(project_root, new_slug, state)
+    meta = _load_meta(project_root)
+    for sm in meta.subjects:
+        if sm.slug == new_slug:
+            sm.node_count = len(state.nodes)
+            sm.display_name = display_name
+            break
+    levels = bundle.get("levels")
+    if isinstance(levels, list):
+        meta.levels = [str(item).strip() for item in levels if str(item).strip()]
+    _save_meta(project_root, meta)
+    return new_slug
+
+
 def get_taxonomy(project_root: Path) -> dict[str, Any]:
     ensure_graph_layout(project_root)
     meta = _load_meta(project_root)

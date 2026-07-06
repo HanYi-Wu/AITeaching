@@ -151,7 +151,12 @@ def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClie
     )
     published = web_client.post(
         f"/api/papers/{paper['paper_id']}/publish",
-        json={"class_ids": [class_id], "title": "Online Midterm", "description": "Answer online"},
+        json={
+            "class_ids": [class_id],
+            "title": "Online Midterm",
+            "description": "Answer online",
+            "max_screen_switches": 2,
+        },
         headers=teacher_headers,
     )
 
@@ -160,6 +165,7 @@ def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClie
     assert body["publication"]["status"] == "published"
     assert body["publication"]["paper_id"] == paper["paper_id"]
     assert body["publication"]["class_ids"] == [class_id]
+    assert body["publication"]["max_screen_switches"] == 2
 
 
 def test_teacher_cannot_publish_empty_paper_and_can_choose_image_submission(
@@ -251,6 +257,23 @@ def test_teacher_filters_papers_and_manages_publication_history(web_client: Test
     assert publications.json()["publications"][0]["title"] == "Managed Publication"
     assert publications.json()["publications"][0]["class_names"] == ["Class 1"]
 
+    paused = web_client.patch(
+        f"/api/papers/{paper['paper_id']}/publications/{publication_id}",
+        json={"status": "paused", "time_limit_minutes": 60},
+        headers=teacher_headers,
+    )
+    assert paused.status_code == 200
+    assert paused.json()["publication"]["status"] == "paused"
+    assert paused.json()["publication"]["time_limit_minutes"] == 60
+
+    resumed = web_client.patch(
+        f"/api/papers/{paper['paper_id']}/publications/{publication_id}",
+        json={"status": "published"},
+        headers=teacher_headers,
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["publication"]["status"] == "published"
+
     closed = web_client.patch(
         f"/api/papers/{paper['paper_id']}/publications/{publication_id}",
         json={"status": "closed", "show_results_immediately": True},
@@ -315,7 +338,7 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
     paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
     published = web_client.post(
         f"/api/papers/{paper['paper_id']}/publish",
-        json={"class_ids": [class_id], "title": "Online Midterm"},
+        json={"class_ids": [class_id], "title": "Online Midterm", "max_screen_switches": 1},
         headers=teacher_headers,
     )
     assert published.status_code == 200
@@ -371,7 +394,10 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
     assert body["summary"]["average_score"] == 80
     assert body["proctoring"]["screen_switch_count"] == 2
     assert body["proctoring"]["flagged_student_count"] == 1
+    assert body["proctoring"]["exceeded_student_count"] == 1
     assert body["students"][0]["screen_switch_count"] == 2
+    assert body["students"][0]["screen_switch_limit"] == 1
+    assert body["students"][0]["screen_switch_exceeded"] is True
 
 
 def test_teacher_reviews_image_submission_with_manual_and_ai_grade_suggestions(

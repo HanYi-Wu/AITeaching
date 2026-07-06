@@ -12,6 +12,7 @@ export type PlatformUser = {
   display_name: string;
   email?: string | null;
   status: string;
+  must_change_password?: boolean;
 };
 
 export type PlatformStatus = {
@@ -37,6 +38,25 @@ export type SchoolAiSettings = {
   school: SchoolRecord;
   ai_available: boolean;
   ai_enabled: boolean;
+};
+
+export type SchoolAiCapability = {
+  id: string;
+  label: string;
+  description: string;
+};
+
+export type SchoolAiResponse = SchoolAiSettings & {
+  capabilities: SchoolAiCapability[];
+  stats: {
+    teachers: number;
+    classes: number;
+    students: number;
+    assignments: number;
+  };
+  reply?: string;
+  source?: "llm" | "local" | string;
+  error?: string;
 };
 
 export type PagedResult = {
@@ -131,6 +151,8 @@ export type PaperPublicationRecord = {
   randomize_questions?: boolean;
   randomize_answers?: boolean;
   submission_mode?: PaperSubmissionMode;
+  max_screen_switches?: number;
+  time_limit_minutes?: number | null;
   start_at?: string | null;
   end_at?: string | null;
   created_at?: string | null;
@@ -209,6 +231,7 @@ export type PlatformPaperAnalysis = {
     screen_switch_count: number;
     screen_switch_duration_ms: number;
     flagged_student_count: number;
+    exceeded_student_count?: number;
   };
   students: Array<{
     student_id: string;
@@ -221,7 +244,13 @@ export type PlatformPaperAnalysis = {
     score_percent?: number | null;
     time_spent_seconds: number;
     screen_switch_count: number;
+    screen_switch_limit?: number;
+    screen_switch_exceeded?: boolean;
+    screen_switch_remaining?: number;
     screen_switch_duration_ms: number;
+    publication_id?: string | null;
+    publication_title?: string | null;
+    class_names?: string[];
   }>;
 };
 
@@ -239,10 +268,14 @@ export type StudentPaperRecord = {
   max_score?: number | null;
   score_percent?: number | null;
   time_spent_seconds: number;
-  screen_switch_count: number;
   show_results: boolean;
   question_count: number;
   submission_mode?: PaperSubmissionMode;
+  publication_status?: string | null;
+  start_at?: string | null;
+  end_at?: string | null;
+  time_limit_minutes?: number | null;
+  can_answer?: boolean;
 };
 
 export type StudentQuestionRecord = {
@@ -261,7 +294,6 @@ export type StudentAttemptRecord = Omit<StudentPaperRecord, "attempt_id" | "ques
 
 export type StudentResultRecord = StudentAttemptRecord & {
   attempt_id: string;
-  screen_switch_duration_ms?: number;
   answers: Array<{
     question_id: string;
     answer?: unknown;
@@ -274,8 +306,6 @@ export type StudentResultRecord = StudentAttemptRecord & {
     correct_count?: number | null;
     wrong_count?: number | null;
     answered_count?: number;
-    screen_switch_count?: number;
-    screen_switch_duration_ms?: number;
   };
 };
 
@@ -421,6 +451,17 @@ export function updateSchoolAiSettings(aiEnabled: boolean): Promise<SchoolAiSett
   return platformRequest("/api/school/ai-settings", {
     method: "PATCH",
     body: JSON.stringify({ ai_enabled: aiEnabled }),
+  });
+}
+
+export function getSchoolAiCapabilities(): Promise<SchoolAiResponse> {
+  return platformRequest("/api/school/ai/capabilities");
+}
+
+export function askSchoolAi(message: string): Promise<SchoolAiResponse> {
+  return platformRequest("/api/school/ai/chat", {
+    method: "POST",
+    body: JSON.stringify({ message }),
   });
 }
 
@@ -736,6 +777,8 @@ export function publishPlatformPaper(
     randomize_questions?: boolean;
     randomize_answers?: boolean;
     submission_mode?: PaperSubmissionMode;
+    max_screen_switches?: number;
+    time_limit_minutes?: number | null;
   },
 ): Promise<{ publication: PaperPublicationRecord }> {
   return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/publish`, {
@@ -758,6 +801,7 @@ export function updatePlatformPaperPublication(
     description?: string | null;
     start_at?: string | null;
     end_at?: string | null;
+    time_limit_minutes?: number | null;
     show_results_immediately?: boolean | null;
     status?: string | null;
   },

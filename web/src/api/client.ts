@@ -4,6 +4,7 @@ import { isTauriShell, waitForTauriShell } from "../lib/tauriEnv";
 
 let apiBaseResolved: string | null = null;
 let apiBasePromise: Promise<string> | null = null;
+const PLATFORM_SESSION_STORAGE_KEY = "solaire.platform.session";
 
 /** 生产构建首次打开时，Tauri 注入可能晚于首帧脚本，需短暂等待再判定是否在壳内。 */
 const TAURI_INJECT_WAIT_MS = 5000;
@@ -263,9 +264,16 @@ async function fetchWithLog(path: string, init?: RequestInit): Promise<Response>
   const url = joinApi(path);
   const t0 = performance.now();
   const method = init?.method ?? "GET";
+  const headers = new Headers(init?.headers);
+  if (typeof localStorage !== "undefined" && !headers.has("Authorization")) {
+    const token = localStorage.getItem(PLATFORM_SESSION_STORAGE_KEY);
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
   let r: Response;
   try {
-    r = await fetch(url, init);
+    r = await fetch(url, { ...init, headers });
   } catch (e) {
     const ms = Math.round(performance.now() - t0);
     const msg = e instanceof Error ? e.message : String(e);
@@ -407,6 +415,17 @@ export async function apiGraphRenameGraph(
 
 export async function apiGraphDeleteGraph(slug: string): Promise<{ ok: boolean }> {
   return apiDelete<{ ok: boolean }>(`/api/graph/graphs/${encodeURIComponent(slug)}`);
+}
+
+export async function apiGraphExportGraph(slug: string): Promise<{ bundle: Record<string, unknown> }> {
+  return apiGet<{ bundle: Record<string, unknown> }>(`/api/graph/graphs/${encodeURIComponent(slug)}/export`);
+}
+
+export async function apiGraphImportGraph(body: {
+  bundle: Record<string, unknown>;
+  slug?: string | null;
+}): Promise<{ ok: boolean; slug: string }> {
+  return apiPost<{ ok: boolean; slug: string }>("/api/graph/graphs/import", body);
 }
 
 // --- Nodes ---

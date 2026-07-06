@@ -132,6 +132,12 @@ def student_account_update(
     user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
     if user.get("role") != "student":
         raise HTTPException(status_code=403, detail="Student role required")
+    wants_username = bool(body.username and body.username.strip())
+    wants_password = bool(body.new_password)
+    if wants_username == wants_password:
+        raise HTTPException(status_code=400, detail="Choose exactly one of username or password")
+    if bool(user.get("must_change_password")) and wants_username:
+        raise HTTPException(status_code=400, detail="Password change is required on first login")
     root = require_platform_root()
     try:
         updated = update_user_credentials(

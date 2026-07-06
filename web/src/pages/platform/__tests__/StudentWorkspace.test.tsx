@@ -42,6 +42,7 @@ describe("StudentWorkspace", () => {
           status: "not_started",
           question_count: 2,
           screen_switch_count: 0,
+          screen_switch_limit: 2,
           time_spent_seconds: 0,
           show_results: true,
         },
@@ -60,6 +61,7 @@ describe("StudentWorkspace", () => {
           max_score: 10,
           score_percent: 80,
           screen_switch_count: 1,
+          screen_switch_limit: 2,
           time_spent_seconds: 300,
           show_results: true,
           analysis: { correct_count: 1, wrong_count: 1, answered_count: 2, screen_switch_count: 1 },
@@ -69,7 +71,7 @@ describe("StudentWorkspace", () => {
     });
   });
 
-  it("lets a student change the generated username and password", async () => {
+  it("lets a student change password and username separately", async () => {
     mocks.updateStudentAccount.mockResolvedValue({
       user: { id: "s1", role: "student", username: "student_custom", display_name: "Student", status: "active" },
     });
@@ -81,14 +83,72 @@ describe("StudentWorkspace", () => {
       />,
     );
 
-    await userEvent.type(screen.getByTestId("student-account-username"), "student_custom");
+    expect(await screen.findByTestId("student-page-home")).toBeInTheDocument();
+    await userEvent.click(await screen.findByTestId("student-page-account"));
     await userEvent.type(screen.getByTestId("student-account-current-password"), "initial123");
     await userEvent.type(screen.getByTestId("student-account-new-password"), "changed123");
     await userEvent.click(screen.getByTestId("student-account-save"));
 
     await waitFor(() =>
       expect(mocks.updateStudentAccount).toHaveBeenCalledWith({
+        username: null,
+        current_password: "initial123",
+        new_password: "changed123",
+      }),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "修改用户名" }));
+    await userEvent.type(screen.getByTestId("student-account-username"), "student_custom");
+    await userEvent.type(screen.getByTestId("student-account-current-password"), "changed123");
+    await userEvent.click(screen.getByTestId("student-account-save"));
+
+    await waitFor(() =>
+      expect(mocks.updateStudentAccount).toHaveBeenLastCalledWith({
         username: "student_custom",
+        current_password: "changed123",
+        new_password: null,
+      }),
+    );
+  });
+
+  it("forces first-login students to change password before entering papers", async () => {
+    mocks.updateStudentAccount.mockResolvedValue({
+      user: {
+        id: "s1",
+        role: "student",
+        username: "stu_abcd",
+        display_name: "Student",
+        status: "active",
+        must_change_password: false,
+      },
+    });
+
+    render(
+      <StudentWorkspace
+        user={{
+          id: "s1",
+          role: "student",
+          username: "stu_abcd",
+          display_name: "Student",
+          status: "active",
+          must_change_password: true,
+        }}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("首次登录必须先修改密码，完成后才能进入答题和成绩页面。")).toBeInTheDocument();
+    expect(screen.getByTestId("student-page-home")).toBeDisabled();
+    expect(screen.getByTestId("student-page-papers")).toBeDisabled();
+    expect(screen.queryByTestId("student-account-username")).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByTestId("student-account-current-password"), "initial123");
+    await userEvent.type(screen.getByTestId("student-account-new-password"), "changed123");
+    await userEvent.click(screen.getByTestId("student-account-save"));
+
+    await waitFor(() =>
+      expect(mocks.updateStudentAccount).toHaveBeenCalledWith({
+        username: null,
         current_password: "initial123",
         new_password: "changed123",
       }),
@@ -106,6 +166,7 @@ describe("StudentWorkspace", () => {
         status: "in_progress",
         time_spent_seconds: 0,
         screen_switch_count: 0,
+        screen_switch_limit: 2,
         show_results: true,
       },
       questions: [
@@ -143,6 +204,7 @@ describe("StudentWorkspace", () => {
         score_percent: 50,
         time_spent_seconds: 120,
         screen_switch_count: 0,
+        screen_switch_limit: 2,
         show_results: true,
       },
     });
@@ -154,6 +216,7 @@ describe("StudentWorkspace", () => {
       />,
     );
 
+    await userEvent.click(await screen.findByTestId("student-page-papers"));
     expect(await screen.findByText("Online Midterm")).toBeInTheDocument();
     await userEvent.click(screen.getByTestId("student-start-pub1"));
     expect(await screen.findByText("1+1=?")).toBeInTheDocument();
@@ -170,7 +233,8 @@ describe("StudentWorkspace", () => {
     );
     expect(mocks.submitStudentAttempt).toHaveBeenCalledWith("attempt1", expect.objectContaining({ time_spent_seconds: expect.any(Number) }));
     await waitFor(() => expect(screen.getAllByText("Old Quiz").length).toBeGreaterThan(0));
-    expect(screen.getByText("80%")).toBeInTheDocument();
+    expect(screen.getAllByText("80%").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/切屏/)).not.toBeInTheDocument();
   });
 
   it("submits image answers when the publication requires image upload", async () => {
@@ -185,6 +249,7 @@ describe("StudentWorkspace", () => {
           status: "not_started",
           question_count: 1,
           screen_switch_count: 0,
+          screen_switch_limit: 0,
           time_spent_seconds: 0,
           show_results: false,
           submission_mode: "image_ai",
@@ -202,6 +267,7 @@ describe("StudentWorkspace", () => {
         status: "in_progress",
         time_spent_seconds: 0,
         screen_switch_count: 0,
+        screen_switch_limit: 0,
         show_results: false,
         submission_mode: "image_ai",
       },
@@ -231,6 +297,7 @@ describe("StudentWorkspace", () => {
         score_percent: null,
         time_spent_seconds: 120,
         screen_switch_count: 0,
+        screen_switch_limit: 0,
         show_results: false,
         submission_mode: "image_ai",
       },
@@ -250,6 +317,7 @@ describe("StudentWorkspace", () => {
         />,
       );
 
+      await userEvent.click(await screen.findByTestId("student-page-papers"));
       expect(await screen.findByText("Image Exam")).toBeInTheDocument();
       await userEvent.click(screen.getByTestId("student-start-pub-img"));
       const file = new File(["fake"], "answer.png", { type: "image/png" });

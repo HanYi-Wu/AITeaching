@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Send,
   Sparkles,
   Trash2,
   Upload,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import {
   assignTeacherClass,
+  askSchoolAi,
   bulkUpdateStudents,
   bulkUpdateTeachers,
   createClass,
@@ -58,6 +60,7 @@ type ClassDraft = { name: string; grade: string };
 type StudentDraft = { student_no: string; display_name: string; email: string };
 type PageQuery = { q: string; status?: string; page: number; pageSize: number };
 type PageMeta = { total: number; page: number; pageSize: number; totalPages: number };
+type SchoolPage = "overview" | "teachers" | "classes" | "students" | "assignments" | "ai";
 
 const DEFAULT_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
 
@@ -100,6 +103,7 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 export function SchoolWorkspace({ user, onLogout, onError }: Props) {
+  const [activePage, setActivePage] = useState<SchoolPage>("overview");
   const [teachers, setTeachers] = useState<TeacherRecord[]>([]);
   const [teacherChoices, setTeacherChoices] = useState<TeacherRecord[]>([]);
   const [classes, setClasses] = useState<ClassRecord[]>([]);
@@ -135,6 +139,9 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
   const [assignClassId, setAssignClassId] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [schoolAiInput, setSchoolAiInput] = useState("");
+  const [schoolAiReply, setSchoolAiReply] = useState<string | null>(null);
+  const [schoolAiBusy, setSchoolAiBusy] = useState(false);
 
   const teacherOptions = useMemo(() => teacherChoices.filter((teacher) => teacher.status === "active"), [teacherChoices]);
 
@@ -301,6 +308,24 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     });
   }
 
+  async function submitSchoolAi(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const message = schoolAiInput.trim();
+    if (!message) return;
+    setSchoolAiBusy(true);
+    setNotice(null);
+    try {
+      const response = await askSchoolAi(message);
+      setAiSettings(response);
+      setSchoolAiReply(response.reply || "AI 已响应，但没有返回正文。");
+      setSchoolAiInput("");
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSchoolAiBusy(false);
+    }
+  }
+
   function toggleTeacher(id: string) {
     setSelectedTeacherIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
@@ -336,6 +361,15 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     </>
   );
 
+  const pages: Array<{ id: SchoolPage; label: string; description: string }> = [
+    { id: "overview", label: "总览", description: "学校数据概览" },
+    { id: "teachers", label: "教师", description: "教师账号和学科" },
+    { id: "classes", label: "班级", description: "班级导入和管理" },
+    { id: "students", label: "学生", description: "学生账号和导出" },
+    { id: "assignments", label: "分配", description: "教师班级分配" },
+    { id: "ai", label: "AI", description: "学校端 AI 能力" },
+  ];
+
   return (
     <PlatformShell
       roleLabel="学校端"
@@ -345,7 +379,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
       actions={actions}
       onLogout={onLogout}
     >
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className={activePage === "overview" || activePage === "ai" ? "space-y-6" : "grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"}>
         <section className="min-w-0 space-y-6">
           <div className="grid gap-3 md:grid-cols-4">
             <Metric label="教师" value={teacherMeta.total} />
@@ -354,6 +388,46 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
             <Metric label="分配" value={assignmentMeta.total} />
           </div>
 
+          <nav className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+            {pages.map((page) => {
+              const selected = activePage === page.id;
+              return (
+                <button
+                  key={page.id}
+                  type="button"
+                  data-testid={`school-page-${page.id}`}
+                  onClick={() => setActivePage(page.id)}
+                  className={`rounded-lg border px-3 py-3 text-left shadow-sm transition ${
+                    selected
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-200 bg-white text-slate-700 hover:border-slate-400"
+                  }`}
+                >
+                  <span className="block text-sm font-semibold">{page.label}</span>
+                  <span className={`mt-1 block text-xs ${selected ? "text-slate-300" : "text-slate-500"}`}>
+                    {page.description}
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {activePage === "overview" ? (
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-base font-semibold text-slate-950">学校管理总览</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                教师、学生、班级和分配已经拆到单独页面。学生初始账号可以在学生页面查看和导出，教师分配到班级后才能向对应班级发布试卷。
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <SummaryTile label="AI 状态" value={aiSettings?.ai_enabled ? "已开启" : aiSettings?.ai_available ? "可开启" : "未配置"} />
+                <SummaryTile label="教师账号" value={`${teacherMeta.total} 个`} />
+                <SummaryTile label="班级" value={`${classMeta.total} 个`} />
+                <SummaryTile label="学生账号" value={`${studentMeta.total} 个`} />
+              </div>
+            </section>
+          ) : null}
+
+          {activePage === "teachers" ? (
           <ManagementSection
             title="教师管理"
             count={teacherMeta.total}
@@ -494,7 +568,9 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
             </div>
             <Pager meta={teacherMeta} onPage={(page) => setTeacherQuery((current) => ({ ...current, page }))} />
           </ManagementSection>
+          ) : null}
 
+          {activePage === "classes" ? (
           <ManagementSection
             title="班级管理"
             count={classMeta.total}
@@ -575,7 +651,9 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
             </div>
             <Pager meta={classMeta} onPage={(page) => setClassQuery((current) => ({ ...current, page }))} />
           </ManagementSection>
+          ) : null}
 
+          {activePage === "students" ? (
           <ManagementSection
             title="学生账号"
             count={studentMeta.total}
@@ -730,7 +808,9 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
             </div>
             <Pager meta={studentMeta} onPage={(page) => setStudentQuery((current) => ({ ...current, page }))} />
           </ManagementSection>
+          ) : null}
 
+          {activePage === "assignments" ? (
           <ManagementSection
             title="教师班级分配"
             count={assignmentMeta.total}
@@ -787,45 +867,74 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
             </div>
             <Pager meta={assignmentMeta} onPage={(page) => setAssignmentQuery((current) => ({ ...current, page }))} />
           </ManagementSection>
+          ) : null}
+
+          {activePage === "ai" ? (
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-700">
+                    <Sparkles className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-base font-semibold text-slate-950">AI 功能</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      学校端 AI 用于教师、学生、班级和分配管理；开关会影响学校端与本校教师端。
+                    </p>
+                  </div>
+                </div>
+                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                  <span className="font-medium text-slate-800">启用 AI</span>
+                  <input
+                    data-testid="school-ai-toggle"
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={Boolean(aiSettings?.ai_enabled)}
+                    disabled={busy || !aiSettings || (!aiSettings.ai_available && !aiSettings.ai_enabled)}
+                    onChange={(event) => void setSchoolAiEnabled(event.target.checked)}
+                  />
+                </label>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-500">
+                {!aiSettings
+                  ? "正在读取 AI 状态。"
+                  : !aiSettings.ai_available
+                    ? "管理员尚未配置 AI API，学校暂不能开启。"
+                    : aiSettings.ai_enabled
+                      ? "当前学校已开启 AI。"
+                      : "当前学校已关闭 AI。"}
+              </p>
+              <form onSubmit={(event) => void submitSchoolAi(event)} className="mt-5 space-y-3">
+                <textarea
+                  className="min-h-40 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="询问教师导入、学生账号、班级管理或教师分配"
+                  value={schoolAiInput}
+                  onChange={(event) => setSchoolAiInput(event.target.value)}
+                  disabled={!aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
+                />
+                <button
+                  type="submit"
+                  disabled={!schoolAiInput.trim() || !aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  <Send className="h-4 w-4" />
+                  询问 AI
+                </button>
+              </form>
+              {schoolAiReply ? (
+                <div className="mt-4 whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+                  {schoolAiReply}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
 
           {notice ? <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{notice}</div> : null}
         </section>
 
+        {activePage !== "overview" && activePage !== "ai" ? (
         <aside className="space-y-4">
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-start gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-700">
-                <Sparkles className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <h2 className="text-sm font-semibold text-slate-950">AI 功能开关</h2>
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  管理学校端和教师端是否允许使用已配置的 AI 能力。
-                </p>
-              </div>
-            </div>
-            <label className="mt-4 flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-              <span className="font-medium text-slate-800">启用 AI</span>
-              <input
-                data-testid="school-ai-toggle"
-                type="checkbox"
-                className="h-4 w-4"
-                checked={Boolean(aiSettings?.ai_enabled)}
-                disabled={busy || !aiSettings || (!aiSettings.ai_available && !aiSettings.ai_enabled)}
-                onChange={(event) => void setSchoolAiEnabled(event.target.checked)}
-              />
-            </label>
-            <p className="mt-2 text-xs leading-5 text-slate-500">
-              {!aiSettings
-                ? "正在读取 AI 状态。"
-                : !aiSettings.ai_available
-                  ? "管理员尚未配置 AI API，学校暂不能开启。"
-                  : aiSettings.ai_enabled
-                    ? "当前学校已开启 AI。"
-                    : "当前学校已关闭 AI。"}
-            </p>
-          </section>
-
+          {activePage === "teachers" ? (
           <form onSubmit={(event) => void submitTeacher(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">添加教师</h2>
             <input className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="用户名" value={teacherUsername} onChange={(event) => setTeacherUsername(event.target.value)} required />
@@ -845,7 +954,9 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               onChange={(event) => void handleFile(event, "teachers")}
             />
           </form>
+          ) : null}
 
+          {activePage === "classes" ? (
           <form onSubmit={(event) => void submitClass(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">添加班级</h2>
             <input className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="班级名称" value={className} onChange={(event) => setClassName(event.target.value)} required />
@@ -862,7 +973,9 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               onChange={(event) => void handleFile(event, "classes")}
             />
           </form>
+          ) : null}
 
+          {activePage === "students" ? (
           <form onSubmit={(event) => void submitStudent(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">添加学生</h2>
             <select className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={studentClassId} onChange={(event) => setStudentClassId(event.target.value)}>
@@ -888,7 +1001,9 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               onChange={(event) => void handleFile(event, "students")}
             />
           </form>
+          ) : null}
 
+          {activePage === "assignments" ? (
           <form onSubmit={(event) => void submitAssignment(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">分配教师班级</h2>
             <select className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={assignTeacherId} onChange={(event) => setAssignTeacherId(event.target.value)} required>
@@ -912,7 +1027,9 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               分配
             </button>
           </form>
+          ) : null}
         </aside>
+        ) : null}
       </div>
     </PlatformShell>
   );
@@ -923,6 +1040,15 @@ function Metric({ label, value }: { label: string; value: number }) {
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <p className="text-xs font-medium text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function SummaryTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-slate-950">{value}</p>
     </div>
   );
 }

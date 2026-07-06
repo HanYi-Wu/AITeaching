@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import shutil
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
 import yaml
-from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
@@ -34,7 +35,8 @@ from solaire.primebrush.api import parse_primebrush, render as render_primebrush
 
 from solaire.web import bundled_paths, extension_registry, help_docs, recent_projects, state, system_tools
 from solaire.web.agent_api import router as agent_router
-from solaire.web.auth_api import router as auth_router
+from solaire.web.auth_api import extract_session_token, require_platform_root, router as auth_router
+from solaire.web.auth_service import get_session_user
 from solaire.web.bank_exchange import export_bank_exchange_zip, import_bank_exchange_zip
 from solaire.web.paper_api import router as paper_router
 from solaire.web.student_api import router as student_router
@@ -96,9 +98,11 @@ from solaire.web.graph_service import (
     delete_graph,
     delete_node_relation,
     detach_file_link,
+    export_graph,
     generate_unique_node_id,
     get_concept_node,
     get_taxonomy,
+    import_graph,
     list_concept_nodes,
     list_file_links_for_node,
     list_graphs,
@@ -160,10 +164,25 @@ from solaire.web.remediation_service import create_remediation_draft, plan_remed
 # 在模块加载时注入 edu_analysis 所需的数据访问实现，解除 edu_analysis 对 web 层的反向依赖
 _configure_edu_analysis(result_port=ResultServiceAdapter())
 
+_graph_request_user: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "graph_request_user",
+    default=None,
+)
+
+
+def _teacher_graph_root(content_root: Path, user: dict[str, Any] | None) -> Path:
+    if not user or user.get("role") != "teacher":
+        return content_root
+    teacher_id = safe_filename_component(str(user.get("id") or "teacher"))
+    root = content_root / ".solaire" / "teacher_graphs" / teacher_id
+    ensure_project_layout(root)
+    return root
+
+
 def _require_root() -> Path:
     r = state.get_content_root()
     ensure_project_layout(r)
-    return r
+    return _teacher_graph_root(r, _graph_request_user.get())
 
 
 def _resolve_under_templates(root: Path, rel: str) -> Path:
@@ -195,6 +214,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _graph_platform_context(request: Request, call_next):
+    token = None
+    user: dict[str, Any] | None = None
+    if request.url.path.startswith("/api/graph"):
+        token = extract_session_token(
+            authorization=request.headers.get("authorization"),
+            x_solaire_session=request.headers.get("x-solaire-session"),
+        )
+        if token:
+            try:
+                user = get_session_user(require_platform_root(), token)
+            except Exception:
+                user = None
+    ctx_token = _graph_request_user.set(user)
+    try:
+        return await call_next(request)
+    finally:
+        _graph_request_user.reset(ctx_token)
 
 
 @app.on_event("startup")
@@ -316,6 +356,11 @@ class GraphCreateBody(BaseModel):
 
 class GraphRenameBody(BaseModel):
     display_name: str = Field(..., min_length=1, description="新名称")
+
+
+class GraphImportBody(BaseModel):
+    bundle: dict[str, Any] = Field(..., description="由图谱导出得到的 JSON 对象")
+    slug: str | None = Field(default=None, description="可选的新图谱内部标识")
 
 
 class GraphNodeNoteBody(BaseModel):
@@ -2033,6 +2078,27 @@ def graph_create(body: GraphCreateBody) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@app.get("/api/graph/graphs/{slug}/export")
+def graph_export(slug: str) -> dict[str, Any]:
+    """导出单个科目图谱。"""
+    root = _require_root()
+    try:
+        return {"bundle": export_graph(root, slug)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.post("/api/graph/graphs/import")
+def graph_import(body: GraphImportBody) -> dict[str, Any]:
+    """导入图谱为新的科目图谱。"""
+    root = _require_root()
+    try:
+        slug = import_graph(root, body.bundle, slug=body.slug)
+        return {"ok": True, "slug": slug}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @app.put("/api/graph/graphs/{slug}")
 def graph_rename(slug: str, body: GraphRenameBody) -> dict[str, Any]:
     """修改科目图谱名称。"""
@@ -2326,11 +2392,13 @@ def graph_question_bindings_index(graph: str | None = Query(None)) -> dict[str, 
 @app.get("/api/graph/nodes/{node_id:path}/questions")
 def graph_nodes_questions(node_id: str, graph: str | None = Query(None)) -> dict[str, Any]:
     root = _require_root()
+    content_root = state.get_content_root()
+    ensure_project_layout(content_root)
     qids = list_questions_for_node(root, node_id, graph=graph)
     questions: list[dict[str, Any]] = []
     for qid in qids:
         try:
-            d = get_question_detail(root, qid)
+            d = get_question_detail(content_root, qid)
         except FileNotFoundError:
             # 图谱绑定可能指向已删除题目；本阶段保持“跳过缺失题目”，不阻断列表。
             continue

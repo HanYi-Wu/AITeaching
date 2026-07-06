@@ -199,10 +199,6 @@ function AppShell() {
           <AdminWorkspace
             user={currentUser}
             onLogout={() => void onLogout()}
-            onOpenTeacherWorkspace={() => {
-              setAdminProjectMode(true);
-              setPage("papers");
-            }}
             onError={setErr}
           />
         ) : platformRoute === "school" && currentUser ? (

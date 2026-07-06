@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,53 @@ from solaire.web.result_service import _flatten_questions
 
 def _new_id() -> str:
     return uuid.uuid4().hex
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _publication_availability(row: dict[str, Any]) -> tuple[bool, str | None]:
+    status = str(row.get("publication_status") or row.get("status") or "")
+    if status != "published":
+        return False, "Publication is not open"
+    now = datetime.now(UTC)
+    start_at = _parse_datetime(row.get("start_at"))
+    if start_at is not None and now < start_at:
+        return False, "Publication has not started"
+    end_at = _parse_datetime(row.get("end_at"))
+    if end_at is not None and now > end_at:
+        return False, "Publication has ended"
+    return True, None
+
+
+def _time_limit_exceeded(row: dict[str, Any]) -> bool:
+    limit_minutes = int(row.get("time_limit_minutes") or 0)
+    if limit_minutes <= 0:
+        return False
+    started_at = _parse_datetime(row.get("started_at"))
+    if started_at is None:
+        return False
+    return datetime.now(UTC) > started_at + timedelta(minutes=limit_minutes)
+
+
+def _ensure_attempt_can_collect(row: dict[str, Any]) -> None:
+    can_answer, reason = _publication_availability(row)
+    if not can_answer:
+        raise ValueError(reason or "Publication is not open")
+    if _time_limit_exceeded(row):
+        raise ValueError("Time limit exceeded")
 
 
 def _student_for_user(root: Path, user: dict[str, Any]) -> dict[str, Any]:
@@ -114,7 +162,7 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
             JOIN paper_records pr ON pr.id = ep.paper_id
             JOIN publication_classes pc ON pc.publication_id = ep.id
             JOIN class_students cs ON cs.class_id = pc.class_id
-            WHERE ep.id = ? AND cs.student_id = ? AND ep.status IN ('published', 'closed')
+            WHERE ep.id = ? AND cs.student_id = ? AND ep.status IN ('published', 'paused', 'closed')
             LIMIT 1
             """,
             (publication_id, student_id),
@@ -131,7 +179,7 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
         row = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
-                   ep.submission_mode,
+                   ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
                    pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count
             FROM student_attempts sa
@@ -152,7 +200,7 @@ def _attempt_for_student(root: Path, attempt_id: str, student_id: str) -> dict[s
         row = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
-                   ep.submission_mode,
+                   ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
                    pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count
             FROM student_attempts sa
@@ -183,9 +231,13 @@ def _attempt_payload(row: dict[str, Any]) -> dict[str, Any]:
         "max_score": row.get("max_score"),
         "score_percent": _score_percent(row.get("score"), row.get("max_score")),
         "time_spent_seconds": int(row.get("time_spent_seconds") or 0),
-        "screen_switch_count": int(row.get("screen_switch_count") or 0),
         "show_results": bool(row.get("show_results_immediately")) or str(row.get("publication_status")) == "closed",
         "submission_mode": row.get("submission_mode") or "online",
+        "publication_status": row.get("publication_status"),
+        "start_at": row.get("start_at"),
+        "end_at": row.get("end_at"),
+        "time_limit_minutes": int(row["time_limit_minutes"]) if row.get("time_limit_minutes") is not None else None,
+        "can_answer": _publication_availability(row)[0] and not _time_limit_exceeded(row),
     }
 
 
@@ -199,7 +251,7 @@ def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) ->
             FROM exam_publications ep
             JOIN publication_classes pc ON pc.publication_id = ep.id
             JOIN class_students cs ON cs.class_id = pc.class_id
-            WHERE cs.student_id = ? AND ep.status IN ('published', 'closed')
+            WHERE cs.student_id = ? AND ep.status IN ('published', 'paused', 'closed')
             ORDER BY ep.created_at DESC
             """,
             (student_id,),
@@ -233,8 +285,8 @@ def start_student_publication(
 ) -> dict[str, Any]:
     student = _student_for_user(root, user)
     attempt = _ensure_assigned_attempt(root, publication_id, str(student["id"]))
-    if str(attempt.get("publication_status")) != "published" and str(attempt.get("status")) != "submitted":
-        raise ValueError("Publication is not open")
+    if str(attempt.get("status")) != "submitted":
+        _ensure_attempt_can_collect(attempt)
     now = utc_now()
     if str(attempt.get("status")) == "not_started":
         with connect(root) as con:
@@ -258,6 +310,7 @@ def save_student_answers(
     attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
     if str(attempt.get("status")) == "submitted":
         raise ValueError("Attempt already submitted")
+    _ensure_attempt_can_collect(attempt)
     now = utc_now()
     rows: list[tuple[object, ...]] = []
     for answer in answers:
@@ -354,6 +407,7 @@ def submit_student_attempt(
     attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
     if str(attempt.get("status")) == "submitted":
         return _attempt_payload(attempt)
+    _ensure_attempt_can_collect(attempt)
     questions, answer_keys = _load_exam_question_payloads(project_root, str(attempt["exam_id"]))
     qtype_by_id = {str(q["question_id"]): str(q.get("type") or "") for q in questions}
     score_by_id = {str(q["question_id"]): float(q.get("score_per_item") or 0) for q in questions}
@@ -411,7 +465,7 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
         rows = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
-                   ep.submission_mode,
+                   ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
                    pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count,
                    COALESCE((SELECT SUM(duration_ms) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_duration_ms
@@ -469,14 +523,11 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
             {
                 "attempt_id": attempt["id"],
                 "publication_id": attempt["publication_id"],
-                "screen_switch_duration_ms": int(attempt.get("screen_switch_duration_ms") or 0),
                 "answers": answers if show_results else [],
                 "analysis": {
                     "correct_count": correct_count if show_results else None,
                     "wrong_count": wrong_count if show_results else None,
                     "answered_count": len(answer_rows),
-                    "screen_switch_count": int(payload["screen_switch_count"]),
-                    "screen_switch_duration_ms": int(attempt.get("screen_switch_duration_ms") or 0),
                 },
             }
         )

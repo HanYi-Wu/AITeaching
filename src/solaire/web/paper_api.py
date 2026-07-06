@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,6 +28,7 @@ from solaire.web.paper_service import (
 from solaire.web.project_layout import ensure_project_layout
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class PaperUpdateBody(BaseModel):
@@ -47,6 +49,8 @@ class PaperPublishBody(BaseModel):
     randomize_questions: bool = False
     randomize_answers: bool = False
     submission_mode: Literal["online", "image_manual", "image_ai"] = "online"
+    max_screen_switches: int = Field(default=0, ge=0, le=999)
+    time_limit_minutes: int | None = Field(default=None, ge=0, le=1440)
 
 
 class PaperPublicationUpdateBody(BaseModel):
@@ -54,6 +58,7 @@ class PaperPublicationUpdateBody(BaseModel):
     description: str | None = None
     start_at: str | None = None
     end_at: str | None = None
+    time_limit_minutes: int | None = Field(default=None, ge=0, le=1440)
     show_results_immediately: bool | None = None
     status: str | None = None
 
@@ -70,10 +75,13 @@ class PaperAnswerGradeBody(BaseModel):
 
 def _raise_api_error(exc: Exception) -> None:
     if isinstance(exc, PermissionError):
+        logger.warning("paper api permission denied: %s", exc)
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, FileNotFoundError):
+        logger.warning("paper api missing resource: %s", exc)
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, (ValueError, sqlite3.IntegrityError)):
+        logger.warning("paper api invalid request: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise exc
 
@@ -249,6 +257,7 @@ def papers_publications_update(
             description=body.description,
             start_at=body.start_at,
             end_at=body.end_at,
+            time_limit_minutes=body.time_limit_minutes,
             show_results_immediately=body.show_results_immediately,
             status=body.status,
         )
@@ -304,6 +313,8 @@ def papers_publish(
             randomize_questions=body.randomize_questions,
             randomize_answers=body.randomize_answers,
             submission_mode=body.submission_mode,
+            max_screen_switches=body.max_screen_switches,
+            time_limit_minutes=body.time_limit_minutes,
         )
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)

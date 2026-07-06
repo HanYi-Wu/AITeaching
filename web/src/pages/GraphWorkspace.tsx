@@ -6,8 +6,9 @@
  *
  * All shared state is managed via useGraphStore (Zustand).
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Download, Upload } from "lucide-react";
 import {
   apiGraphCreateGraph,
   apiGraphCreateNode,
@@ -15,7 +16,9 @@ import {
   apiGraphDeleteGraph,
   apiGraphDeleteNode,
   apiGraphDeleteRelation,
+  apiGraphExportGraph,
   apiGraphGetTaxonomy,
+  apiGraphImportGraph,
   apiGraphListGraphs,
   apiGraphListNodes,
   apiGraphListRelations,
@@ -68,6 +71,7 @@ export function GraphWorkspace({
   const [pendingConnectTarget, setPendingConnectTarget] = useState<string | null>(null);
   const [connectRelType, setConnectRelType] = useState("related");
   const [showConnectDialog, setShowConnectDialog] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? graphNodes.find((n) => n.id === selectedNodeId) ?? null : null),
@@ -243,6 +247,49 @@ export function GraphWorkspace({
       setBusy(false);
     }
   }, [setBusy, onError, loadGraphList]);
+
+  const handleExportGraph = useCallback(async () => {
+    if (!activeSlug) return;
+    setBusy(true);
+    onError(null);
+    try {
+      const r = await apiGraphExportGraph(activeSlug);
+      const graph = graphs.find((g) => g.slug === activeSlug);
+      const filename = `${graph?.display_name || activeSlug}-graph.json`;
+      const blob = new Blob([JSON.stringify(r.bundle, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [activeSlug, graphs, onError, setBusy]);
+
+  const handleImportGraph = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    onError(null);
+    try {
+      const text = await file.text();
+      const bundle = JSON.parse(text) as Record<string, unknown>;
+      const r = await apiGraphImportGraph({ bundle });
+      await loadGraphList();
+      setActiveSlug(r.slug);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [loadGraphList, onError, setActiveSlug, setBusy]);
 
   // Add orphan node
   const handleAddNode = useCallback(async () => {
@@ -667,6 +714,33 @@ export function GraphWorkspace({
 
   return (
     <div className="flex h-full min-h-[70vh] flex-col gap-2 p-2">
+      <div className="flex items-center justify-end gap-2">
+        <input
+          ref={importInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(event) => void handleImportGraph(event)}
+        />
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => importInputRef.current?.click()}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          <Upload className="h-3.5 w-3.5" />
+          导入
+        </button>
+        <button
+          type="button"
+          disabled={busy || !activeSlug}
+          onClick={() => void handleExportGraph()}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          <Download className="h-3.5 w-3.5" />
+          导出
+        </button>
+      </div>
       <div className="flex min-h-0 flex-1 flex-row gap-2">
         {/* Left: Subject selector */}
         <GraphSubjectSidebar

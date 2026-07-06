@@ -17,10 +17,9 @@ from solaire.web.auth_service import utc_now
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import list_exam_results
 from solaire.web.student_service import _load_exam_question_payloads
-from solaire.agent_layer.llm.router import ModelRouter, load_llm_settings
 
 DELIVERY_MODES = {"offline", "online"}
-PUBLICATION_STATUSES = {"draft", "published", "closed", "revoked"}
+PUBLICATION_STATUSES = {"draft", "published", "paused", "closed", "revoked"}
 SUBMISSION_MODES = {"online", "image_manual", "image_ai"}
 MAX_PAGE_SIZE = 100
 
@@ -126,12 +125,25 @@ def _publication_stats(root: Path, paper_id: str) -> dict[str, int]:
     return {"publication_count": int(publication_count), "published_class_count": int(published_class_count)}
 
 
+def _paper_visible_to_user(paper: dict[str, Any], user: dict[str, Any]) -> bool:
+    role = str(user.get("role") or "")
+    if role == "admin":
+        return True
+    if role == "school":
+        return paper.get("school_id") in (None, user.get("school_id"))
+    if role == "teacher":
+        return paper.get("owner_teacher_id") in (None, user.get("id"))
+    return False
+
+
 def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     init_platform_db(platform_root)
     exams = list_exam_results(project_root)
     papers: list[dict[str, Any]] = []
     for exam in exams:
         record = _paper_record_for_exam(platform_root, exam, user)
+        if not _paper_visible_to_user(record, user):
+            continue
         stats = _publication_stats(platform_root, str(record["id"]))
         papers.append(
             {
@@ -176,6 +188,7 @@ def sync_paper_for_exam(
     if matched is None:
         raise ValueError("exam not found")
     record = _paper_record_for_exam(platform_root, matched, user)
+    _ensure_paper_access(record, user)
     stats = _publication_stats(platform_root, str(record["id"]))
     return {
         "paper_id": record["id"],
@@ -259,9 +272,10 @@ def update_paper_delivery_mode(root: Path, paper_id: str, delivery_mode: str, us
         raise ValueError("delivery_mode must be offline or online")
     now = utc_now()
     with connect(root) as con:
-        existing = con.execute("SELECT 1 FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
+        existing = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
         if existing is None:
             raise ValueError("paper not found")
+        _ensure_paper_access(row_to_dict(existing) or {}, user)
         con.execute(
             "UPDATE paper_records SET delivery_mode = ?, updated_at = ? WHERE id = ?",
             (clean_mode, now, paper_id),
@@ -312,6 +326,10 @@ def list_paper_publications(root: Path, *, paper_id: str, user: dict[str, Any]) 
         item["attempt_count"] = int(item.get("attempt_count") or 0)
         item["submitted_count"] = int(item.get("submitted_count") or 0)
         item["proctor_event_count"] = int(item.get("proctor_event_count") or 0)
+        item["max_screen_switches"] = int(item.get("max_screen_switches") or 0)
+        item["time_limit_minutes"] = (
+            int(item["time_limit_minutes"]) if item.get("time_limit_minutes") is not None else None
+        )
         publications.append(item)
     return publications
 
@@ -326,6 +344,7 @@ def update_paper_publication(
     description: str | None = None,
     start_at: str | None = None,
     end_at: str | None = None,
+    time_limit_minutes: int | None = None,
     show_results_immediately: bool | None = None,
     status: str | None = None,
 ) -> dict[str, Any]:
@@ -347,6 +366,9 @@ def update_paper_publication(
     if end_at is not None:
         updates.append("end_at = ?")
         params.append(end_at.strip() or None)
+    if time_limit_minutes is not None:
+        updates.append("time_limit_minutes = ?")
+        params.append(max(0, int(time_limit_minutes)) or None)
     if show_results_immediately is not None:
         updates.append("show_results_immediately = ?")
         params.append(1 if show_results_immediately else 0)
@@ -430,6 +452,15 @@ def analyze_paper(root: Path, *, paper_id: str, user: dict[str, Any]) -> dict[st
             """
             SELECT
               sa.*,
+              ep.id AS publication_id,
+              ep.title AS publication_title,
+              ep.max_screen_switches,
+              (
+                SELECT GROUP_CONCAT(c.name)
+                FROM publication_classes pc
+                JOIN classes c ON c.id = pc.class_id
+                WHERE pc.publication_id = ep.id
+              ) AS class_names,
               s.student_no,
               s.display_name,
               u.username AS account_username
@@ -485,7 +516,9 @@ def analyze_paper(root: Path, *, paper_id: str, user: dict[str, Any]) -> dict[st
             time_values.append(time_spent)
         attempt_events = events_by_attempt.get(str(attempt.get("id")), [])
         screen_switch_count = len(attempt_events)
-        if screen_switch_count:
+        screen_switch_limit = int(attempt.get("max_screen_switches") or 0)
+        screen_switch_exceeded = screen_switch_count > screen_switch_limit
+        if screen_switch_exceeded:
             flagged_student_ids.add(str(attempt.get("student_id")))
         students.append(
             {
@@ -493,6 +526,9 @@ def analyze_paper(root: Path, *, paper_id: str, user: dict[str, Any]) -> dict[st
                 "student_no": attempt.get("student_no"),
                 "display_name": attempt.get("display_name"),
                 "account_username": attempt.get("account_username"),
+                "publication_id": attempt.get("publication_id"),
+                "publication_title": attempt.get("publication_title"),
+                "class_names": [part for part in str(attempt.get("class_names") or "").split(",") if part],
                 "status": status_group,
                 "score": attempt.get("score"),
                 "max_score": attempt.get("max_score"),
@@ -501,6 +537,9 @@ def analyze_paper(root: Path, *, paper_id: str, user: dict[str, Any]) -> dict[st
                 "submitted_at": attempt.get("submitted_at"),
                 "time_spent_seconds": time_spent,
                 "screen_switch_count": screen_switch_count,
+                "screen_switch_limit": screen_switch_limit,
+                "screen_switch_exceeded": screen_switch_exceeded,
+                "screen_switch_remaining": max(0, screen_switch_limit - screen_switch_count),
                 "screen_switch_duration_ms": sum(int(event.get("duration_ms") or 0) for event in attempt_events),
             }
         )
@@ -542,6 +581,7 @@ def analyze_paper(root: Path, *, paper_id: str, user: dict[str, Any]) -> dict[st
             "screen_switch_count": screen_switch_count,
             "screen_switch_duration_ms": screen_switch_duration_ms,
             "flagged_student_count": len(flagged_student_ids),
+            "exceeded_student_count": len(flagged_student_ids),
         },
         "students": students,
     }
@@ -804,6 +844,8 @@ async def _ai_grade_answer(
     ocr_text: str,
     max_score: float,
 ) -> dict[str, Any] | None:
+    from solaire.agent_layer.llm.router import ModelRouter, load_llm_settings
+
     settings = load_llm_settings(project_root)
     if not settings.api_key:
         return None
@@ -857,6 +899,8 @@ def publish_online_paper(
     randomize_questions: bool = False,
     randomize_answers: bool = False,
     submission_mode: str = "online",
+    max_screen_switches: int = 0,
+    time_limit_minutes: int | None = None,
 ) -> dict[str, Any]:
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
@@ -869,6 +913,8 @@ def publish_online_paper(
     clean_submission_mode = submission_mode.strip() or "online"
     if clean_submission_mode not in SUBMISSION_MODES:
         raise ValueError("submission_mode must be online, image_manual, or image_ai")
+    clean_max_screen_switches = max(0, int(max_screen_switches or 0))
+    clean_time_limit_minutes = max(0, int(time_limit_minutes or 0)) or None
     now = utc_now()
     publication_id = _new_id()
     teacher_id = str(user["id"])
@@ -880,9 +926,10 @@ def publish_online_paper(
             """
             INSERT INTO exam_publications (
               id, paper_id, teacher_id, title, description, start_at, end_at,
-              show_results_immediately, randomize_questions, randomize_answers, submission_mode, status, created_at, updated_at
+              show_results_immediately, randomize_questions, randomize_answers,
+              submission_mode, max_screen_switches, time_limit_minutes, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
             """,
             (
                 publication_id,
@@ -896,6 +943,8 @@ def publish_online_paper(
                 1 if randomize_questions else 0,
                 1 if randomize_answers else 0,
                 clean_submission_mode,
+                clean_max_screen_switches,
+                clean_time_limit_minutes,
                 now,
                 now,
             ),
@@ -930,6 +979,8 @@ def publish_online_paper(
     publication["class_ids"] = selected_class_ids
     publication["attempt_count"] = len(student_rows)
     publication["submission_mode"] = clean_submission_mode
+    publication["max_screen_switches"] = clean_max_screen_switches
+    publication["time_limit_minutes"] = clean_time_limit_minutes
     return publication
 
 
@@ -940,6 +991,8 @@ def list_paper_submissions(
     paper_id: str,
     user: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    from solaire.agent_layer.llm.router import load_llm_settings
+
     init_platform_db(root)
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)

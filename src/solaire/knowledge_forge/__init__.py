@@ -22,6 +22,8 @@ from solaire.knowledge_forge.service import (
     # 多图管理
     create_graph,
     delete_graph,
+    export_graph,
+    import_graph,
     list_graphs,
     rename_graph,
     # 持久化与查询
@@ -73,9 +75,11 @@ __all__ = [
     "delete_node_relation",
     "detach_file_link",
     "ensure_graph_layout",
+    "export_graph",
     "generate_unique_node_id",
     "get_concept_node",
     "get_taxonomy",
+    "import_graph",
     "list_concept_nodes",
     "list_file_links_for_node",
     "list_graphs",

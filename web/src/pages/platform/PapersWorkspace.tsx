@@ -3,7 +3,10 @@ import {
   BarChart3,
   CheckCircle2,
   ClipboardList,
+  FileImage,
   History,
+  PauseCircle,
+  PlayCircle,
   RefreshCw,
   Search,
   Trash2,
@@ -20,7 +23,7 @@ import {
   listTeacherAssignedClasses,
   publishPlatformPaper,
   revokePlatformPaperPublication,
-  suggestAiGradesForAttempt,
+  updatePlatformPaperPublication,
   updatePlatformPaperDeliveryMode,
   uploadPaperScores,
   type PaperPublicationRecord,
@@ -79,6 +82,7 @@ function mergeMeta(
 
 function publicationStatusLabel(status: string): string {
   if (status === "published") return "发布中";
+  if (status === "paused") return "已暂停";
   if (status === "closed") return "已关闭";
   if (status === "revoked") return "已撤回";
   return "草稿";
@@ -98,6 +102,11 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   const [publications, setPublications] = useState<PaperPublicationRecord[]>([]);
   const [submissions, setSubmissions] = useState<PaperSubmissionRecord[]>([]);
   const [submissionMode, setSubmissionMode] = useState<PaperSubmissionMode>("online");
+  const [maxScreenSwitches, setMaxScreenSwitches] = useState(0);
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState(0);
+  const [publishStartAt, setPublishStartAt] = useState("");
+  const [publishEndAt, setPublishEndAt] = useState("");
+  const [paperDetailView, setPaperDetailView] = useState<"manage" | "grading">("manage");
   const [gradeDrafts, setGradeDrafts] = useState<Record<string, string>>({});
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<string, string>>({});
   const [selectedPaperId, setSelectedPaperId] = useState("");
@@ -185,6 +194,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     setSubmissions([]);
     setGradeDrafts({});
     setFeedbackDrafts({});
+    setSelectedClassIds([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPaperId]);
 
@@ -228,7 +238,11 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
       await publishPlatformPaper(selectedPaper.paper_id, {
         class_ids: selectedClassIds,
         title: selectedPaper.title,
+        start_at: publishStartAt || null,
+        end_at: publishEndAt || null,
         submission_mode: submissionMode,
+        max_screen_switches: maxScreenSwitches,
+        time_limit_minutes: timeLimitMinutes > 0 ? timeLimitMinutes : null,
       });
       setPapers((current) =>
         current.map((item) =>
@@ -238,7 +252,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                 delivery_mode: "online",
                 status: "published",
                 publication_count: item.publication_count + 1,
-                published_class_count: Math.max(item.published_class_count, selectedClassIds.length),
+                published_class_count: item.published_class_count + selectedClassIds.length,
               }
             : item,
         ),
@@ -261,6 +275,22 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
       await revokePlatformPaperPublication(selectedPaper.paper_id, publication.id);
       await refresh();
       setMessage("已撤回发布");
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function togglePublicationPause(publication: PaperPublicationRecord) {
+    if (!selectedPaper) return;
+    const nextStatus = publication.status === "paused" ? "published" : "paused";
+    setBusy(`pause:${publication.id}`);
+    setMessage(null);
+    try {
+      await updatePlatformPaperPublication(selectedPaper.paper_id, publication.id, { status: nextStatus });
+      await loadPublications(selectedPaper.paper_id);
+      setMessage(nextStatus === "paused" ? "已暂停收取提交" : "已恢复收取提交");
     } catch (e) {
       reportError(e);
     } finally {
@@ -323,53 +353,6 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     return `${attemptId}:${questionId}`;
   }
 
-  async function suggestGradesForSubmission(submission: PaperSubmissionRecord) {
-    if (!selectedPaper) return;
-    const questionIds = submission.answers.map((answer) => answer.question_id);
-    setBusy(`ai:${submission.attempt_id}`);
-    setMessage(null);
-    try {
-      const result = await suggestAiGradesForAttempt(selectedPaper.paper_id, submission.attempt_id, questionIds);
-      const nextGrades: Record<string, string> = {};
-      const nextFeedback: Record<string, string> = {};
-      result.suggestions.forEach((suggestion) => {
-        const key = gradeKey(submission.attempt_id, suggestion.question_id);
-        if (suggestion.suggested_score !== null && suggestion.suggested_score !== undefined) {
-          nextGrades[key] = String(suggestion.suggested_score);
-        }
-        if (suggestion.feedback) {
-          nextFeedback[key] = suggestion.feedback;
-        }
-      });
-      setGradeDrafts((current) => ({ ...current, ...nextGrades }));
-      setFeedbackDrafts((current) => ({ ...current, ...nextFeedback }));
-      setSubmissions((current) =>
-        current.map((item) =>
-          item.attempt_id === submission.attempt_id
-            ? {
-                ...item,
-                answers: item.answers.map((answer) => {
-                  const suggestion = result.suggestions.find((entry) => entry.question_id === answer.question_id);
-                  return suggestion
-                    ? {
-                        ...answer,
-                        ai_suggested_score: suggestion.suggested_score ?? answer.ai_suggested_score,
-                        ai_feedback: suggestion.feedback ?? answer.ai_feedback,
-                        grading_status: suggestion.status,
-                      }
-                    : answer;
-                }),
-              }
-            : item,
-        ),
-      );
-    } catch (e) {
-      reportError(e);
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function saveGrade(submission: PaperSubmissionRecord, questionId: string) {
     if (!selectedPaper) return;
     const key = gradeKey(submission.attempt_id, questionId);
@@ -416,6 +399,8 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   const scoresBusy = selectedPaper ? busy === `scores:${selectedPaper.paper_id}` : false;
   const analysisBusy = selectedPaper ? busy === `analysis:${selectedPaper.paper_id}` : false;
   const submissionsBusy = selectedPaper ? busy === `submissions:${selectedPaper.paper_id}` : false;
+  const canPublish =
+    Boolean(selectedPaper) && !publishBusy && Number(selectedPaper?.question_count || 0) > 0 && selectedClassIds.length > 0;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-slate-50 text-slate-950">
@@ -579,6 +564,33 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                 </div>
               </section>
 
+              <div className="inline-flex w-fit rounded-md border border-slate-300 bg-white p-1 shadow-sm">
+                <button
+                  type="button"
+                  data-testid="paper-tab-manage"
+                  onClick={() => setPaperDetailView("manage")}
+                  className={`rounded px-3 py-1.5 text-sm font-medium ${
+                    paperDetailView === "manage" ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-950"
+                  }`}
+                >
+                  试卷管理
+                </button>
+                <button
+                  type="button"
+                  data-testid="paper-tab-grading"
+                  onClick={() => {
+                    setPaperDetailView("grading");
+                    void loadSelectedSubmissions();
+                  }}
+                  className={`rounded px-3 py-1.5 text-sm font-medium ${
+                    paperDetailView === "grading" ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-950"
+                  }`}
+                >
+                  提交批改
+                </button>
+              </div>
+
+              {paperDetailView === "manage" ? (
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
                 <section className="space-y-5">
                   <Panel title="发布班级" icon={<Wifi className="h-5 w-5 text-slate-600" />}>
@@ -643,13 +655,59 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                         </label>
                       ))}
                     </div>
+                    <label className="mt-4 block text-sm font-medium text-slate-700">
+                      允许切屏次数
+                      <input
+                        type="number"
+                        min={0}
+                        max={999}
+                        value={maxScreenSwitches}
+                        onChange={(event) => setMaxScreenSwitches(Math.max(0, Number(event.target.value || 0)))}
+                        className="mt-1 w-36 rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+                      />
+                    </label>
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      <label className="block text-sm font-medium text-slate-700">
+                        开始时间
+                        <input
+                          type="datetime-local"
+                          value={publishStartAt}
+                          onChange={(event) => setPublishStartAt(event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        结束时间
+                        <input
+                          type="datetime-local"
+                          value={publishEndAt}
+                          onChange={(event) => setPublishEndAt(event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        做题时长（分钟）
+                        <input
+                          data-testid="paper-time-limit"
+                          type="number"
+                          min={0}
+                          max={1440}
+                          value={timeLimitMinutes}
+                          onChange={(event) => setTimeLimitMinutes(Math.max(0, Number(event.target.value || 0)))}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+                        />
+                      </label>
+                    </div>
                     {selectedPaper.question_count <= 0 ? (
                       <p className="mt-3 text-sm text-amber-700">试卷至少需要包含 1 道题后才能发布。</p>
+                    ) : null}
+                    {selectedClassIds.length === 0 ? (
+                      <p className="mt-3 text-sm text-slate-500">请选择至少一个未发布过的班级。</p>
                     ) : null}
                     <button
                       type="button"
                       data-testid="paper-publish"
-                      disabled={publishBusy || selectedPaper.question_count <= 0}
+                      disabled={!canPublish}
                       onClick={() => void publishSelectedPaper()}
                       className="mt-4 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
                     >
@@ -660,13 +718,14 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
 
                   <Panel title="发布记录" icon={<History className="h-5 w-5 text-slate-600" />}>
                     <div className="overflow-x-auto">
-                      <table className="min-w-[720px] w-full text-left text-sm">
+                      <table className="min-w-[860px] w-full text-left text-sm">
                         <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
                           <tr>
                             <th className="px-3 py-2">标题</th>
                             <th className="px-3 py-2">班级</th>
                             <th className="px-3 py-2">进度</th>
-                            <th className="px-3 py-2">切屏</th>
+                            <th className="px-3 py-2">允许切屏</th>
+                            <th className="px-3 py-2">时间</th>
                             <th className="px-3 py-2">状态</th>
                             <th className="px-3 py-2 text-right">操作</th>
                           </tr>
@@ -681,7 +740,11 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                               <td className="px-3 py-2 text-slate-600">
                                 {publication.submitted_count ?? 0}/{publication.attempt_count ?? 0}
                               </td>
-                              <td className="px-3 py-2 text-slate-600">{publication.proctor_event_count ?? 0}</td>
+                              <td className="px-3 py-2 text-slate-600">{publication.max_screen_switches ?? 0} 次</td>
+                              <td className="px-3 py-2 text-xs text-slate-600">
+                                <div>{publication.start_at || "未设置"} - {publication.end_at || "未设置"}</div>
+                                <div>限时 {publication.time_limit_minutes ? `${publication.time_limit_minutes} 分钟` : "不限"}</div>
+                              </td>
                               <td className="px-3 py-2">
                                 <span
                                   className={`rounded-full px-2 py-0.5 text-xs ${
@@ -696,6 +759,24 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                                 </span>
                               </td>
                               <td className="px-3 py-2 text-right">
+                                <button
+                                  type="button"
+                                  title={publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
+                                  aria-label={publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
+                                  disabled={
+                                    busy === `pause:${publication.id}` ||
+                                    publication.status === "revoked" ||
+                                    publication.status === "closed"
+                                  }
+                                  onClick={() => void togglePublicationPause(publication)}
+                                  className="mr-2 inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                                >
+                                  {publication.status === "paused" ? (
+                                    <PlayCircle className="h-4 w-4" />
+                                  ) : (
+                                    <PauseCircle className="h-4 w-4" />
+                                  )}
+                                </button>
                                 <button
                                   type="button"
                                   title="撤回发布"
@@ -719,92 +800,6 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                     ) : null}
                   </Panel>
 
-                  <Panel title="线上提交审核" icon={<CheckCircle2 className="h-5 w-5 text-slate-600" />}>
-                    <button
-                      type="button"
-                      data-testid="paper-load-submissions"
-                      disabled={submissionsBusy}
-                      onClick={() => void loadSelectedSubmissions()}
-                      className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                    >
-                      {submissionsBusy ? "加载中..." : "加载提交"}
-                    </button>
-                    <div className="mt-4 space-y-3">
-                      {submissions.map((submission) => (
-                        <article key={submission.attempt_id} className="rounded-md border border-slate-200 p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <p className="font-medium">{submission.student_name || submission.student_no}</p>
-                              <p className="mt-1 text-xs text-slate-500">
-                                {submission.student_no || "-"} · {submission.status}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              data-testid={`paper-ai-grade-${submission.attempt_id}`}
-                              disabled={busy === `ai:${submission.attempt_id}`}
-                              onClick={() => void suggestGradesForSubmission(submission)}
-                              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                            >
-                              AI 批改建议
-                            </button>
-                          </div>
-                          <div className="mt-3 space-y-3">
-                            {submission.answers.map((answer) => {
-                              const key = gradeKey(submission.attempt_id, answer.question_id);
-                              const value = gradeDrafts[key] ?? String(answer.score ?? answer.ai_suggested_score ?? "");
-                              const feedback = feedbackDrafts[key] ?? answer.ai_feedback ?? answer.feedback ?? "";
-                              return (
-                                <div key={answer.question_id} className="rounded-md bg-slate-50 p-3">
-                                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                                    <span className="font-medium">{answer.header || answer.question_id}</span>
-                                    <span className="text-xs text-slate-500">{answer.grading_status || "pending"}</span>
-                                  </div>
-                                  {answer.images && answer.images.length > 0 ? (
-                                    <p className="mt-2 text-xs text-slate-500">
-                                      图片：{answer.images.map((image) => image.name).join("、")}
-                                    </p>
-                                  ) : null}
-                                  <div className="mt-3 grid gap-2 sm:grid-cols-[120px_minmax(0,1fr)_auto]">
-                                    <input
-                                      data-testid={`paper-grade-${answer.question_id}`}
-                                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                      value={value}
-                                      onChange={(event) =>
-                                        setGradeDrafts((current) => ({ ...current, [key]: event.target.value }))
-                                      }
-                                    />
-                                    <input
-                                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                      value={feedback}
-                                      placeholder="批改反馈"
-                                      onChange={(event) =>
-                                        setFeedbackDrafts((current) => ({ ...current, [key]: event.target.value }))
-                                      }
-                                    />
-                                    <button
-                                      type="button"
-                                      data-testid={`paper-save-grade-${answer.question_id}`}
-                                      disabled={busy === `grade:${key}`}
-                                      onClick={() => void saveGrade(submission, answer.question_id)}
-                                      className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                                    >
-                                      保存
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </article>
-                      ))}
-                      {submissions.length === 0 ? (
-                        <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
-                          暂无已加载提交
-                        </p>
-                      ) : null}
-                    </div>
-                  </Panel>
                 </section>
 
                 <aside className="space-y-4">
@@ -835,24 +830,63 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                       {analysisBusy ? "加载中..." : "查看分析摘要"}
                     </button>
                     {analysis ? (
-                      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                        <div className="rounded-md bg-slate-50 p-3">
-                          <p className="text-xs text-slate-500">完成率</p>
-                          <p data-testid="paper-analysis-completion-rate" className="mt-1 text-lg font-semibold">
-                            {analysis.summary.completion_rate}%
-                          </p>
+                      <div className="mt-4 space-y-3">
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="rounded-md bg-slate-50 p-3">
+                            <p className="text-xs text-slate-500">完成率</p>
+                            <p data-testid="paper-analysis-completion-rate" className="mt-1 text-lg font-semibold">
+                              {analysis.summary.completion_rate}%
+                            </p>
+                          </div>
+                          <div className="rounded-md bg-slate-50 p-3">
+                            <p className="text-xs text-slate-500">切屏</p>
+                            <p data-testid="paper-analysis-switch-count" className="mt-1 text-lg font-semibold">
+                              {analysis.proctoring.screen_switch_count}
+                            </p>
+                          </div>
+                          <div className="rounded-md bg-slate-50 p-3">
+                            <p className="text-xs text-slate-500">超限</p>
+                            <p data-testid="paper-analysis-flagged-count" className="mt-1 text-lg font-semibold">
+                              {analysis.proctoring.exceeded_student_count ?? analysis.proctoring.flagged_student_count}
+                            </p>
+                          </div>
                         </div>
-                        <div className="rounded-md bg-slate-50 p-3">
-                          <p className="text-xs text-slate-500">切屏</p>
-                          <p data-testid="paper-analysis-switch-count" className="mt-1 text-lg font-semibold">
-                            {analysis.proctoring.screen_switch_count}
-                          </p>
-                        </div>
-                        <div className="rounded-md bg-slate-50 p-3">
-                          <p className="text-xs text-slate-500">风险</p>
-                          <p data-testid="paper-analysis-flagged-count" className="mt-1 text-lg font-semibold">
-                            {analysis.proctoring.flagged_student_count}
-                          </p>
+                        <div className="rounded-md border border-slate-200 bg-white">
+                          <div className="border-b border-slate-100 px-3 py-2 text-sm font-semibold">学生个人分析</div>
+                          <div className="max-h-72 overflow-auto">
+                            {analysis.students.length === 0 ? (
+                              <p className="px-3 py-4 text-sm text-slate-500">暂无学生作答数据</p>
+                            ) : (
+                              <div className="divide-y divide-slate-100">
+                                {analysis.students.map((student) => (
+                                  <div key={`${student.publication_id ?? ""}:${student.student_id}`} className="px-3 py-2 text-sm">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <p className="truncate font-medium text-slate-900">{student.display_name}</p>
+                                        <p className="truncate text-xs text-slate-500">
+                                          {[student.student_no, ...(student.class_names ?? [])].filter(Boolean).join(" · ") || "-"}
+                                        </p>
+                                      </div>
+                                      <span
+                                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
+                                          student.screen_switch_exceeded
+                                            ? "bg-rose-100 text-rose-700"
+                                            : "bg-emerald-100 text-emerald-700"
+                                        }`}
+                                      >
+                                        {student.screen_switch_count}/{student.screen_switch_limit ?? 0} 次
+                                      </span>
+                                    </div>
+                                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-600">
+                                      <span>状态：{student.status === "completed" ? "已完成" : student.status === "in_progress" ? "答题中" : "未开始"}</span>
+                                      <span>得分：{student.score_percent == null ? "待批改" : `${student.score_percent}%`}</span>
+                                      <span>用时：{Math.round(Number(student.time_spent_seconds || 0) / 60)} 分钟</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ) : null}
@@ -866,6 +900,116 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                   </Panel>
                 </aside>
               </div>
+              ) : (
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="text-base font-semibold text-slate-950">线上提交批改</h3>
+                      <p className="mt-1 text-sm text-slate-500">图片提交在这里审核，最终分数以教师保存为准。</p>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="paper-load-submissions"
+                      disabled={submissionsBusy}
+                      onClick={() => void loadSelectedSubmissions()}
+                      className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      {submissionsBusy ? "加载中..." : "刷新提交"}
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    {submissions.map((submission) => (
+                      <article key={submission.attempt_id} className="rounded-lg border border-slate-200 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
+                          <div className="min-w-0">
+                            <p className="font-medium text-slate-950">{submission.student_name || submission.student_no}</p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {[submission.student_no, submission.status, submission.submitted_at].filter(Boolean).join(" · ")}
+                            </p>
+                          </div>
+                          <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                            {submission.score ?? "-"} / {submission.max_score ?? "-"}
+                          </span>
+                        </div>
+                        <div className="mt-4 space-y-4">
+                          {submission.answers.map((answer) => {
+                            const key = gradeKey(submission.attempt_id, answer.question_id);
+                            const value = gradeDrafts[key] ?? String(answer.score ?? answer.ai_suggested_score ?? "");
+                            const feedback = feedbackDrafts[key] ?? answer.feedback ?? answer.ai_feedback ?? "";
+                            return (
+                              <div key={answer.question_id} className="rounded-md bg-slate-50 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                  <span className="font-medium">{answer.header || answer.question_id}</span>
+                                  <span className="text-xs text-slate-500">{answer.grading_status || "pending"}</span>
+                                </div>
+                                {answer.content ? <p className="mt-2 text-sm text-slate-700">{answer.content}</p> : null}
+                                {answer.images && answer.images.length > 0 ? (
+                                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                    {answer.images.map((image, index) => (
+                                      <a
+                                        key={`${answer.question_id}:${image.name}:${index}`}
+                                        href={image.data_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="group block overflow-hidden rounded-md border border-slate-200 bg-white"
+                                      >
+                                        <img
+                                          data-testid={`paper-answer-image-${answer.question_id}`}
+                                          src={image.data_url}
+                                          alt={image.name || "学生提交图片"}
+                                          className="aspect-[4/3] w-full object-contain bg-white"
+                                        />
+                                        <div className="flex items-center gap-2 border-t border-slate-100 px-2 py-1 text-xs text-slate-500">
+                                          <FileImage className="h-3.5 w-3.5" />
+                                          <span className="truncate">{image.name || `image-${index + 1}`}</span>
+                                        </div>
+                                      </a>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                <div className="mt-3 grid gap-2 sm:grid-cols-[120px_minmax(0,1fr)_auto]">
+                                  <input
+                                    data-testid={`paper-grade-${answer.question_id}`}
+                                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                                    value={value}
+                                    placeholder="分数"
+                                    onChange={(event) =>
+                                      setGradeDrafts((current) => ({ ...current, [key]: event.target.value }))
+                                    }
+                                  />
+                                  <input
+                                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                                    value={feedback}
+                                    placeholder="批改反馈"
+                                    onChange={(event) =>
+                                      setFeedbackDrafts((current) => ({ ...current, [key]: event.target.value }))
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    data-testid={`paper-save-grade-${answer.question_id}`}
+                                    disabled={busy === `grade:${key}`}
+                                    onClick={() => void saveGrade(submission, answer.question_id)}
+                                    className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                                  >
+                                    保存
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </article>
+                    ))}
+                    {submissions.length === 0 ? (
+                      <p className="rounded-md border border-dashed border-slate-300 p-6 text-sm text-slate-500">
+                        暂无已加载提交
+                      </p>
+                    ) : null}
+                  </div>
+                </section>
+              )}
               {message ? (
                 <div className="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
                   {message}

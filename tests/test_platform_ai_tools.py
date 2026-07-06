@@ -10,6 +10,10 @@ def test_teacher_ai_tools_include_online_publish_and_grading() -> None:
     assert publish_tool is not None
     assert grade_tool is not None
     assert "submission_mode" in publish_tool.parameters_schema["properties"]
+    assert "max_screen_switches" in publish_tool.parameters_schema["properties"]
+    assert "time_limit_minutes" in publish_tool.parameters_schema["properties"]
+    assert "start_at" in publish_tool.parameters_schema["properties"]
+    assert "end_at" in publish_tool.parameters_schema["properties"]
     assert "question_ids" in grade_tool.parameters_schema["properties"]
 
 

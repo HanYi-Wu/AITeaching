@@ -154,6 +154,10 @@ export function ComposeWorkspace({
   const [publishClasses, setPublishClasses] = useState<TeacherClassRecord[]>([]);
   const [publishClassIds, setPublishClassIds] = useState<string[]>([]);
   const [publishSubmissionMode, setPublishSubmissionMode] = useState<PaperSubmissionMode>("online");
+  const [publishMaxScreenSwitches, setPublishMaxScreenSwitches] = useState(0);
+  const [publishStartAt, setPublishStartAt] = useState("");
+  const [publishEndAt, setPublishEndAt] = useState("");
+  const [publishTimeLimitMinutes, setPublishTimeLimitMinutes] = useState(0);
   const [publishBusy, setPublishBusy] = useState(false);
 
   const currentExamIdRef = useRef<string | null>(null);
@@ -1340,6 +1344,10 @@ export function ComposeWorkspace({
       setPublishClasses(data.classes);
       setPublishClassIds([]);
       setPublishSubmissionMode("online");
+      setPublishMaxScreenSwitches(0);
+      setPublishStartAt("");
+      setPublishEndAt("");
+      setPublishTimeLimitMinutes(0);
       setPublishDialogOpen(true);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1371,7 +1379,11 @@ export function ComposeWorkspace({
       await publishPlatformPaper(synced.paper.paper_id, {
         class_ids: publishClassIds,
         title: exportLabel.trim() || synced.paper.title,
+        start_at: publishStartAt || null,
+        end_at: publishEndAt || null,
         submission_mode: publishSubmissionMode,
+        max_screen_switches: publishMaxScreenSwitches,
+        time_limit_minutes: publishTimeLimitMinutes > 0 ? publishTimeLimitMinutes : null,
       });
       setMsg("已发布为线上答题试卷");
       setPublishDialogOpen(false);
@@ -1758,6 +1770,48 @@ export function ComposeWorkspace({
                   <span>{label}</span>
                 </label>
               ))}
+            </div>
+            <label className="mt-4 block text-sm font-medium text-slate-700">
+              允许切屏次数
+              <input
+                type="number"
+                min={0}
+                max={999}
+                value={publishMaxScreenSwitches}
+                onChange={(event) => setPublishMaxScreenSwitches(Math.max(0, Number(event.target.value || 0)))}
+                className="mt-1 w-36 rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-700"
+              />
+            </label>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <label className="block text-sm font-medium text-slate-700">
+                开始时间
+                <input
+                  type="datetime-local"
+                  value={publishStartAt}
+                  onChange={(event) => setPublishStartAt(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-700"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                结束时间
+                <input
+                  type="datetime-local"
+                  value={publishEndAt}
+                  onChange={(event) => setPublishEndAt(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-700"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                做题时长
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={publishTimeLimitMinutes}
+                  onChange={(event) => setPublishTimeLimitMinutes(Math.max(0, Number(event.target.value || 0)))}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-700"
+                />
+              </label>
             </div>
             <div className="mt-6 flex flex-wrap justify-end gap-2">
               <button
