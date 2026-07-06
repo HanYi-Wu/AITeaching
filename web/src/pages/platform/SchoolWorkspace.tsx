@@ -40,12 +40,14 @@ import {
   removeTeacherClassAssignment,
   resetStudentPassword,
   resetTeacherPassword,
+  reviewSchoolAiImportFile,
   updateClass,
   updateSchoolAiSettings,
   updateStudent,
   updateTeacher,
   type ClassRecord,
   type PlatformUser,
+  type SchoolAiImportReviewResponse,
   type SchoolAiSettings,
   type StudentRecord,
   type TeacherClassAssignmentRecord,
@@ -66,6 +68,12 @@ type PageQuery = { q: string; status?: string; page: number; pageSize: number };
 type PageMeta = { total: number; page: number; pageSize: number; totalPages: number };
 type SchoolPage = "overview" | "teachers" | "classes" | "students" | "assignments" | "ai";
 type SchoolAiMessage = { role: "user" | "assistant" | "system"; content: string; source?: string };
+type PendingSchoolAiImport = {
+  kind: "teachers" | "classes" | "students";
+  file: File;
+  classId: string | null;
+  review: SchoolAiImportReviewResponse;
+};
 
 const DEFAULT_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
 
@@ -150,6 +158,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
   const [schoolAiBusy, setSchoolAiBusy] = useState(false);
   const [schoolAiImportKind, setSchoolAiImportKind] = useState<"teachers" | "classes" | "students">("students");
   const [schoolAiImportFile, setSchoolAiImportFile] = useState<File | null>(null);
+  const [pendingSchoolAiImport, setPendingSchoolAiImport] = useState<PendingSchoolAiImport | null>(null);
 
   const teacherOptions = useMemo(() => teacherChoices.filter((teacher) => teacher.status === "active"), [teacherChoices]);
 
@@ -345,27 +354,65 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     if (!schoolAiImportFile) return;
     setSchoolAiBusy(true);
     setNotice(null);
+    setPendingSchoolAiImport(null);
     try {
       const file = schoolAiImportFile;
-      const result = await importSchoolAiFile(
+      const classId = schoolAiImportKind === "students" ? studentClassId || null : null;
+      const review = await reviewSchoolAiImportFile(
         schoolAiImportKind,
         file,
-        schoolAiImportKind === "students" ? studentClassId || null : null,
+        classId,
       );
+      const result = { ...review, imported: review.row_count };
+      setAiSettings(review);
+      setPendingSchoolAiImport({ kind: schoolAiImportKind, file, classId, review });
       setSchoolAiMessages((current) => [
         ...current,
         {
           role: "assistant",
-          content: `${result.review}\n\n已完成 ${file.name} 的 AI 导入并写入 ${result.imported} 条${schoolAiImportKind === "teachers" ? "教师" : schoolAiImportKind === "classes" ? "班级" : "学生"}数据。`,
+          content: `${result.review}\n\n${file.name} has been reviewed by AI. Confirm before writing ${result.imported} rows.`,
+          source: "review",
+        },
+      ]);
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e);
+      onError(text);
+      setSchoolAiMessages((current) => [...current, { role: "system", content: `导入失败：${text}` }]);
+    } finally {
+      setSchoolAiBusy(false);
+    }
+  }
+
+  async function confirmSchoolAiImport(accepted: boolean) {
+    const pending = pendingSchoolAiImport;
+    if (!pending) return;
+    if (!accepted) {
+      setPendingSchoolAiImport(null);
+      setSchoolAiMessages((current) => [...current, { role: "system", content: "AI import review cancelled." }]);
+      return;
+    }
+    setSchoolAiBusy(true);
+    setNotice(null);
+    try {
+      const result = await importSchoolAiFile(pending.kind, pending.file, pending.classId);
+      setAiSettings(result);
+      setSchoolAiMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: `${result.review}\n\nConfirmed and wrote ${result.imported} ${
+            pending.kind === "teachers" ? "teacher" : pending.kind === "classes" ? "class" : "student"
+          } rows.`,
           source: "import",
         },
       ]);
+      setPendingSchoolAiImport(null);
       setSchoolAiImportFile(null);
       await refresh();
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
       onError(text);
-      setSchoolAiMessages((current) => [...current, { role: "system", content: `导入失败：${text}` }]);
+      setSchoolAiMessages((current) => [...current, { role: "system", content: `Import failed: ${text}` }]);
     } finally {
       setSchoolAiBusy(false);
     }
@@ -1015,7 +1062,10 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                     <select
                       className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                       value={schoolAiImportKind}
-                      onChange={(event) => setSchoolAiImportKind(event.target.value as "teachers" | "classes" | "students")}
+                      onChange={(event) => {
+                        setSchoolAiImportKind(event.target.value as "teachers" | "classes" | "students");
+                        setPendingSchoolAiImport(null);
+                      }}
                     >
                       <option value="students">导入学生</option>
                       <option value="teachers">导入教师</option>
@@ -1043,12 +1093,52 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                         className="sr-only"
                         type="file"
                         accept=".json,.xlsx"
-                        onChange={(event) => setSchoolAiImportFile(event.target.files?.[0] ?? null)}
+                        onChange={(event) => {
+                          setSchoolAiImportFile(event.target.files?.[0] ?? null);
+                          setPendingSchoolAiImport(null);
+                        }}
                       />
                     </label>
                     <div className="rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-500">
                       上传后会按学校端模板字段检查并写入当前学校数据；导入结果会作为 AI 审核消息保留在对话流。
                     </div>
+                    {pendingSchoolAiImport ? (
+                      <div
+                        data-testid="school-ai-import-confirm-card"
+                        className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+                      >
+                        <div className="flex items-start gap-2">
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="font-semibold">AI import review</p>
+                            <p className="mt-1 whitespace-pre-wrap text-xs leading-5">{pendingSchoolAiImport.review.review}</p>
+                            <p className="mt-2 text-xs text-amber-800">
+                              {pendingSchoolAiImport.file.name} / {pendingSchoolAiImport.review.row_count} rows
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            data-testid="school-ai-import-cancel"
+                            disabled={schoolAiBusy}
+                            onClick={() => void confirmSchoolAiImport(false)}
+                            className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="school-ai-import-confirm"
+                            disabled={schoolAiBusy}
+                            onClick={() => void confirmSchoolAiImport(true)}
+                            className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                          >
+                            Confirm import
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     <button
                       type="button"
                       data-testid="school-ai-import-run"

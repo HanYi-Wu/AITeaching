@@ -8,7 +8,6 @@ import {
   History,
   PauseCircle,
   PlayCircle,
-  Printer,
   RefreshCw,
   Search,
   Trash2,
@@ -18,6 +17,7 @@ import {
 import { resolveApiUrl } from "../../api/client";
 import {
   analyzePlatformPaper,
+  downloadPaperAnalysisReport,
   gradePaperAnswer,
   listPaperSubmissions,
   listPlatformPaperPublications,
@@ -90,6 +90,17 @@ function htmlEscape(value: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function publicationStatusLabel(status: string): string {
@@ -347,20 +358,29 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     }
   }
 
-  function downloadAnalysisReport() {
-    if (!analysis) return;
-    const blob = new Blob([JSON.stringify(analysis, null, 2)], { type: "application/json;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${analysis.paper.title || analysis.paper.exam_id}-analysis-report.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+  async function downloadSelectedReport(format: "xlsx" | "pdf") {
+    if (!selectedPaper) return;
+    setBusy(`report:${format}:${selectedPaper.paper_id}`);
+    setMessage(null);
+    try {
+      const blob = await downloadPaperAnalysisReport(selectedPaper.paper_id, format);
+      downloadBlob(blob, `${selectedPaper.title || selectedPaper.exam_id}-analysis-report.${format}`);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusy(null);
+    }
   }
 
-  function printAnalysisReport() {
+  function downloadAnalysisReport() {
+    void downloadSelectedReport("xlsx");
+  }
+
+  async function printAnalysisReport() {
+    if (Date.now() >= 0) {
+      await downloadSelectedReport("pdf");
+      return;
+    }
     if (!analysis) return;
     const rows = analysis.students
       .map(
@@ -939,7 +959,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                         <div className="grid gap-2 sm:grid-cols-2">
                           <button
                             type="button"
-                            data-testid="paper-export-report"
+                            data-testid="paper-export-report-xlsx"
                             onClick={downloadAnalysisReport}
                             className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                           >
@@ -948,11 +968,11 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                           </button>
                           <button
                             type="button"
-                            data-testid="paper-print-pdf-report"
-                            onClick={printAnalysisReport}
+                            data-testid="paper-export-report-pdf"
+                            onClick={() => void printAnalysisReport()}
                             className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                           >
-                            <Printer className="h-4 w-4" />
+                            <Download className="h-4 w-4" />
                             PDF 报告
                           </button>
                         </div>

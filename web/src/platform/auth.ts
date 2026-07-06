@@ -67,6 +67,15 @@ export type SchoolAiImportResponse = SchoolAiSettings & {
   result: unknown;
 };
 
+export type SchoolAiImportReviewResponse = SchoolAiSettings & {
+  kind: "teachers" | "classes" | "students";
+  class_id?: string | null;
+  row_count: number;
+  review: string;
+  preview: Array<Record<string, unknown>>;
+  stats?: SchoolAiResponse["stats"];
+};
+
 export type PagedResult = {
   total?: number;
   page?: number;
@@ -564,6 +573,18 @@ export function importSchoolAiFile(
   return platformRequest("/api/school/ai/import-file", { method: "POST", body: fd });
 }
 
+export function reviewSchoolAiImportFile(
+  kind: "teachers" | "classes" | "students",
+  file: File,
+  classId?: string | null,
+): Promise<SchoolAiImportReviewResponse> {
+  const fd = new FormData();
+  fd.append("kind", kind);
+  if (classId) fd.append("class_id", classId);
+  fd.append("file", file);
+  return platformRequest("/api/school/ai/import-review", { method: "POST", body: fd });
+}
+
 export function listTeachers(params: ListQuery = {}): Promise<{ teachers: TeacherRecord[] } & PagedResult> {
   return platformRequest(
     `/api/school/teachers${buildQuery({
@@ -923,6 +944,10 @@ export function revokePlatformPaperPublication(
 
 export function analyzePlatformPaper(paperId: string): Promise<{ analysis: PlatformPaperAnalysis }> {
   return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/analysis`);
+}
+
+export function downloadPaperAnalysisReport(paperId: string, format: "xlsx" | "pdf"): Promise<Blob> {
+  return downloadAuthorizedBlob(`/api/papers/${encodeURIComponent(paperId)}/analysis.${format}`);
 }
 
 export function listPaperSubmissions(paperId: string): Promise<{ submissions: PaperSubmissionRecord[] }> {

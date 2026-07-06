@@ -172,6 +172,15 @@ def _school_ai_payload(root, school_id: str) -> dict[str, Any]:
     }
 
 
+def _require_school_ai_enabled(root, school_id: str) -> dict[str, Any]:
+    payload = _school_ai_payload(root, school_id)
+    if not payload["ai_available"]:
+        raise HTTPException(status_code=400, detail="AI API is not configured by admin")
+    if not payload["ai_enabled"]:
+        raise HTTPException(status_code=400, detail="School AI is disabled")
+    return payload
+
+
 def _school_ai_stats(root, school_id: str) -> dict[str, int]:
     teachers = query_teachers(root, school_id=school_id, page=1, page_size=1)
     classes = query_classes(root, school_id=school_id, page=1, page_size=1)
@@ -533,11 +542,7 @@ async def school_ai_chat(
 ) -> dict[str, Any]:
     school_id = _require_school(user)
     root = require_platform_root()
-    payload = _school_ai_payload(root, school_id)
-    if not payload["ai_available"]:
-        raise HTTPException(status_code=400, detail="AI API is not configured by admin")
-    if not payload["ai_enabled"]:
-        raise HTTPException(status_code=400, detail="School AI is disabled")
+    payload = _require_school_ai_enabled(root, school_id)
     context = _school_ai_context(root, school_id)
     stats = context["stats"]
     capabilities = list(SCHOOL_AI_CAPABILITIES)
@@ -590,6 +595,35 @@ async def school_ai_chat(
     }
 
 
+@router.post("/school/ai/import-review")
+async def school_ai_import_review(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    kind: str = Form(...),
+    class_id: str | None = Form(default=None),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    payload = _require_school_ai_enabled(root, school_id)
+    clean_kind = kind.strip()
+    if clean_kind not in {"teachers", "classes", "students"}:
+        raise HTTPException(status_code=400, detail="invalid import kind")
+    try:
+        rows = _rows_from_upload(file, expected=clean_kind)
+        review = await _review_school_import_with_ai(clean_kind, rows)
+    except (ValueError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {
+        **payload,
+        "kind": clean_kind,
+        "class_id": class_id,
+        "row_count": len(rows),
+        "review": review,
+        "preview": rows[:10],
+        "stats": _school_ai_stats(root, school_id),
+    }
+
+
 @router.post("/school/ai/import-file")
 async def school_ai_import_file(
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
@@ -599,11 +633,7 @@ async def school_ai_import_file(
 ) -> dict[str, Any]:
     school_id = _require_school(user)
     root = require_platform_root()
-    payload = _school_ai_payload(root, school_id)
-    if not payload["ai_available"]:
-        raise HTTPException(status_code=400, detail="AI API is not configured by admin")
-    if not payload["ai_enabled"]:
-        raise HTTPException(status_code=400, detail="School AI is disabled")
+    payload = _require_school_ai_enabled(root, school_id)
     clean_kind = kind.strip()
     if clean_kind not in {"teachers", "classes", "students"}:
         raise HTTPException(status_code=400, detail="invalid import kind")

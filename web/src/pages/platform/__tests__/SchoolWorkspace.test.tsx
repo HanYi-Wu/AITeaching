@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   removeTeacherClassAssignment: vi.fn(),
   resetStudentPassword: vi.fn(),
   resetTeacherPassword: vi.fn(),
+  reviewSchoolAiImportFile: vi.fn(),
   updateClass: vi.fn(),
   updateSchoolAiSettings: vi.fn(),
   updateStudent: vi.fn(),
@@ -59,6 +60,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     removeTeacherClassAssignment: mocks.removeTeacherClassAssignment,
     resetStudentPassword: mocks.resetStudentPassword,
     resetTeacherPassword: mocks.resetTeacherPassword,
+    reviewSchoolAiImportFile: mocks.reviewSchoolAiImportFile,
     updateClass: mocks.updateClass,
     updateSchoolAiSettings: mocks.updateSchoolAiSettings,
     updateStudent: mocks.updateStudent,
@@ -179,6 +181,15 @@ describe("SchoolWorkspace", () => {
       ai_enabled: true,
       school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
     });
+    mocks.reviewSchoolAiImportFile.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+      kind: "students",
+      row_count: 1,
+      review: "AI import review: 1 student row is ready.",
+      preview: [{ student_no: "S002", display_name: "Student Two" }],
+    });
     mocks.importSchoolAiFile.mockResolvedValue({
       ai_available: true,
       ai_enabled: true,
@@ -210,7 +221,13 @@ describe("SchoolWorkspace", () => {
     await userEvent.upload(screen.getByTestId("school-ai-import-file"), file);
     await userEvent.click(screen.getByTestId("school-ai-import-run"));
 
+    await waitFor(() => expect(mocks.reviewSchoolAiImportFile).toHaveBeenCalledWith("students", file, "c1"));
+    expect(mocks.importSchoolAiFile).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("school-ai-import-confirm-card")).toBeInTheDocument();
+    expect(screen.getAllByText(/AI import review/).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByTestId("school-ai-import-confirm"));
+
     await waitFor(() => expect(mocks.importSchoolAiFile).toHaveBeenCalledWith("students", file, "c1"));
-    expect(await screen.findByText(/AI 导入并写入 1 条学生数据/)).toBeInTheDocument();
+    expect(await screen.findByText(/Confirmed and wrote 1 student rows/)).toBeInTheDocument();
   });
 });

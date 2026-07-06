@@ -10,26 +10,26 @@ SRC="$ROOT/src"
 cd "$ROOT"
 
 echo "[Solaire] 仓库: $ROOT"
-echo "[Solaire] 启动 FastAPI（--app-dir src）→ http://0.0.0.0:8000"
+echo "[Solaire] 启动 FastAPI（--app-dir src）→ http://127.0.0.1:8000"
 
 if command -v py >/dev/null 2>&1; then
   (cd "$ROOT" && py -3.12 -m uvicorn solaire.web.app:app \
     --app-dir "$SRC" \
-    --host 0.0.0.0 \
+    --host 127.0.0.1 \
     --port 8000 \
     --reload \
     --reload-dir "$SRC") &
 elif command -v python3 >/dev/null 2>&1; then
   (cd "$ROOT" && python3 -m uvicorn solaire.web.app:app \
     --app-dir "$SRC" \
-    --host 0.0.0.0 \
+    --host 127.0.0.1 \
     --port 8000 \
     --reload \
     --reload-dir "$SRC") &
 elif command -v python >/dev/null 2>&1; then
   (cd "$ROOT" && python -m uvicorn solaire.web.app:app \
     --app-dir "$SRC" \
-    --host 0.0.0.0 \
+    --host 127.0.0.1 \
     --port 8000 \
     --reload \
     --reload-dir "$SRC") &

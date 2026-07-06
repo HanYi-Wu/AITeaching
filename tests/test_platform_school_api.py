@@ -215,6 +215,26 @@ def test_school_ai_imports_file_with_review(
     enabled = web_client.patch("/api/school/ai-settings", json={"ai_enabled": True}, headers=school_headers)
     assert enabled.status_code == 200
 
+    review = web_client.post(
+        "/api/school/ai/import-review",
+        data={"kind": "students", "class_id": class_id},
+        files={
+            "file": (
+                "students.json",
+                b'[{"student_no":"S002","display_name":"Student Two"}]',
+                "application/json",
+            )
+        },
+        headers=school_headers,
+    )
+
+    assert review.status_code == 200
+    review_body = review.json()
+    assert review_body["kind"] == "students"
+    assert review_body["row_count"] == 1
+    assert review_body["review"] == "reviewed students: 1 rows"
+    assert web_client.get("/api/school/students", headers=school_headers).json()["total"] == 0
+
     response = web_client.post(
         "/api/school/ai/import-file",
         data={"kind": "students", "class_id": class_id},

@@ -11,17 +11,17 @@ $srcDir = Join-Path $repoRoot "src"
 
 $uvicornLine = $null
 if (Get-Command py -ErrorAction SilentlyContinue) {
-  $uvicornLine = "Set-Location '$repoRoot'; py -3.12 -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 0.0.0.0 --port 8000 --reload --reload-dir `"$srcDir`""
+  $uvicornLine = "Set-Location '$repoRoot'; py -3.12 -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 127.0.0.1 --port 8000 --reload --reload-dir `"$srcDir`""
 } elseif (Get-Command python -ErrorAction SilentlyContinue) {
-  $uvicornLine = "Set-Location '$repoRoot'; python -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 0.0.0.0 --port 8000 --reload --reload-dir `"$srcDir`""
+  $uvicornLine = "Set-Location '$repoRoot'; python -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 127.0.0.1 --port 8000 --reload --reload-dir `"$srcDir`""
 } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
-  $uvicornLine = "Set-Location '$repoRoot'; python3 -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 0.0.0.0 --port 8000 --reload --reload-dir `"$srcDir`""
+  $uvicornLine = "Set-Location '$repoRoot'; python3 -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 127.0.0.1 --port 8000 --reload --reload-dir `"$srcDir`""
 } else {
   Write-Error "未找到 py / python / python3。请安装 Python 3.11+ 或使用 pixi run dev-backend。"
 }
 
 Write-Host "仓库: $repoRoot"
-Write-Host "启动 FastAPI（--app-dir src）→ http://0.0.0.0:8000"
+Write-Host "启动 FastAPI（--app-dir src）→ http://127.0.0.1:8000"
 Start-Process pwsh -ArgumentList "-NoExit", "-Command", $uvicornLine
 
 Start-Sleep -Seconds 2

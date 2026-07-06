@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   updatePlatformPaperPublication: vi.fn(),
   uploadPaperScores: vi.fn(),
   analyzePlatformPaper: vi.fn(),
+  downloadPaperAnalysisReport: vi.fn(),
   listPaperSubmissions: vi.fn(),
   suggestAiGradesForAttempt: vi.fn(),
   gradePaperAnswer: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     updatePlatformPaperPublication: mocks.updatePlatformPaperPublication,
     uploadPaperScores: mocks.uploadPaperScores,
     analyzePlatformPaper: mocks.analyzePlatformPaper,
+    downloadPaperAnalysisReport: mocks.downloadPaperAnalysisReport,
     listPaperSubmissions: mocks.listPaperSubmissions,
     suggestAiGradesForAttempt: mocks.suggestAiGradesForAttempt,
     gradePaperAnswer: mocks.gradePaperAnswer,
@@ -60,11 +62,14 @@ const offlinePaper = {
 describe("PapersWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(URL, "createObjectURL", { writable: true, value: vi.fn(() => "blob:report") });
+    Object.defineProperty(URL, "revokeObjectURL", { writable: true, value: vi.fn() });
     mocks.listTeacherAssignedClasses.mockResolvedValue({
       classes: [{ id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: "Math", subject: "Math" }],
     });
     mocks.listPlatformPaperPublications.mockResolvedValue({ publications: [] });
     mocks.listPaperSubmissions.mockResolvedValue({ submissions: [] });
+    mocks.downloadPaperAnalysisReport.mockResolvedValue(new Blob(["report"]));
   });
 
   it("lists exported papers and updates online/offline delivery mode", async () => {
@@ -265,6 +270,11 @@ describe("PapersWorkspace", () => {
     expect(screen.getByText("学生个人分析表")).toBeInTheDocument();
     expect(screen.getByText("Student One")).toBeInTheDocument();
     expect(screen.getByText("2/1")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("paper-export-report-xlsx"));
+    await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith("p1", "xlsx"));
+    await userEvent.click(screen.getByTestId("paper-export-report-pdf"));
+    await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith("p1", "pdf"));
   });
 
   it("disables publishing until a paper has questions and sends image submission mode", async () => {

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 import yaml
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from solaire.exam_compiler.models import ExamConfig, QuestionLibraryRef, SelectedSection
 from solaire.web import recent_projects, state
@@ -484,6 +486,23 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
         "proctoring",
         "module_mastery",
     }
+
+    xlsx_report = web_client.get(f"/api/papers/{paper['paper_id']}/analysis.xlsx", headers=teacher_headers)
+    assert xlsx_report.status_code == 200
+    assert xlsx_report.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    workbook = load_workbook(BytesIO(xlsx_report.content), data_only=True)
+    assert {"summary", "students", "classes", "questions", "modules", "radar"}.issubset(set(workbook.sheetnames))
+    assert workbook["summary"]["A1"].value == "metric"
+    assert workbook["students"]["A1"].value == "student_no"
+    student_names = [row[1] for row in workbook["students"].iter_rows(min_row=2, values_only=True)]
+    assert "Student One" in student_names
+
+    pdf_report = web_client.get(f"/api/papers/{paper['paper_id']}/analysis.pdf", headers=teacher_headers)
+    assert pdf_report.status_code == 200
+    assert pdf_report.headers["content-type"].startswith("application/pdf")
+    assert pdf_report.content.startswith(b"%PDF")
 
 
 def test_teacher_reviews_image_submission_with_manual_and_ai_grade_suggestions(

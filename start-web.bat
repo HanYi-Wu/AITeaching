@@ -16,12 +16,12 @@ if %ERRORLEVEL%==2 (
   goto :frontend
 )
 
-echo [Solaire] Starting backend http://0.0.0.0:8000 ...
+echo [Solaire] Starting backend http://127.0.0.1:8000 ...
 where py >nul 2>&1
 if %ERRORLEVEL%==0 (
-  start "Solaire Web - Backend" cmd /k "py -3.12 -m uvicorn solaire.web.app:app --host 0.0.0.0 --port 8000"
+  start "Solaire Web - Backend" cmd /k "py -3.12 -m uvicorn solaire.web.app:app --host 127.0.0.1 --port 8000"
 ) else (
-  start "Solaire Web - Backend" cmd /k "python -m uvicorn solaire.web.app:app --host 0.0.0.0 --port 8000"
+  start "Solaire Web - Backend" cmd /k "python -m uvicorn solaire.web.app:app --host 127.0.0.1 --port 8000"
 )
 timeout /t 2 /nobreak >nul
 

@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import sqlite3
 import logging
+from io import BytesIO
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from solaire.web import state
+from solaire.web.analysis_report_service import (
+    analysis_report_filename,
+    build_paper_analysis_pdf,
+    build_paper_analysis_workbook,
+)
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.paper_service import (
     analyze_paper,
@@ -161,6 +169,46 @@ def papers_analysis(
     except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"analysis": analysis}
+
+
+@router.get("/papers/{paper_id}/analysis.xlsx")
+def papers_analysis_xlsx(
+    paper_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> StreamingResponse:
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root)
+        data = build_paper_analysis_workbook(analysis)
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    filename = analysis_report_filename(analysis, "xlsx")
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/papers/{paper_id}/analysis.pdf")
+def papers_analysis_pdf(
+    paper_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> StreamingResponse:
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root)
+        data = build_paper_analysis_pdf(analysis)
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    filename = analysis_report_filename(analysis, "pdf")
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.get("/papers/{paper_id}/publications")
