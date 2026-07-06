@@ -18,8 +18,31 @@ type Props = {
   onError: (message: string | null) => void;
 };
 
+type PageMeta = { total: number; page: number; pageSize: number; totalPages: number };
+
+const DEFAULT_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
+
+function mergeMeta(
+  data: { total?: number; page?: number; page_size?: number; total_pages?: number },
+  page: number,
+  pageSize: number,
+  itemCount: number,
+): PageMeta {
+  const cleanPageSize = Number(data.page_size ?? pageSize);
+  const total = Number(data.total ?? itemCount);
+  return {
+    total,
+    page: Number(data.page ?? page),
+    pageSize: cleanPageSize,
+    totalPages: Number(data.total_pages ?? Math.max(1, Math.ceil(total / cleanPageSize))),
+  };
+}
+
 export function AdminWorkspace({ user, onLogout, onError }: Props) {
   const [schools, setSchools] = useState<SchoolRecord[]>([]);
+  const [schoolMeta, setSchoolMeta] = useState<PageMeta>(DEFAULT_META);
+  const [schoolPage, setSchoolPage] = useState(1);
+  const [schoolPageSize, setSchoolPageSize] = useState(10);
   const [schoolName, setSchoolName] = useState("");
   const [selectedSchoolId, setSelectedSchoolId] = useState("");
   const [schoolUsername, setSchoolUsername] = useState("");
@@ -33,8 +56,12 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
     onError(null);
     setAiLoading(true);
     try {
-      const [schoolData, llmData] = await Promise.all([listSchools(), apiAgentLlmSettingsGet()]);
+      const [schoolData, llmData] = await Promise.all([
+        listSchools({ page: schoolPage, pageSize: schoolPageSize }),
+        apiAgentLlmSettingsGet(),
+      ]);
       setSchools(schoolData.schools);
+      setSchoolMeta(mergeMeta(schoolData, schoolPage, schoolPageSize, schoolData.schools.length));
       setLlmSettings(llmData);
       if (!selectedSchoolId && schoolData.schools.length > 0) {
         setSelectedSchoolId(schoolData.schools[0].id);
@@ -47,7 +74,7 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
   useEffect(() => {
     void refresh().catch((e) => onError(e instanceof Error ? e.message : String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [schoolPage, schoolPageSize]);
 
   async function submitSchool(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -55,6 +82,7 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
     try {
       const created = await createSchool({ name: schoolName });
       setSchoolName("");
+      setSchoolPage(1);
       await refresh();
       setSelectedSchoolId(created.school.id);
     } catch (e) {
@@ -109,6 +137,18 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
           <div className="mb-3 flex items-center gap-2">
             <School className="h-5 w-5 text-slate-600" />
             <h2 className="text-base font-semibold">学校管理</h2>
+            <select
+              value={schoolPageSize}
+              onChange={(event) => {
+                setSchoolPageSize(Number(event.target.value));
+                setSchoolPage(1);
+              }}
+              className="ml-auto rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
+            >
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
           </div>
           <div className="grid gap-3">
             {schools.map((school) => (
@@ -132,6 +172,29 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
                 暂无学校。
               </div>
             ) : null}
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-3 text-sm text-slate-500">
+            <span>
+              第 {schoolMeta.page}/{schoolMeta.totalPages} 页，共 {schoolMeta.total} 所
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={schoolMeta.page <= 1}
+                onClick={() => setSchoolPage((page) => Math.max(1, page - 1))}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 disabled:opacity-50"
+              >
+                上一页
+              </button>
+              <button
+                type="button"
+                disabled={schoolMeta.page >= schoolMeta.totalPages}
+                onClick={() => setSchoolPage((page) => Math.min(schoolMeta.totalPages, page + 1))}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 disabled:opacity-50"
+              >
+                下一页
+              </button>
+            </div>
           </div>
         </section>
 

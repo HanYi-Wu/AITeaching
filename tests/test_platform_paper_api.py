@@ -398,6 +398,17 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
     assert body["students"][0]["screen_switch_count"] == 2
     assert body["students"][0]["screen_switch_limit"] == 1
     assert body["students"][0]["screen_switch_exceeded"] is True
+    assert body["modules"][0]["module_id"] == "Choice"
+    assert body["modules"][0]["question_count"] == 2
+    assert body["modules"][0]["student_count"] == 2
+    assert 0 <= body["modules"][0]["average_score_percent"] <= 100
+    assert {axis["id"] for axis in body["radar"]} == {
+        "completion",
+        "score",
+        "time_efficiency",
+        "proctoring",
+        "module_mastery",
+    }
 
 
 def test_teacher_reviews_image_submission_with_manual_and_ai_grade_suggestions(

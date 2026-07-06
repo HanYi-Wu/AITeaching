@@ -3,10 +3,12 @@ import {
   BarChart3,
   CheckCircle2,
   ClipboardList,
+  Download,
   FileImage,
   History,
   PauseCircle,
   PlayCircle,
+  Printer,
   RefreshCw,
   Search,
   Trash2,
@@ -334,6 +336,63 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     } finally {
       setBusy(null);
     }
+  }
+
+  function downloadAnalysisReport() {
+    if (!analysis) return;
+    const blob = new Blob([JSON.stringify(analysis, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${analysis.paper.title || analysis.paper.exam_id}-analysis-report.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function printAnalysisReport() {
+    if (!analysis) return;
+    const rows = analysis.students
+      .map(
+        (student) =>
+          `<tr><td>${student.display_name}</td><td>${student.student_no || ""}</td><td>${student.status}</td><td>${student.score_percent ?? ""}</td><td>${student.screen_switch_count}</td></tr>`,
+      )
+      .join("");
+    const modules = (analysis.modules ?? [])
+      .map(
+        (item) =>
+          `<tr><td>${item.label || item.module_id}</td><td>${item.question_count}</td><td>${item.answered_count}</td><td>${item.average_score_percent ?? ""}</td><td>${item.risk_level ?? ""}</td></tr>`,
+      )
+      .join("");
+    const popup = window.open("", "_blank", "noopener,noreferrer,width=960,height=720");
+    if (!popup) return;
+    popup.document.write(`<!doctype html><html><head><title>${analysis.paper.title} Analysis</title>
+      <style>
+        body{font-family:Arial,sans-serif;margin:32px;color:#0f172a}
+        h1,h2{margin:0 0 12px}
+        .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}
+        .metric{border:1px solid #e2e8f0;padding:12px;border-radius:8px}
+        table{width:100%;border-collapse:collapse;margin-top:12px}
+        th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:12px}
+        th{background:#f8fafc}
+      </style></head><body>
+      <h1>${analysis.paper.title}</h1>
+      <p>${analysis.paper.subject || ""} ${analysis.paper.exam_id || ""}</p>
+      <div class="grid">
+        <div class="metric">完成率<br/><strong>${analysis.summary.completion_rate}%</strong></div>
+        <div class="metric">平均分<br/><strong>${analysis.summary.average_score ?? "-"}</strong></div>
+        <div class="metric">切屏<br/><strong>${analysis.proctoring.screen_switch_count}</strong></div>
+        <div class="metric">超限<br/><strong>${analysis.proctoring.exceeded_student_count ?? analysis.proctoring.flagged_student_count}</strong></div>
+      </div>
+      <h2>模块报告</h2>
+      <table><thead><tr><th>模块</th><th>题数</th><th>作答</th><th>得分率</th><th>风险</th></tr></thead><tbody>${modules}</tbody></table>
+      <h2>学生分析</h2>
+      <table><thead><tr><th>学生</th><th>学号</th><th>状态</th><th>得分率</th><th>切屏</th></tr></thead><tbody>${rows}</tbody></table>
+      </body></html>`);
+    popup.document.close();
+    popup.focus();
+    popup.print();
   }
 
   async function loadSelectedSubmissions() {
@@ -851,6 +910,26 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                               {analysis.proctoring.exceeded_student_count ?? analysis.proctoring.flagged_student_count}
                             </p>
                           </div>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            data-testid="paper-export-report"
+                            onClick={downloadAnalysisReport}
+                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            <Download className="h-4 w-4" />
+                            导出完整报表
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="paper-print-pdf-report"
+                            onClick={printAnalysisReport}
+                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            <Printer className="h-4 w-4" />
+                            PDF 报告
+                          </button>
                         </div>
                         <PlatformPaperAnalysisCharts analysis={analysis} compact />
                       </div>

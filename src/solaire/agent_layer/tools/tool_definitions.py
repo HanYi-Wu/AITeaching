@@ -289,7 +289,14 @@ _RAW_TOOLS: list[RegisteredTool] = [
             "type": "object",
             "properties": {
                 "paper_id": {"type": "string"},
+                "paper_title": {"type": "string", "description": "试卷标题或标题中的关键词；当用户没有给出 paper_id 时使用。"},
+                "exam_id": {"type": "string", "description": "考试目录标识，例如 midterm/Math；当用户按考试名称发布时使用。"},
                 "class_ids": {"type": "array", "items": {"type": "string"}},
+                "class_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "班级名称或名称关键词；当用户没有给出 class_ids 时使用。",
+                },
                 "title": {"type": "string"},
                 "description": {"type": "string"},
                 "start_at": {"type": "string"},
@@ -303,7 +310,6 @@ _RAW_TOOLS: list[RegisteredTool] = [
                 "max_screen_switches": {"type": "integer", "minimum": 0, "maximum": 999},
                 "show_results_immediately": {"type": "boolean"},
             },
-            "required": ["paper_id", "class_ids"],
             "additionalProperties": False,
         },
         exam_tools.tool_publish_online_paper,

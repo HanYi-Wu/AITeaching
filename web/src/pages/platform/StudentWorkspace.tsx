@@ -12,6 +12,7 @@ import {
   UserCog,
 } from "lucide-react";
 import { resolveApiUrl } from "../../api/client";
+import { compressImageFileToDataUrl } from "../../lib/imageCompression";
 import {
   loadSessionToken,
   listStudentPapers,
@@ -263,17 +264,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   }
 
   function readImageFile(file: File): Promise<StudentAnswerImage> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(reader.error ?? new Error("failed to read image"));
-      reader.onload = () =>
-        resolve({
-          name: file.name,
-          mime_type: file.type,
-          data_url: String(reader.result || ""),
-        });
-      reader.readAsDataURL(file);
-    });
+    return compressImageFileToDataUrl(file);
   }
 
   async function setQuestionImages(questionId: string, files: FileList | null) {

@@ -74,6 +74,32 @@ def test_admin_creates_school_and_school_account(web_client: TestClient) -> None
     assert listed.json()["schools"][0]["name"] == "No.1 School"
 
 
+def test_admin_school_list_supports_pagination(web_client: TestClient) -> None:
+    token = _admin_token(web_client)
+    headers = _headers(token)
+
+    for index in range(3):
+        response = web_client.post(
+            "/api/schools",
+            json={"name": f"Paged School {index}", "code": f"paged-{index}", "status": "active"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    page_one = web_client.get("/api/schools?page=1&page_size=2", headers=headers)
+    assert page_one.status_code == 200
+    body = page_one.json()
+    assert body["total"] == 3
+    assert body["page"] == 1
+    assert body["page_size"] == 2
+    assert body["total_pages"] == 2
+    assert len(body["schools"]) == 2
+
+    page_two = web_client.get("/api/schools?page=2&page_size=2", headers=headers)
+    assert page_two.status_code == 200
+    assert len(page_two.json()["schools"]) == 1
+
+
 def test_school_assigns_teacher_to_class_without_subject(web_client: TestClient) -> None:
     school_headers, _ = _school_headers(web_client)
 
@@ -469,6 +495,39 @@ def test_school_management_paginates_bulk_updates_resets_and_removes_assignments
     assert web_client.get("/api/school/classes?q=Page%20Class%20B", headers=school_headers).json()["total"] == 0
 
 
+def test_create_teacher_duplicate_username_returns_400_without_duplicate_rows(web_client: TestClient) -> None:
+    school_headers, _ = _school_headers(web_client)
+
+    first = web_client.post(
+        "/api/school/teachers",
+        json={
+            "username": "teacher_dupe",
+            "password": "teacher123",
+            "display_name": "Teacher One",
+            "subjects": [],
+        },
+        headers=school_headers,
+    )
+    assert first.status_code == 200
+
+    duplicate = web_client.post(
+        "/api/school/teachers",
+        json={
+            "username": "teacher_dupe",
+            "password": "teacher123",
+            "display_name": "Teacher Two",
+            "subjects": [],
+        },
+        headers=school_headers,
+    )
+    assert duplicate.status_code == 400
+
+    listed = web_client.get("/api/school/teachers?q=teacher_dupe", headers=school_headers)
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+    assert listed.json()["teachers"][0]["display_name"] == "Teacher One"
+
+
 def test_school_downloads_import_templates(web_client: TestClient) -> None:
     school_headers, _ = _school_headers(web_client)
     for path, expected_headers in [
@@ -578,3 +637,9 @@ def test_student_first_login_changes_password_then_username(web_client: TestClie
     )
     assert changed_username.status_code == 200
     assert changed_username.json()["user"]["username"] == "student_custom_001"
+
+    school_view = web_client.get("/api/school/students?q=Change", headers=school_headers)
+    assert school_view.status_code == 200
+    listed = school_view.json()["students"][0]
+    assert listed["display_name"] == "Change Me"
+    assert listed["account_username"] == "student_custom_001"

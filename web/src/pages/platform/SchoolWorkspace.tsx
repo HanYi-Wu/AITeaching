@@ -112,6 +112,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
   const [teachers, setTeachers] = useState<TeacherRecord[]>([]);
   const [teacherChoices, setTeacherChoices] = useState<TeacherRecord[]>([]);
   const [classes, setClasses] = useState<ClassRecord[]>([]);
+  const [classChoices, setClassChoices] = useState<ClassRecord[]>([]);
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [assignments, setAssignments] = useState<TeacherClassAssignmentRecord[]>([]);
   const [aiSettings, setAiSettings] = useState<SchoolAiSettings | null>(null);
@@ -166,7 +167,8 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     setAiSettings(aiData);
     setTeachers(teacherData.teachers);
     setTeacherChoices(allTeacherData.teachers);
-    setClasses(allClassData.classes);
+    setClasses(classData.classes);
+    setClassChoices(allClassData.classes);
     setStudents(studentData.students);
     setAssignments(assignmentData.assignments);
     setTeacherMeta(mergeMeta(teacherData, teacherQuery, teacherData.teachers.length));
@@ -736,7 +738,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                   }}
                 >
                   <option value="">全部班级</option>
-                  {classes.map((klass) => (
+                  {classChoices.map((klass) => (
                     <option key={klass.id} value={klass.id}>
                       {klass.name}
                     </option>
@@ -1026,7 +1028,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                         onChange={(event) => setStudentClassId(event.target.value)}
                       >
                         <option value="">不指定班级</option>
-                        {classes.map((klass) => (
+                        {classChoices.map((klass) => (
                           <option key={klass.id} value={klass.id}>
                             {klass.name}
                           </option>
@@ -1114,7 +1116,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
             <h2 className="mb-3 text-sm font-semibold">添加学生</h2>
             <select className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={studentClassId} onChange={(event) => setStudentClassId(event.target.value)}>
               <option value="">不加入班级</option>
-              {classes.map((klass) => (
+              {classChoices.map((klass) => (
                 <option key={klass.id} value={klass.id}>
                   {klass.name}
                 </option>
@@ -1150,7 +1152,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
             </select>
             <select className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={assignClassId} onChange={(event) => setAssignClassId(event.target.value)} required>
               <option value="">选择班级</option>
-              {classes.map((klass) => (
+              {classChoices.map((klass) => (
                 <option key={klass.id} value={klass.id}>
                   {klass.name}
                 </option>

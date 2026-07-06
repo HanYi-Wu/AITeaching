@@ -117,6 +117,27 @@ def list_schools(root: Path) -> list[dict[str, Any]]:
     return [row_to_dict(row) or {} for row in rows]
 
 
+def query_schools(
+    root: Path,
+    *,
+    q: str | None = None,
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
+) -> dict[str, Any]:
+    schools = list_schools(root)
+    if status and status != "all":
+        schools = [school for school in schools if str(school.get("status") or "") == status]
+    if q:
+        schools = [
+            school
+            for school in schools
+            if _contains_query(school, q, ["name", "status", "created_at", "updated_at"])
+        ]
+    result = _page(schools, page=page, page_size=page_size)
+    return {"schools": result.pop("items"), **result}
+
+
 def create_user(
     root: Path,
     *,
@@ -205,16 +226,45 @@ def create_teacher(
     subjects: list[str],
     email: str | None = None,
 ) -> dict[str, Any]:
-    user = create_user(
-        root,
-        role="teacher",
-        username=username,
-        password=password,
-        display_name=display_name,
-        school_id=school_id,
-        email=email,
-    )
-    user["subjects"] = set_teacher_subjects(root, teacher_id=str(user["id"]), school_id=school_id, subjects=subjects)
+    init_platform_db(root)
+    clean_username = username.strip()
+    if len(clean_username) < 3:
+        raise ValueError("username must be at least 3 characters")
+    clean_display_name = display_name.strip() or clean_username
+    clean_email = email.strip() if email and email.strip() else None
+    clean_subjects = sorted({subject.strip() for subject in subjects if subject.strip()})
+    now = utc_now()
+    user_id = _new_id()
+    with connect(root) as con:
+        school = con.execute("SELECT 1 FROM schools WHERE id = ? AND status = 'active'", (school_id,)).fetchone()
+        if school is None:
+            raise ValueError("school not found")
+        con.execute(
+            """
+            INSERT INTO users (
+              id, school_id, role, username, password_hash, display_name, email, status, created_at, updated_at
+            )
+            VALUES (?, ?, 'teacher', ?, ?, ?, ?, 'active', ?, ?)
+            """,
+            (user_id, school_id, clean_username, hash_password(password), clean_display_name, clean_email, now, now),
+        )
+        if clean_subjects:
+            con.executemany(
+                "INSERT INTO teacher_subjects (id, teacher_id, subject) VALUES (?, ?, ?)",
+                [(_new_id(), user_id, subject) for subject in clean_subjects],
+            )
+        row = con.execute(
+            """
+            SELECT id, school_id, role, username, display_name, email, status, created_at, updated_at
+            FROM users
+            WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    user = row_to_dict(row)
+    if user is None:
+        raise RuntimeError("failed to create teacher")
+    user["subjects"] = clean_subjects
     return user
 
 

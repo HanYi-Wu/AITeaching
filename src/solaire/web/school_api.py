@@ -29,10 +29,10 @@ from solaire.web.school_service import (
     import_students,
     import_teachers,
     list_classes,
-    list_schools,
     list_students,
     list_teachers,
     list_teacher_class_assignments,
+    query_schools,
     query_classes,
     query_students,
     query_teachers,
@@ -442,10 +442,16 @@ def _workbook_response(data: bytes, filename: str) -> StreamingResponse:
 
 
 @router.get("/schools")
-def schools_list(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def schools_list(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    q: str | None = None,
+    status: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
     _require_admin(user)
     root = require_platform_root()
-    return {"schools": list_schools(root)}
+    return query_schools(root, q=q, status=status, page=page, page_size=page_size)
 
 
 @router.post("/schools")

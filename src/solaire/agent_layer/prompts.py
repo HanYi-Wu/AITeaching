@@ -271,6 +271,12 @@ def build_dynamic_system_prompt(
         chunks.append("## 当前协助重点\n" + skill_guidance.strip())
     if (current_focus or "").strip() == "compose":
         chunks.append(_layer_compose_hints())
+        chunks.append(
+            "## 发布试卷意图识别\n"
+            "- 教师表达类似“把期中考试发给一班”“这个卷子给 24248 班线上答”“发布刚生成的数学卷”时，应识别为发布线上试卷意图。\n"
+            "- 如果没有内部 ID，优先调用 `exam.publish_online_paper` 并传入 `paper_title` / `exam_id` / `class_names`；工具会做名称匹配，匹配歧义时再让教师选择候选项。\n"
+            "- 不要要求教师必须描述 paper_id 或 class_ids；这些属于内部字段。"
+        )
     if plan_mode_active:
         chunks.append(_layer_plan_mode())
     if execution_plan_path and execution_plan_path.strip():

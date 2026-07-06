@@ -109,6 +109,107 @@ function SegmentedStatus({ rows, total }: { rows: Bucket[]; total: number }) {
   );
 }
 
+function RadarChart({ analysis }: { analysis: PlatformPaperAnalysis }) {
+  const axes = analysis.radar ?? [];
+  if (axes.length < 3) {
+    return <p className="text-sm text-slate-500">暂无雷达图数据</p>;
+  }
+  const size = 220;
+  const center = size / 2;
+  const radius = 76;
+  const points = axes.map((axis, index) => {
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index) / axes.length;
+    const valueRadius = (clampPercent(axis.value) / 100) * radius;
+    return {
+      axis,
+      line: {
+        x: center + Math.cos(angle) * radius,
+        y: center + Math.sin(angle) * radius,
+      },
+      point: {
+        x: center + Math.cos(angle) * valueRadius,
+        y: center + Math.sin(angle) * valueRadius,
+      },
+      label: {
+        x: center + Math.cos(angle) * (radius + 24),
+        y: center + Math.sin(angle) * (radius + 24),
+      },
+    };
+  });
+  const polygon = points.map((item) => `${item.point.x},${item.point.y}`).join(" ");
+  return (
+    <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)]" data-testid="paper-analysis-radar">
+      <svg viewBox={`0 0 ${size} ${size}`} className="h-[220px] w-[220px]">
+        {[0.25, 0.5, 0.75, 1].map((scale) => (
+          <circle key={scale} cx={center} cy={center} r={radius * scale} fill="none" stroke="#e2e8f0" strokeWidth="1" />
+        ))}
+        {points.map((item) => (
+          <g key={item.axis.id}>
+            <line x1={center} y1={center} x2={item.line.x} y2={item.line.y} stroke="#cbd5e1" strokeWidth="1" />
+            <text x={item.label.x} y={item.label.y} textAnchor="middle" dominantBaseline="middle" className="fill-slate-500 text-[10px]">
+              {item.axis.label}
+            </text>
+          </g>
+        ))}
+        <polygon points={polygon} fill="#0f172a" fillOpacity="0.16" stroke="#0f172a" strokeWidth="2" />
+        {points.map((item) => (
+          <circle key={`${item.axis.id}:point`} cx={item.point.x} cy={item.point.y} r="3" fill="#0f172a" />
+        ))}
+      </svg>
+      <div className="space-y-2">
+        {axes.map((axis) => (
+          <div key={axis.id} className="grid grid-cols-[120px_minmax(0,1fr)_44px] items-center gap-2 text-xs">
+            <span className="truncate text-slate-600">{axis.label}</span>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full rounded-full bg-slate-900" style={{ width: `${clampPercent(axis.value)}%` }} />
+            </div>
+            <span className="text-right font-semibold text-slate-800">{Math.round(axis.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ModuleReport({ analysis }: { analysis: PlatformPaperAnalysis }) {
+  const modules = analysis.modules ?? [];
+  if (modules.length === 0) {
+    return <p className="text-sm text-slate-500">暂无模块级报告数据</p>;
+  }
+  return (
+    <div className="overflow-x-auto" data-testid="paper-analysis-modules">
+      <table className="min-w-[680px] w-full text-sm">
+        <thead className="bg-slate-50 text-xs text-slate-500">
+          <tr>
+            <th className="px-3 py-2 text-left font-medium">模块</th>
+            <th className="px-3 py-2 text-right font-medium">题数</th>
+            <th className="px-3 py-2 text-right font-medium">作答</th>
+            <th className="px-3 py-2 text-right font-medium">得分率</th>
+            <th className="px-3 py-2 text-right font-medium">正确率</th>
+            <th className="px-3 py-2 text-right font-medium">风险</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {modules.map((item) => (
+            <tr key={item.module_id}>
+              <td className="px-3 py-2 font-medium text-slate-800">{item.label || item.module_id}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.question_count}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.answered_count}</td>
+              <td className="px-3 py-2 text-right text-slate-600">
+                {item.average_score_percent == null ? "-" : `${Math.round(item.average_score_percent)}%`}
+              </td>
+              <td className="px-3 py-2 text-right text-slate-600">
+                {item.accuracy_rate == null ? "-" : `${Math.round(item.accuracy_rate)}%`}
+              </td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.risk_level || "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; compact?: boolean }) {
   const rows = [...analysis.students].sort((a, b) => clampPercent(b.score_percent) - clampPercent(a.score_percent));
   return (
@@ -236,6 +337,21 @@ export function PlatformPaperAnalysisCharts({
           </div>
         </div>
       </section>
+
+      <div className={`grid gap-3 ${compact ? "grid-cols-1" : "lg:grid-cols-[420px_minmax(0,1fr)]"}`}>
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h4 className="text-sm font-semibold text-slate-900">雷达 / 蜘蛛图</h4>
+          <div className="mt-3">
+            <RadarChart analysis={analysis} />
+          </div>
+        </section>
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h4 className="text-sm font-semibold text-slate-900">模块级报告</h4>
+          <div className="mt-3">
+            <ModuleReport analysis={analysis} />
+          </div>
+        </section>
+      </div>
 
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">

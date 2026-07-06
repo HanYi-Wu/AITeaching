@@ -240,6 +240,26 @@ export type PlatformPaperAnalysis = {
     flagged_student_count: number;
     exceeded_student_count?: number;
   };
+  modules?: Array<{
+    module_id: string;
+    label?: string;
+    question_ids?: string[];
+    question_count: number;
+    student_count: number;
+    answered_count: number;
+    scored_count: number;
+    correct_count?: number;
+    wrong_count?: number;
+    max_score?: number;
+    average_score_percent?: number | null;
+    accuracy_rate?: number | null;
+    risk_level?: "no_data" | "low" | "medium" | "high" | string;
+  }>;
+  radar?: Array<{
+    id: "completion" | "score" | "time_efficiency" | "proctoring" | "module_mastery" | string;
+    label: string;
+    value: number;
+  }>;
   students: Array<{
     student_id: string;
     student_no: string;
@@ -432,8 +452,15 @@ export async function logoutPlatform(): Promise<void> {
   }
 }
 
-export function listSchools(): Promise<{ schools: SchoolRecord[] }> {
-  return platformRequest("/api/schools");
+export function listSchools(params: ListQuery = {}): Promise<{ schools: SchoolRecord[] } & PagedResult> {
+  return platformRequest(
+    `/api/schools${buildQuery({
+      q: params.q ?? null,
+      status: params.status ?? null,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  );
 }
 
 export function createSchool(payload: { name: string }): Promise<{ school: SchoolRecord }> {

@@ -155,8 +155,9 @@ def papers_analysis(
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
 ) -> dict[str, Any]:
     root = require_platform_root()
+    project_root = require_content_project_root()
     try:
-        analysis = analyze_paper(root, paper_id=paper_id, user=user)
+        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root)
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"analysis": analysis}

@@ -718,12 +718,14 @@ export function GraphWorkspace({
         <input
           ref={importInputRef}
           type="file"
+          data-testid="graph-import-file"
           accept="application/json,.json"
           className="hidden"
           onChange={(event) => void handleImportGraph(event)}
         />
         <button
           type="button"
+          data-testid="graph-import-button"
           disabled={busy}
           onClick={() => importInputRef.current?.click()}
           className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
@@ -733,6 +735,7 @@ export function GraphWorkspace({
         </button>
         <button
           type="button"
+          data-testid="graph-export-button"
           disabled={busy || !activeSlug}
           onClick={() => void handleExportGraph()}
           className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
