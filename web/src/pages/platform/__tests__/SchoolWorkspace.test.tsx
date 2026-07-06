@@ -6,6 +6,7 @@ import { SchoolWorkspace } from "../SchoolWorkspace";
 
 const mocks = vi.hoisted(() => ({
   assignTeacherClass: vi.fn(),
+  askSchoolAi: vi.fn(),
   bulkUpdateStudents: vi.fn(),
   bulkUpdateTeachers: vi.fn(),
   createClass: vi.fn(),
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   exportStudentAccounts: vi.fn(),
   getSchoolAiSettings: vi.fn(),
   importClassesFile: vi.fn(),
+  importSchoolAiFile: vi.fn(),
   importStudents: vi.fn(),
   importStudentsFile: vi.fn(),
   importTeachersFile: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
   return {
     ...actual,
     assignTeacherClass: mocks.assignTeacherClass,
+    askSchoolAi: mocks.askSchoolAi,
     bulkUpdateStudents: mocks.bulkUpdateStudents,
     bulkUpdateTeachers: mocks.bulkUpdateTeachers,
     createClass: mocks.createClass,
@@ -45,6 +48,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     exportStudentAccounts: mocks.exportStudentAccounts,
     getSchoolAiSettings: mocks.getSchoolAiSettings,
     importClassesFile: mocks.importClassesFile,
+    importSchoolAiFile: mocks.importSchoolAiFile,
     importStudents: mocks.importStudents,
     importStudentsFile: mocks.importStudentsFile,
     importTeachersFile: mocks.importTeachersFile,
@@ -107,6 +111,15 @@ describe("SchoolWorkspace", () => {
       ai_enabled: true,
       school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
     });
+    mocks.askSchoolAi.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+      capabilities: [],
+      stats: { teachers: 1, classes: 1, students: 1, assignments: 0 },
+      reply: "当前学校教师名单：\n1. Teacher Li（账号：teacher_li，学科：Math，状态：active）",
+      source: "local",
+    });
   });
 
   it("assigns a teacher to a class without requiring a subject", async () => {
@@ -158,5 +171,46 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(toggle);
 
     await waitFor(() => expect(mocks.updateSchoolAiSettings).toHaveBeenCalledWith(true));
+  });
+
+  it("uses a chat-style school AI panel and imports files from the AI page", async () => {
+    mocks.getSchoolAiSettings.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+    });
+    mocks.importSchoolAiFile.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+      kind: "students",
+      imported: 1,
+      review: "AI 导入审核：识别到 1 行学生数据。",
+      result: { imported: 1, students: [] },
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-ai"));
+    await userEvent.type(screen.getByPlaceholderText("询问教师导入、学生账号、班级管理或教师分配"), "有哪些教师名字");
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(mocks.askSchoolAi).toHaveBeenCalledWith("有哪些教师名字"));
+    expect(await screen.findByText(/Teacher Li/)).toBeInTheDocument();
+
+    const file = new File([JSON.stringify([{ student_no: "S002", display_name: "Student Two" }])], "students.json", {
+      type: "application/json",
+    });
+    await userEvent.upload(screen.getByTestId("school-ai-import-file"), file);
+    await userEvent.click(screen.getByTestId("school-ai-import-run"));
+
+    await waitFor(() => expect(mocks.importSchoolAiFile).toHaveBeenCalledWith("students", file, "c1"));
+    expect(await screen.findByText(/AI 导入并写入 1 条学生数据/)).toBeInTheDocument();
   });
 });

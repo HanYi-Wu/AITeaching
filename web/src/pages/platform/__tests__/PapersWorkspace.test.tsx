@@ -227,9 +227,11 @@ describe("PapersWorkspace", () => {
     expect(await screen.findByTestId("paper-analysis-completion-rate")).toHaveTextContent("50%");
     expect(screen.getByTestId("paper-analysis-switch-count")).toHaveTextContent("2");
     expect(screen.getByTestId("paper-analysis-flagged-count")).toHaveTextContent("1");
-    expect(screen.getByText("学生个人分析")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-analysis-charts")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-analysis-chart-score")).toBeInTheDocument();
+    expect(screen.getByText("学生个人分析表")).toBeInTheDocument();
     expect(screen.getByText("Student One")).toBeInTheDocument();
-    expect(screen.getByText("2/1 次")).toBeInTheDocument();
+    expect(screen.getByText("2/1")).toBeInTheDocument();
   });
 
   it("disables publishing until a paper has questions and sends image submission mode", async () => {

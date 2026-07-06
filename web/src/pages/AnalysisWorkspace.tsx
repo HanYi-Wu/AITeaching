@@ -28,6 +28,7 @@ import {
   type PlatformPaperAnalysis,
   type PlatformPaperRecord,
 } from "../platform/auth";
+import { PlatformPaperAnalysisCharts } from "./platform/AnalysisCharts";
 import { useAgentContext } from "../contexts/AgentContext";
 import { confirmDialog } from "../lib/confirmDialog";
 import { dispatchExamsChanged } from "../lib/examEvents";
@@ -828,58 +829,7 @@ export function AnalysisWorkspace({
                     <div className="text-xs text-slate-500">切屏超限</div>
                   </div>
                 </div>
-
-                <section className="rounded-lg border border-slate-200 bg-white">
-                  <div className="border-b border-slate-100 px-4 py-3">
-                    <h3 className="text-sm font-semibold text-slate-700">学生个人分析</h3>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[760px] text-sm">
-                      <thead className="bg-slate-50 text-xs text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-medium">学生</th>
-                          <th className="px-3 py-2 text-left font-medium">班级</th>
-                          <th className="px-3 py-2 text-right font-medium">状态</th>
-                          <th className="px-3 py-2 text-right font-medium">得分率</th>
-                          <th className="px-3 py-2 text-right font-medium">用时</th>
-                          <th className="px-3 py-2 text-right font-medium">切屏</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {onlineAnalysis.students.map((student) => (
-                          <tr key={`${student.publication_id ?? ""}:${student.student_id}`} className="hover:bg-slate-50">
-                            <td className="px-3 py-2">
-                              <div className="font-medium text-slate-700">{student.display_name}</div>
-                              <div className="text-xs text-slate-400">{student.student_no || student.account_username}</div>
-                            </td>
-                            <td className="px-3 py-2 text-slate-500">{(student.class_names ?? []).join("、") || "-"}</td>
-                            <td className="px-3 py-2 text-right text-slate-600">
-                              {student.status === "completed" ? "已完成" : student.status === "in_progress" ? "答题中" : "未开始"}
-                            </td>
-                            <td className="px-3 py-2 text-right font-mono text-slate-700">
-                              {student.score_percent == null ? "-" : `${student.score_percent}%`}
-                            </td>
-                            <td className="px-3 py-2 text-right text-slate-600">
-                              {Math.round(Number(student.time_spent_seconds || 0) / 60)} 分钟
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <span
-                                className={cn(
-                                  "rounded px-1.5 py-0.5 text-xs font-semibold",
-                                  student.screen_switch_exceeded
-                                    ? "bg-rose-100 text-rose-700"
-                                    : "bg-emerald-100 text-emerald-700",
-                                )}
-                              >
-                                {student.screen_switch_count}/{student.screen_switch_limit ?? 0}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
+                <PlatformPaperAnalysisCharts analysis={onlineAnalysis} />
               </div>
             ) : (
               <div className="flex min-h-[20rem] items-center justify-center text-sm text-slate-400">

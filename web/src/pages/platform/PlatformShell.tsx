@@ -8,27 +8,47 @@ type Props = {
   userName?: string;
   actions?: ReactNode;
   onLogout?: () => void;
+  compactMobile?: boolean;
+  hideLogout?: boolean;
   children: ReactNode;
 };
 
-export function PlatformShell({ roleLabel, title, subtitle, userName, actions, onLogout, children }: Props) {
+export function PlatformShell({
+  roleLabel,
+  title,
+  subtitle,
+  userName,
+  actions,
+  onLogout,
+  compactMobile = false,
+  hideLogout = false,
+  children,
+}: Props) {
   return (
     <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-slate-50 text-slate-950 lg:flex-row">
       <aside className="flex w-full shrink-0 flex-col border-b border-slate-800 bg-slate-950 text-slate-100 lg:w-64 lg:border-b-0 lg:border-r">
-        <div className="flex items-center gap-3 border-b border-slate-800 p-4 lg:block lg:p-5">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white lg:mb-4">
+        <div className={`flex items-center border-b border-slate-800 lg:block lg:p-5 ${compactMobile ? "gap-2 p-2" : "gap-3 p-4"}`}>
+          <div
+            className={`flex shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white lg:mb-4 lg:h-10 lg:w-10 ${
+              compactMobile ? "h-8 w-8" : "h-10 w-10"
+            }`}
+          >
             <ShieldCheck className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Solaire Platform</p>
-            <h1 className="mt-1 text-lg font-semibold text-white">{roleLabel}</h1>
-            {userName ? <p className="mt-1 truncate text-sm text-slate-400">{userName}</p> : null}
+            <p className={`${compactMobile ? "hidden lg:block" : ""} text-xs font-semibold uppercase tracking-wide text-slate-500`}>
+              Solaire Platform
+            </p>
+            <h1 className={`${compactMobile ? "text-sm lg:mt-1 lg:text-lg" : "mt-1 text-lg"} font-semibold text-white`}>{roleLabel}</h1>
+            {userName ? (
+              <p className={`${compactMobile ? "text-xs lg:mt-1 lg:text-sm" : "mt-1 text-sm"} truncate text-slate-400`}>{userName}</p>
+            ) : null}
           </div>
         </div>
         <div className="hidden min-h-0 flex-1 p-4 text-sm leading-6 text-slate-400 lg:block">
           <p>平台权限、学校账号、教师班级和学生答题统一在这里管理。</p>
         </div>
-        {onLogout ? (
+        {onLogout && !hideLogout ? (
           <div className="border-t border-slate-800 p-3">
             <button
               type="button"

@@ -46,4 +46,4 @@ Write-Host "[dev] Backend health OK"
 
 # ── Start Vite dev server (foreground, Tauri watches devUrl) ──
 Set-Location (Join-Path $repoRoot "web")
-npm run dev -- --host localhost --port 5173 --strictPort
+npm run dev -- --host 0.0.0.0 --port 5173 --strictPort

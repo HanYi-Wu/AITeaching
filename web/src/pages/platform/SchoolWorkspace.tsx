@@ -1,6 +1,9 @@
 import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
+  Bot,
+  CheckCircle2,
   Download,
+  FileUp,
   KeyRound,
   Link2,
   Plus,
@@ -26,6 +29,7 @@ import {
   exportStudentAccounts,
   getSchoolAiSettings,
   importClassesFile,
+  importSchoolAiFile,
   importStudents,
   importStudentsFile,
   importTeachersFile,
@@ -61,6 +65,7 @@ type StudentDraft = { student_no: string; display_name: string; email: string };
 type PageQuery = { q: string; status?: string; page: number; pageSize: number };
 type PageMeta = { total: number; page: number; pageSize: number; totalPages: number };
 type SchoolPage = "overview" | "teachers" | "classes" | "students" | "assignments" | "ai";
+type SchoolAiMessage = { role: "user" | "assistant" | "system"; content: string; source?: string };
 
 const DEFAULT_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
 
@@ -140,8 +145,10 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [schoolAiInput, setSchoolAiInput] = useState("");
-  const [schoolAiReply, setSchoolAiReply] = useState<string | null>(null);
+  const [schoolAiMessages, setSchoolAiMessages] = useState<SchoolAiMessage[]>([]);
   const [schoolAiBusy, setSchoolAiBusy] = useState(false);
+  const [schoolAiImportKind, setSchoolAiImportKind] = useState<"teachers" | "classes" | "students">("students");
+  const [schoolAiImportFile, setSchoolAiImportFile] = useState<File | null>(null);
 
   const teacherOptions = useMemo(() => teacherChoices.filter((teacher) => teacher.status === "active"), [teacherChoices]);
 
@@ -314,13 +321,49 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     if (!message) return;
     setSchoolAiBusy(true);
     setNotice(null);
+    setSchoolAiMessages((current) => [...current, { role: "user", content: message }]);
     try {
       const response = await askSchoolAi(message);
       setAiSettings(response);
-      setSchoolAiReply(response.reply || "AI 已响应，但没有返回正文。");
+      setSchoolAiMessages((current) => [
+        ...current,
+        { role: "assistant", content: response.reply || "AI 已响应，但没有返回正文。", source: response.source },
+      ]);
       setSchoolAiInput("");
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      const text = e instanceof Error ? e.message : String(e);
+      onError(text);
+      setSchoolAiMessages((current) => [...current, { role: "system", content: text }]);
+    } finally {
+      setSchoolAiBusy(false);
+    }
+  }
+
+  async function runSchoolAiImport() {
+    if (!schoolAiImportFile) return;
+    setSchoolAiBusy(true);
+    setNotice(null);
+    try {
+      const file = schoolAiImportFile;
+      const result = await importSchoolAiFile(
+        schoolAiImportKind,
+        file,
+        schoolAiImportKind === "students" ? studentClassId || null : null,
+      );
+      setSchoolAiMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: `${result.review}\n\n已完成 ${file.name} 的 AI 导入并写入 ${result.imported} 条${schoolAiImportKind === "teachers" ? "教师" : schoolAiImportKind === "classes" ? "班级" : "学生"}数据。`,
+          source: "import",
+        },
+      ]);
+      setSchoolAiImportFile(null);
+      await refresh();
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e);
+      onError(text);
+      setSchoolAiMessages((current) => [...current, { role: "system", content: `导入失败：${text}` }]);
     } finally {
       setSchoolAiBusy(false);
     }
@@ -870,62 +913,153 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
           ) : null}
 
           {activePage === "ai" ? (
-            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-700">
+            <section className="grid min-h-[34rem] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm xl:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="flex min-h-0 flex-col">
+                <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
                     <Sparkles className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <h2 className="text-base font-semibold text-slate-950">AI 功能</h2>
+                    <h2 className="text-base font-semibold text-slate-950">学校 AI 助手</h2>
                     <p className="mt-1 text-sm leading-6 text-slate-500">
-                      学校端 AI 用于教师、学生、班级和分配管理；开关会影响学校端与本校教师端。
+                      直接读取本校教师、学生、班级和分配数据，也可以审核导入 JSON/Excel 文件。
                     </p>
                   </div>
                 </div>
-                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-                  <span className="font-medium text-slate-800">启用 AI</span>
-                  <input
-                    data-testid="school-ai-toggle"
-                    type="checkbox"
-                    className="h-4 w-4"
-                    checked={Boolean(aiSettings?.ai_enabled)}
-                    disabled={busy || !aiSettings || (!aiSettings.ai_available && !aiSettings.ai_enabled)}
-                    onChange={(event) => void setSchoolAiEnabled(event.target.checked)}
-                  />
-                </label>
-              </div>
-              <p className="mt-3 text-sm leading-6 text-slate-500">
-                {!aiSettings
-                  ? "正在读取 AI 状态。"
-                  : !aiSettings.ai_available
-                    ? "管理员尚未配置 AI API，学校暂不能开启。"
-                    : aiSettings.ai_enabled
-                      ? "当前学校已开启 AI。"
-                      : "当前学校已关闭 AI。"}
-              </p>
-              <form onSubmit={(event) => void submitSchoolAi(event)} className="mt-5 space-y-3">
-                <textarea
-                  className="min-h-40 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  placeholder="询问教师导入、学生账号、班级管理或教师分配"
-                  value={schoolAiInput}
-                  onChange={(event) => setSchoolAiInput(event.target.value)}
-                  disabled={!aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
-                />
-                <button
-                  type="submit"
-                  disabled={!schoolAiInput.trim() || !aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  <Send className="h-4 w-4" />
-                  询问 AI
-                </button>
-              </form>
-              {schoolAiReply ? (
-                <div className="mt-4 whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
-                  {schoolAiReply}
+                <div className="min-h-0 flex-1 space-y-3 overflow-auto bg-slate-50 p-4">
+                  {schoolAiMessages.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-sm leading-6 text-slate-500">
+                      可以直接问“有哪些教师名字”“哪些班级没有老师”“导入学生模板字段是什么”。AI 会基于当前学校数据回答。
+                    </div>
+                  ) : (
+                    schoolAiMessages.map((item, index) => (
+                      <div
+                        key={`${item.role}:${index}`}
+                        className={`flex gap-3 ${item.role === "user" ? "justify-end" : "justify-start"}`}
+                      >
+                        {item.role !== "user" ? (
+                          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
+                            <Bot className="h-4 w-4" />
+                          </div>
+                        ) : null}
+                        <div
+                          className={`max-w-[82%] whitespace-pre-wrap rounded-lg px-4 py-3 text-sm leading-6 shadow-sm ${
+                            item.role === "user"
+                              ? "bg-slate-900 text-white"
+                              : item.role === "system"
+                                ? "border border-amber-200 bg-amber-50 text-amber-900"
+                                : "border border-slate-200 bg-white text-slate-700"
+                          }`}
+                        >
+                          {item.content}
+                          {item.source ? <div className="mt-2 text-xs opacity-60">source: {item.source}</div> : null}
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ) : null}
+                <form onSubmit={(event) => void submitSchoolAi(event)} className="border-t border-slate-200 bg-white p-4">
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <textarea
+                      className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="询问教师导入、学生账号、班级管理或教师分配"
+                      value={schoolAiInput}
+                      onChange={(event) => setSchoolAiInput(event.target.value)}
+                      disabled={!aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
+                    />
+                    <button
+                      type="submit"
+                      disabled={!schoolAiInput.trim() || !aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    >
+                      <Send className="h-4 w-4" />
+                      发送
+                    </button>
+                  </div>
+                </form>
+              </div>
+              <aside className="space-y-4 border-t border-slate-200 bg-white p-4 xl:border-l xl:border-t-0">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-950">AI 开关</h3>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        {!aiSettings
+                          ? "正在读取状态"
+                          : !aiSettings.ai_available
+                            ? "管理员尚未配置 AI API"
+                            : aiSettings.ai_enabled
+                              ? "学校与教师端可使用 AI"
+                              : "当前学校已关闭 AI"}
+                      </p>
+                    </div>
+                    <input
+                      data-testid="school-ai-toggle"
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={Boolean(aiSettings?.ai_enabled)}
+                      disabled={busy || !aiSettings || (!aiSettings.ai_available && !aiSettings.ai_enabled)}
+                      onChange={(event) => void setSchoolAiEnabled(event.target.checked)}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <FileUp className="h-4 w-4 text-slate-600" />
+                    <h3 className="text-sm font-semibold text-slate-950">AI 文件导入审核</h3>
+                  </div>
+                  <div className="space-y-3">
+                    <select
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      value={schoolAiImportKind}
+                      onChange={(event) => setSchoolAiImportKind(event.target.value as "teachers" | "classes" | "students")}
+                    >
+                      <option value="students">导入学生</option>
+                      <option value="teachers">导入教师</option>
+                      <option value="classes">导入班级</option>
+                    </select>
+                    {schoolAiImportKind === "students" ? (
+                      <select
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                        value={studentClassId}
+                        onChange={(event) => setStudentClassId(event.target.value)}
+                      >
+                        <option value="">不指定班级</option>
+                        {classes.map((klass) => (
+                          <option key={klass.id} value={klass.id}>
+                            {klass.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-3 text-sm font-medium text-slate-600 hover:bg-slate-50">
+                      <Upload className="h-4 w-4" />
+                      {schoolAiImportFile ? schoolAiImportFile.name : "选择 JSON / Excel"}
+                      <input
+                        data-testid="school-ai-import-file"
+                        className="sr-only"
+                        type="file"
+                        accept=".json,.xlsx"
+                        onChange={(event) => setSchoolAiImportFile(event.target.files?.[0] ?? null)}
+                      />
+                    </label>
+                    <div className="rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-500">
+                      上传后会按学校端模板字段检查并写入当前学校数据；导入结果会作为 AI 审核消息保留在对话流。
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="school-ai-import-run"
+                      disabled={!schoolAiImportFile || schoolAiBusy}
+                      onClick={() => void runSchoolAiImport()}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      审核并导入
+                    </button>
+                  </div>
+                </div>
+              </aside>
             </section>
           ) : null}
 

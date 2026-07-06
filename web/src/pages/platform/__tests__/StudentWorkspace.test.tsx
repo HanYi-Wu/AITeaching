@@ -44,6 +44,7 @@ describe("StudentWorkspace", () => {
           screen_switch_count: 0,
           screen_switch_limit: 2,
           time_spent_seconds: 0,
+          time_limit_minutes: 30,
           show_results: true,
         },
       ],
@@ -167,6 +168,7 @@ describe("StudentWorkspace", () => {
         time_spent_seconds: 0,
         screen_switch_count: 0,
         screen_switch_limit: 2,
+        time_limit_minutes: 30,
         show_results: true,
       },
       questions: [
@@ -220,6 +222,9 @@ describe("StudentWorkspace", () => {
     expect(await screen.findByText("Online Midterm")).toBeInTheDocument();
     await userEvent.click(screen.getByTestId("student-start-pub1"));
     expect(await screen.findByText("1+1=?")).toBeInTheDocument();
+    expect(screen.getByText("30:00")).toBeInTheDocument();
+    expect(screen.queryByText("返回待答")).not.toBeInTheDocument();
+    expect(screen.queryByText("退出登录")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByLabelText("A. 2"));
     await userEvent.type(screen.getByTestId("student-answer-math/q2"), "4");

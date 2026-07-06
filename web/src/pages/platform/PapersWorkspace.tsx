@@ -33,6 +33,7 @@ import {
   type PlatformPaperRecord,
   type TeacherClassRecord,
 } from "../../platform/auth";
+import { PlatformPaperAnalysisCharts } from "./AnalysisCharts";
 
 type Props = {
   onOpenAnalysis?: (examId: string) => void;
@@ -851,43 +852,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                             </p>
                           </div>
                         </div>
-                        <div className="rounded-md border border-slate-200 bg-white">
-                          <div className="border-b border-slate-100 px-3 py-2 text-sm font-semibold">学生个人分析</div>
-                          <div className="max-h-72 overflow-auto">
-                            {analysis.students.length === 0 ? (
-                              <p className="px-3 py-4 text-sm text-slate-500">暂无学生作答数据</p>
-                            ) : (
-                              <div className="divide-y divide-slate-100">
-                                {analysis.students.map((student) => (
-                                  <div key={`${student.publication_id ?? ""}:${student.student_id}`} className="px-3 py-2 text-sm">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <div className="min-w-0">
-                                        <p className="truncate font-medium text-slate-900">{student.display_name}</p>
-                                        <p className="truncate text-xs text-slate-500">
-                                          {[student.student_no, ...(student.class_names ?? [])].filter(Boolean).join(" · ") || "-"}
-                                        </p>
-                                      </div>
-                                      <span
-                                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
-                                          student.screen_switch_exceeded
-                                            ? "bg-rose-100 text-rose-700"
-                                            : "bg-emerald-100 text-emerald-700"
-                                        }`}
-                                      >
-                                        {student.screen_switch_count}/{student.screen_switch_limit ?? 0} 次
-                                      </span>
-                                    </div>
-                                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-600">
-                                      <span>状态：{student.status === "completed" ? "已完成" : student.status === "in_progress" ? "答题中" : "未开始"}</span>
-                                      <span>得分：{student.score_percent == null ? "待批改" : `${student.score_percent}%`}</span>
-                                      <span>用时：{Math.round(Number(student.time_spent_seconds || 0) / 60)} 分钟</span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                        <PlatformPaperAnalysisCharts analysis={analysis} compact />
                       </div>
                     ) : null}
                     <button

@@ -10,26 +10,26 @@ SRC="$ROOT/src"
 cd "$ROOT"
 
 echo "[Solaire] 仓库: $ROOT"
-echo "[Solaire] 启动 FastAPI（--app-dir src）→ http://127.0.0.1:8000"
+echo "[Solaire] 启动 FastAPI（--app-dir src）→ http://0.0.0.0:8000"
 
 if command -v py >/dev/null 2>&1; then
   (cd "$ROOT" && py -3.12 -m uvicorn solaire.web.app:app \
     --app-dir "$SRC" \
-    --host 127.0.0.1 \
+    --host 0.0.0.0 \
     --port 8000 \
     --reload \
     --reload-dir "$SRC") &
 elif command -v python3 >/dev/null 2>&1; then
   (cd "$ROOT" && python3 -m uvicorn solaire.web.app:app \
     --app-dir "$SRC" \
-    --host 127.0.0.1 \
+    --host 0.0.0.0 \
     --port 8000 \
     --reload \
     --reload-dir "$SRC") &
 elif command -v python >/dev/null 2>&1; then
   (cd "$ROOT" && python -m uvicorn solaire.web.app:app \
     --app-dir "$SRC" \
-    --host 127.0.0.1 \
+    --host 0.0.0.0 \
     --port 8000 \
     --reload \
     --reload-dir "$SRC") &
@@ -43,6 +43,6 @@ cleanup() { kill "$UV_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 sleep 2
-echo "[Solaire] 启动 Vite → http://127.0.0.1:5173"
+echo "[Solaire] 启动 Vite → http://0.0.0.0:5173"
 cd "$ROOT/web"
-npm run dev
+npm run dev -- --host 0.0.0.0 --port 5173 --strictPort

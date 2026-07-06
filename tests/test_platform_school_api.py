@@ -8,6 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
+from solaire.web import school_api
+
 
 def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
@@ -135,6 +137,76 @@ def test_school_ai_toggle_requires_admin_configured_api(
     disabled = web_client.patch("/api/school/ai-settings", json={"ai_enabled": False}, headers=school_headers)
     assert disabled.status_code == 200
     assert disabled.json()["ai_enabled"] is False
+
+
+def test_school_ai_answers_teacher_names_from_school_data(
+    web_client: TestClient,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in ("SOLAIRE_LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("SOLAIRE_USER_CONFIG_DIR", str(tmp_path / "user-ai-names"))
+    school_headers, _ = _school_headers(web_client)
+
+    created = web_client.post(
+        "/api/school/teachers",
+        json={"username": "teacher_li", "password": "teacher123", "display_name": "Teacher Li", "subjects": ["Math"]},
+        headers=school_headers,
+    )
+    assert created.status_code == 200
+    configured = web_client.put("/api/agent/llm-settings", json={"api_key": "sk-test-key-abcdef"})
+    assert configured.status_code == 200
+    enabled = web_client.patch("/api/school/ai-settings", json={"ai_enabled": True}, headers=school_headers)
+    assert enabled.status_code == 200
+
+    response = web_client.post("/api/school/ai/chat", json={"message": "有哪些教师名字？"}, headers=school_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "local"
+    assert "Teacher Li" in body["reply"]
+    assert "teacher_li" in body["reply"]
+
+
+def test_school_ai_imports_file_with_review(
+    web_client: TestClient,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_review(kind: str, rows: list[dict[str, object]]) -> str:
+        return f"reviewed {kind}: {len(rows)} rows"
+
+    for key in ("SOLAIRE_LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("SOLAIRE_USER_CONFIG_DIR", str(tmp_path / "user-ai-import"))
+    monkeypatch.setattr(school_api, "_review_school_import_with_ai", fake_review)
+    school_headers, _ = _school_headers(web_client)
+    klass = web_client.post("/api/school/classes", json={"name": "Class 1", "grade": "G10"}, headers=school_headers)
+    assert klass.status_code == 200
+    class_id = klass.json()["class"]["id"]
+    configured = web_client.put("/api/agent/llm-settings", json={"api_key": "sk-test-key-abcdef"})
+    assert configured.status_code == 200
+    enabled = web_client.patch("/api/school/ai-settings", json={"ai_enabled": True}, headers=school_headers)
+    assert enabled.status_code == 200
+
+    response = web_client.post(
+        "/api/school/ai/import-file",
+        data={"kind": "students", "class_id": class_id},
+        files={
+            "file": (
+                "students.json",
+                b'[{"student_no":"S002","display_name":"Student Two"}]',
+                "application/json",
+            )
+        },
+        headers=school_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 1
+    assert body["review"] == "reviewed students: 1 rows"
+    assert body["result"]["students"][0]["student_no"] == "S002"
 
 
 def test_school_imports_teachers_classes_and_students_from_json(web_client: TestClient) -> None:

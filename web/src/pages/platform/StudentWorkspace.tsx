@@ -1,17 +1,19 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
-  ArrowLeft,
   BarChart3,
   CheckCircle2,
   ClipboardList,
+  Clock,
   Home,
   RefreshCw,
   Save,
   Send,
   UserCog,
 } from "lucide-react";
+import { resolveApiUrl } from "../../api/client";
 import {
+  loadSessionToken,
   listStudentPapers,
   listStudentResults,
   recordStudentProctorEvent,
@@ -48,6 +50,18 @@ function scoreText(score?: number | null, maxScore?: number | null): string {
   return `${score}/${maxScore}`;
 }
 
+function formatCountdown(seconds: number | null): string {
+  if (seconds === null) return "不限时";
+  const safe = Math.max(0, seconds);
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function isImageSubmission(mode?: string | null): boolean {
+  return mode === "image_manual" || mode === "image_ai";
+}
+
 export function StudentWorkspace({ user, onLogout }: Props) {
   const [profile, setProfile] = useState(user);
   const [activeView, setActiveView] = useState<StudentView>(user.must_change_password ? "account" : "home");
@@ -63,9 +77,17 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [questions, setQuestions] = useState<StudentQuestionRecord[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [imageAnswers, setImageAnswers] = useState<Record<string, StudentAnswerImage[]>>({});
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const startedAtRef = useRef<number | null>(null);
   const hiddenAtRef = useRef<number | null>(null);
+  const activeAttemptRef = useRef<StudentAttemptRecord | null>(null);
+  const questionsRef = useRef<StudentQuestionRecord[]>([]);
+  const answersRef = useRef<Record<string, string>>({});
+  const imageAnswersRef = useRef<Record<string, StudentAnswerImage[]>>({});
+  const answersUrlRef = useRef<string | null>(null);
+  const submitUrlRef = useRef<string | null>(null);
+  const submitInFlightRef = useRef(false);
 
   const pendingPapers = useMemo(
     () => papers.filter((paper) => paper.status !== "submitted" && paper.status !== "completed"),
@@ -133,6 +155,65 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     };
   }, [activeAttempt]);
 
+  useEffect(() => {
+    activeAttemptRef.current = activeAttempt;
+    questionsRef.current = questions;
+    answersRef.current = answers;
+    imageAnswersRef.current = imageAnswers;
+  }, [activeAttempt, answers, imageAnswers, questions]);
+
+  useEffect(() => {
+    if (!activeAttempt) {
+      answersUrlRef.current = null;
+      submitUrlRef.current = null;
+      setRemainingSeconds(null);
+      return;
+    }
+    void Promise.all([
+      resolveApiUrl(`/api/student/attempts/${encodeURIComponent(activeAttempt.id)}/answers`),
+      resolveApiUrl(`/api/student/attempts/${encodeURIComponent(activeAttempt.id)}/submit`),
+    ]).then(([answersUrl, submitUrl]) => {
+      if (activeAttemptRef.current?.id === activeAttempt.id) {
+        answersUrlRef.current = answersUrl;
+        submitUrlRef.current = submitUrl;
+      }
+    });
+    const limitMinutes = Number(activeAttempt.time_limit_minutes || 0);
+    setRemainingSeconds(limitMinutes > 0 ? limitMinutes * 60 : null);
+  }, [activeAttempt]);
+
+  useEffect(() => {
+    const limitMinutes = Number(activeAttempt?.time_limit_minutes || 0);
+    if (!activeAttempt || activeAttempt.status !== "in_progress" || limitMinutes <= 0) {
+      return;
+    }
+    const tick = () => {
+      const elapsed = startedAtRef.current ? Math.floor((Date.now() - startedAtRef.current) / 1000) : 0;
+      const next = Math.max(0, limitMinutes * 60 - elapsed);
+      setRemainingSeconds(next);
+      if (next <= 0) {
+        void submitActiveAttempt();
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAttempt?.id, activeAttempt?.status, activeAttempt?.time_limit_minutes]);
+
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      submitAttemptBestEffort();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", onBeforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function submitAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy("account");
@@ -168,6 +249,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setAnswers({});
       setImageAnswers({});
       startedAtRef.current = Date.now();
+      setRemainingSeconds(Number(data.attempt.time_limit_minutes || 0) > 0 ? Number(data.attempt.time_limit_minutes) * 60 : null);
       setActiveView("exam");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -200,30 +282,71 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     setImageAnswers((current) => ({ ...current, [questionId]: images }));
   }
 
+  function buildAnswerPayload(
+    attempt: StudentAttemptRecord,
+    sourceQuestions: StudentQuestionRecord[],
+    sourceAnswers: Record<string, string>,
+    sourceImageAnswers: Record<string, StudentAnswerImage[]>,
+  ) {
+    const imageMode = isImageSubmission(attempt.submission_mode);
+    return sourceQuestions.map((question) =>
+      imageMode
+        ? {
+            question_id: question.question_id,
+            images: sourceImageAnswers[question.question_id] ?? [],
+          }
+        : {
+            question_id: question.question_id,
+            answer: sourceAnswers[question.question_id] ?? "",
+          },
+    );
+  }
+
+  function elapsedSeconds(): number | null {
+    return startedAtRef.current ? Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000)) : null;
+  }
+
+  function submitAttemptBestEffort() {
+    const attempt = activeAttemptRef.current;
+    if (!attempt || attempt.status !== "in_progress") return;
+    const token = loadSessionToken();
+    const answersUrl = answersUrlRef.current;
+    const submitUrl = submitUrlRef.current;
+    if (!token || !answersUrl || !submitUrl) return;
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
+    const payload = buildAnswerPayload(attempt, questionsRef.current, answersRef.current, imageAnswersRef.current);
+    void fetch(answersUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => undefined);
+    void fetch(submitUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ time_spent_seconds: elapsedSeconds() }),
+      keepalive: true,
+    }).catch(() => undefined);
+  }
+
   async function submitActiveAttempt() {
     if (!activeAttempt) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setBusy("submit");
     setMessage(null);
     try {
-      const imageMode = activeAttempt.submission_mode === "image_manual" || activeAttempt.submission_mode === "image_ai";
-      const payload = questions.map((question) =>
-        imageMode
-          ? {
-              question_id: question.question_id,
-              images: imageAnswers[question.question_id] ?? [],
-            }
-          : {
-              question_id: question.question_id,
-              answer: answers[question.question_id] ?? "",
-            },
-      );
+      const payload = buildAnswerPayload(activeAttempt, questions, answers, imageAnswers);
       await saveStudentAnswers(activeAttempt.id, payload);
-      const elapsed = startedAtRef.current ? Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000)) : null;
-      await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsed });
+      await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsedSeconds() });
       setActiveAttempt(null);
       setQuestions([]);
       setAnswers({});
       setImageAnswers({});
+      setRemainingSeconds(null);
       startedAtRef.current = null;
       await refresh();
       setMessage("试卷已提交");
@@ -232,6 +355,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setMessage(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
+      submitInFlightRef.current = false;
     }
   }
 
@@ -242,32 +366,26 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         title={activeAttempt.title}
         subtitle={`${activeAttempt.subject || "未分科"} · ${questions.length} 题`}
         userName={profile.username}
-        onLogout={onLogout}
+        compactMobile
+        hideLogout
       >
         <section className="mx-auto w-full max-w-4xl rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveAttempt(null);
-                  setQuestions([]);
-                  setActiveView("papers");
-                  void refresh();
-                }}
-                className="mb-3 inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                返回待答
-              </button>
               <h2 className="text-lg font-semibold text-slate-950">{activeAttempt.title}</h2>
               <p className="mt-1 text-sm text-slate-500">
                 {activeAttempt.subject || "未分科"} · {questions.length} 题
               </p>
             </div>
-            <div className="inline-flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              <AlertTriangle className="h-4 w-4" />
-              已开启切屏检测
+            <div className="flex flex-wrap gap-2">
+              <div className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white">
+                <Clock className="h-4 w-4" />
+                {formatCountdown(remainingSeconds)}
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <AlertTriangle className="h-4 w-4" />
+                已开启切屏检测
+              </div>
             </div>
           </div>
           <div className="space-y-4">
@@ -306,6 +424,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       subtitle={mustChangePassword ? "首次登录需要先修改密码。" : "查看待答试卷、历史成绩和个人分析。"}
       userName={profile.username}
       onLogout={onLogout}
+      compactMobile
     >
       <div className="space-y-5">
         <nav className="grid grid-cols-4 gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">

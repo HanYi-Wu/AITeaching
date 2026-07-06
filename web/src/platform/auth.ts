@@ -59,6 +59,13 @@ export type SchoolAiResponse = SchoolAiSettings & {
   error?: string;
 };
 
+export type SchoolAiImportResponse = SchoolAiSettings & {
+  kind: "teachers" | "classes" | "students";
+  imported: number;
+  review: string;
+  result: unknown;
+};
+
 export type PagedResult = {
   total?: number;
   page?: number;
@@ -463,6 +470,18 @@ export function askSchoolAi(message: string): Promise<SchoolAiResponse> {
     method: "POST",
     body: JSON.stringify({ message }),
   });
+}
+
+export function importSchoolAiFile(
+  kind: "teachers" | "classes" | "students",
+  file: File,
+  classId?: string | null,
+): Promise<SchoolAiImportResponse> {
+  const fd = new FormData();
+  fd.append("kind", kind);
+  if (classId) fd.append("class_id", classId);
+  fd.append("file", file);
+  return platformRequest("/api/school/ai/import-file", { method: "POST", body: fd });
 }
 
 export function listTeachers(params: ListQuery = {}): Promise<{ teachers: TeacherRecord[] } & PagedResult> {
