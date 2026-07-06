@@ -83,6 +83,15 @@ function mergeMeta(
   };
 }
 
+function htmlEscape(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function publicationStatusLabel(status: string): string {
   if (status === "published") return "发布中";
   if (status === "paused") return "已暂停";
@@ -356,18 +365,30 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     const rows = analysis.students
       .map(
         (student) =>
-          `<tr><td>${student.display_name}</td><td>${student.student_no || ""}</td><td>${student.status}</td><td>${student.score_percent ?? ""}</td><td>${student.screen_switch_count}</td></tr>`,
+          `<tr><td>${htmlEscape(student.display_name)}</td><td>${htmlEscape(student.student_no || "")}</td><td>${htmlEscape(student.status)}</td><td>${htmlEscape(student.score_percent ?? "")}</td><td>${htmlEscape(student.screen_switch_count)}</td></tr>`,
       )
       .join("");
     const modules = (analysis.modules ?? [])
       .map(
         (item) =>
-          `<tr><td>${item.label || item.module_id}</td><td>${item.question_count}</td><td>${item.answered_count}</td><td>${item.average_score_percent ?? ""}</td><td>${item.risk_level ?? ""}</td></tr>`,
+          `<tr><td>${htmlEscape(item.label || item.module_id)}</td><td>${htmlEscape(item.question_count)}</td><td>${htmlEscape(item.answered_count)}</td><td>${htmlEscape(item.average_score_percent ?? "")}</td><td>${htmlEscape(item.risk_level ?? "")}</td></tr>`,
+      )
+      .join("");
+    const classes = (analysis.classes ?? [])
+      .map(
+        (item) =>
+          `<tr><td>${htmlEscape(item.class_name)}</td><td>${htmlEscape(item.student_count)}</td><td>${htmlEscape(item.completion_rate)}%</td><td>${htmlEscape(item.average_score ?? "")}</td><td>${htmlEscape(item.screen_switch_count)}</td></tr>`,
+      )
+      .join("");
+    const questions = (analysis.questions ?? [])
+      .map(
+        (item) =>
+          `<tr><td>${htmlEscape(item.header || item.question_id)}</td><td>${htmlEscape(item.section_id || "")}</td><td>${htmlEscape(item.answered_count)}</td><td>${htmlEscape(item.accuracy_rate ?? "")}</td><td>${htmlEscape(item.average_score_percent ?? "")}</td><td>${htmlEscape(item.risk_level ?? "")}</td></tr>`,
       )
       .join("");
     const popup = window.open("", "_blank", "noopener,noreferrer,width=960,height=720");
     if (!popup) return;
-    popup.document.write(`<!doctype html><html><head><title>${analysis.paper.title} Analysis</title>
+    popup.document.write(`<!doctype html><html><head><title>${htmlEscape(analysis.paper.title)} Analysis</title>
       <style>
         body{font-family:Arial,sans-serif;margin:32px;color:#0f172a}
         h1,h2{margin:0 0 12px}
@@ -377,8 +398,8 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
         th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:12px}
         th{background:#f8fafc}
       </style></head><body>
-      <h1>${analysis.paper.title}</h1>
-      <p>${analysis.paper.subject || ""} ${analysis.paper.exam_id || ""}</p>
+      <h1>${htmlEscape(analysis.paper.title)}</h1>
+      <p>${htmlEscape(analysis.paper.subject || "")} ${htmlEscape(analysis.paper.exam_id || "")}</p>
       <div class="grid">
         <div class="metric">完成率<br/><strong>${analysis.summary.completion_rate}%</strong></div>
         <div class="metric">平均分<br/><strong>${analysis.summary.average_score ?? "-"}</strong></div>
@@ -387,6 +408,10 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
       </div>
       <h2>模块报告</h2>
       <table><thead><tr><th>模块</th><th>题数</th><th>作答</th><th>得分率</th><th>风险</th></tr></thead><tbody>${modules}</tbody></table>
+      <h2>班级报表</h2>
+      <table><thead><tr><th>班级</th><th>人数</th><th>完成率</th><th>平均分</th><th>切屏</th></tr></thead><tbody>${classes}</tbody></table>
+      <h2>题目报表</h2>
+      <table><thead><tr><th>题目</th><th>模块</th><th>作答</th><th>正确率</th><th>得分率</th><th>风险</th></tr></thead><tbody>${questions}</tbody></table>
       <h2>学生分析</h2>
       <table><thead><tr><th>学生</th><th>学号</th><th>状态</th><th>得分率</th><th>切屏</th></tr></thead><tbody>${rows}</tbody></table>
       </body></html>`);

@@ -442,6 +442,15 @@ def _risk_level(value: float | None) -> str:
     return "low"
 
 
+def _attempt_status_group(attempt: dict[str, Any]) -> str:
+    status = str(attempt.get("status") or "not_started")
+    if status in {"submitted", "completed"} or attempt.get("submitted_at"):
+        return "completed"
+    if status == "in_progress" or attempt.get("started_at"):
+        return "in_progress"
+    return "not_started"
+
+
 def _build_module_report(
     root: Path,
     *,
@@ -535,6 +544,171 @@ def _build_module_report(
         item["risk_level"] = _risk_level(average_score_percent)
         out.append(item)
     return sorted(out, key=lambda value: str(value.get("module_id") or ""))
+
+
+def _build_question_report(
+    root: Path,
+    *,
+    paper_id: str,
+    project_root: Path | None,
+    paper: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if project_root is None:
+        return []
+    try:
+        questions, _by_id, score_by_id = _question_maps(project_root, paper)
+    except (FileNotFoundError, ValueError):
+        return []
+    reports: dict[str, dict[str, Any]] = {}
+    for order, question in enumerate(questions):
+        qid = str(question.get("question_id") or "")
+        if not qid:
+            continue
+        reports[qid] = {
+            "_order": order,
+            "question_id": qid,
+            "header": question.get("header"),
+            "section_id": question.get("section_id"),
+            "type": question.get("type"),
+            "content": question.get("content"),
+            "score_per_item": float(score_by_id.get(qid) or 0),
+            "answered_count": 0,
+            "scored_count": 0,
+            "correct_count": 0,
+            "wrong_count": 0,
+            "_scores": [],
+            "_max_scores": [],
+        }
+    if not reports:
+        return []
+
+    with connect(root) as con:
+        rows = con.execute(
+            """
+            SELECT ans.question_id, ans.answer_payload, ans.is_correct, ans.score
+            FROM student_answers ans
+            JOIN student_attempts sa ON sa.id = ans.attempt_id
+            JOIN exam_publications ep ON ep.id = sa.publication_id
+            WHERE ep.paper_id = ?
+            """,
+            (paper_id,),
+        ).fetchall()
+
+    for row in rows:
+        question_id = str(row["question_id"] or "")
+        item = reports.get(question_id)
+        if item is None:
+            continue
+        payload = _json_payload(row["answer_payload"])
+        if payload:
+            item["answered_count"] = int(item["answered_count"]) + 1
+        if row["score"] is not None:
+            max_score = float(score_by_id.get(question_id) or 0)
+            if max_score > 0:
+                item["_scores"].append(float(row["score"]))
+                item["_max_scores"].append(max_score)
+            item["scored_count"] = int(item["scored_count"]) + 1
+        if row["is_correct"] is not None:
+            if int(row["is_correct"]):
+                item["correct_count"] = int(item["correct_count"]) + 1
+            else:
+                item["wrong_count"] = int(item["wrong_count"]) + 1
+
+    out: list[dict[str, Any]] = []
+    for item in reports.values():
+        scores = [float(value) for value in item.pop("_scores")]
+        max_scores = [float(value) for value in item.pop("_max_scores")]
+        if scores and sum(max_scores) > 0:
+            average_score_percent: float | None = round(sum(scores) / sum(max_scores) * 100, 2)
+        else:
+            average_score_percent = None
+        correct_total = int(item["correct_count"]) + int(item["wrong_count"])
+        accuracy_rate = round(int(item["correct_count"]) / correct_total * 100, 2) if correct_total else None
+        item["average_score_percent"] = average_score_percent
+        item["accuracy_rate"] = accuracy_rate
+        item["risk_level"] = _risk_level(average_score_percent if average_score_percent is not None else accuracy_rate)
+        out.append(item)
+    out = sorted(out, key=lambda value: int(value.get("_order") or 0))
+    for item in out:
+        item.pop("_order", None)
+    return out
+
+
+def _build_class_report(root: Path, *, paper_id: str) -> list[dict[str, Any]]:
+    with connect(root) as con:
+        rows = con.execute(
+            """
+            SELECT
+              c.id AS class_id,
+              c.name AS class_name,
+              c.grade AS class_grade,
+              sa.id AS attempt_id,
+              sa.status,
+              sa.started_at,
+              sa.submitted_at,
+              sa.score,
+              sa.max_score,
+              sa.time_spent_seconds,
+              COUNT(pe.id) AS screen_switch_count
+            FROM exam_publications ep
+            JOIN publication_classes pc ON pc.publication_id = ep.id
+            JOIN classes c ON c.id = pc.class_id
+            JOIN student_attempts sa ON sa.publication_id = ep.id
+            JOIN class_students cs ON cs.class_id = c.id AND cs.student_id = sa.student_id
+            LEFT JOIN proctor_events pe ON pe.attempt_id = sa.id
+            WHERE ep.paper_id = ?
+            GROUP BY c.id, sa.id
+            ORDER BY c.name
+            """,
+            (paper_id,),
+        ).fetchall()
+
+    classes: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        class_id = str(row["class_id"] or "")
+        if not class_id:
+            continue
+        item = classes.setdefault(
+            class_id,
+            {
+                "class_id": class_id,
+                "class_name": row["class_name"],
+                "class_grade": row["class_grade"],
+                "student_count": 0,
+                "completed_count": 0,
+                "in_progress_count": 0,
+                "not_started_count": 0,
+                "screen_switch_count": 0,
+                "_scores": [],
+                "_times": [],
+            },
+        )
+        item["student_count"] = int(item["student_count"]) + 1
+        status_group = _attempt_status_group(row_to_dict(row) or {})
+        if status_group == "completed":
+            item["completed_count"] = int(item["completed_count"]) + 1
+        elif status_group == "in_progress":
+            item["in_progress_count"] = int(item["in_progress_count"]) + 1
+        else:
+            item["not_started_count"] = int(item["not_started_count"]) + 1
+        score_percent = _score_percent(row["score"], row["max_score"])
+        if score_percent is not None:
+            item["_scores"].append(score_percent)
+        time_spent = int(row["time_spent_seconds"] or 0)
+        if time_spent > 0:
+            item["_times"].append(time_spent)
+        item["screen_switch_count"] = int(item["screen_switch_count"]) + int(row["screen_switch_count"] or 0)
+
+    out: list[dict[str, Any]] = []
+    for item in classes.values():
+        scores = [float(value) for value in item.pop("_scores")]
+        times = [int(value) for value in item.pop("_times")]
+        total = int(item["student_count"])
+        item["completion_rate"] = round(int(item["completed_count"]) / total * 100, 2) if total else 0
+        item["average_score"] = round(sum(scores) / len(scores), 2) if scores else None
+        item["average_time_seconds"] = round(sum(times) / len(times), 2) if times else None
+        out.append(item)
+    return sorted(out, key=lambda value: str(value.get("class_name") or ""))
 
 
 def _build_radar(
@@ -640,16 +814,13 @@ def analyze_paper(
     flagged_student_ids: set[str] = set()
     for row in attempt_rows:
         attempt = row_to_dict(row) or {}
-        status = str(attempt.get("status") or "not_started")
-        if status in {"submitted", "completed"} or attempt.get("submitted_at"):
+        status_group = _attempt_status_group(attempt)
+        if status_group == "completed":
             completed += 1
-            status_group = "completed"
-        elif status == "in_progress" or attempt.get("started_at"):
+        elif status_group == "in_progress":
             in_progress += 1
-            status_group = "in_progress"
         else:
             not_started += 1
-            status_group = "not_started"
         score_percent = _score_percent(attempt.get("score"), attempt.get("max_score"))
         if score_percent is not None:
             score_values.append(score_percent)
@@ -708,6 +879,8 @@ def analyze_paper(
         students=students,
         average_score=average_score,
     )
+    questions = _build_question_report(root, paper_id=paper_id, project_root=project_root, paper=paper)
+    classes = _build_class_report(root, paper_id=paper_id)
     radar = _build_radar(
         completion_rate=completion_rate,
         average_score=average_score,
@@ -743,6 +916,8 @@ def analyze_paper(
             "exceeded_student_count": exceeded_student_count,
         },
         "modules": modules,
+        "questions": questions,
+        "classes": classes,
         "radar": radar,
         "students": students,
     }

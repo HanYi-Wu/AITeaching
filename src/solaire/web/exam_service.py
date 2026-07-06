@@ -209,6 +209,30 @@ def _template_path_relative_to_exam_file(project_root: Path, exam_yaml: Path, te
     return os.path.relpath(abs_tpl, exam_yaml.parent.resolve()).replace("\\", "/")
 
 
+def _rewrite_exam_paths_for_copy(
+    project_root: Path,
+    source_exam_yaml: Path,
+    dest_exam_yaml: Path,
+    exam_data: ExamConfig,
+) -> ExamConfig:
+    """Rewrite paths when copying .solaire/build.yaml into exams/<label>/<subject>/exam.yaml."""
+    source_parent = source_exam_yaml.resolve().parent
+    dest_parent = dest_exam_yaml.resolve().parent
+    for library in exam_data.question_libraries:
+        raw = Path(library.path)
+        absolute = raw.resolve() if raw.is_absolute() else (source_parent / raw).resolve()
+        assert_within_project(project_root, absolute)
+        library.path = os.path.relpath(absolute, dest_parent).replace("\\", "/")
+    if exam_data.template_path:
+        raw_template = Path(exam_data.template_path)
+        absolute_template = (
+            raw_template.resolve() if raw_template.is_absolute() else (source_parent / raw_template).resolve()
+        )
+        assert_within_project(project_root, absolute_template)
+        exam_data.template_path = os.path.relpath(absolute_template, dest_parent).replace("\\", "/")
+    return exam_data
+
+
 def write_preview_exam_yaml(
     project_root: Path,
     preview_dir: Path,
@@ -374,7 +398,9 @@ def export_pdfs(
             for sel in exam_data.selected_items:
                 if sel.section_id in sec_score_map and sel.score_per_item is None:
                     sel.score_per_item = sec_score_map[sel.section_id]
-        with (dest / "exam.yaml").open("w", encoding="utf-8") as f:
+        dest_exam_yaml = dest / "exam.yaml"
+        exam_data = _rewrite_exam_paths_for_copy(project_root, exam_yaml, dest_exam_yaml, exam_data)
+        with dest_exam_yaml.open("w", encoding="utf-8") as f:
             yaml.safe_dump(exam_data.model_dump(mode="json"), f, allow_unicode=True, sort_keys=False)
 
     return dest, s_name, t_name
@@ -437,7 +463,9 @@ def export_docx(
             for sel in exam_data.selected_items:
                 if sel.section_id in sec_score_map and sel.score_per_item is None:
                     sel.score_per_item = sec_score_map[sel.section_id]
-        with (dest / "exam.yaml").open("w", encoding="utf-8") as f:
+        dest_exam_yaml = dest / "exam.yaml"
+        exam_data = _rewrite_exam_paths_for_copy(project_root, exam_yaml, dest_exam_yaml, exam_data)
+        with dest_exam_yaml.open("w", encoding="utf-8") as f:
             yaml.safe_dump(exam_data.model_dump(mode="json"), f, allow_unicode=True, sort_keys=False)
 
     return dest, s_name, t_name
@@ -471,4 +499,3 @@ def export_preview_pdfs(
     shutil.move(str(student_pdf), s_new)
     shutil.move(str(teacher_pdf), t_new)
     return s_name, t_name, warnings
-

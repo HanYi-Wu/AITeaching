@@ -203,13 +203,17 @@ def test_export_docx_names_files_and_keeps_existing_pdf(
 ) -> None:
     exam_yaml = tmp_path / ".solaire" / "build.yaml"
     exam_yaml.parent.mkdir(parents=True)
+    (tmp_path / "resource" / "math").mkdir(parents=True)
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "t1.yaml").write_text("template_id: t1\nsections: []\n", encoding="utf-8")
     exam_yaml.write_text(
         yaml.safe_dump(
             {
                 "exam_id": "web_export",
                 "template_ref": "t1",
                 "metadata": {"title": "T"},
-                "question_libraries": [],
+                "question_libraries": [{"path": "../resource/math", "namespace": "math"}],
+                "template_path": "../templates/t1.yaml",
                 "selected_items": [{"section_id": "s1", "question_ids": []}],
             },
             allow_unicode=True,
@@ -250,6 +254,9 @@ def test_export_docx_names_files_and_keeps_existing_pdf(
     assert (dest / "keep.pdf").is_file()
     assert (dest / "old.docx").read_bytes() == b"old"
     assert (dest / "exam.yaml").is_file()
+    exported = yaml.safe_load((dest / "exam.yaml").read_text(encoding="utf-8"))
+    assert exported["question_libraries"][0]["path"].replace("\\", "/") == "../../../resource/math"
+    assert exported["template_path"].replace("\\", "/") == "../../../templates/t1.yaml"
 
 
 def test_export_docx_preserves_old_docx_when_pandoc_fails(

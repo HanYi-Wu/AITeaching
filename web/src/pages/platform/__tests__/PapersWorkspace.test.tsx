@@ -197,6 +197,37 @@ describe("PapersWorkspace", () => {
           flagged_student_count: 1,
           exceeded_student_count: 1,
         },
+        classes: [
+          {
+            class_id: "c1",
+            class_name: "Class 1",
+            student_count: 2,
+            completed_count: 1,
+            in_progress_count: 1,
+            not_started_count: 0,
+            completion_rate: 50,
+            average_score: 80,
+            average_time_seconds: 1200,
+            screen_switch_count: 2,
+          },
+        ],
+        questions: [
+          {
+            question_id: "math/q1",
+            header: "Q1",
+            section_id: "Choice",
+            type: "single_choice",
+            content: "Question 1",
+            score_per_item: 5,
+            answered_count: 1,
+            scored_count: 1,
+            correct_count: 1,
+            wrong_count: 0,
+            average_score_percent: 100,
+            accuracy_rate: 100,
+            risk_level: "low",
+          },
+        ],
         students: [
           {
             student_id: "s1",
@@ -229,6 +260,8 @@ describe("PapersWorkspace", () => {
     expect(screen.getByTestId("paper-analysis-flagged-count")).toHaveTextContent("1");
     expect(screen.getByTestId("paper-analysis-charts")).toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-chart-score")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-analysis-classes")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-analysis-questions")).toBeInTheDocument();
     expect(screen.getByText("学生个人分析表")).toBeInTheDocument();
     expect(screen.getByText("Student One")).toBeInTheDocument();
     expect(screen.getByText("2/1")).toBeInTheDocument();

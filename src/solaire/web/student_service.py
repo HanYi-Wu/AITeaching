@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -111,6 +112,38 @@ def _score_percent(score: object, max_score: object) -> float | None:
     return round(raw / max_raw * 100, 2)
 
 
+def _normalize_exam_question_refs(
+    project_root: Path,
+    exam_yaml: Path,
+    refs: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Keep old exported exams publishable after their exam.yaml moved under exams/."""
+    exam_dir = exam_yaml.resolve().parent
+    resource_root = (project_root / "resource").resolve()
+    normalized_refs: list[tuple[str, str]] = []
+    for namespace, raw_path in refs:
+        path = Path(raw_path)
+        if path.is_absolute() or (exam_dir / path).resolve().is_dir():
+            normalized_refs.append((namespace, raw_path))
+            continue
+
+        clean = raw_path.replace("\\", "/").lstrip("./")
+        marker = "resource/"
+        if marker in clean and resource_root.is_dir():
+            suffix = clean.split(marker, 1)[1]
+            candidate: Path | None = (resource_root / suffix).resolve()
+            try:
+                candidate.relative_to(resource_root)
+            except ValueError:
+                candidate = None
+            if candidate is not None and candidate.is_dir():
+                rel = os.path.relpath(candidate, exam_dir).replace("\\", "/")
+                normalized_refs.append((namespace, rel))
+                continue
+        normalized_refs.append((namespace, raw_path))
+    return normalized_refs
+
+
 def _load_exam_question_payloads(project_root: Path, exam_id: str) -> tuple[list[dict[str, Any]], dict[str, str]]:
     exam_dir = workspace_dir(project_root, exam_id)
     exam_yaml = exam_dir / "exam.yaml"
@@ -122,6 +155,7 @@ def _load_exam_question_payloads(project_root: Path, exam_id: str) -> tuple[list
     loaded = None
     if exam.question_libraries:
         refs = [(ref.namespace, ref.path) for ref in exam.question_libraries]
+        refs = _normalize_exam_question_refs(project_root, exam_yaml, refs)
         loaded = load_all_questions(exam_yaml, refs)
 
     questions: list[dict[str, Any]] = []

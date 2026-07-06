@@ -75,13 +75,13 @@ class PaperAnswerGradeBody(BaseModel):
 
 def _raise_api_error(exc: Exception) -> None:
     if isinstance(exc, PermissionError):
-        logger.warning("paper api permission denied: %s", exc)
+        logger.warning("paper api permission denied: %s", exc, exc_info=True)
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, FileNotFoundError):
-        logger.warning("paper api missing resource: %s", exc)
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        logger.warning("paper api missing resource: %s", exc, exc_info=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isinstance(exc, (ValueError, sqlite3.IntegrityError)):
-        logger.warning("paper api invalid request: %s", exc)
+        logger.warning("paper api invalid request: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise exc
 
@@ -116,7 +116,7 @@ def papers_list(
             page=page,
             page_size=page_size,
         )
-    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return result
 
@@ -130,7 +130,7 @@ def papers_from_exam(
     project_root = require_content_project_root()
     try:
         paper = sync_paper_for_exam(project_root, platform_root, user, exam_id=body.exam_id)
-    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"paper": paper}
 
@@ -144,7 +144,7 @@ def papers_update(
     root = require_platform_root()
     try:
         paper = update_paper_delivery_mode(root, paper_id, body.delivery_mode, user)
-    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"paper": paper}
 
@@ -158,7 +158,7 @@ def papers_analysis(
     project_root = require_content_project_root()
     try:
         analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root)
-    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"analysis": analysis}
 
@@ -171,7 +171,7 @@ def papers_publications(
     root = require_platform_root()
     try:
         publications = list_paper_publications(root, paper_id=paper_id, user=user)
-    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"publications": publications}
 
@@ -262,7 +262,7 @@ def papers_publications_update(
             show_results_immediately=body.show_results_immediately,
             status=body.status,
         )
-    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"publication": publication}
 
@@ -317,6 +317,6 @@ def papers_publish(
             max_screen_switches=body.max_screen_switches,
             time_limit_minutes=body.time_limit_minutes,
         )
-    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"publication": publication}

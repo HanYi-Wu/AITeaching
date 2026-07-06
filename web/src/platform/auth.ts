@@ -1,4 +1,5 @@
 import { resolveApiUrl } from "../api/client";
+import { logApiCall } from "../lib/appLog";
 import type { PlatformRole } from "./roles";
 
 const LEGACY_SESSION_STORAGE_KEY = "solaire.platform.session";
@@ -255,6 +256,34 @@ export type PlatformPaperAnalysis = {
     accuracy_rate?: number | null;
     risk_level?: "no_data" | "low" | "medium" | "high" | string;
   }>;
+  questions?: Array<{
+    question_id: string;
+    header?: string | null;
+    section_id?: string | null;
+    type?: string | null;
+    content?: string | null;
+    score_per_item?: number | null;
+    answered_count: number;
+    scored_count: number;
+    correct_count?: number;
+    wrong_count?: number;
+    average_score_percent?: number | null;
+    accuracy_rate?: number | null;
+    risk_level?: "no_data" | "low" | "medium" | "high" | string;
+  }>;
+  classes?: Array<{
+    class_id: string;
+    class_name: string;
+    class_grade?: string | null;
+    student_count: number;
+    completed_count: number;
+    in_progress_count: number;
+    not_started_count: number;
+    completion_rate: number;
+    average_score?: number | null;
+    average_time_seconds?: number | null;
+    screen_switch_count: number;
+  }>;
   radar?: Array<{
     id: "completion" | "score" | "time_efficiency" | "proctoring" | "module_mastery" | string;
     label: string;
@@ -380,19 +409,26 @@ async function readJson<T>(response: Response): Promise<T> {
   if (response.ok) {
     return response.json() as Promise<T>;
   }
+  const message = await readErrorMessage(response);
+  throw new Error(message);
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
   let message = response.statusText || "Request failed";
   try {
-    const body = (await response.json()) as { detail?: unknown };
+    const body = (await response.clone().json()) as { detail?: unknown };
     if (typeof body.detail === "string" && body.detail.trim()) {
       message = body.detail;
     }
   } catch {
     /* ignore */
   }
-  throw new Error(message);
+  return message;
 }
 
 export async function platformRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method ?? "GET").toString().toUpperCase();
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const token = loadSessionToken();
   const headers = new Headers(init.headers);
   const bodyIsFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
@@ -403,7 +439,24 @@ export async function platformRequest<T>(path: string, init: RequestInit = {}): 
     headers.set("Authorization", `Bearer ${token}`);
   }
   const url = await resolveApiUrl(path);
-  const response = await fetch(url, { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, headers });
+  } catch (error) {
+    const ms = Math.round((typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt);
+    const detail = error instanceof Error ? error.message : String(error);
+    logApiCall({ path, method, ok: false, status: 0, ms, detail });
+    throw error;
+  }
+  const ms = Math.round((typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt);
+  if (!response.ok) {
+    const detail = await readErrorMessage(response);
+    logApiCall({ path, method, ok: false, status: response.status, ms, detail });
+    throw new Error(detail);
+  }
+  if (method !== "GET") {
+    logApiCall({ path, method, ok: true, status: response.status, ms });
+  }
   return readJson<T>(response);
 }
 

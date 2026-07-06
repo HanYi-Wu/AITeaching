@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 from fastapi.testclient import TestClient
 
-from solaire.exam_compiler.models import ExamConfig, SelectedSection
+from solaire.exam_compiler.models import ExamConfig, QuestionLibraryRef, SelectedSection
 from solaire.web import recent_projects, state
 from solaire.web.app import ensure_project_layout
 from solaire.web.platform_db import connect, default_platform_root
@@ -110,6 +110,44 @@ def _write_empty_exam(root: Path, label: str = "empty", subject: str = "Math") -
     return exam_id
 
 
+def _write_legacy_exported_exam_with_bad_resource_path(root: Path) -> str:
+    ensure_project_layout(root)
+    library = root / "resource" / "math" / "quadratic"
+    library.mkdir(parents=True, exist_ok=True)
+    (library / "q01.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "q01",
+                "type": "single_choice",
+                "content": "Discriminant of ax^2+bx+c=0?",
+                "options": {"A": "b^2-4ac", "B": "b^2+4ac"},
+                "answer": "A",
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    exam_id = "quadratic-discriminant/math"
+    exam_dir = root / "exams" / "quadratic-discriminant" / "math"
+    exam_dir.mkdir(parents=True, exist_ok=True)
+    exam = ExamConfig(
+        exam_id=exam_id,
+        template_ref="default",
+        metadata={"title": "Quadratic Legacy", "subject": "math", "export_label": "quadratic-discriminant"},
+        question_libraries=[
+            QuestionLibraryRef(namespace="math/quadratic", path="../resource/math/quadratic"),
+        ],
+        template_path="../templates/test.yaml",
+        selected_items=[
+            SelectedSection(section_id="mcq", question_ids=["math/quadratic/q01"], score_per_item=5.0),
+        ],
+    )
+    with (exam_dir / "exam.yaml").open("w", encoding="utf-8") as f:
+        yaml.safe_dump(exam.model_dump(mode="json"), f, allow_unicode=True, sort_keys=False)
+    return exam_id
+
+
 def test_teacher_lists_exported_papers_with_default_offline_mode(web_client: TestClient, tmp_path: Path) -> None:
     admin_token = _bootstrap_admin(web_client)
     _create_school_teacher_class(web_client, admin_token)
@@ -166,6 +204,23 @@ def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClie
     assert body["publication"]["paper_id"] == paper["paper_id"]
     assert body["publication"]["class_ids"] == [class_id]
     assert body["publication"]["max_screen_switches"] == 2
+
+
+def test_teacher_publishes_legacy_exported_paper_with_resource_path(web_client: TestClient, tmp_path: Path) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _, _, class_id = _create_school_teacher_class(web_client, admin_token)
+    _write_legacy_exported_exam_with_bad_resource_path(tmp_path)
+    teacher_headers = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers?q=Quadratic", headers=teacher_headers).json()["papers"][0]
+
+    published = web_client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "title": "Quadratic Online"},
+        headers=teacher_headers,
+    )
+
+    assert published.status_code == 200
+    assert published.json()["publication"]["paper_id"] == paper["paper_id"]
 
 
 def test_teacher_cannot_publish_empty_paper_and_can_choose_image_submission(
@@ -383,6 +438,18 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
                 ("event2", str(attempts[0]["id"]), str(attempts[0]["student_id"]), publication_id, 800),
             ],
         )
+        con.executemany(
+            """
+            INSERT INTO student_answers (
+              id, attempt_id, question_id, answer_payload, is_correct, score, grading_status, responded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'auto', '2026-07-04T08:20:00+00:00')
+            """,
+            [
+                ("ans1", str(attempts[0]["id"]), "math/q1", '{"answer":"A"}', 1, 5.0),
+                ("ans2", str(attempts[0]["id"]), "math/q2", '{"answer":"B"}', 0, 0.0),
+            ],
+        )
 
     analysis = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=teacher_headers)
     assert analysis.status_code == 200
@@ -402,6 +469,14 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
     assert body["modules"][0]["question_count"] == 2
     assert body["modules"][0]["student_count"] == 2
     assert 0 <= body["modules"][0]["average_score_percent"] <= 100
+    assert body["classes"][0]["class_name"] == "Class 1"
+    assert body["classes"][0]["student_count"] == 2
+    assert body["classes"][0]["completed_count"] == 1
+    assert body["classes"][0]["completion_rate"] == 50
+    questions = {item["question_id"]: item for item in body["questions"]}
+    assert questions["math/q1"]["answered_count"] == 1
+    assert questions["math/q1"]["accuracy_rate"] == 100
+    assert questions["math/q2"]["accuracy_rate"] == 0
     assert {axis["id"] for axis in body["radar"]} == {
         "completion",
         "score",

@@ -210,6 +210,86 @@ function ModuleReport({ analysis }: { analysis: PlatformPaperAnalysis }) {
   );
 }
 
+function ClassReport({ analysis }: { analysis: PlatformPaperAnalysis }) {
+  const rows = analysis.classes ?? [];
+  if (rows.length === 0) {
+    return <p className="text-sm text-slate-500">暂无班级维度数据</p>;
+  }
+  return (
+    <div className="overflow-x-auto" data-testid="paper-analysis-classes">
+      <table className="min-w-[720px] w-full text-sm">
+        <thead className="bg-slate-50 text-xs text-slate-500">
+          <tr>
+            <th className="px-3 py-2 text-left font-medium">班级</th>
+            <th className="px-3 py-2 text-right font-medium">人数</th>
+            <th className="px-3 py-2 text-right font-medium">完成率</th>
+            <th className="px-3 py-2 text-right font-medium">平均分</th>
+            <th className="px-3 py-2 text-right font-medium">平均耗时</th>
+            <th className="px-3 py-2 text-right font-medium">切屏</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.map((item) => (
+            <tr key={item.class_id}>
+              <td className="px-3 py-2 font-medium text-slate-800">
+                {item.class_name}
+                {item.class_grade ? <span className="ml-2 text-xs font-normal text-slate-400">{item.class_grade}</span> : null}
+              </td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.student_count}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{Math.round(item.completion_rate)}%</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.average_score == null ? "-" : `${Math.round(item.average_score)}%`}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.average_time_seconds == null ? "-" : `${minutes(item.average_time_seconds)} 分钟`}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.screen_switch_count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function QuestionReport({ analysis }: { analysis: PlatformPaperAnalysis }) {
+  const rows = analysis.questions ?? [];
+  if (rows.length === 0) {
+    return <p className="text-sm text-slate-500">暂无题目维度数据</p>;
+  }
+  return (
+    <div className="overflow-x-auto" data-testid="paper-analysis-questions">
+      <table className="min-w-[860px] w-full text-sm">
+        <thead className="bg-slate-50 text-xs text-slate-500">
+          <tr>
+            <th className="px-3 py-2 text-left font-medium">题目</th>
+            <th className="px-3 py-2 text-left font-medium">模块</th>
+            <th className="px-3 py-2 text-right font-medium">作答</th>
+            <th className="px-3 py-2 text-right font-medium">已批</th>
+            <th className="px-3 py-2 text-right font-medium">正确率</th>
+            <th className="px-3 py-2 text-right font-medium">得分率</th>
+            <th className="px-3 py-2 text-right font-medium">风险</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.map((item) => (
+            <tr key={item.question_id}>
+              <td className="px-3 py-2">
+                <div className="font-medium text-slate-800">{item.header || item.question_id}</div>
+                <div className="max-w-[360px] truncate text-xs text-slate-400">{item.content || item.question_id}</div>
+              </td>
+              <td className="px-3 py-2 text-slate-600">{item.section_id || "-"}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.answered_count}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.scored_count}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.accuracy_rate == null ? "-" : `${Math.round(item.accuracy_rate)}%`}</td>
+              <td className="px-3 py-2 text-right text-slate-600">
+                {item.average_score_percent == null ? "-" : `${Math.round(item.average_score_percent)}%`}
+              </td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.risk_level || "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; compact?: boolean }) {
   const rows = [...analysis.students].sort((a, b) => clampPercent(b.score_percent) - clampPercent(a.score_percent));
   return (
@@ -349,6 +429,21 @@ export function PlatformPaperAnalysisCharts({
           <h4 className="text-sm font-semibold text-slate-900">模块级报告</h4>
           <div className="mt-3">
             <ModuleReport analysis={analysis} />
+          </div>
+        </section>
+      </div>
+
+      <div className={`grid gap-3 ${compact ? "grid-cols-1" : "xl:grid-cols-2"}`}>
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h4 className="text-sm font-semibold text-slate-900">班级维度报表</h4>
+          <div className="mt-3">
+            <ClassReport analysis={analysis} />
+          </div>
+        </section>
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h4 className="text-sm font-semibold text-slate-900">题目维度报表</h4>
+          <div className="mt-3">
+            <QuestionReport analysis={analysis} />
           </div>
         </section>
       </div>
