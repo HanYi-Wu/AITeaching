@@ -38,6 +38,9 @@ _ALL_ANALYSIS = _names_starting("analysis.")
 _ALL_BANK = _names_starting("bank.")
 _ALL_GRAPH = _names_starting("graph.")
 _ALL_EXAM = _names_starting("exam.")
+_ALL_TEMPLATE = _names_starting("template.")
+_ALL_PAPER = _names_starting("paper.")
+_ALL_TEACHER = _names_starting("teacher.")
 _ALL_FILE = _names_starting("file.")
 _ALL_DOC = _names_starting("doc.")
 _ALL_MEMORY = _names_starting("memory.")
@@ -78,28 +81,35 @@ _BANK_GRAPH: tuple[str, ...] = (
 
 _ANALYSIS_FOCUS = _merge_unique(
     _AGENT_CORE,
+    _ALL_TEACHER,
     _FILE_RO,
     _SUBTASK_PIPELINE,
     _ALL_MEMORY,
     _WEB_FETCH,
     _ALL_ANALYSIS,
+    _ALL_PAPER,
     ("exam.ai_grade_submission",),
 )
-_BANK_FOCUS = _merge_unique(_AGENT_CORE, _FILE_RO, _SUBTASK_PIPELINE, _WEB_FETCH, _ALL_BANK, _BANK_GRAPH)
-_GRAPH_FOCUS = _merge_unique(_AGENT_CORE, _FILE_RO, _SUBTASK_PIPELINE, _WEB_FETCH, _ALL_GRAPH, _ALL_BANK)
+_BANK_FOCUS = _merge_unique(_AGENT_CORE, _ALL_TEACHER, _FILE_RO, _SUBTASK_PIPELINE, _WEB_FETCH, _ALL_BANK, _BANK_GRAPH)
+_GRAPH_FOCUS = _merge_unique(_AGENT_CORE, _ALL_TEACHER, _FILE_RO, _SUBTASK_PIPELINE, _WEB_FETCH, _ALL_GRAPH, _ALL_BANK)
 _COMPOSE_FOCUS = _merge_unique(
     _AGENT_CORE,
+    _ALL_TEACHER,
     _FILE_RO,
     _SUBTASK_PIPELINE,
     _WEB_FETCH,
     _ALL_MEMORY,
     _ALL_EXAM,
+    _ALL_TEMPLATE,
+    _ALL_PAPER,
     _ALL_BANK,
     _COMPOSE_GRAPH,
     ("file.write", "file.edit"),
 )
-_DOC_FOCUS = _merge_unique(_AGENT_CORE, _FILE_RO, _SUBTASK_PIPELINE, _WEB_FETCH, _ALL_FILE, _ALL_DOC)
-_GENERAL_FOCUS = _merge_unique(_AGENT_CORE, _FILE_RO, _WEB_FETCH, _GENERAL_DOMAIN)
+_DOC_FOCUS = _merge_unique(_AGENT_CORE, _ALL_TEACHER, _FILE_RO, _SUBTASK_PIPELINE, _WEB_FETCH, _ALL_FILE, _ALL_DOC)
+_TEMPLATE_FOCUS = _merge_unique(_AGENT_CORE, _ALL_TEACHER, _FILE_RO, _ALL_TEMPLATE, _ALL_EXAM)
+_PAPER_FOCUS = _merge_unique(_AGENT_CORE, _ALL_TEACHER, _FILE_RO, _ALL_PAPER, _ALL_EXAM, _ALL_ANALYSIS)
+_GENERAL_FOCUS = _merge_unique(_AGENT_CORE, _ALL_TEACHER, _FILE_RO, _WEB_FETCH, _GENERAL_DOMAIN)
 
 
 def get_registered_tool(tool_name: str) -> RegisteredTool | None:
@@ -137,6 +147,8 @@ FOCUS_PRESETS: dict[str, tuple[str, ...]] = {
     "bank": _BANK_FOCUS,
     "graph": _GRAPH_FOCUS,
     "compose": _COMPOSE_FOCUS,
+    "template": _TEMPLATE_FOCUS,
+    "paper": _PAPER_FOCUS,
     "doc_process": _DOC_FOCUS,
 }
 

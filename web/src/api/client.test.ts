@@ -1,0 +1,28 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { apiAgentChatStream } from "./client";
+
+const PLATFORM_SESSION_STORAGE_KEY = "solaire.platform.session";
+
+describe("apiAgentChatStream", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it("sends the current platform bearer token for protected teacher chat", async () => {
+    localStorage.setItem(PLATFORM_SESSION_STORAGE_KEY, "teacher-token");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('event: done\ndata: {"usage":{}}\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await apiAgentChatStream({ message: "hello" }, () => undefined);
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer teacher-token");
+  });
+});

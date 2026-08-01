@@ -410,6 +410,7 @@ async def run_agent_turn(
         session=session,
         public_mode=bool(project_ctx.get("_public_mode")),
         host_control_authorized=bool(project_ctx.get("_host_control_authorized", True)),
+        platform_user=project_ctx.get("_platform_user") if isinstance(project_ctx.get("_platform_user"), dict) else None,
     )
     cm = ContextManager(include_subtask_tool=True)
     full_ctx = {**project_ctx, "_project_root": project_root}
@@ -837,4 +838,3 @@ async def iter_agent_turn_sse(
         ev, data = item
         yield f"event: {ev}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
     await task
-

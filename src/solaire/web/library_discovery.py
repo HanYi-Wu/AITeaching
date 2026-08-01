@@ -35,16 +35,25 @@ def discover_question_library_refs(project_root: Path) -> list[dict[str, str]]:
 
 def library_root_for_namespace(project_root: Path, namespace: str) -> Path:
     """Absolute directory for one library（namespace = 科目/题集；``main`` 表示 ``resource/`` 根）。"""
-    resource = project_root / "resource"
-    if namespace == "main":
-        return resource.resolve()
-    parts = namespace.split("/")
+    resource = (project_root / "resource").resolve()
+    clean = namespace.strip().replace("\\", "/")
+    if clean == "main":
+        return resource
+    parts = clean.split("/")
+    if any(not part or part in {".", ".."} or ":" in part for part in parts):
+        raise ValueError(f"Invalid namespace: {namespace!r}")
     if len(parts) == 2:
-        return (resource / parts[0] / parts[1]).resolve()
-    if len(parts) == 1:
+        candidate = (resource / parts[0] / parts[1]).resolve()
+    elif len(parts) == 1:
         # 单层目录名（旧数据或误放）：当作 resource/<name>
-        return (resource / parts[0]).resolve()
-    raise ValueError(f"Invalid namespace (expect 科目/题集): {namespace!r}")
+        candidate = (resource / parts[0]).resolve()
+    else:
+        raise ValueError(f"Invalid namespace (expect 科目/题集): {namespace!r}")
+    try:
+        candidate.relative_to(resource)
+    except ValueError as exc:
+        raise ValueError(f"Namespace must stay inside resource/: {namespace!r}") from exc
+    return candidate
 
 
 def split_qualified_id(qualified_id: str) -> tuple[str, str]:

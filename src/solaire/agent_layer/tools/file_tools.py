@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from solaire.agent_layer.attachments import TEXT_SUFFIXES, extract_attachment
 from solaire.agent_layer.models import InvocationContext, ToolResult
 from solaire.agent_layer.plan_document import normalize_rel_path, validate_plan_markdown_body
 from solaire.common.security import assert_within_project
@@ -62,6 +63,25 @@ def tool_file_read(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
         return ToolResult(status="failed", error_message=str(e))
     if not p.is_file():
         return ToolResult(status="failed", error_message=f"文件不存在: {rel}")
+    if p.suffix.lower() not in TEXT_SUFFIXES:
+        extracted = extract_attachment(p)
+        if extracted.error_code:
+            message = " ".join(part for part in (extracted.error, extracted.suggestion) if part)
+            return ToolResult(
+                status="failed",
+                error_code=extracted.error_code,
+                error_message=message,
+                data={"path": rel, "suggestion": extracted.suggestion},
+            )
+        return ToolResult(
+            data={
+                "path": rel,
+                "kind": extracted.kind,
+                "content": extracted.content,
+                "truncated": extracted.truncated,
+                "metadata": extracted.metadata,
+            }
+        )
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
     except Exception as e:

@@ -47,6 +47,7 @@ import { useAgentContext } from "../contexts/AgentContext";
 import { confirmDialog } from "../lib/confirmDialog";
 import { isImeComposingKeyboardEvent } from "../lib/ime";
 import i18n from "../i18n/i18n";
+import { AGENT_UPLOAD_ACCEPT, formatUploadFailure } from "./agentUpload";
 
 type FileAttachment = { path: string; mime_type: string | null; original_name: string };
 
@@ -528,7 +529,7 @@ export function AgentChatPanel({
         } catch (e) {
           setLines((prev) => [
             ...prev,
-            { kind: "system", text: i18n.t("agent:uploadFail", { name: f.name }) },
+            { kind: "system", text: i18n.t("agent:uploadFail", { name: formatUploadFailure(f.name, e) }) },
           ]);
         }
       }
@@ -1084,7 +1085,7 @@ export function AgentChatPanel({
           type="file"
           multiple
           className="hidden"
-          accept=".txt,.md,.yaml,.yml,.csv,.json,.xml,.docx,.doc,.pdf,.png,.jpg,.jpeg,.gif"
+          accept={AGENT_UPLOAD_ACCEPT}
           onChange={(e) => {
             const files = Array.from(e.target.files ?? []);
             if (files.length > 0) setPendingFiles((prev) => [...prev, ...files]);

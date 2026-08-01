@@ -52,6 +52,7 @@ class PendingConfirmation(BaseModel):
 
 class SessionState(BaseModel):
     session_id: str
+    owner_user_id: str | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     messages: list[ChatMessage] = Field(default_factory=list)
@@ -92,6 +93,7 @@ class InvocationContext(BaseModel):
     max_subagent_tool_rounds: int = 8
     public_mode: bool = False
     host_control_authorized: bool = True
+    platform_user: dict[str, Any] | None = None
 
     def approved_key(self, tool_name: str, args: dict[str, Any]) -> str:
         import json

@@ -298,20 +298,11 @@ def tool_export_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResul
     )
 
 
-def _platform_actor() -> dict[str, Any] | None:
-    root = default_platform_root()
-    init_platform_db(root)
-    with connect(root) as con:
-        row = con.execute(
-            """
-            SELECT id, school_id, role, username, display_name, email, status
-            FROM users
-            WHERE status = 'active' AND role IN ('admin', 'teacher')
-            ORDER BY CASE WHEN role = 'teacher' THEN 0 ELSE 1 END, created_at DESC
-            LIMIT 1
-            """
-        ).fetchone()
-    return row_to_dict(row)
+def _platform_actor(ctx: InvocationContext) -> dict[str, Any] | None:
+    actor = ctx.platform_user
+    if not actor or actor.get("role") not in {"admin", "teacher"} or actor.get("status") != "active":
+        return None
+    return dict(actor)
 
 
 def _split_name_terms(value: object) -> list[str]:
@@ -455,7 +446,7 @@ def _resolve_class_ids(root: Path, actor: dict[str, Any], args: dict[str, Any]) 
 
 
 def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
-    actor = _platform_actor()
+    actor = _platform_actor(ctx)
     if actor is None:
         return ToolResult(
             status="failed",
@@ -496,7 +487,7 @@ def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> T
 
 
 def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
-    actor = _platform_actor()
+    actor = _platform_actor(ctx)
     if actor is None:
         return ToolResult(
             status="failed",
@@ -538,7 +529,7 @@ def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> T
 
 
 def tool_ai_grade_submission(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
-    actor = _platform_actor()
+    actor = _platform_actor(ctx)
     if actor is None:
         return ToolResult(
             status="failed",

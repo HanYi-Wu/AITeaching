@@ -18,8 +18,13 @@ PASSWORDS = {
     "demo_admin": "demo123",
     "demo_school": "school123",
     "demo_teacher": "teacher123",
+    "demo_teacher2": "teacher123",
+    "demo_teacher3": "teacher123",
     "demo_student": "student123",
     "demo_student2": "student123",
+    "demo_student3": "student123",
+    "demo_student4": "student123",
+    "demo_student5": "student123",
 }
 
 
@@ -35,9 +40,10 @@ def upsert_user(
     role: str,
     display_name: str,
     school_id: str | None = None,
+    must_change_password: bool | None = None,
 ) -> dict[str, object]:
     now = utc_now()
-    must_change_password = 1 if role == "student" else 0
+    must_change = int(role == "student") if must_change_password is None else int(must_change_password)
     with connect(root) as con:
         row = con.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         if row is None:
@@ -50,7 +56,7 @@ def upsert_user(
                 )
                 VALUES (?, ?, ?, ?, ?, ?, NULL, 'active', ?, ?, ?)
                 """,
-                (user_id, school_id, role, username, hash_password(password), display_name, must_change_password, now, now),
+                (user_id, school_id, role, username, hash_password(password), display_name, must_change, now, now),
             )
         else:
             user_id = str(row["id"])
@@ -61,7 +67,7 @@ def upsert_user(
                     must_change_password = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (school_id, role, hash_password(password), display_name, must_change_password, now, user_id),
+                (school_id, role, hash_password(password), display_name, must_change, now, user_id),
             )
         updated = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     user = row_to_dict(updated)
@@ -349,12 +355,8 @@ def seed_demo_attempts(root: Path, *, publication_id: str, class_id: str) -> Non
                 )
 
 
-def main() -> None:
-    platform_root = default_platform_root()
-    project_root = state.default_content_root()
+def seed_demo_accounts(platform_root: Path) -> dict[str, object]:
     init_platform_db(platform_root)
-    ensure_project_layout(project_root)
-
     school = get_or_create_school(platform_root)
     school_id = str(school["id"])
     klass = get_or_create_class(platform_root, school_id)
@@ -375,49 +377,55 @@ def main() -> None:
         display_name="演示学校端",
         school_id=school_id,
     )
-    teacher = upsert_user(
-        platform_root,
-        username="demo_teacher",
-        password=PASSWORDS["demo_teacher"],
-        role="teacher",
-        display_name="演示教师",
-        school_id=school_id,
-    )
-    student_user = upsert_user(
-        platform_root,
-        username="demo_student",
-        password=PASSWORDS["demo_student"],
-        role="student",
-        display_name="演示学生",
-        school_id=school_id,
-    )
-    student_user2 = upsert_user(
-        platform_root,
-        username="demo_student2",
-        password=PASSWORDS["demo_student2"],
-        role="student",
-        display_name="演示学生二",
-        school_id=school_id,
-    )
-    ensure_student(
-        platform_root,
-        school_id=school_id,
-        class_id=class_id,
-        user_id=str(student_user["id"]),
-        student_no="S001",
-        display_name="演示学生",
-        initial_password=PASSWORDS["demo_student"],
-    )
-    ensure_student(
-        platform_root,
-        school_id=school_id,
-        class_id=class_id,
-        user_id=str(student_user2["id"]),
-        student_no="S002",
-        display_name="演示学生二",
-        initial_password=PASSWORDS["demo_student2"],
-    )
-    ensure_teacher_links(platform_root, school_id=school_id, teacher_id=str(teacher["id"]), class_id=class_id)
+    teachers: list[dict[str, object]] = []
+    for index, username in enumerate(("demo_teacher", "demo_teacher2", "demo_teacher3"), start=1):
+        teacher = upsert_user(
+            platform_root,
+            username=username,
+            password=PASSWORDS[username],
+            role="teacher",
+            display_name=f"演示教师{index}",
+            school_id=school_id,
+        )
+        ensure_teacher_links(platform_root, school_id=school_id, teacher_id=str(teacher["id"]), class_id=class_id)
+        teachers.append(teacher)
+
+    students: list[dict[str, object]] = []
+    for index, username in enumerate(
+        ("demo_student", "demo_student2", "demo_student3", "demo_student4", "demo_student5"),
+        start=1,
+    ):
+        display_name = f"演示学生{index}"
+        student_user = upsert_user(
+            platform_root,
+            username=username,
+            password=PASSWORDS[username],
+            role="student",
+            display_name=display_name,
+            school_id=school_id,
+            must_change_password=False,
+        )
+        student = ensure_student(
+            platform_root,
+            school_id=school_id,
+            class_id=class_id,
+            user_id=str(student_user["id"]),
+            student_no=f"S{index:03d}",
+            display_name=display_name,
+            initial_password=PASSWORDS[username],
+        )
+        students.append(student)
+
+    return {"school": school, "class": klass, "teachers": teachers, "students": students}
+
+
+def main() -> None:
+    platform_root = default_platform_root()
+    project_root = state.default_content_root()
+    ensure_project_layout(project_root)
+    seeded = seed_demo_accounts(platform_root)
+    teacher = seeded["teachers"][0]
+    class_id = str(seeded["class"]["id"])
 
     online_exam = write_exam(project_root, label="demo-online", title="演示线上答题")
     image_exam = write_exam(project_root, label="demo-image", title="演示图片AI批改")

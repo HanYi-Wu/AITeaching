@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -19,8 +20,21 @@ def new_session_id() -> str:
     return uuid.uuid4().hex
 
 
+def _validated_session_id(session_id: str) -> str:
+    value = str(session_id).strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value) is None:
+        raise ValueError("Invalid agent session id")
+    return value
+
+
 def session_path(project_root: Path, session_id: str) -> Path:
-    return sessions_dir(project_root) / f"{session_id}.json"
+    root = sessions_dir(project_root).resolve()
+    path = (root / f"{_validated_session_id(session_id)}.json").resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Agent session path must stay inside sessions directory") from exc
+    return path
 
 
 def load_session(project_root: Path, session_id: str) -> SessionState | None:
@@ -36,19 +50,21 @@ def save_session(project_root: Path, session: SessionState) -> None:
     p.write_text(session.model_dump_json(indent=2), encoding="utf-8")
 
 
-def create_session(project_root: Path) -> SessionState:
+def create_session(project_root: Path, *, owner_user_id: str | None = None) -> SessionState:
     sid = new_session_id()
-    s = SessionState(session_id=sid)
+    s = SessionState(session_id=sid, owner_user_id=owner_user_id)
     save_session(project_root, s)
     return s
 
 
-def list_sessions(project_root: Path, *, limit: int = 50) -> list[dict]:
+def list_sessions(project_root: Path, *, limit: int = 50, owner_user_id: str | None = None) -> list[dict]:
     out: list[dict] = []
     d = sessions_dir(project_root)
     for p in sorted(d.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
         try:
             s = SessionState.model_validate(json.loads(p.read_text(encoding="utf-8")))
+            if owner_user_id is not None and s.owner_user_id != owner_user_id:
+                continue
             title = ""
             for m in s.messages:
                 if m.role == "user" and (m.content or "").strip():

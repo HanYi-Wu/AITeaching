@@ -33,7 +33,7 @@ def _write_ai_tool_exam(root: Path) -> str:
     return exam_id
 
 
-def _setup_teacher_paper(client: TestClient, root: Path) -> str:
+def _setup_teacher_paper(client: TestClient, root: Path) -> tuple[str, dict[str, object]]:
     admin = client.post(
         "/api/auth/bootstrap-admin",
         json={"username": "admin", "password": "secret123", "display_name": "Administrator"},
@@ -72,7 +72,7 @@ def _setup_teacher_paper(client: TestClient, root: Path) -> str:
     teacher_headers = _headers(str(teacher_login.json()["token"]))
     listed = client.get("/api/papers", headers=teacher_headers)
     assert listed.status_code == 200
-    return listed.json()["papers"][0]["paper_id"]
+    return listed.json()["papers"][0]["paper_id"], teacher_login.json()["user"]
 
 
 def test_teacher_ai_tools_include_online_publish_and_grading() -> None:
@@ -117,11 +117,12 @@ def test_compose_focus_exposes_publish_and_analysis_focus_exposes_ai_grading() -
 
 
 def test_teacher_ai_publish_tool_resolves_paper_title_and_class_name(web_client: TestClient, tmp_path: Path) -> None:
-    paper_id = _setup_teacher_paper(web_client, tmp_path)
+    paper_id, teacher_user = _setup_teacher_paper(web_client, tmp_path)
     ctx = InvocationContext(
         project_root=tmp_path,
         session_id="ai-tool-publish",
         session=SessionState(session_id="ai-tool-publish", current_focus="compose"),
+        platform_user=teacher_user,
     )
 
     result = invoke_registered_tool(

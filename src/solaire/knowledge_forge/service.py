@@ -637,6 +637,18 @@ def set_taxonomy(project_root: Path, *, subjects: list[str] | None, levels: list
                 if not sp.is_file():
                     _save_subject_state(project_root, slug, GraphState())
     _save_meta(project_root, meta)
+    # Keep the per-graph compatibility fields in sync.  ``get_taxonomy`` still
+    # reads these fields for projects created before the multi-graph metadata
+    # file existed, so updating only meta.yaml made a successful write appear
+    # to be ignored on the next read.
+    taxonomy_subjects = [sm.display_name for sm in meta.subjects]
+    for subject_meta in meta.subjects:
+        state = _load_subject_state(project_root, subject_meta.slug)
+        if subjects is not None:
+            state.taxonomy.subjects = taxonomy_subjects
+        if levels is not None:
+            state.taxonomy.levels = list(meta.levels)
+        _save_subject_state(project_root, subject_meta.slug, state)
 
 
 # ---------------------------------------------------------------------------

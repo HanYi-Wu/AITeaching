@@ -9,6 +9,13 @@ import yaml
 
 from solaire.exam_compiler.models import QuestionItem
 from solaire.web.bank_service import delete_question_collection, import_merged_yaml, rename_question_collection
+from solaire.web.library_discovery import library_root_for_namespace
+
+
+def test_question_collection_namespace_cannot_escape_resource(tmp_path: Path) -> None:
+    for namespace in ("..", "../templates", "math/..", "C:/Windows", "/absolute"):
+        with pytest.raises(ValueError):
+            library_root_for_namespace(tmp_path, namespace)
 
 
 def _q() -> QuestionItem:

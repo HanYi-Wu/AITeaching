@@ -227,10 +227,13 @@ async function parseDetailFromResponse(r: Response): Promise<{
     }
     if (j.detail && typeof j.detail === "object" && !Array.isArray(j.detail)) {
       const d = j.detail as Record<string, unknown>;
-      const msg =
+      let msg =
         typeof d.message === "string" && d.message.trim()
           ? d.message
           : r.statusText || "Request failed";
+      if (typeof d.suggestion === "string" && d.suggestion.trim()) {
+        msg = `${msg} ${d.suggestion}`;
+      }
       const raw = d.exam_saved ?? d.draft_saved;
       let examSaved: ExamSavedPayload | undefined;
       if (raw && typeof raw === "object" && raw !== null) {
@@ -1098,8 +1101,7 @@ export async function apiAgentChatStream(
   onEvent: (event: string, data: Record<string, unknown>) => void,
   options?: { signal?: AbortSignal },
 ): Promise<void> {
-  await ensureApiBase();
-  const r = await fetch(joinApi("/api/agent/chat"), {
+  const r = await fetchWithLog("/api/agent/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify(body),

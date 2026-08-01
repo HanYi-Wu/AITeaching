@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -26,11 +27,13 @@ from solaire.agent_layer.cancel_signal import clear_cancel, request_cancel
 from solaire.agent_layer.orchestrator import iter_agent_turn_sse
 from solaire.agent_layer.skills import list_skills_public
 from solaire.agent_layer.context_meter import context_meter_for_session
+from solaire.agent_layer.attachments import SUPPORTED_UPLOAD_SUFFIXES, capability_for_filename
 from solaire.agent_layer.session import create_session, delete_session, list_sessions, load_session
 from solaire.knowledge_forge import list_graphs
 from solaire.web import state
+from solaire.web.actor_scope import teacher_graph_root
 from solaire.web.result_service import list_exam_results
-from solaire.web.public_access import public_mode_enabled
+from solaire.web.public_access import _authenticated_user, public_mode_enabled
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -44,7 +47,7 @@ def _require_root() -> Path:
     return r
 
 
-def _project_ctx(root: Path) -> dict[str, Any]:
+def _project_ctx(root: Path, platform_user: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         exams = list_exam_results(root)
         exam_summary = f"{len(exams)} 场考试记录" if exams else "暂无考试结果"
@@ -55,7 +58,7 @@ def _project_ctx(root: Path) -> dict[str, Any]:
     if td.is_dir():
         template_count = len(list(td.rglob("*.yaml")))
     try:
-        graphs = list_graphs(root)
+        graphs = list_graphs(teacher_graph_root(root, platform_user))
         total_node_count = sum(g.get("node_count", 0) for g in graphs)
         graph_subjects = [{"slug": g["slug"], "name": g["display_name"], "nodes": g["node_count"]} for g in graphs]
     except Exception:
@@ -69,6 +72,25 @@ def _project_ctx(root: Path) -> dict[str, Any]:
         "graph_node_count": total_node_count,
         "graph_subjects": graph_subjects,
     }
+
+
+def _request_actor(request: Request) -> dict[str, Any] | None:
+    actor = getattr(request.state, "platform_user", None)
+    return actor if isinstance(actor, dict) else _authenticated_user(request)
+
+
+def _actor_id(request: Request) -> str | None:
+    actor = _request_actor(request)
+    value = str((actor or {}).get("id") or "").strip()
+    return value or None
+
+
+def _owned_session(root: Path, session_id: str, request: Request):
+    session = load_session(root, session_id)
+    owner_id = _actor_id(request)
+    if session is None or (owner_id is not None and session.owner_user_id != owner_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return session
 
 
 class AgentPageContextBody(BaseModel):
@@ -251,40 +273,37 @@ def agent_skills_list() -> dict[str, Any]:
 
 
 @router.get("/sessions")
-def agent_sessions_list() -> dict[str, Any]:
+def agent_sessions_list(request: Request) -> dict[str, Any]:
     root = _require_root()
-    return {"sessions": list_sessions(root)}
+    return {"sessions": list_sessions(root, owner_user_id=_actor_id(request))}
 
 
 @router.post("/sessions")
-def agent_sessions_create() -> dict[str, Any]:
+def agent_sessions_create(request: Request) -> dict[str, Any]:
     root = _require_root()
-    s = create_session(root)
+    s = create_session(root, owner_user_id=_actor_id(request))
     return {"session_id": s.session_id, "created_at": s.created_at}
 
 
 @router.get("/sessions/{session_id}")
-def agent_session_get(session_id: str) -> dict[str, Any]:
+def agent_session_get(session_id: str, request: Request) -> dict[str, Any]:
     root = _require_root()
-    s = load_session(root, session_id)
-    if s is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    s = _owned_session(root, session_id, request)
     return {"session": s.model_dump(mode="json")}
 
 
 @router.get("/sessions/{session_id}/context-meter")
-def agent_session_context_meter(session_id: str) -> dict[str, Any]:
+def agent_session_context_meter(session_id: str, request: Request) -> dict[str, Any]:
     """按当前会话与内容上下文估算上下文用量（与 SSE `context_metrics` 同源逻辑）。"""
     root = _require_root()
-    s = load_session(root, session_id)
-    if s is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    return context_meter_for_session(root, s, project_ctx=_project_ctx(root))
+    s = _owned_session(root, session_id, request)
+    return context_meter_for_session(root, s, project_ctx=_project_ctx(root, _request_actor(request)))
 
 
 @router.delete("/sessions/{session_id}")
-def agent_session_delete(session_id: str) -> dict[str, Any]:
+def agent_session_delete(session_id: str, request: Request) -> dict[str, Any]:
     root = _require_root()
+    _owned_session(root, session_id, request)
     ok = delete_session(root, session_id)
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -292,10 +311,9 @@ def agent_session_delete(session_id: str) -> dict[str, Any]:
 
 
 @router.post("/sessions/{session_id}/cancel")
-def agent_session_cancel(session_id: str) -> dict[str, Any]:
+def agent_session_cancel(session_id: str, request: Request) -> dict[str, Any]:
     root = _require_root()
-    if load_session(root, session_id) is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    _owned_session(root, session_id, request)
     request_cancel(session_id)
     return {"ok": True}
 
@@ -338,24 +356,57 @@ def agent_memory_topic_put(topic: str, body: MemoryPutBody) -> dict[str, Any]:
 
 # --- Phase 2: File upload ---
 
-_ALLOWED_UPLOAD_SUFFIXES = {
-    ".txt", ".md", ".yaml", ".yml", ".csv", ".json", ".xml",
-    ".docx", ".doc", ".pdf", ".png", ".jpg", ".jpeg", ".gif",
-}
 _MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
+@router.get("/upload-capabilities")
+def agent_upload_capabilities() -> dict[str, Any]:
+    formats = []
+    for suffix in sorted(SUPPORTED_UPLOAD_SUFFIXES):
+        capability = capability_for_filename(f"file{suffix}")
+        formats.append(
+            {
+                "extension": suffix,
+                "kind": capability.kind,
+                "strategy": capability.strategy,
+                "suggestion": capability.suggestion,
+            }
+        )
+    return {
+        "accepted_extensions": sorted(SUPPORTED_UPLOAD_SUFFIXES),
+        "max_bytes": _MAX_UPLOAD_SIZE,
+        "formats": formats,
+    }
+
+
 @router.post("/upload")
-async def agent_upload(file: UploadFile = File(...), session_id: str | None = None) -> dict[str, Any]:
+async def agent_upload(file: UploadFile = File(...), session_id: str | None = Form(None)) -> dict[str, Any]:
     root = _require_root()
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名不能为空")
     suffix = Path(file.filename).suffix.lower()
-    if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
-        raise HTTPException(status_code=400, detail=f"不支持的文件类型: {suffix}")
-    content = await file.read()
-    if len(content) > _MAX_UPLOAD_SIZE:
-        raise HTTPException(status_code=400, detail="文件大小超过 10MB 限制")
+    capability = capability_for_filename(file.filename)
+    if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "unsupported_file_type",
+                "message": f"不支持的文件类型: {suffix or '(无扩展名)'}",
+                "extension": suffix,
+                "supported_extensions": sorted(SUPPORTED_UPLOAD_SUFFIXES),
+                "suggestion": capability.suggestion,
+            },
+        )
+    chunks: list[bytes] = []
+    total_size = 0
+    while chunk := await file.read(1024 * 1024):
+        total_size += len(chunk)
+        if total_size > _MAX_UPLOAD_SIZE:
+            raise HTTPException(status_code=400, detail="文件大小超过 10MB 限制")
+        chunks.append(chunk)
+    content = b"".join(chunks)
+    if session_id and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_id) is None:
+        raise HTTPException(status_code=400, detail="无效的会话标识")
     sid = session_id or uuid.uuid4().hex[:12]
     upload_dir = root / ".solaire" / "uploads" / sid
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -373,6 +424,11 @@ async def agent_upload(file: UploadFile = File(...), session_id: str | None = No
         "mime_type": file.content_type,
         "original_name": file.filename,
         "size": len(content),
+        "capability": {
+            "kind": capability.kind,
+            "strategy": capability.strategy,
+            "suggestion": capability.suggestion,
+        },
     }
 
 
@@ -407,17 +463,21 @@ def agent_prompt_overrides_put(body: PromptOverridePutBody) -> dict[str, Any]:
 @router.post("/chat")
 async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse:
     root = _require_root()
+    platform_user = _request_actor(request)
+    owner_id = _actor_id(request)
     s = load_session(root, body.session_id) if body.session_id else None
+    if s is not None and owner_id is not None and s.owner_user_id != owner_id:
+        raise HTTPException(status_code=404, detail="会话不存在")
     if s is None:
         if body.session_id:
             raise HTTPException(status_code=404, detail="会话不存在")
-        s = create_session(root)
+        s = create_session(root, owner_user_id=owner_id)
     if (body.message is None or not str(body.message).strip()) and body.confirm_action_id is None:
         raise HTTPException(status_code=400, detail="message 或 confirm_action_id 必填其一")
 
     clear_cancel(s.session_id)
 
-    ctx = _project_ctx(root)
+    ctx = _project_ctx(root, platform_user)
     is_public = public_mode_enabled()
     ctx = {
         **ctx,
@@ -425,6 +485,7 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
         "_host_control_authorized": (
             not is_public or bool(getattr(request.state, "host_control_authorized", False))
         ),
+        "_platform_user": platform_user,
     }
     if body.page_context is not None:
         ctx = {**ctx, "page_context": body.page_context.model_dump(exclude_none=True)}
@@ -442,8 +503,14 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
         attachment_lines = ["\n\n📎 附件文件："]
         for att in body.file_attachments:
             name = att.original_name or Path(att.path).name
+            capability = capability_for_filename(name)
+            attachment_lines.append(f"- 处理能力：{capability.strategy}；{capability.suggestion}")
             attachment_lines.append(f"- `{att.path}`（{name}，{att.mime_type or '未知类型'}）")
         attachment_lines.append("请根据文件类型选择合适的工具处理（如 file.read、doc.convert_to_markdown 等）。")
+        attachment_lines.append(
+            "先用 file.read 读取可内置解析的附件；图片需要时切换到 doc_process 后用 doc.ocr_image。"
+            "若用户要求维护知识图谱，请切换到 graph 聚焦域并实际调用图谱工具。"
+        )
         user_msg += "\n".join(attachment_lines)
 
     async def gen():

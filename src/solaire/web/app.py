@@ -36,6 +36,7 @@ from solaire.primebrush.api import parse_primebrush, render as render_primebrush
 
 from solaire.web import bundled_paths, extension_registry, help_docs, recent_projects, state, system_tools
 from solaire.web.agent_api import router as agent_router
+from solaire.web.actor_scope import teacher_graph_root
 from solaire.web.auth_api import extract_session_token, require_platform_root, router as auth_router
 from solaire.web.auth_service import get_session_user
 from solaire.web.bank_exchange import export_bank_exchange_zip, import_bank_exchange_zip
@@ -173,12 +174,7 @@ _graph_request_user: contextvars.ContextVar[dict[str, Any] | None] = contextvars
 
 
 def _teacher_graph_root(content_root: Path, user: dict[str, Any] | None) -> Path:
-    if not user or user.get("role") != "teacher":
-        return content_root
-    teacher_id = safe_filename_component(str(user.get("id") or "teacher"))
-    root = content_root / ".solaire" / "teacher_graphs" / teacher_id
-    ensure_project_layout(root)
-    return root
+    return teacher_graph_root(content_root, user)
 
 
 def _require_root() -> Path:

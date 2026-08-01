@@ -17,6 +17,7 @@ from solaire.agent_layer.tools import (
     memory_tools,
     pipeline_tools,
     session_tools,
+    teacher_tools,
     web_tools,
 )
 
@@ -1072,6 +1073,54 @@ _RAW_TOOLS: list[RegisteredTool] = [
         ui_label="正在识别图片文字…",
     ),
 ]
+
+
+def _teacher_schema(
+    properties: dict[str, dict[str, Any]] | None = None,
+    required: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties or {},
+        "required": required or [],
+        "additionalProperties": False,
+    }
+
+
+_S = {"type": "string"}
+_RAW_TOOLS.extend(
+    [
+        _fn("teacher.list_capabilities", "列出教师可通过 AI 完成的操作及必须人工确认的安全操作。", _teacher_schema(), teacher_tools.tool_list_capabilities, risk=ToolRisk.READ),
+        _fn("teacher.operation_guide", "返回某项高风险人工操作的前置条件、完整步骤和安全提醒。", _teacher_schema({"capability_id": _S}, ["capability_id"]), teacher_tools.tool_operation_guide, risk=ToolRisk.READ),
+        _fn("graph.rename_graph", "重命名当前教师自己的知识图谱。", _teacher_schema({"slug": _S, "display_name": _S}, ["slug", "display_name"]), teacher_tools.tool_graph_rename),
+        _fn("graph.get_taxonomy", "读取当前教师知识图谱的学科和年级分类。", _teacher_schema(), teacher_tools.tool_graph_get_taxonomy, risk=ToolRisk.READ),
+        _fn("graph.set_taxonomy", "配置当前教师知识图谱的学科和年级分类。", _teacher_schema({"subjects": {"type": "array", "items": _S}, "levels": {"type": "array", "items": _S}}), teacher_tools.tool_graph_set_taxonomy),
+        _fn("graph.unbind_question", "解除题目与知识点的关联。", _teacher_schema({"question_qualified_id": _S, "node_id": _S, "graph": _S}, ["question_qualified_id", "node_id"]), teacher_tools.tool_graph_unbind_question),
+        _fn("graph.detach_resource", "移除知识点上的资源链接，不删除原始资源文件。", _teacher_schema({"link_id": _S, "graph": _S}, ["link_id"]), teacher_tools.tool_graph_detach_resource),
+        _fn("bank.delete_item", "删除一道题目。", _teacher_schema({"qualified_id": _S, "storage_path": _S}, ["qualified_id"]), teacher_tools.tool_bank_delete_item, risk=ToolRisk.DESTRUCTIVE),
+        _fn("bank.rename_collection", "重命名或移动一个题集。", _teacher_schema({"namespace": _S, "new_subject": _S, "new_collection": _S}, ["namespace", "new_subject", "new_collection"]), teacher_tools.tool_bank_rename_collection),
+        _fn("bank.delete_collection", "删除整个题集及其题目文件。", _teacher_schema({"namespace": _S}, ["namespace"]), teacher_tools.tool_bank_delete_collection, risk=ToolRisk.DESTRUCTIVE),
+        _fn("template.list", "列出当前项目中的试卷模板文件。", _teacher_schema(), teacher_tools.tool_template_list, risk=ToolRisk.READ),
+        _fn("template.get", "读取一个试卷模板文件。", _teacher_schema({"path": _S}, ["path"]), teacher_tools.tool_template_get, risk=ToolRisk.READ),
+        _fn("template.create", "创建试卷模板文件。", _teacher_schema({"path": _S, "content": _S}, ["path", "content"]), teacher_tools.tool_template_create),
+        _fn("template.update", "更新试卷模板文件。", _teacher_schema({"path": _S, "content": _S}, ["path", "content"]), teacher_tools.tool_template_update),
+        _fn("template.rename", "重命名试卷模板文件。", _teacher_schema({"path": _S, "new_path": _S}, ["path", "new_path"]), teacher_tools.tool_template_rename),
+        _fn("template.delete", "删除试卷模板文件。", _teacher_schema({"path": _S}, ["path"]), teacher_tools.tool_template_delete, risk=ToolRisk.DESTRUCTIVE),
+        _fn("exam.workspace_list", "列出组卷工作区草稿。", _teacher_schema(), teacher_tools.tool_exam_workspace_list, risk=ToolRisk.READ),
+        _fn("exam.workspace_get", "读取一份组卷工作区草稿。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_get, risk=ToolRisk.READ),
+        _fn("exam.workspace_save", "创建或更新组卷工作区草稿。", _teacher_schema({"exam_id": _S, "name": _S, "subject": _S, "export_label": _S, "template_ref": _S, "template_path": _S, "selected_items": {"type": "array", "items": {"type": "object"}}}, ["subject", "export_label", "template_path", "selected_items"]), teacher_tools.tool_exam_workspace_save),
+        _fn("exam.workspace_delete", "删除组卷工作区草稿。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_delete, risk=ToolRisk.DESTRUCTIVE),
+        _fn("exam.workspace_copy", "从现有试卷复制一份新的组卷工作区。", _teacher_schema({"source_exam_id": _S, "export_label": _S}, ["source_exam_id", "export_label"]), teacher_tools.tool_exam_workspace_copy),
+        _fn("paper.list", "按关键字、学科、状态和交付模式查询当前教师的试卷。", _teacher_schema({"q": _S, "delivery_mode": _S, "status": _S, "subject": _S, "page": {"type": "integer"}, "page_size": {"type": "integer"}}), teacher_tools.tool_paper_list, risk=ToolRisk.READ),
+        _fn("paper.analyze", "分析试卷提交、成绩、用时和监考事件。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_analyze, risk=ToolRisk.READ),
+        _fn("paper.publications", "列出试卷的发布记录。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_publications, risk=ToolRisk.READ),
+        _fn("paper.submissions", "列出试卷答卷及答案。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_submissions, risk=ToolRisk.READ),
+        _fn("paper.update_delivery", "修改试卷的线上或线下交付模式。", _teacher_schema({"paper_id": _S, "delivery_mode": _S}, ["paper_id", "delivery_mode"]), teacher_tools.tool_paper_update_delivery),
+        _fn("paper.update_publication", "修改考试发布的标题、时间、时长、结果展示和状态。", _teacher_schema({"paper_id": _S, "publication_id": _S, "title": _S, "description": _S, "start_at": _S, "end_at": _S, "time_limit_minutes": {"type": "integer"}, "show_results_immediately": {"type": "boolean"}, "status": _S}, ["paper_id", "publication_id"]), teacher_tools.tool_paper_update_publication),
+        _fn("paper.revoke_publication", "撤销考试发布。", _teacher_schema({"paper_id": _S, "publication_id": _S}, ["paper_id", "publication_id"]), teacher_tools.tool_paper_revoke_publication, risk=ToolRisk.DESTRUCTIVE),
+        _fn("paper.manual_grade", "人工复核并保存一道主观题得分和反馈。", _teacher_schema({"paper_id": _S, "attempt_id": _S, "question_id": _S, "score": {"type": "number"}, "feedback": _S, "is_correct": {"type": "boolean"}}, ["paper_id", "attempt_id", "question_id", "score"]), teacher_tools.tool_paper_manual_grade),
+    ]
+)
 
 _CONFIRM_LABELS: dict[str, str] = {
     "exam.export_paper": "导出试卷文件",
