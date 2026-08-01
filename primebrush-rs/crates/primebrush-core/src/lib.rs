@@ -20,3 +20,46 @@ pub trait PrimeBrushPlugin: Send + Sync {
     fn type_names(&self) -> &'static [&'static str];
     fn render_svg(&self, doc: &DiagramPayload, seed: u64) -> Result<String, PrimeBrushError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    struct EchoPlugin;
+
+    impl PrimeBrushPlugin for EchoPlugin {
+        fn type_names(&self) -> &'static [&'static str] {
+            &["test_diagram"]
+        }
+
+        fn render_svg(&self, doc: &DiagramPayload, seed: u64) -> Result<String, PrimeBrushError> {
+            Ok(format!(
+                "<svg data-seed=\"{seed}\"><title>{}</title></svg>",
+                doc["title"].as_str().unwrap_or_default()
+            ))
+        }
+    }
+
+    #[test]
+    fn plugin_contract_reports_types_and_renders_deterministically() {
+        let plugin = EchoPlugin;
+        let payload = json!({"title": "triangle"});
+
+        assert_eq!(plugin.type_names(), &["test_diagram"]);
+        assert_eq!(
+            plugin.render_svg(&payload, 42).unwrap(),
+            "<svg data-seed=\"42\"><title>triangle</title></svg>"
+        );
+    }
+
+    #[test]
+    fn errors_have_stable_user_facing_messages() {
+        let unknown = PrimeBrushError::UnknownType("unsupported".to_owned());
+        assert_eq!(unknown.to_string(), "unknown diagram type: unsupported");
+
+        let serde_error = serde_json::from_str::<DiagramPayload>("{").unwrap_err();
+        let wrapped = PrimeBrushError::from(serde_error);
+        assert!(wrapped.to_string().starts_with("serialization:"));
+    }
+}

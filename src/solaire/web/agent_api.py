@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,7 @@ from solaire.agent_layer.session import create_session, delete_session, list_ses
 from solaire.knowledge_forge import list_graphs
 from solaire.web import state
 from solaire.web.result_service import list_exam_results
+from solaire.web.public_access import public_mode_enabled
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -404,7 +405,7 @@ def agent_prompt_overrides_put(body: PromptOverridePutBody) -> dict[str, Any]:
 
 
 @router.post("/chat")
-async def agent_chat(body: AgentChatBody) -> StreamingResponse:
+async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse:
     root = _require_root()
     s = load_session(root, body.session_id) if body.session_id else None
     if s is None:
@@ -417,6 +418,14 @@ async def agent_chat(body: AgentChatBody) -> StreamingResponse:
     clear_cancel(s.session_id)
 
     ctx = _project_ctx(root)
+    is_public = public_mode_enabled()
+    ctx = {
+        **ctx,
+        "_public_mode": is_public,
+        "_host_control_authorized": (
+            not is_public or bool(getattr(request.state, "host_control_authorized", False))
+        ),
+    }
     if body.page_context is not None:
         ctx = {**ctx, "page_context": body.page_context.model_dump(exclude_none=True)}
     if body.skill_id is not None and str(body.skill_id).strip():

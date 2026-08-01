@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   BarChart3,
@@ -13,20 +13,10 @@ import {
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
-import { AgentSidebar } from "./components/AgentSidebar";
 import { DesktopTitleBar } from "./components/DesktopTitleBar";
 import { ToolBar } from "./components/layout/ToolBar";
 import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
 import { ToolBarProvider, useToolBar } from "./contexts/ToolBarContext";
-import { AnalysisWorkspace } from "./pages/AnalysisWorkspace";
-import { HelpWorkspace } from "./pages/HelpWorkspace";
-import { AdminWorkspace } from "./pages/platform/AdminWorkspace";
-import { PapersWorkspace } from "./pages/platform/PapersWorkspace";
-import { PlatformLogin } from "./pages/platform/PlatformLogin";
-import { SchoolWorkspace } from "./pages/platform/SchoolWorkspace";
-import { StudentWorkspace } from "./pages/platform/StudentWorkspace";
-import { TeacherWorkspace } from "./pages/platform/TeacherWorkspace";
-import { SettingsWorkspace } from "./pages/SettingsWorkspace";
 import { apiGet } from "./api/client";
 import { dispatchSolaireSave } from "./lib/saveEvents";
 import { installImeCompositionTracker, isImeComposingKeyboardEvent } from "./lib/ime";
@@ -44,6 +34,37 @@ import {
 } from "./platform/auth";
 import { resolvePlatformRoute } from "./platform/routing";
 import type { ProjectInfo } from "./types/project";
+
+const AgentSidebar = lazy(() =>
+  import("./components/AgentSidebar").then((module) => ({ default: module.AgentSidebar })),
+);
+const AnalysisWorkspace = lazy(() =>
+  import("./pages/AnalysisWorkspace").then((module) => ({ default: module.AnalysisWorkspace })),
+);
+const HelpWorkspace = lazy(() =>
+  import("./pages/HelpWorkspace").then((module) => ({ default: module.HelpWorkspace })),
+);
+const SettingsWorkspace = lazy(() =>
+  import("./pages/SettingsWorkspace").then((module) => ({ default: module.SettingsWorkspace })),
+);
+const AdminWorkspace = lazy(() =>
+  import("./pages/platform/AdminWorkspace").then((module) => ({ default: module.AdminWorkspace })),
+);
+const PapersWorkspace = lazy(() =>
+  import("./pages/platform/PapersWorkspace").then((module) => ({ default: module.PapersWorkspace })),
+);
+const PlatformLogin = lazy(() =>
+  import("./pages/platform/PlatformLogin").then((module) => ({ default: module.PlatformLogin })),
+);
+const SchoolWorkspace = lazy(() =>
+  import("./pages/platform/SchoolWorkspace").then((module) => ({ default: module.SchoolWorkspace })),
+);
+const StudentWorkspace = lazy(() =>
+  import("./pages/platform/StudentWorkspace").then((module) => ({ default: module.StudentWorkspace })),
+);
+const TeacherWorkspace = lazy(() =>
+  import("./pages/platform/TeacherWorkspace").then((module) => ({ default: module.TeacherWorkspace })),
+);
 
 export default function App() {
   return (
@@ -81,8 +102,13 @@ function AppShell() {
   }, []);
 
   useEffect(() => {
+    if (platformLoading || platformStatus === null) return;
+    if (platformStatus.public_mode && currentUser === null) {
+      setInfo(null);
+      return;
+    }
     void refreshInfo();
-  }, [refreshInfo]);
+  }, [currentUser, platformLoading, platformStatus, refreshInfo]);
 
   useEffect(() => {
     setPlatformProjectRoot(info?.bound ? info.root : null);
@@ -187,9 +213,10 @@ function AppShell() {
       <DesktopTitleBar />
 
       <div className="relative flex min-h-0 flex-1">
+        <Suspense fallback={<AppLoadingFallback />}>
         {platformRoute === "loading" ? (
           <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-sm text-slate-500">
-            正在加载平台权限...
+            {t("app:loading.permissions")}
           </div>
         ) : platformRoute === "bootstrap" ? (
           <PlatformLogin mode="bootstrap" onAuthenticated={onAuthenticated} onError={setErr} />
@@ -237,11 +264,11 @@ function AppShell() {
                   />
                   <SidebarNavButton
                     icon={ClipboardList}
-                    label="试卷"
+                    label={t("app:nav.papers")}
                     active={page === "papers"}
                     onClick={() => setPage("papers")}
                     testId="nav-papers"
-                    title="试卷管理"
+                    title={t("app:nav.papersTitle")}
                   />
                   <SidebarNavButton
                     icon={BarChart3}
@@ -268,16 +295,16 @@ function AppShell() {
                   />
                   <SidebarNavButton
                     icon={Settings}
-                    label="设置"
+                    label={t("app:nav.settings")}
                     active={page === "settings"}
                     onClick={() => setPage("settings")}
-                    title="设置"
+                    title={t("app:nav.settingsTitle")}
                   />
                   <SidebarNavButton
                     icon={LogOut}
-                    label="退出"
+                    label={t("app:nav.logout")}
                     onClick={() => void onLogout()}
-                    title="退出登录"
+                    title={t("app:nav.logoutTitle")}
                   />
                 </div>
               </nav>
@@ -369,7 +396,17 @@ function AppShell() {
             </div>
           </TeacherWorkspace>
         )}
+        </Suspense>
       </div>
+    </div>
+  );
+}
+
+function AppLoadingFallback() {
+  const { t } = useTranslation("app");
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-sm text-slate-500">
+      {t("loading.workspace")}
     </div>
   );
 }

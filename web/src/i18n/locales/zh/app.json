@@ -3,6 +3,8 @@
   "errorBannerLogHint": "（完整说明见运行日志）",
   "nav": {
     "compose": "组卷",
+    "papers": "试卷",
+    "papersTitle": "试卷管理",
     "bank": "题库",
     "template": "模板",
     "graph": "知识图谱",
@@ -12,10 +14,16 @@
     "assistantTitle": "打开或收起智能助手侧栏",
     "settings": "设置",
     "settingsTitle": "智能助手模型服务参数",
+    "logout": "退出",
+    "logoutTitle": "退出登录",
     "help": "手册",
     "helpTitle": "使用说明与高级使用说明",
     "log": "日志",
     "logTitle": "运行日志"
+  },
+  "loading": {
+    "permissions": "正在加载平台权限…",
+    "workspace": "正在加载工作区…"
   },
   "menu": {
     "file": "文件",

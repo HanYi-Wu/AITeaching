@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-web-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Native rendering dependency
+        run: sudo apt-get update && sudo apt-get install -y libcairo2
+      - name: Install Python package
+        run: python -m pip install -e ".[dev,primebrush-pdf]"
+      - name: Python tests
+        run: python -m pytest tests
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Web tests and production build
+        working-directory: web
+        run: npm test && npm run build
+      - name: PrimeBrush Rust tests
+        working-directory: primebrush-rs
+        run: cargo test --workspace

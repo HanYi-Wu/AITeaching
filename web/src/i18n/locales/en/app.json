@@ -3,6 +3,8 @@
   "errorBannerLogHint": "(Full message in runtime log)",
   "nav": {
     "compose": "Compose",
+    "papers": "Papers",
+    "papersTitle": "Paper management",
     "bank": "Question bank",
     "template": "Templates",
     "graph": "Knowledge map",
@@ -12,10 +14,16 @@
     "assistantTitle": "Show or hide the assistant panel",
     "settings": "Settings",
     "settingsTitle": "Assistant model service",
+    "logout": "Sign out",
+    "logoutTitle": "Sign out of the platform",
     "help": "Manual",
     "helpTitle": "User guide and advanced topics",
     "log": "Log",
     "logTitle": "Runtime log"
+  },
+  "loading": {
+    "permissions": "Loading platform permissions…",
+    "workspace": "Loading workspace…"
   },
   "menu": {
     "file": "File",

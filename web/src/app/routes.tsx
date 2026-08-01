@@ -1,12 +1,21 @@
-import { useEffect } from "react";
+import { lazy, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useAgentContext } from "../contexts/AgentContext";
-import { BankWorkspace } from "../pages/BankWorkspace";
-import { ComposeWorkspace } from "../pages/ComposeWorkspace";
-import { GraphWorkspace } from "../pages/GraphWorkspace";
-import { TemplateWorkspace } from "../pages/TemplateWorkspace";
 import { ProjectPanel } from "../components/ProjectPanel";
 import type { ProjectInfo } from "../types/project";
+
+const BankWorkspace = lazy(() =>
+  import("../pages/BankWorkspace").then((module) => ({ default: module.BankWorkspace })),
+);
+const ComposeWorkspace = lazy(() =>
+  import("../pages/ComposeWorkspace").then((module) => ({ default: module.ComposeWorkspace })),
+);
+const GraphWorkspace = lazy(() =>
+  import("../pages/GraphWorkspace").then((module) => ({ default: module.GraphWorkspace })),
+);
+const TemplateWorkspace = lazy(() =>
+  import("../pages/TemplateWorkspace").then((module) => ({ default: module.TemplateWorkspace })),
+);
 
 export function ComposeRoute({
   info,

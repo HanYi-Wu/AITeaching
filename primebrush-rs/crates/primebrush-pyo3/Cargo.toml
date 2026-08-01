@@ -2,7 +2,7 @@
 name = "primebrush-pyo3"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "PyO3 bindings for PrimeBrush (optional; Python falls back when not built)"
 
 [lib]

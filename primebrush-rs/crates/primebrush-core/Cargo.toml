@@ -2,7 +2,7 @@
 name = "primebrush-core"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "PrimeBrush core traits and plugin registry (Rust migration scaffold)"
 
 [dependencies]

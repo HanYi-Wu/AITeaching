@@ -19,6 +19,7 @@ export type PlatformUser = {
 export type PlatformStatus = {
   project_bound: boolean;
   admin_exists: boolean;
+  public_mode: boolean;
 };
 
 export type PlatformAuthResponse = {

@@ -80,10 +80,13 @@ def current_session_token(
 
 @router.get("/platform/status")
 def platform_status() -> dict[str, Any]:
+    from solaire.web.public_access import public_mode_enabled
+
     root = require_platform_root()
     return {
         "project_bound": state.get_root() is not None,
         "admin_exists": has_admin(root),
+        "public_mode": public_mode_enabled(),
     }
 
 

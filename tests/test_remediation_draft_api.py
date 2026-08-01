@@ -58,7 +58,8 @@ def _write_source_exam(
     *,
     template_path: str = "templates/test.yaml",
 ) -> None:
-    exam_dir = root / "exams" / "期中" / "数学"
+    export_label, subject = exam_id.split("/", 1)
+    exam_dir = root / "exams" / export_label / subject
     exam_dir.mkdir(parents=True, exist_ok=True)
     exam = ExamConfig(
         exam_id=exam_id,
@@ -145,7 +146,7 @@ def test_create_remediation_draft_excludes_source_exam_questions(web_client, tmp
 
     r_get = web_client.get(f"/api/exams/{body['exam_id']}")
     assert r_get.status_code == 200, r_get.text
-    doc = r_get.json()
+    doc = r_get.json()["exam"]
     assert doc["source_exam_id"] == exam_id
     assert doc["template_ref"] == "remediation_practice"
     assert doc["template_path"] == ".solaire/internal_templates/remediation_practice.yaml"
@@ -203,4 +204,4 @@ def test_create_remediation_draft_falls_back_to_template_ref_when_path_is_stale(
 
     r_get = web_client.get(f"/api/exams/{r.json()['exam_id']}")
     assert r_get.status_code == 200, r_get.text
-    assert r_get.json()["template_path"] == ".solaire/internal_templates/remediation_practice.yaml"
+    assert r_get.json()["exam"]["template_path"] == ".solaire/internal_templates/remediation_practice.yaml"

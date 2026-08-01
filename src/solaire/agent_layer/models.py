@@ -90,6 +90,8 @@ class InvocationContext(BaseModel):
     session: SessionState | None = None
     subagent: bool = False
     max_subagent_tool_rounds: int = 8
+    public_mode: bool = False
+    host_control_authorized: bool = True
 
     def approved_key(self, tool_name: str, args: dict[str, Any]) -> str:
         import json

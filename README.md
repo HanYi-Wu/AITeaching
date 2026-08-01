@@ -11,7 +11,7 @@
 
 ## 简介
 
-**SolEdu** 是一个面向 K12 教育的开源自动化平台，灵感来自光电子电子设计自动化（EPDA）的理念——通过标准化工具链和自动化流水线，将组卷、题库管理、知识图谱维护、学情分析等高度重复的教学事务，提升到工程级水准。
+**SolEdu** 是一个面向 K12 教育、源码可查看和修改的自动化平台，灵感来自光电子电子设计自动化（EPDA）的理念——通过标准化工具链和自动化流水线，将组卷、题库管理、知识图谱维护、学情分析等高度重复的教学事务，提升到工程级水准。
 
 围绕教师核心工作流形成持续闭环：
 
@@ -47,10 +47,10 @@
 
 ### 社区版（当前版本）
 
-本仓库即社区版，以 **MIT** 协议开源，包含上述全部核心功能模块。适用于：
+本仓库即社区版，依据仓库 `LICENSE` 中的**自定义非商业许可证**提供源码，包含上述全部核心功能模块。它不是 OSI 认可的标准开源许可证。适用于：
 
 * 个人教师独立使用
-* 学校内部部署与二次开发
+* 学校内部的非商业试用与二次开发
 * 教育技术爱好者研究与贡献
 
 ### 商业版（未来计划）
@@ -146,6 +146,24 @@ pixi run build   # 在 web/ 下执行生产构建（tsc + vite build）
 
 **质量检查（可选）**：`pixi run test`（Python）、`pixi run test-web`（前端单测）、`pixi run typecheck`（TypeScript）。
 
+### 公网 / FRP 测试
+
+只把 Vite 的 `5173` 端口映射到 FRP；FastAPI 必须继续监听 `127.0.0.1:8000`，由 Vite 同源代理 `/api`。启动前启用公网安全边界并预绑定内容库：
+
+```powershell
+$env:SOLAIRE_PUBLIC_MODE = "1"
+$env:SOLAIRE_PROJECT_ROOT = "G:\path\to\content"
+$env:SOLAIRE_BIND_PROJECT_FROM_ENV = "1"
+$env:SOLAIRE_CONTROL_TOKEN = "足够长的随机本机密钥"
+$env:SOLAIRE_PUBLIC_HOSTS = "你的精确公网域名.frp-van.com"
+pixi run dev-backend
+cd web
+npm run build
+npm run preview -- --host 0.0.0.0 --port 5173 --strictPort
+```
+
+远程用户必须登录。公网测试使用构建后的预览服务，不应直接暴露带源码与热更新接口的 Vite 开发服务。`SOLAIRE_PUBLIC_HOSTS` 必须填写实际 FRP 域名，不要放行整个共享域名。选择本机目录、安装系统组件、运行本地分析脚本、打开服务器文件等主机控制操作，还必须使用管理员会话并携带控制令牌。不要把该令牌写入浏览器代码，也不要把 `8000` 端口直接暴露到公网。
+
 ### 4\. 桌面版打包
 
 ```powershell
@@ -175,17 +193,10 @@ pixi run build-desktop
 
 ### 报告安全漏洞
 
-如果你发现安全漏洞，**请勿通过公开 Issue 报告**。请发送邮件至 [**hectorzhang4253@gmail.com**](mailto:security@YOUR_DOMAIN.com)，我们会在确认后尽快修复并致谢。
-
-### 贡献者许可协议（CLA）
-
-为保障项目的长期健康发展，首次提交 PR 时需签署 [贡献者许可协议（CLA）](CLA.md)。CLA 不会改变你对自己代码的权利，仅确保项目可以持续以开源方式分发。
+如果你发现安全漏洞，**请勿通过公开 Issue 报告**。请发送邮件至 [**hectorzhang4253@gmail.com**](mailto:hectorzhang4253@gmail.com)，我们会在确认后尽快修复并致谢。
 
 ## 许可证
 
-本项目基于 [**AGPL-3.0**](https://www.gnu.org/licenses/agpl-3.0.html) 协议开源。
-
-完整许可证文本见 [LICENSE](LICENSE) 文件。
+本项目采用[自定义非商业许可证](LICENSE)：允许非商业目的下查看、学习、复制、修改和使用；商业使用、商业部署或商业分发必须事先取得作者书面授权。本项目不应被描述为采用标准开源许可证。
 
 \---
-

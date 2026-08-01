@@ -52,7 +52,10 @@ def test_expand_web_writes_svg_and_marker(tmp_path: Path) -> None:
 
 
 def test_expand_latex_writes_png_when_cairosvg(tmp_path: Path) -> None:
-    pytest.importorskip("cairosvg")
+    try:
+        import cairosvg  # noqa: F401
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"CairoSVG native runtime is unavailable: {exc}")
     image_dir = tmp_path / "image"
     text = "```primebrush\n" + _MINIMAL_GEO + "\n```"
     out, _ = expand_primebrush_in_text(text, image_dir=image_dir, mode="latex", starting_block_index=0)

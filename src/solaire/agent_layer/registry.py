@@ -16,6 +16,7 @@ from solaire.agent_layer.tools.tool_definitions import (
 
 _TOOL_BY_NAME: dict[str, RegisteredTool] = {t.name: t for t in TOOLS}
 _ALL_TOOL_NAMES: list[str] = sorted(_TOOL_BY_NAME.keys())
+HOST_CONTROL_TOOL_NAMES = frozenset({"analysis.save_script", "analysis.run_script"})
 
 
 def _names_starting(prefix: str) -> tuple[str, ...]:
@@ -250,6 +251,12 @@ def tool_descriptions_for_prompt(tools: list[RegisteredTool] | None = None) -> s
 
 
 def invoke_registered_tool(name: str, args: dict[str, Any], ctx: InvocationContext) -> ToolResult:
+    if ctx.public_mode and not ctx.host_control_authorized and name in HOST_CONTROL_TOOL_NAMES:
+        return ToolResult(
+            status="failed",
+            error_code="host_control_required",
+            error_message="Public deployments require administrator host-control authorization for this tool",
+        )
     if name == SUBTASK_TOOL_NAME:
         return ToolResult(status="failed", error_code="internal", error_message="subtask not invokable here")
     rt = _TOOL_BY_NAME.get(name)

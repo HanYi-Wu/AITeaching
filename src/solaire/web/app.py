@@ -9,6 +9,7 @@ import logging
 import shutil
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
@@ -39,6 +40,7 @@ from solaire.web.auth_api import extract_session_token, require_platform_root, r
 from solaire.web.auth_service import get_session_user
 from solaire.web.bank_exchange import export_bank_exchange_zip, import_bank_exchange_zip
 from solaire.web.paper_api import router as paper_router
+from solaire.web.public_access import allowed_origins, enforce_public_access, redact_project_root
 from solaire.web.student_api import router as student_router
 from solaire.web.result_service import (
     compute_statistics,
@@ -200,7 +202,13 @@ def _resolve_under_templates(root: Path, rel: str) -> Path:
     return target
 
 
-app = FastAPI(title="Solaire Web", version="0.1.0")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    state.init_from_env()
+    yield
+
+
+app = FastAPI(title="Solaire Web", version="0.2.3", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
@@ -209,15 +217,23 @@ app.include_router(student_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Solaire-Session",
+        "X-Solaire-Control-Token",
+    ],
 )
 
 
 @app.middleware("http")
 async def _graph_platform_context(request: Request, call_next):
+    rejection = await enforce_public_access(request)
+    if rejection is not None:
+        return rejection
     token = None
     user: dict[str, Any] | None = None
     if request.url.path.startswith("/api/graph"):
@@ -235,11 +251,6 @@ async def _graph_platform_context(request: Request, call_next):
         return await call_next(request)
     finally:
         _graph_request_user.reset(ctx_token)
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    state.init_from_env()
 
 
 class ProjectOpenBody(BaseModel):
@@ -615,15 +626,19 @@ def serve_resource_file(rel_path: str) -> FileResponse:
     assert_within_project(root, target)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    mt = "image/svg+xml" if target.suffix.lower() == ".svg" else None
-    return FileResponse(target, media_type=mt)
+    is_svg = target.suffix.lower() == ".svg"
+    mt = "image/svg+xml" if is_svg else None
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if is_svg:
+        headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+    return FileResponse(target, media_type=mt, headers=headers)
 
 
 @app.get("/api/project/info")
 def project_info() -> dict[str, Any]:
     r = state.get_content_root()
     ensure_project_layout(r)
-    return {"bound": True, "root": str(r)}
+    return redact_project_root({"bound": True, "root": str(r)})
 
 
 @app.get("/api/recent-projects")

@@ -30,6 +30,7 @@ from solaire.agent_layer.plan_document import (
 )
 from solaire.agent_layer.task_tracker import set_plan
 from solaire.agent_layer.registry import (
+    HOST_CONTROL_TOOL_NAMES,
     invoke_registered_tool,
     openai_tools_payload,
     select_tools_for_turn,
@@ -407,6 +408,8 @@ async def run_agent_turn(
         session_id=session.session_id,
         mode="suggest" if mode == "suggest" else "execute",
         session=session,
+        public_mode=bool(project_ctx.get("_public_mode")),
+        host_control_authorized=bool(project_ctx.get("_host_control_authorized", True)),
     )
     cm = ContextManager(include_subtask_tool=True)
     full_ctx = {**project_ctx, "_project_root": project_root}
@@ -438,6 +441,8 @@ async def run_agent_turn(
         project_root=project_root,
         plan_mode_active=session.plan_mode_active,
     )
+    if ctx.public_mode and not ctx.host_control_authorized:
+        tools_selected = [tool for tool in tools_selected if tool.name not in HOST_CONTROL_TOOL_NAMES]
     tools_payload = openai_tools_payload(tools_selected)
 
     dtc = DraftToolContext(
@@ -832,5 +837,4 @@ async def iter_agent_turn_sse(
         ev, data = item
         yield f"event: {ev}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
     await task
-
 

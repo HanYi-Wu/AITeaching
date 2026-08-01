@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 from solaire.exam_compiler.loaders.questions import LoadedQuestions
@@ -91,10 +90,6 @@ def test_underscore_outside_fenced_code_block_still_warns() -> None:
     w = analyze_math_static_for_loaded(lq)
     assert any(x["code"] == "latex_underscore" for x in w)
 
-@pytest.mark.xfail(
-    reason="题干中 \\underline 与静态下划线规则的预期尚未对齐；保留样例作回归锚点",
-    strict=False,
-)
 def test_qz2024_fill_001_sample_flags_content_underscore() -> None:
     p = Path(__file__).resolve().parent / "fixtures" / "qz2024_fill_001.yaml"
     raw = yaml.safe_load(p.read_text(encoding="utf-8"))

@@ -2,6 +2,14 @@ import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const publicHosts = (process.env.SOLAIRE_PUBLIC_HOSTS ?? "")
+  .split(",")
+  .map((host) => host.trim().toLowerCase())
+  .filter((host) => host.length > 0 && host !== "*");
+const apiProxy = {
+  "/api": { target: "http://127.0.0.1:8000", changeOrigin: true, xfwd: true },
+};
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -20,9 +28,13 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
-    allowedHosts: ["frp-van.com", ".frp-van.com"],
-    proxy: {
-      "/api": { target: "http://127.0.0.1:8000", changeOrigin: true },
-    },
+    allowedHosts: publicHosts,
+    proxy: apiProxy,
+  },
+  preview: {
+    host: "0.0.0.0",
+    port: 5173,
+    allowedHosts: publicHosts,
+    proxy: apiProxy,
   },
 });
