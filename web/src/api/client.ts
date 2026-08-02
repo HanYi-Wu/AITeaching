@@ -307,6 +307,12 @@ export async function apiGet<T>(path: string): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+/** Fetch a protected binary resource through the same authenticated request path as JSON APIs. */
+export async function apiGetBlob(path: string): Promise<Blob> {
+  const r = await fetchWithLog(path);
+  return r.blob();
+}
+
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const r = await fetchWithLog(path, {
     method: "POST",

@@ -68,6 +68,8 @@
   "modify": "Revise",
   "processing": "Working…",
   "addAttachment": "Add attachment",
+  "dropFilesHere": "Drop to add files, then send them directly to AI",
+  "fileOnlyPrompt": "Read and process the files I uploaded. Summarize them first, then suggest the actions you can perform for these file types.",
   "inputPh": "Describe what you need… (drop files)",
   "stop": "Stop",
   "openSidebar": "Open sidebar",

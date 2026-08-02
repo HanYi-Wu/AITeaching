@@ -68,6 +68,8 @@
   "modify": "修改",
   "processing": "处理中…",
   "addAttachment": "添加附件",
+  "dropFilesHere": "松开即可添加文件，随后可直接交给 AI 处理",
+  "fileOnlyPrompt": "请读取并处理我上传的文件，先概括内容，再根据文件类型给出可以执行的后续操作。",
   "inputPh": "描述你的需求…（可拖入文件）",
   "stop": "停止",
   "openSidebar": "打开侧栏",

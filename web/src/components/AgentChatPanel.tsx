@@ -47,7 +47,14 @@ import { useAgentContext } from "../contexts/AgentContext";
 import { confirmDialog } from "../lib/confirmDialog";
 import { isImeComposingKeyboardEvent } from "../lib/ime";
 import i18n from "../i18n/i18n";
-import { AGENT_UPLOAD_ACCEPT, formatUploadFailure } from "./agentUpload";
+import {
+  AGENT_UPLOAD_ACCEPT,
+  agentSendMessage,
+  createAgentSubmissionGate,
+  formatUploadFailure,
+  isFileDrag,
+  shouldDispatchAgentMessage,
+} from "./agentUpload";
 
 type FileAttachment = { path: string; mime_type: string | null; original_name: string };
 
@@ -191,8 +198,12 @@ export function AgentChatPanel({
   const [sessionList, setSessionList] = useState<AgentSessionListItem[]>([]);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [fileDragActive, setFileDragActive] = useState(false);
   const [currentFocus, setCurrentFocus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileDragDepthRef = useRef(0);
+  const sendGateRef = useRef<ReturnType<typeof createAgentSubmissionGate> | null>(null);
+  if (sendGateRef.current === null) sendGateRef.current = createAgentSubmissionGate();
   const bottomRef = useRef<HTMLDivElement>(null);
   const historyShellRef = useRef<HTMLDivElement>(null);
   const assistantSegmentClosedRef = useRef(false);
@@ -506,17 +517,19 @@ export function AgentChatPanel({
   );
 
   const send = useCallback(async () => {
-    const msgText = input.trim();
-    if (!msgText || busy) return;
-    setInput("");
+    const typedInput = input.trim();
     const filesToUpload = [...pendingFiles];
+    const msgText = agentSendMessage(typedInput, filesToUpload.length, t("fileOnlyPrompt"));
+    const gate = sendGateRef.current;
+    if (!msgText || busy || !gate?.tryAcquire()) return;
+    setBusy(true);
+    setInput("");
     setPendingFiles([]);
-    setLines((prev) => [...prev, { kind: "user", text: msgText }]);
-    const sid = await ensureSession();
 
-    let attachments: FileAttachment[] | undefined;
-    if (filesToUpload.length > 0) {
-      attachments = [];
+    try {
+      const sid = await ensureSession();
+      const attachments: FileAttachment[] = [];
+      const failedFiles: File[] = [];
       for (const f of filesToUpload) {
         try {
           const fd = new FormData();
@@ -527,21 +540,36 @@ export function AgentChatPanel({
           }>("/api/agent/upload", fd);
           attachments.push({ path: res.path, mime_type: res.mime_type, original_name: res.original_name });
         } catch (e) {
+          failedFiles.push(f);
           setLines((prev) => [
             ...prev,
             { kind: "system", text: i18n.t("agent:uploadFail", { name: formatUploadFailure(f.name, e) }) },
           ]);
         }
       }
-    }
+      if (failedFiles.length > 0) {
+        setPendingFiles((prev) => [...failedFiles, ...prev]);
+      }
+      if (!shouldDispatchAgentMessage(typedInput, filesToUpload.length, attachments.length)) return;
 
-    await runStream({
-      session_id: sid,
-      message: msgText,
-      mode: "execute",
-      ...(attachments && attachments.length > 0 ? { file_attachments: attachments } : {}),
-    } as Parameters<typeof apiAgentChatStream>[0]);
-  }, [busy, ensureSession, input, pendingFiles, runStream]);
+      setLines((prev) => [...prev, { kind: "user", text: msgText }]);
+      await runStream({
+        session_id: sid,
+        message: msgText,
+        mode: "execute",
+        ...(attachments.length > 0 ? { file_attachments: attachments } : {}),
+      } as Parameters<typeof apiAgentChatStream>[0]);
+    } catch (e) {
+      setPendingFiles((prev) => [...filesToUpload, ...prev]);
+      setLines((prev) => [
+        ...prev,
+        { kind: "system", text: e instanceof Error ? e.message : String(e) },
+      ]);
+    } finally {
+      gate.release();
+      setBusy(false);
+    }
+  }, [busy, ensureSession, input, pendingFiles, runStream, t]);
 
   const confirm = useCallback(
     async (action_id: string, accepted: boolean) => {
@@ -676,7 +704,44 @@ export function AgentChatPanel({
   );
 
   return (
-    <div className="relative flex h-full min-h-[320px] flex-col border-t border-slate-200 bg-white">
+    <div
+      className="relative flex h-full min-h-[320px] flex-col border-t border-slate-200 bg-white"
+      data-testid="agent-file-drop-surface"
+      onDragEnter={(e) => {
+        if (!isFileDrag(Array.from(e.dataTransfer.types))) return;
+        e.preventDefault();
+        fileDragDepthRef.current += 1;
+        setFileDragActive(true);
+      }}
+      onDragOver={(e) => {
+        if (!isFileDrag(Array.from(e.dataTransfer.types))) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(e) => {
+        if (!isFileDrag(Array.from(e.dataTransfer.types))) return;
+        e.preventDefault();
+        fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1);
+        if (fileDragDepthRef.current === 0) setFileDragActive(false);
+      }}
+      onDrop={(e) => {
+        if (!isFileDrag(Array.from(e.dataTransfer.types))) return;
+        e.preventDefault();
+        fileDragDepthRef.current = 0;
+        setFileDragActive(false);
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) setPendingFiles((prev) => [...prev, ...files]);
+      }}
+    >
+      {fileDragActive ? (
+        <div
+          className="pointer-events-none absolute inset-1 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-violet-500 bg-violet-50/95 p-4 text-center text-sm font-semibold text-violet-800 shadow-inner"
+          role="status"
+          aria-live="polite"
+        >
+          {t("dropFilesHere")}
+        </div>
+      ) : null}
       <div ref={historyShellRef} className="relative shrink-0 border-b border-slate-100">
         <div className="relative px-2 py-1.5 pr-10">
           {onRequestCollapse ? (
@@ -1162,12 +1227,6 @@ export function AgentChatPanel({
                 void send();
               }
             }}
-            onDrop={(e) => {
-              e.preventDefault();
-              const files = Array.from(e.dataTransfer.files);
-              if (files.length > 0) setPendingFiles((prev) => [...prev, ...files]);
-            }}
-            onDragOver={(e) => e.preventDefault()}
             rows={2}
             placeholder={t("inputPh")}
             className="min-h-[44px] flex-1 resize-none rounded-md border border-slate-300 px-2 py-1.5 text-sm"
@@ -1185,7 +1244,7 @@ export function AgentChatPanel({
           ) : (
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || (!input.trim() && pendingFiles.length === 0)}
               onClick={() => void send()}
               className="self-end rounded-md bg-violet-600 p-2 text-white hover:bg-violet-700 disabled:opacity-50"
             >

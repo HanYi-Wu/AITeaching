@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Document, Page, pdfjs } from "react-pdf";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { ensureApiBase, resolveApiUrl } from "../api/client";
+import { apiGetBlob } from "../api/client";
 import { cn } from "../lib/utils";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -33,16 +33,17 @@ export function PdfPreview({ apiPath, className }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    let objectUrl: string | null = null;
     const run = async () => {
       setLoadError(null);
       setFileUrl(null);
       setNumPages(0);
       setZoom(1);
       try {
-        await ensureApiBase();
-        const u = await resolveApiUrl(apiPath);
+        const blob = await apiGetBlob(apiPath);
         if (!cancelled) {
-          setFileUrl(u);
+          objectUrl = URL.createObjectURL(blob);
+          setFileUrl(objectUrl);
         }
       } catch (e) {
         if (!cancelled) {
@@ -53,6 +54,7 @@ export function PdfPreview({ apiPath, className }: Props) {
     void run();
     return () => {
       cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [apiPath]);
 
@@ -111,7 +113,11 @@ export function PdfPreview({ apiPath, className }: Props) {
         file={fileUrl}
         loading={<p className="text-sm text-slate-500">{t("common:processing")}</p>}
         onLoadSuccess={({ numPages: n }) => setNumPages(n)}
-        onLoadError={(err) => setLoadError(err.message)}
+        onLoadError={(err) => {
+          URL.revokeObjectURL(fileUrl);
+          setFileUrl(null);
+          setLoadError(err.message);
+        }}
       >
         <div className="flex flex-col items-center gap-4 pb-4">
           {Array.from({ length: numPages }, (_, i) => (

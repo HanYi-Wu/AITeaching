@@ -7,6 +7,38 @@ export const AGENT_UPLOAD_EXTENSIONS = [
 
 export const AGENT_UPLOAD_ACCEPT = AGENT_UPLOAD_EXTENSIONS.join(",");
 
+export function isFileDrag(types: readonly string[]): boolean {
+  return types.includes("Files");
+}
+
+export function agentSendMessage(input: string, fileCount: number, fileOnlyPrompt: string): string | null {
+  const text = input.trim();
+  if (text) return text;
+  return fileCount > 0 ? fileOnlyPrompt : null;
+}
+
+export function createAgentSubmissionGate() {
+  let active = false;
+  return {
+    tryAcquire(): boolean {
+      if (active) return false;
+      active = true;
+      return true;
+    },
+    release(): void {
+      active = false;
+    },
+  };
+}
+
+export function shouldDispatchAgentMessage(
+  typedInput: string,
+  requestedFileCount: number,
+  uploadedFileCount: number,
+): boolean {
+  return Boolean(typedInput.trim()) || requestedFileCount === 0 || uploadedFileCount > 0;
+}
+
 type StructuredUploadError = {
   detail?: { message?: unknown; suggestion?: unknown } | unknown;
   message?: unknown;
