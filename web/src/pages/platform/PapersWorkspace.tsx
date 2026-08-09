@@ -936,11 +936,17 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                     </button>
                     {analysis ? (
                       <div className="mt-4 space-y-3">
-                        <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                           <div className="rounded-md bg-slate-50 p-3">
                             <p className="text-xs text-slate-500">完成率</p>
                             <p data-testid="paper-analysis-completion-rate" className="mt-1 text-lg font-semibold">
                               {analysis.summary.completion_rate}%
+                            </p>
+                          </div>
+                          <div className="rounded-md bg-slate-50 p-3">
+                            <p className="text-xs text-slate-500">诚信事件</p>
+                            <p data-testid="paper-analysis-integrity-events" className="mt-1 text-lg font-semibold">
+                              {analysis.proctoring.event_count ?? analysis.proctoring.screen_switch_count}
                             </p>
                           </div>
                           <div className="rounded-md bg-slate-50 p-3">

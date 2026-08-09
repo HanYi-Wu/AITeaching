@@ -8,7 +8,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -109,6 +109,8 @@ CREATE TABLE IF NOT EXISTS exam_publications (
   submission_mode TEXT NOT NULL DEFAULT 'online',
   max_screen_switches INTEGER NOT NULL DEFAULT 0,
   time_limit_minutes INTEGER,
+  practice_kind TEXT,
+  source_publication_ids_json TEXT,
   status TEXT NOT NULL DEFAULT 'draft',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -145,6 +147,9 @@ CREATE TABLE IF NOT EXISTS student_attempts (
   score REAL,
   max_score REAL,
   time_spent_seconds INTEGER,
+  question_payload_json TEXT,
+  answer_key_json TEXT,
+  practice_metadata_json TEXT,
   UNIQUE(publication_id, student_id)
 );
 
@@ -176,6 +181,9 @@ CREATE TABLE IF NOT EXISTS proctor_events (
   duration_ms INTEGER,
   payload_json TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_proctor_events_attempt_type_time
+ON proctor_events(attempt_id, event_type, occurred_at);
 
 CREATE TABLE IF NOT EXISTS ai_audit_events (
   id TEXT PRIMARY KEY,
@@ -224,6 +232,8 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "exam_publications", "submission_mode", "TEXT NOT NULL DEFAULT 'online'")
         _ensure_column(con, "exam_publications", "max_screen_switches", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "exam_publications", "time_limit_minutes", "INTEGER")
+        _ensure_column(con, "exam_publications", "practice_kind", "TEXT")
+        _ensure_column(con, "exam_publications", "source_publication_ids_json", "TEXT")
         _ensure_column(con, "student_answers", "grading_status", "TEXT NOT NULL DEFAULT 'pending'")
         _ensure_column(con, "student_answers", "feedback", "TEXT")
         _ensure_column(con, "student_answers", "ai_suggested_score", "REAL")
@@ -231,6 +241,9 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "student_answers", "ai_ocr_text", "TEXT")
         _ensure_column(con, "student_answers", "graded_by", "TEXT REFERENCES users(id) ON DELETE SET NULL")
         _ensure_column(con, "student_answers", "graded_at", "TEXT")
+        _ensure_column(con, "student_attempts", "question_payload_json", "TEXT")
+        _ensure_column(con, "student_attempts", "answer_key_json", "TEXT")
+        _ensure_column(con, "student_attempts", "practice_metadata_json", "TEXT")
         _dedupe_active_publication_classes(con)
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 

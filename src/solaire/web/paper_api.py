@@ -18,6 +18,11 @@ from solaire.web.analysis_report_service import (
     build_paper_analysis_pdf,
     build_paper_analysis_workbook,
 )
+from solaire.web.adaptive_practice_service import (
+    list_practice_history,
+    publish_reinforcement_practice,
+    publish_wrong_question_practice,
+)
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.paper_service import (
     analyze_paper,
@@ -79,6 +84,26 @@ class PaperAnswerGradeBody(BaseModel):
     score: float = Field(..., ge=0)
     feedback: str | None = None
     is_correct: bool | None = None
+
+
+class PracticePublishBase(BaseModel):
+    class_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=200)
+    start_at: str | None = None
+    end_at: str | None = None
+    show_results_immediately: bool = False
+    submission_mode: Literal["online", "image_manual", "image_ai"] = "online"
+    max_screen_switches: int = Field(default=0, ge=0, le=999)
+    time_limit_minutes: int | None = Field(default=None, ge=0, le=1440)
+
+
+class WrongQuestionPracticeBody(PracticePublishBase):
+    source_publication_id: str = Field(..., min_length=1)
+
+
+class ReinforcementPracticeBody(PracticePublishBase):
+    source_publication_ids: list[str] = Field(..., min_length=1)
+    questions_per_student: int = Field(default=5, ge=1, le=20)
 
 
 def _raise_api_error(exc: Exception) -> None:
@@ -337,6 +362,57 @@ def teacher_classes_list(user: Annotated[dict[str, Any], Depends(current_platfor
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"classes": classes}
+
+
+@router.get("/teacher/classes/{class_id}/practice-history")
+def teacher_class_practice_history(
+    class_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    try:
+        return list_practice_history(root, class_id=class_id, user=user)
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    raise RuntimeError("unreachable")
+
+
+@router.post("/teacher/practice-publications/wrong-questions")
+def teacher_publish_wrong_question_practice(
+    body: WrongQuestionPracticeBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        return publish_wrong_question_practice(
+            root,
+            project_root,
+            user=user,
+            **body.model_dump(mode="json"),
+        )
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    raise RuntimeError("unreachable")
+
+
+@router.post("/teacher/practice-publications/reinforcement")
+async def teacher_publish_reinforcement_practice(
+    body: ReinforcementPracticeBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        return await publish_reinforcement_practice(
+            root,
+            project_root,
+            user=user,
+            **body.model_dump(mode="json"),
+        )
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    raise RuntimeError("unreachable")
 
 
 @router.post("/papers/{paper_id}/publish")

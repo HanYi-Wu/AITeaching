@@ -197,6 +197,8 @@ describe("PapersWorkspace", () => {
           publication_count: 1,
         },
         proctoring: {
+          event_count: 5,
+          event_type_counts: { visibility_hidden: 2, copy: 1, paste: 1, fullscreen_exit: 1 },
           screen_switch_count: 2,
           screen_switch_duration_ms: 3000,
           flagged_student_count: 1,
@@ -248,6 +250,9 @@ describe("PapersWorkspace", () => {
             screen_switch_limit: 1,
             screen_switch_exceeded: true,
             screen_switch_duration_ms: 3000,
+            integrity_event_count: 5,
+            integrity_event_type_counts: { visibility_hidden: 2, copy: 1, paste: 1, fullscreen_exit: 1 },
+            integrity_risk_score: 75,
             class_names: ["Class 1"],
           },
         ],
@@ -263,6 +268,7 @@ describe("PapersWorkspace", () => {
     expect(await screen.findByTestId("paper-analysis-completion-rate")).toHaveTextContent("50%");
     expect(screen.getByTestId("paper-analysis-switch-count")).toHaveTextContent("2");
     expect(screen.getByTestId("paper-analysis-flagged-count")).toHaveTextContent("1");
+    expect(screen.getByTestId("paper-analysis-integrity-events")).toHaveTextContent("5");
     expect(screen.getByTestId("paper-analysis-charts")).toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-chart-score")).toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-classes")).toBeInTheDocument();
@@ -270,6 +276,7 @@ describe("PapersWorkspace", () => {
     expect(screen.getByText("学生个人分析表")).toBeInTheDocument();
     expect(screen.getByText("Student One")).toBeInTheDocument();
     expect(screen.getByText("2/1")).toBeInTheDocument();
+    expect(screen.getByText("75 · 高风险")).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("paper-export-report-xlsx"));
     await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith("p1", "xlsx"));

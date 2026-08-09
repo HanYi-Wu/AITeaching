@@ -136,6 +136,30 @@ def _paper_visible_to_user(paper: dict[str, Any], user: dict[str, Any]) -> bool:
     return False
 
 
+def _adaptive_paper_summary(root: Path, paper_id: str) -> tuple[int, bool]:
+    with connect(root) as con:
+        rows = con.execute(
+            """
+            SELECT sa.question_payload_json, sa.score
+            FROM student_attempts sa
+            JOIN exam_publications ep ON ep.id = sa.publication_id
+            WHERE ep.paper_id = ?
+            """,
+            (paper_id,),
+        ).fetchall()
+    question_count = 0
+    has_score = False
+    for row in rows:
+        has_score = has_score or row["score"] is not None
+        try:
+            payload = json.loads(str(row["question_payload_json"] or "[]"))
+        except json.JSONDecodeError:
+            payload = []
+        if isinstance(payload, list):
+            question_count = max(question_count, len(payload))
+    return question_count, has_score
+
+
 def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     init_platform_db(platform_root)
     exams = list_exam_results(project_root)
@@ -165,6 +189,39 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
                 "exam_dir": exam.get("exam_dir"),
                 "mtime": exam.get("mtime"),
                 **stats,
+            }
+        )
+    with connect(platform_root) as con:
+        adaptive_rows = con.execute(
+            "SELECT * FROM paper_records WHERE exam_id LIKE 'adaptive/%' ORDER BY updated_at DESC"
+        ).fetchall()
+    existing_ids = {str(item["paper_id"]) for item in papers}
+    for row in adaptive_rows:
+        record = row_to_dict(row) or {}
+        paper_id = str(record.get("id") or "")
+        if not paper_id or paper_id in existing_ids or not _paper_visible_to_user(record, user):
+            continue
+        question_count, has_score = _adaptive_paper_summary(platform_root, paper_id)
+        papers.append(
+            {
+                "paper_id": paper_id,
+                "exam_id": record.get("exam_id"),
+                "title": record.get("title"),
+                "subject": record.get("subject"),
+                "delivery_mode": record.get("delivery_mode"),
+                "status": record.get("status"),
+                "owner_teacher_id": record.get("owner_teacher_id"),
+                "school_id": record.get("school_id"),
+                "question_count": question_count,
+                "section_count": 1 if question_count else 0,
+                "score_batch_count": 0,
+                "has_score": has_score,
+                "has_pdf": False,
+                "has_docx": False,
+                "latest_batch_id": None,
+                "exam_dir": None,
+                "mtime": record.get("updated_at"),
+                **_publication_stats(platform_root, paper_id),
             }
         )
     return papers
@@ -655,7 +712,7 @@ def _build_class_report(root: Path, *, paper_id: str) -> list[dict[str, Any]]:
             JOIN classes c ON c.id = pc.class_id
             JOIN student_attempts sa ON sa.publication_id = ep.id
             JOIN class_students cs ON cs.class_id = c.id AND cs.student_id = sa.student_id
-            LEFT JOIN proctor_events pe ON pe.attempt_id = sa.id
+            LEFT JOIN proctor_events pe ON pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'
             WHERE ep.paper_id = ?
             GROUP BY c.id, sa.id
             ORDER BY c.name
@@ -828,7 +885,21 @@ def analyze_paper(
         if time_spent > 0:
             time_values.append(time_spent)
         attempt_events = events_by_attempt.get(str(attempt.get("id")), [])
-        screen_switch_count = len(attempt_events)
+        switch_events = [event for event in attempt_events if event.get("event_type") == "visibility_hidden"]
+        event_type_counts: dict[str, int] = {}
+        for event in attempt_events:
+            event_type = str(event.get("event_type") or "unknown")
+            event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
+        integrity_risk_score = min(
+            100,
+            event_type_counts.get("visibility_hidden", 0) * 15
+            + event_type_counts.get("fullscreen_exit", 0) * 20
+            + event_type_counts.get("copy", 0) * 10
+            + event_type_counts.get("paste", 0) * 15
+            + event_type_counts.get("context_menu", 0) * 5
+            + event_type_counts.get("window_blur", 0) * 2,
+        )
+        screen_switch_count = len(switch_events)
         screen_switch_limit = int(attempt.get("max_screen_switches") or 0)
         screen_switch_exceeded = screen_switch_count > screen_switch_limit
         if screen_switch_exceeded:
@@ -853,7 +924,10 @@ def analyze_paper(
                 "screen_switch_limit": screen_switch_limit,
                 "screen_switch_exceeded": screen_switch_exceeded,
                 "screen_switch_remaining": max(0, screen_switch_limit - screen_switch_count),
-                "screen_switch_duration_ms": sum(int(event.get("duration_ms") or 0) for event in attempt_events),
+                "screen_switch_duration_ms": sum(int(event.get("duration_ms") or 0) for event in switch_events),
+                "integrity_event_count": len(attempt_events),
+                "integrity_event_type_counts": dict(sorted(event_type_counts.items())),
+                "integrity_risk_score": integrity_risk_score,
             }
         )
     students.sort(
@@ -868,8 +942,13 @@ def analyze_paper(
     completion_rate = round(completed / total * 100, 2) if total else 0
     average_score = round(sum(score_values) / len(score_values), 2) if score_values else None
     average_time_seconds = round(sum(time_values) / len(time_values), 2) if time_values else None
-    screen_switch_count = len(event_rows)
-    screen_switch_duration_ms = sum(int(row["duration_ms"] or 0) for row in event_rows)
+    switch_event_rows = [row for row in event_rows if row["event_type"] == "visibility_hidden"]
+    screen_switch_count = len(switch_event_rows)
+    screen_switch_duration_ms = sum(int(row["duration_ms"] or 0) for row in switch_event_rows)
+    event_type_counts: dict[str, int] = {}
+    for row in event_rows:
+        event_type = str(row["event_type"] or "unknown")
+        event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
     exceeded_student_count = len(flagged_student_ids)
     modules = _build_module_report(
         root,
@@ -910,6 +989,8 @@ def analyze_paper(
             "publication_count": len(publication_rows),
         },
         "proctoring": {
+            "event_count": len(event_rows),
+            "event_type_counts": dict(sorted(event_type_counts.items())),
             "screen_switch_count": screen_switch_count,
             "screen_switch_duration_ms": screen_switch_duration_ms,
             "flagged_student_count": len(flagged_student_ids),
@@ -1095,6 +1176,25 @@ def _question_maps(project_root: Path, paper: dict[str, Any]) -> tuple[list[dict
     return questions, by_id, score_by_id
 
 
+def _question_maps_for_attempt(
+    project_root: Path,
+    paper: dict[str, Any],
+    attempt: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
+    raw_questions = attempt.get("question_payload_json")
+    if raw_questions:
+        try:
+            questions = json.loads(str(raw_questions))
+        except json.JSONDecodeError as exc:
+            raise ValueError("Frozen question payload is invalid") from exc
+        if not isinstance(questions, list) or not all(isinstance(item, dict) for item in questions):
+            raise ValueError("Frozen question payload is invalid")
+        by_id = {str(item.get("question_id")): item for item in questions}
+        score_by_id = {qid: float(item.get("score_per_item") or 0) for qid, item in by_id.items()}
+        return questions, by_id, score_by_id
+    return _question_maps(project_root, paper)
+
+
 def _run_async_blocking(coro):
     try:
         asyncio.get_running_loop()
@@ -1256,6 +1356,12 @@ def publish_online_paper(
     teacher_id = str(user["id"])
     publication_title = _clean_title(title, str(paper["title"]))
     clean_description = description.strip() if description and description.strip() else None
+    frozen_questions: list[dict[str, Any]] = []
+    frozen_answer_keys: dict[str, str] = {}
+    if project_root is not None:
+        frozen_questions, frozen_answer_keys = _paper_exam_question_payloads(project_root, paper)
+    frozen_questions_json = json.dumps(frozen_questions, ensure_ascii=False) if frozen_questions else None
+    frozen_answer_keys_json = json.dumps(frozen_answer_keys, ensure_ascii=False) if frozen_questions else None
 
     with connect(root) as con:
         con.execute(
@@ -1299,10 +1405,14 @@ def publish_online_paper(
         ).fetchall()
         con.executemany(
             """
-            INSERT OR IGNORE INTO student_attempts (id, publication_id, student_id, status)
-            VALUES (?, ?, ?, 'not_started')
+            INSERT OR IGNORE INTO student_attempts
+              (id, publication_id, student_id, status, question_payload_json, answer_key_json)
+            VALUES (?, ?, ?, 'not_started', ?, ?)
             """,
-            [(_new_id(), publication_id, str(row["student_id"])) for row in student_rows],
+            [
+                (_new_id(), publication_id, str(row["student_id"]), frozen_questions_json, frozen_answer_keys_json)
+                for row in student_rows
+            ],
         )
         con.execute(
             "UPDATE paper_records SET delivery_mode = 'online', status = 'published', updated_at = ? WHERE id = ?",
@@ -1332,8 +1442,6 @@ def list_paper_submissions(
     init_platform_db(root)
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
-    questions, by_id, _score_by_id = _question_maps(project_root, paper)
-    order_index = {str(item.get("question_id")): index for index, item in enumerate(questions)}
     with connect(root) as con:
         attempt_rows = con.execute(
             """
@@ -1348,7 +1456,7 @@ def list_paper_submissions(
               s.student_no,
               s.display_name AS student_name,
               u.username AS account_username,
-              COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count
+              COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count
             FROM student_attempts sa
             JOIN exam_publications ep ON ep.id = sa.publication_id
             JOIN paper_records pr ON pr.id = ep.paper_id
@@ -1371,18 +1479,30 @@ def list_paper_submissions(
             (paper_id,),
         ).fetchall()
 
+    attempts = [row_to_dict(row) or {} for row in attempt_rows]
+    maps_by_attempt: dict[str, tuple[dict[str, dict[str, Any]], dict[str, int]]] = {}
+    for attempt in attempts:
+        questions, by_id, _score_by_id = _question_maps_for_attempt(project_root, paper, attempt)
+        maps_by_attempt[str(attempt.get("id"))] = (
+            by_id,
+            {str(item.get("question_id")): index for index, item in enumerate(questions)},
+        )
+
     answers_by_attempt: dict[str, list[dict[str, Any]]] = {}
     for row in answer_rows:
         answer = row_to_dict(row) or {}
+        attempt_id = str(answer.get("attempt_id"))
         qid = str(answer.get("question_id") or "")
-        answers_by_attempt.setdefault(str(answer.get("attempt_id")), []).append(
+        by_id, _order_index = maps_by_attempt.get(attempt_id, ({}, {}))
+        answers_by_attempt.setdefault(attempt_id, []).append(
             _answer_public_payload(answer, by_id.get(qid)),
         )
 
     submissions: list[dict[str, Any]] = []
-    for row in attempt_rows:
-        attempt = row_to_dict(row) or {}
-        attempt_answers = answers_by_attempt.get(str(attempt.get("id")), [])
+    for attempt in attempts:
+        attempt_id = str(attempt.get("id"))
+        attempt_answers = answers_by_attempt.get(attempt_id, [])
+        _by_id, order_index = maps_by_attempt.get(attempt_id, ({}, {}))
         attempt_answers.sort(key=lambda item: order_index.get(str(item.get("question_id")), 999999))
         submissions.append(
             {
@@ -1454,7 +1574,7 @@ def grade_paper_answer(
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
     attempt = _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id)
-    _questions, by_id, score_by_id = _question_maps(project_root, paper)
+    _questions, by_id, score_by_id = _question_maps_for_attempt(project_root, paper, attempt)
     if question_id not in by_id:
         raise ValueError("question not found in paper")
     max_score = float(score_by_id.get(question_id, 0.0))
@@ -1515,8 +1635,8 @@ def suggest_ai_grades_for_attempt(
     init_platform_db(root)
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
-    _attempt = _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id)
-    questions, by_id, score_by_id = _question_maps(project_root, paper)
+    attempt = _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id)
+    questions, by_id, score_by_id = _question_maps_for_attempt(project_root, paper, attempt)
     selected = [str(qid).strip() for qid in (question_ids or []) if str(qid).strip()]
     if not selected:
         selected = [str(item.get("question_id")) for item in questions]

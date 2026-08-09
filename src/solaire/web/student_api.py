@@ -30,11 +30,12 @@ class StudentAnswerIn(BaseModel):
 
 
 class StudentAnswersBody(BaseModel):
-    answers: list[StudentAnswerIn] = Field(default_factory=list)
+    answers: list[StudentAnswerIn] = Field(default_factory=list, max_length=200)
 
 
 class StudentSubmitBody(BaseModel):
     time_spent_seconds: int | None = Field(default=None, ge=0)
+    answers: list[StudentAnswerIn] | None = Field(default=None, max_length=200)
 
 
 class StudentProctorEventBody(BaseModel):
@@ -91,9 +92,11 @@ def student_attempt_answers(
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
 ) -> dict[str, Any]:
     root = require_platform_root()
+    project_root = _content_root()
     try:
         return save_student_answers(
             root,
+            project_root,
             attempt_id=attempt_id,
             user=user,
             answers=[item.model_dump(mode="json") for item in body.answers],
@@ -139,6 +142,7 @@ def student_attempt_submit(
             attempt_id=attempt_id,
             user=user,
             time_spent_seconds=body.time_spent_seconds,
+            answers=[item.model_dump(mode="json") for item in body.answers] if body.answers is not None else None,
         )
     except (PermissionError, FileNotFoundError, ValueError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)

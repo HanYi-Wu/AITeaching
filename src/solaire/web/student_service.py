@@ -18,6 +18,23 @@ from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import _flatten_questions
 
 
+PROCTOR_EVENT_TYPES = {
+    "visibility_hidden",
+    "window_blur",
+    "fullscreen_exit",
+    "copy",
+    "paste",
+    "context_menu",
+}
+MAX_ANSWERS_PER_REQUEST = 200
+MAX_ANSWER_TEXT_LENGTH = 100_000
+MAX_IMAGES_PER_ANSWER = 10
+MAX_IMAGE_DATA_URL_LENGTH = 5_000_000
+MAX_ANSWER_BATCH_BYTES = 20_000_000
+MAX_PROCTOR_EVENTS_PER_ATTEMPT = 1_000
+MAX_PROCTOR_EVENTS_PER_MINUTE = 120
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex
 
@@ -61,12 +78,28 @@ def _time_limit_exceeded(row: dict[str, Any]) -> bool:
     return datetime.now(UTC) > started_at + timedelta(minutes=limit_minutes)
 
 
+def _remaining_seconds(row: dict[str, Any]) -> int | None:
+    limit_minutes = int(row.get("time_limit_minutes") or 0)
+    if limit_minutes <= 0:
+        return None
+    started_at = _parse_datetime(row.get("started_at"))
+    if started_at is None:
+        return limit_minutes * 60
+    return max(0, int((started_at + timedelta(minutes=limit_minutes) - datetime.now(UTC)).total_seconds()))
+
+
 def _ensure_attempt_can_collect(row: dict[str, Any]) -> None:
     can_answer, reason = _publication_availability(row)
     if not can_answer:
         raise ValueError(reason or "Publication is not open")
     if _time_limit_exceeded(row):
         raise ValueError("Time limit exceeded")
+
+
+def _ensure_attempt_can_submit(row: dict[str, Any]) -> None:
+    can_submit, reason = _publication_availability(row)
+    if not can_submit:
+        raise ValueError(reason or "Publication is not open")
 
 
 def _student_for_user(root: Path, user: dict[str, Any]) -> dict[str, Any]:
@@ -187,6 +220,49 @@ def _load_exam_question_payloads(project_root: Path, exam_id: str) -> tuple[list
     return questions, answer_keys
 
 
+def _load_attempt_question_payloads(
+    project_root: Path,
+    attempt: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    raw_questions = attempt.get("question_payload_json")
+    raw_answers = attempt.get("answer_key_json")
+    if raw_questions:
+        try:
+            questions = json.loads(str(raw_questions))
+            answer_keys = json.loads(str(raw_answers or "{}"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("Personalized question payload is invalid") from exc
+        if not isinstance(questions, list) or not all(isinstance(item, dict) for item in questions):
+            raise ValueError("Personalized question payload is invalid")
+        if not isinstance(answer_keys, dict):
+            raise ValueError("Personalized answer key is invalid")
+        return questions, {str(key): str(value) for key, value in answer_keys.items()}
+    return _load_exam_question_payloads(project_root, str(attempt["exam_id"]))
+
+
+def _saved_answer_payloads(root: Path, attempt_id: str) -> list[dict[str, Any]]:
+    with connect(root) as con:
+        rows = con.execute(
+            "SELECT question_id, answer_payload FROM student_answers WHERE attempt_id = ? ORDER BY responded_at, question_id",
+            (attempt_id,),
+        ).fetchall()
+    saved: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(str(row["answer_payload"] or "{}"))
+        except json.JSONDecodeError:
+            payload = {}
+        images = payload.get("images")
+        saved.append(
+            {
+                "question_id": str(row["question_id"]),
+                "answer": payload.get("answer"),
+                "images": images if isinstance(images, list) else [],
+            }
+        )
+    return saved
+
+
 def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -> dict[str, Any]:
     with connect(root) as con:
         publication = con.execute(
@@ -203,19 +279,27 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
         ).fetchone()
         if publication is None:
             raise PermissionError("No assigned publication for this student")
-        con.execute(
-            """
-            INSERT OR IGNORE INTO student_attempts (id, publication_id, student_id, status)
-            VALUES (?, ?, ?, 'not_started')
-            """,
-            (_new_id(), publication_id, student_id),
-        )
+        if publication["practice_kind"]:
+            assigned = con.execute(
+                "SELECT 1 FROM student_attempts WHERE publication_id = ? AND student_id = ?",
+                (publication_id, student_id),
+            ).fetchone()
+            if assigned is None:
+                raise PermissionError("No personalized practice assigned for this student")
+        else:
+            con.execute(
+                """
+                INSERT OR IGNORE INTO student_attempts (id, publication_id, student_id, status)
+                VALUES (?, ?, ?, 'not_started')
+                """,
+                (_new_id(), publication_id, student_id),
+            )
         row = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
                    ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
                    pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
-                   COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count
+                   COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count
             FROM student_attempts sa
             JOIN exam_publications ep ON ep.id = sa.publication_id
             JOIN paper_records pr ON pr.id = ep.paper_id
@@ -231,19 +315,24 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
 
 def _attempt_for_student(root: Path, attempt_id: str, student_id: str) -> dict[str, Any]:
     with connect(root) as con:
-        row = con.execute(
-            """
-            SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
-                   ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
-                   pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
-                   COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count
-            FROM student_attempts sa
-            JOIN exam_publications ep ON ep.id = sa.publication_id
-            JOIN paper_records pr ON pr.id = ep.paper_id
-            WHERE sa.id = ? AND sa.student_id = ?
-            """,
-            (attempt_id, student_id),
-        ).fetchone()
+        attempt = _attempt_for_student_in_connection(con, attempt_id, student_id)
+    return attempt
+
+
+def _attempt_for_student_in_connection(con: Any, attempt_id: str, student_id: str) -> dict[str, Any]:
+    row = con.execute(
+        """
+        SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
+               ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
+               pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
+               COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count
+        FROM student_attempts sa
+        JOIN exam_publications ep ON ep.id = sa.publication_id
+        JOIN paper_records pr ON pr.id = ep.paper_id
+        WHERE sa.id = ? AND sa.student_id = ?
+        """,
+        (attempt_id, student_id),
+    ).fetchone()
     attempt = row_to_dict(row)
     if attempt is None:
         raise PermissionError("No permission for this attempt")
@@ -251,7 +340,7 @@ def _attempt_for_student(root: Path, attempt_id: str, student_id: str) -> dict[s
 
 
 def _attempt_payload(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "id": row["id"],
         "publication_id": row["publication_id"],
         "paper_id": row["paper_id"],
@@ -271,8 +360,18 @@ def _attempt_payload(row: dict[str, Any]) -> dict[str, Any]:
         "start_at": row.get("start_at"),
         "end_at": row.get("end_at"),
         "time_limit_minutes": int(row["time_limit_minutes"]) if row.get("time_limit_minutes") is not None else None,
-        "can_answer": _publication_availability(row)[0] and not _time_limit_exceeded(row),
+        "can_answer": _publication_availability(row)[0]
+        and (not _time_limit_exceeded(row) or str(row.get("status")) == "in_progress"),
+        "remaining_seconds": _remaining_seconds(row),
     }
+    if row.get("practice_metadata_json"):
+        try:
+            metadata = json.loads(str(row["practice_metadata_json"]))
+        except json.JSONDecodeError:
+            metadata = None
+        if isinstance(metadata, dict):
+            payload["practice_metadata"] = metadata
+    return payload
 
 
 def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -286,6 +385,13 @@ def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) ->
             JOIN publication_classes pc ON pc.publication_id = ep.id
             JOIN class_students cs ON cs.class_id = pc.class_id
             WHERE cs.student_id = ? AND ep.status IN ('published', 'paused', 'closed')
+              AND (
+                ep.practice_kind IS NULL
+                OR EXISTS (
+                  SELECT 1 FROM student_attempts assigned
+                  WHERE assigned.publication_id = ep.id AND assigned.student_id = cs.student_id
+                )
+              )
             ORDER BY ep.created_at DESC
             """,
             (student_id,),
@@ -295,7 +401,7 @@ def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) ->
         attempt = _ensure_assigned_attempt(root, str(row["id"]), student_id)
         payload = _attempt_payload(attempt)
         try:
-            questions, _answers = _load_exam_question_payloads(project_root, str(payload["exam_id"]))
+            questions, _answers = _load_attempt_question_payloads(project_root, attempt)
             question_count = len(questions)
         except Exception:
             question_count = 0
@@ -320,7 +426,12 @@ def start_student_publication(
     student = _student_for_user(root, user)
     attempt = _ensure_assigned_attempt(root, publication_id, str(student["id"]))
     if str(attempt.get("status")) != "submitted":
-        _ensure_attempt_can_collect(attempt)
+        if str(attempt.get("status")) == "in_progress" and _time_limit_exceeded(attempt):
+            # Let a student recover the frozen questions and saved draft after a
+            # browser crash; the zero-second client timer will atomically submit it.
+            _ensure_attempt_can_submit(attempt)
+        else:
+            _ensure_attempt_can_collect(attempt)
     now = utc_now()
     if str(attempt.get("status")) == "not_started":
         with connect(root) as con:
@@ -329,34 +440,57 @@ def start_student_publication(
                 (now, attempt["id"]),
             )
         attempt = _attempt_for_student(root, str(attempt["id"]), str(student["id"]))
-    questions, _answers = _load_exam_question_payloads(project_root, str(attempt["exam_id"]))
-    return {"attempt": _attempt_payload(attempt), "questions": questions}
+    questions, _answers = _load_attempt_question_payloads(project_root, attempt)
+    return {
+        "attempt": _attempt_payload(attempt),
+        "questions": questions,
+        "saved_answers": _saved_answer_payloads(root, str(attempt["id"])),
+    }
 
 
 def save_student_answers(
     root: Path,
+    project_root: Path,
     *,
     attempt_id: str,
     user: dict[str, Any],
     answers: list[dict[str, Any]],
 ) -> dict[str, Any]:
     student = _student_for_user(root, user)
-    attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
-    if str(attempt.get("status")) == "submitted":
-        raise ValueError("Attempt already submitted")
-    _ensure_attempt_can_collect(attempt)
+    initial_attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
+    questions, _answer_keys = _load_attempt_question_payloads(project_root, initial_attempt)
+    _validate_answer_batch(answers, {str(item.get("question_id")) for item in questions})
     now = utc_now()
+    rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers, now)
+    with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
+        attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
+        if str(attempt.get("status")) == "submitted":
+            raise ValueError("Attempt already submitted")
+        _ensure_attempt_can_collect(attempt)
+        _write_answer_mutations(con, attempt_id, rows, cleared_question_ids)
+    return {"answer_count": len(rows)}
+
+
+def _prepare_answer_mutations(
+    attempt_id: str,
+    answers: list[dict[str, Any]],
+    now: str,
+) -> tuple[list[tuple[object, ...]], list[str]]:
     rows: list[tuple[object, ...]] = []
+    cleared_question_ids: list[str] = []
     for answer in answers:
         qid = str(answer.get("question_id") or "").strip()
         if not qid:
             continue
         payload: dict[str, Any] = {}
         if "answer" in answer:
-            payload["answer"] = answer.get("answer")
+            raw_answer = answer.get("answer")
+            if raw_answer is not None and str(raw_answer).strip():
+                payload["answer"] = raw_answer
         images = answer.get("images")
         if isinstance(images, list):
-            payload["images"] = [
+            clean_images = [
                 {
                     "name": str(item.get("name") or "image") if isinstance(item, dict) else "image",
                     "mime_type": str(item.get("mime_type") or "") if isinstance(item, dict) else "",
@@ -365,8 +499,56 @@ def save_student_answers(
                 for item in images
                 if isinstance(item, dict) and str(item.get("data_url") or "").strip()
             ]
+            if clean_images:
+                payload["images"] = clean_images
+        if not payload:
+            cleared_question_ids.append(qid)
+            continue
         rows.append((_new_id(), attempt_id, qid, json.dumps(payload, ensure_ascii=False), now))
-    with connect(root) as con:
+    return rows, cleared_question_ids
+
+
+def _validate_answer_batch(answers: list[dict[str, Any]], allowed_question_ids: set[str]) -> None:
+    if len(answers) > MAX_ANSWERS_PER_REQUEST:
+        raise ValueError("Too many answers in one request")
+    serialized_size = len(json.dumps(answers, ensure_ascii=False).encode("utf-8"))
+    if serialized_size > MAX_ANSWER_BATCH_BYTES:
+        raise ValueError("Answer payload is too large")
+    seen: set[str] = set()
+    for item in answers:
+        qid = str(item.get("question_id") or "").strip()
+        if qid not in allowed_question_ids:
+            raise ValueError(f"Question does not belong to this attempt: {qid or '(empty)'}")
+        if qid in seen:
+            raise ValueError(f"Duplicate answer for question: {qid}")
+        seen.add(qid)
+        answer = item.get("answer")
+        if answer is not None and len(str(answer)) > MAX_ANSWER_TEXT_LENGTH:
+            raise ValueError("Answer text is too large")
+        images = item.get("images")
+        if images is None:
+            continue
+        if not isinstance(images, list) or len(images) > MAX_IMAGES_PER_ANSWER:
+            raise ValueError("Too many answer images")
+        for image in images:
+            if not isinstance(image, dict):
+                raise ValueError("Answer image is invalid")
+            if len(str(image.get("data_url") or "")) > MAX_IMAGE_DATA_URL_LENGTH:
+                raise ValueError("Answer image is too large")
+
+
+def _write_answer_mutations(
+    con: Any,
+    attempt_id: str,
+    rows: list[tuple[object, ...]],
+    cleared_question_ids: list[str],
+) -> None:
+    if cleared_question_ids:
+        con.executemany(
+            "DELETE FROM student_answers WHERE attempt_id = ? AND question_id = ?",
+            [(attempt_id, question_id) for question_id in cleared_question_ids],
+        )
+    if rows:
         con.executemany(
             """
             INSERT INTO student_answers (id, attempt_id, question_id, answer_payload, responded_at)
@@ -386,7 +568,6 @@ def save_student_answers(
             """,
             rows,
         )
-    return {"answer_count": len(rows)}
 
 
 def record_student_proctor_event(
@@ -400,10 +581,51 @@ def record_student_proctor_event(
 ) -> dict[str, Any]:
     student = _student_for_user(root, user)
     attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
+    if str(attempt.get("status")) != "in_progress":
+        raise ValueError("Proctor events require an in-progress attempt")
     now = utc_now()
     event_id = _new_id()
     clean_type = event_type.strip() or "unknown"
+    if clean_type not in PROCTOR_EVENT_TYPES:
+        raise ValueError(f"Unsupported proctor event type: {clean_type}")
+    clean_duration = int(duration_ms or 0)
+    if clean_duration < 0 or clean_duration > 86_400_000:
+        raise ValueError("Proctor event duration is out of range")
+    payload_json = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True)
+    if len(payload_json.encode("utf-8")) > 4096:
+        raise ValueError("Proctor event payload is too large")
     with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
+        current = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
+        if str(current.get("status")) != "in_progress":
+            raise ValueError("Proctor events require an in-progress attempt")
+        total_count = int(
+            con.execute("SELECT COUNT(*) FROM proctor_events WHERE attempt_id = ?", (attempt_id,)).fetchone()[0]
+        )
+        if total_count >= MAX_PROCTOR_EVENTS_PER_ATTEMPT:
+            raise ValueError("Proctor event limit exceeded")
+        recent_count = int(
+            con.execute(
+                "SELECT COUNT(*) FROM proctor_events WHERE attempt_id = ? AND datetime(occurred_at) >= datetime('now', '-1 minute')",
+                (attempt_id,),
+            ).fetchone()[0]
+        )
+        if recent_count >= MAX_PROCTOR_EVENTS_PER_MINUTE:
+            raise ValueError("Proctor event rate limit exceeded")
+        previous = con.execute(
+            """
+            SELECT * FROM proctor_events
+            WHERE attempt_id = ? AND event_type = ? AND payload_json = ?
+            ORDER BY occurred_at DESC LIMIT 1
+            """,
+            (attempt_id, clean_type, payload_json),
+        ).fetchone()
+        previous_payload = row_to_dict(previous)
+        if previous_payload is not None:
+            occurred_at = _parse_datetime(previous_payload.get("occurred_at"))
+            if occurred_at is not None and (datetime.now(UTC) - occurred_at).total_seconds() < 2:
+                previous_payload["deduplicated"] = True
+                return previous_payload
         con.execute(
             """
             INSERT INTO proctor_events (
@@ -418,8 +640,8 @@ def record_student_proctor_event(
                 attempt["publication_id"],
                 clean_type,
                 now,
-                duration_ms,
-                json.dumps(payload or {}, ensure_ascii=False),
+                clean_duration,
+                payload_json,
             ),
         )
         row = con.execute("SELECT * FROM proctor_events WHERE id = ?", (event_id,)).fetchone()
@@ -436,18 +658,32 @@ def submit_student_attempt(
     attempt_id: str,
     user: dict[str, Any],
     time_spent_seconds: int | None = None,
+    answers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     student = _student_for_user(root, user)
     attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
     if str(attempt.get("status")) == "submitted":
         return _attempt_payload(attempt)
-    _ensure_attempt_can_collect(attempt)
-    questions, answer_keys = _load_exam_question_payloads(project_root, str(attempt["exam_id"]))
+    # An expired timer blocks further answer edits, but the client must still be
+    # able to finalize the saved answers when its countdown reaches zero.
+    _ensure_attempt_can_submit(attempt)
+    questions, answer_keys = _load_attempt_question_payloads(project_root, attempt)
+    if answers is not None:
+        _validate_answer_batch(answers, {str(item.get("question_id")) for item in questions})
     qtype_by_id = {str(q["question_id"]): str(q.get("type") or "") for q in questions}
     score_by_id = {str(q["question_id"]): float(q.get("score_per_item") or 0) for q in questions}
     max_score = round(sum(score_by_id.values()), 2)
 
+    now = utc_now()
+    submitted_rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers or [], now)
     with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
+        attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
+        if str(attempt.get("status")) == "submitted":
+            return _attempt_payload(attempt)
+        _ensure_attempt_can_submit(attempt)
+        if answers is not None:
+            _write_answer_mutations(con, attempt_id, submitted_rows, cleared_question_ids)
         answer_rows = con.execute(
             "SELECT * FROM student_answers WHERE attempt_id = ?",
             (attempt_id,),
@@ -478,7 +714,15 @@ def submit_student_attempt(
                 "UPDATE student_answers SET is_correct = ?, score = ?, grading_status = ? WHERE attempt_id = ? AND question_id = ?",
                 (is_correct, score, "auto_scored" if score is not None else "pending", attempt_id, qid),
             )
-        now = utc_now()
+        submitted_at = _parse_datetime(now) or datetime.now(UTC)
+        started_at = _parse_datetime(attempt.get("started_at"))
+        if started_at is None:
+            authoritative_time_spent = 0
+        else:
+            authoritative_time_spent = max(0, int((submitted_at - started_at).total_seconds()))
+            time_limit_seconds = max(0, int(attempt.get("time_limit_minutes") or 0)) * 60
+            if time_limit_seconds:
+                authoritative_time_spent = min(authoritative_time_spent, time_limit_seconds)
         final_score: float | None = round(total, 2) if scored_any else None
         if not attempt.get("started_at"):
             con.execute("UPDATE student_attempts SET started_at = ? WHERE id = ?", (now, attempt_id))
@@ -488,7 +732,7 @@ def submit_student_attempt(
             SET status = 'submitted', submitted_at = ?, score = ?, max_score = ?, time_spent_seconds = ?
             WHERE id = ?
             """,
-            (now, final_score, max_score, int(time_spent_seconds or 0), attempt_id),
+            (now, final_score, max_score, authoritative_time_spent, attempt_id),
         )
     return _attempt_payload(_attempt_for_student(root, attempt_id, str(student["id"])))
 
@@ -501,7 +745,7 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
                    ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
                    pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
-                   COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_count,
+                   COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count,
                    COALESCE((SELECT SUM(duration_ms) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_duration_ms
             FROM student_attempts sa
             JOIN exam_publications ep ON ep.id = sa.publication_id
@@ -519,7 +763,7 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
         show_results = bool(payload["show_results"])
         question_order: list[str] = []
         try:
-            questions, _answer_keys = _load_exam_question_payloads(project_root, str(attempt["exam_id"]))
+            questions, _answer_keys = _load_attempt_question_payloads(project_root, attempt)
             question_order = [str(q["question_id"]) for q in questions]
         except Exception:
             pass

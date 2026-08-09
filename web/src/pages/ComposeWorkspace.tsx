@@ -11,6 +11,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../api/client";
+import { AdaptivePracticeSelector } from "../components/AdaptivePracticeSelector";
 import { KatexPlainPreview } from "../components/KatexText";
 import { PdfPreview } from "../components/PdfPreview";
 import { MetadataFilterControls } from "../components/MetadataFilterControls";
@@ -37,8 +38,13 @@ import { isTauriShell } from "../lib/tauriEnv";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../lib/ime";
 import {
   listTeacherAssignedClasses,
+  listClassPracticeHistory,
   publishPlatformPaper,
+  publishReinforcementPractice,
+  publishWrongQuestionPractice,
   syncPlatformPaperFromExam,
+  type PracticeHistoryRecord,
+  type PracticePublishMode,
   type PaperSubmissionMode,
   type TeacherClassRecord,
 } from "../platform/auth";
@@ -159,6 +165,10 @@ export function ComposeWorkspace({
   const [publishEndAt, setPublishEndAt] = useState("");
   const [publishTimeLimitMinutes, setPublishTimeLimitMinutes] = useState(0);
   const [publishBusy, setPublishBusy] = useState(false);
+  const [publishMode, setPublishMode] = useState<PracticePublishMode>("current");
+  const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryRecord[]>([]);
+  const [practiceSourceIds, setPracticeSourceIds] = useState<string[]>([]);
+  const [practiceHistoryLoading, setPracticeHistoryLoading] = useState(false);
 
   const currentExamIdRef = useRef<string | null>(null);
   currentExamIdRef.current = currentExamId;
@@ -1333,10 +1343,6 @@ export function ComposeWorkspace({
   ]);
 
   async function openPublishDialog() {
-    if (!countsOk) {
-      onError("请先满足试卷题量要求后再发布线上试卷。");
-      return;
-    }
     setPublishBusy(true);
     onError(null);
     try {
@@ -1348,6 +1354,9 @@ export function ComposeWorkspace({
       setPublishStartAt("");
       setPublishEndAt("");
       setPublishTimeLimitMinutes(0);
+      setPublishMode("current");
+      setPracticeHistory([]);
+      setPracticeSourceIds([]);
       setPublishDialogOpen(true);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1355,6 +1364,30 @@ export function ComposeWorkspace({
       setPublishBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!publishDialogOpen || publishClassIds.length !== 1) {
+      setPracticeHistory([]);
+      setPracticeSourceIds([]);
+      if (publishClassIds.length > 1) setPublishMode("current");
+      return;
+    }
+    let cancelled = false;
+    setPracticeHistoryLoading(true);
+    void listClassPracticeHistory(publishClassIds[0])
+      .then((data) => {
+        if (!cancelled) setPracticeHistory(data.publications);
+      })
+      .catch((error) => {
+        if (!cancelled) onError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setPracticeHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onError, publishClassIds, publishDialogOpen]);
 
   function togglePublishClass(classId: string) {
     setPublishClassIds((current) =>
@@ -1370,6 +1403,47 @@ export function ComposeWorkspace({
     setPublishBusy(true);
     onError(null);
     try {
+      const adaptiveSettings = {
+        class_id: publishClassIds[0],
+        title:
+          exportLabel.trim() ||
+          (publishMode === "wrong_questions" ? "历史错题巩固" : publishMode === "reinforcement" ? "专项巩固" : "在线试卷"),
+        start_at: publishStartAt || null,
+        end_at: publishEndAt || null,
+        submission_mode: publishSubmissionMode,
+        max_screen_switches: publishMaxScreenSwitches,
+        time_limit_minutes: publishTimeLimitMinutes > 0 ? publishTimeLimitMinutes : null,
+      };
+      if (publishMode === "wrong_questions") {
+        if (publishClassIds.length !== 1 || practiceSourceIds.length !== 1) {
+          throw new Error("历史错题卷需要选择一个班级和一份历史试卷");
+        }
+        const result = await publishWrongQuestionPractice({
+          ...adaptiveSettings,
+          source_publication_id: practiceSourceIds[0],
+        });
+        setMsg(`历史错题卷已发布：${result.assigned_student_count} 人收到，${result.skipped_student_count} 人无错题`);
+        setPublishDialogOpen(false);
+        return;
+      }
+      if (publishMode === "reinforcement") {
+        if (publishClassIds.length !== 1 || practiceSourceIds.length < 10) {
+          throw new Error("专项巩固卷需要选择一个班级和至少 10 份历史试卷");
+        }
+        const result = await publishReinforcementPractice({
+          ...adaptiveSettings,
+          source_publication_ids: practiceSourceIds,
+          questions_per_student: 5,
+        });
+        setMsg(
+          `专项巩固卷已发布：${result.assigned_student_count} 人收到，AI 使用 ${result.generation.total_tokens} tokens`,
+        );
+        setPublishDialogOpen(false);
+        return;
+      }
+      if (!countsOk) {
+        throw new Error("当前试卷题量尚未满足模板要求；可改选历史错题卷或专项巩固卷");
+      }
       const saved = await persistDraftForPublish();
       const examId = String(saved?.exam_id ?? currentExamIdRef.current ?? "").trim();
       if (!examId) {
@@ -1525,7 +1599,7 @@ export function ComposeWorkspace({
         <button
           type="button"
           className="rounded-md border border-emerald-300 bg-white px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-          disabled={busy || publishBusy || !selectedTpl || !countsOk}
+          disabled={busy || publishBusy}
           onClick={() => void openPublishDialog()}
           title="发布线上试卷"
         >
@@ -1715,7 +1789,7 @@ export function ComposeWorkspace({
           aria-modal="true"
           aria-labelledby="publish-online-dialog-title"
         >
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+          <div className="max-h-[92vh] w-full max-w-3xl overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
             <h2 id="publish-online-dialog-title" className="text-base font-semibold text-slate-900">
               发布线上答题试卷
             </h2>
@@ -1748,6 +1822,15 @@ export function ComposeWorkspace({
                 </p>
               ) : null}
             </div>
+            <AdaptivePracticeSelector
+              mode={publishMode}
+              history={practiceHistory}
+              selectedIds={practiceSourceIds}
+              loading={practiceHistoryLoading}
+              disabled={publishClassIds.length !== 1}
+              onModeChange={setPublishMode}
+              onSelectionChange={setPracticeSourceIds}
+            />
             <div className="mt-4 grid gap-2 sm:grid-cols-3">
               {[
                 ["online", "网页答题"],
@@ -1826,10 +1909,24 @@ export function ComposeWorkspace({
                 type="button"
                 data-testid="compose-publish-online-confirm"
                 className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
-                disabled={publishBusy || publishClassIds.length === 0}
+                disabled={
+                  publishBusy ||
+                  publishClassIds.length === 0 ||
+                  (publishMode === "current" && !countsOk) ||
+                  (publishMode === "wrong_questions" && (publishClassIds.length !== 1 || practiceSourceIds.length !== 1)) ||
+                  (publishMode === "reinforcement" && (publishClassIds.length !== 1 || practiceSourceIds.length < 10))
+                }
                 onClick={() => void publishCurrentPaperOnline()}
               >
-                {publishBusy ? "发布中..." : "发布线上试卷"}
+                {publishBusy
+                  ? publishMode === "reinforcement"
+                    ? "AI 正在生成每位学生的专项题…"
+                    : "发布中..."
+                  : publishMode === "wrong_questions"
+                    ? "发布历史错题卷"
+                    : publishMode === "reinforcement"
+                      ? "生成并发布专项巩固卷"
+                      : "发布线上试卷"}
               </button>
             </div>
           </div>

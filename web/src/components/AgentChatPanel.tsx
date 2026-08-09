@@ -1017,7 +1017,7 @@ export function AgentChatPanel({
             {ln.kind === "assistant" && ln.text && (
               <div className="mr-4 flex gap-2">
                 <Bot className="mt-0.5 h-4 w-4 shrink-0 text-violet-500" />
-                <div className="prose prose-sm max-w-none text-slate-800 prose-p:my-1 prose-headings:my-2">
+                <div className={ASSISTANT_PROSE_CLASS}>
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
@@ -1256,3 +1256,5 @@ export function AgentChatPanel({
     </div>
   );
 }
+export const ASSISTANT_PROSE_CLASS =
+  "prose prose-sm min-w-0 max-w-full break-words text-slate-800 prose-p:my-1 prose-headings:my-2 prose-pre:max-w-full prose-pre:overflow-x-auto prose-table:block prose-table:max-w-full prose-table:overflow-x-auto";

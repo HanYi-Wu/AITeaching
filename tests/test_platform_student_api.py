@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import json
 
 import yaml
 from fastapi.testclient import TestClient
 
 from solaire.exam_compiler.models import ExamConfig, QuestionLibraryRef, SelectedSection
 from solaire.web.app import ensure_project_layout
+from solaire.web.platform_db import connect, default_platform_root, init_platform_db
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -260,3 +263,195 @@ def test_paused_publication_blocks_student_collection_and_exposes_time_limit(
     started = web_client.post(f"/api/student/publications/{publication_id}/start", headers=student_headers)
     assert started.status_code == 400
     assert "not open" in started.json()["detail"]
+
+
+def test_student_resumes_saved_answers_and_personalized_questions_are_scored(
+    web_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    school_headers, _ = _school_headers(web_client, admin_token)
+    class_id, student_account = _create_teacher_class_student(web_client, school_headers)
+    _write_online_exam(tmp_path)
+    teacher_headers = _teacher_headers(web_client)
+    paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+    publication = web_client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "title": "Personalized", "time_limit_minutes": 1},
+        headers=teacher_headers,
+    ).json()["publication"]
+
+    platform_root = default_platform_root()
+    init_platform_db(platform_root)
+    frozen_questions = [
+        {
+            "question_id": "adaptive/student/q1",
+            "header": "专项题 1",
+            "section_id": "practice",
+            "score_per_item": 6,
+            "type": "single_choice",
+            "content": "3+4=?",
+            "options": {"A": "6", "B": "7"},
+        }
+    ]
+    with connect(platform_root) as con:
+        attempt_id = str(
+            con.execute(
+                "SELECT id FROM student_attempts WHERE publication_id = ?",
+                (publication["id"],),
+            ).fetchone()["id"]
+        )
+        con.execute(
+            """
+            UPDATE student_attempts
+            SET question_payload_json = ?, answer_key_json = ?, practice_metadata_json = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(frozen_questions, ensure_ascii=False),
+                json.dumps({"adaptive/student/q1": "B"}),
+                json.dumps({"kind": "reinforcement"}),
+                attempt_id,
+            ),
+        )
+
+    student_login = web_client.post("/api/auth/login", json=student_account)
+    student_headers = _headers(str(student_login.json()["token"]))
+    started = web_client.post(
+        f"/api/student/publications/{publication['id']}/start",
+        headers=student_headers,
+    )
+    assert started.status_code == 200
+    assert started.json()["questions"] == frozen_questions
+    assert started.json()["attempt"]["practice_metadata"] == {"kind": "reinforcement"}
+    assert 0 < started.json()["attempt"]["remaining_seconds"] <= 60
+
+    invalid_question = web_client.post(
+        f"/api/student/attempts/{attempt_id}/answers",
+        json={"answers": [{"question_id": "not-in-this-attempt", "answer": "B"}]},
+        headers=student_headers,
+    )
+    assert invalid_question.status_code == 400
+    assert "does not belong" in invalid_question.json()["detail"]
+
+    saved = web_client.post(
+        f"/api/student/attempts/{attempt_id}/answers",
+        json={"answers": [{"question_id": "adaptive/student/q1", "answer": "B"}]},
+        headers=student_headers,
+    )
+    assert saved.status_code == 200
+    resumed = web_client.post(
+        f"/api/student/publications/{publication['id']}/start",
+        headers=student_headers,
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["saved_answers"] == [
+        {"question_id": "adaptive/student/q1", "answer": "B", "images": []}
+    ]
+    assert 0 < resumed.json()["attempt"]["remaining_seconds"] <= started.json()["attempt"]["remaining_seconds"]
+
+    server_started_at = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
+    with connect(default_platform_root()) as con:
+        con.execute(
+            "UPDATE student_attempts SET started_at = ? WHERE id = ?",
+            (server_started_at, attempt_id),
+        )
+        con.execute("DELETE FROM student_answers WHERE attempt_id = ?", (attempt_id,))
+
+    expired_listing = web_client.get("/api/student/papers", headers=student_headers)
+    assert expired_listing.status_code == 200
+    expired_paper = next(item for item in expired_listing.json()["papers"] if item["attempt_id"] == attempt_id)
+    assert expired_paper["status"] == "in_progress"
+    assert expired_paper["can_answer"] is True
+    assert expired_paper["remaining_seconds"] == 0
+
+    expired_resume = web_client.post(
+        f"/api/student/publications/{publication['id']}/start",
+        headers=student_headers,
+    )
+    assert expired_resume.status_code == 200
+    assert expired_resume.json()["attempt"]["remaining_seconds"] == 0
+
+    submitted = web_client.post(
+        f"/api/student/attempts/{attempt_id}/submit",
+        json={
+            "time_spent_seconds": 12,
+            "answers": [{"question_id": "adaptive/student/q1", "answer": "B"}],
+        },
+        headers=student_headers,
+    )
+    assert submitted.status_code == 200
+    assert submitted.json()["attempt"]["score"] == 6.0
+    assert submitted.json()["attempt"]["max_score"] == 6.0
+    assert submitted.json()["attempt"]["time_spent_seconds"] == 60
+
+    late_save = web_client.post(
+        f"/api/student/attempts/{attempt_id}/answers",
+        json={"answers": [{"question_id": "adaptive/student/q1", "answer": "A"}]},
+        headers=student_headers,
+    )
+    assert late_save.status_code == 400
+    result = web_client.get("/api/student/results", headers=student_headers).json()["results"][0]
+    assert result["score"] == 6.0
+
+
+def test_proctor_events_are_validated_deduplicated_and_only_visibility_counts_as_switch(
+    web_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    school_headers, _ = _school_headers(web_client, admin_token)
+    class_id, student_account = _create_teacher_class_student(web_client, school_headers)
+    _write_online_exam(tmp_path)
+    teacher_headers = _teacher_headers(web_client)
+    paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+    publication = web_client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "max_screen_switches": 1},
+        headers=teacher_headers,
+    ).json()["publication"]
+    student_login = web_client.post("/api/auth/login", json=student_account)
+    student_headers = _headers(str(student_login.json()["token"]))
+    attempt_id = web_client.post(
+        f"/api/student/publications/{publication['id']}/start",
+        headers=student_headers,
+    ).json()["attempt"]["id"]
+
+    invalid = web_client.post(
+        f"/api/student/attempts/{attempt_id}/proctor-events",
+        json={"event_type": "camera_snapshot", "payload": {}},
+        headers=student_headers,
+    )
+    assert invalid.status_code == 400
+
+    for event_type in ("window_blur", "copy", "paste", "fullscreen_exit", "visibility_hidden"):
+        first = web_client.post(
+            f"/api/student/attempts/{attempt_id}/proctor-events",
+            json={"event_type": event_type, "duration_ms": 500, "payload": {"source": "test"}},
+            headers=student_headers,
+        )
+        assert first.status_code == 200
+        duplicate = web_client.post(
+            f"/api/student/attempts/{attempt_id}/proctor-events",
+            json={"event_type": event_type, "duration_ms": 500, "payload": {"source": "test"}},
+            headers=student_headers,
+        )
+        assert duplicate.status_code == 200
+        assert duplicate.json()["event"]["deduplicated"] is True
+
+    analysis = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=teacher_headers)
+    assert analysis.status_code == 200
+    integrity = analysis.json()["analysis"]["proctoring"]
+    assert integrity["screen_switch_count"] == 1
+    assert integrity["event_count"] == 5
+    assert integrity["event_type_counts"] == {
+        "copy": 1,
+        "fullscreen_exit": 1,
+        "paste": 1,
+        "visibility_hidden": 1,
+        "window_blur": 1,
+    }
+    student = analysis.json()["analysis"]["students"][0]
+    assert student["screen_switch_count"] == 1
+    assert student["screen_switch_exceeded"] is False
+    assert student["integrity_risk_score"] > 0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +21,11 @@ from solaire.knowledge_forge import (
     unbind_question_from_node,
 )
 from solaire.web.actor_scope import teacher_graph_root
+from solaire.web.adaptive_practice_service import (
+    list_practice_history,
+    publish_reinforcement_practice,
+    publish_wrong_question_practice,
+)
 from solaire.web.bank_service import delete_question, delete_question_collection, rename_question_collection
 from solaire.web.exam_workspace_service import (
     create_workspace_from_exam,
@@ -356,6 +362,62 @@ def tool_paper_publications(ctx: InvocationContext, args: dict[str, Any]) -> Too
     return _run(
         lambda: list_paper_publications(default_platform_root(), paper_id=_required(args, "paper_id"), user=_actor(ctx))
     )
+
+
+def _practice_settings(args: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "start_at": str(args.get("start_at") or "").strip() or None,
+        "end_at": str(args.get("end_at") or "").strip() or None,
+        "show_results_immediately": bool(args.get("show_results_immediately", False)),
+        "submission_mode": str(args.get("submission_mode") or "online"),
+        "max_screen_switches": int(args.get("max_screen_switches") or 0),
+        "time_limit_minutes": int(args.get("time_limit_minutes") or 0) or None,
+    }
+
+
+def tool_paper_practice_history(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(
+        lambda: list_practice_history(
+            default_platform_root(),
+            class_id=_required(args, "class_id"),
+            user=_actor(ctx),
+        )
+    )
+
+
+def tool_paper_publish_wrong_question_practice(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(
+        lambda: publish_wrong_question_practice(
+            default_platform_root(),
+            ctx.project_root,
+            class_id=_required(args, "class_id"),
+            source_publication_id=_required(args, "source_publication_id"),
+            title=_required(args, "title"),
+            user=_actor(ctx),
+            **_practice_settings(args),
+        )
+    )
+
+
+def tool_paper_publish_reinforcement_practice(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    def invoke() -> dict[str, Any]:
+        source_ids = args.get("source_publication_ids")
+        if not isinstance(source_ids, list):
+            raise ValueError("source_publication_ids must be an array")
+        return asyncio.run(
+            publish_reinforcement_practice(
+                default_platform_root(),
+                ctx.project_root,
+                class_id=_required(args, "class_id"),
+                source_publication_ids=[str(item) for item in source_ids],
+                title=_required(args, "title"),
+                questions_per_student=int(args.get("questions_per_student") or 5),
+                user=_actor(ctx),
+                **_practice_settings(args),
+            )
+        )
+
+    return _run(invoke)
 
 
 def tool_paper_submissions(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:

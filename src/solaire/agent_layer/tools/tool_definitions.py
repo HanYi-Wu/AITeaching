@@ -1114,6 +1114,52 @@ _RAW_TOOLS.extend(
         _fn("paper.list", "按关键字、学科、状态和交付模式查询当前教师的试卷。", _teacher_schema({"q": _S, "delivery_mode": _S, "status": _S, "subject": _S, "page": {"type": "integer"}, "page_size": {"type": "integer"}}), teacher_tools.tool_paper_list, risk=ToolRisk.READ),
         _fn("paper.analyze", "分析试卷提交、成绩、用时和监考事件。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_analyze, risk=ToolRisk.READ),
         _fn("paper.publications", "列出试卷的发布记录。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_publications, risk=ToolRisk.READ),
+        _fn(
+            "paper.practice_history",
+            "查询班级可用于历史错题卷和专项巩固卷的发布记录与十卷资格。",
+            _teacher_schema({"class_id": _S}, ["class_id"]),
+            teacher_tools.tool_paper_practice_history,
+            risk=ToolRisk.READ,
+        ),
+        _fn(
+            "paper.publish_wrong_question_practice",
+            "按每位学生在一条历史发布中的错题，发布个性化历史错题卷。",
+            _teacher_schema(
+                {
+                    "class_id": _S,
+                    "source_publication_id": _S,
+                    "title": _S,
+                    "start_at": _S,
+                    "end_at": _S,
+                    "show_results_immediately": {"type": "boolean"},
+                    "submission_mode": _S,
+                    "max_screen_switches": {"type": "integer", "minimum": 0, "maximum": 999},
+                    "time_limit_minutes": {"type": "integer", "minimum": 0, "maximum": 1440},
+                },
+                ["class_id", "source_publication_id", "title"],
+            ),
+            teacher_tools.tool_paper_publish_wrong_question_practice,
+        ),
+        _fn(
+            "paper.publish_reinforcement_practice",
+            "根据同一班级至少十条历史发布中每位学生的错题，调用 AI 生成并发布举一反三专项巩固卷。",
+            _teacher_schema(
+                {
+                    "class_id": _S,
+                    "source_publication_ids": {"type": "array", "items": _S, "minItems": 10},
+                    "title": _S,
+                    "questions_per_student": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "start_at": _S,
+                    "end_at": _S,
+                    "show_results_immediately": {"type": "boolean"},
+                    "submission_mode": _S,
+                    "max_screen_switches": {"type": "integer", "minimum": 0, "maximum": 999},
+                    "time_limit_minutes": {"type": "integer", "minimum": 0, "maximum": 1440},
+                },
+                ["class_id", "source_publication_ids", "title"],
+            ),
+            teacher_tools.tool_paper_publish_reinforcement_practice,
+        ),
         _fn("paper.submissions", "列出试卷答卷及答案。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_submissions, risk=ToolRisk.READ),
         _fn("paper.update_delivery", "修改试卷的线上或线下交付模式。", _teacher_schema({"paper_id": _S, "delivery_mode": _S}, ["paper_id", "delivery_mode"]), teacher_tools.tool_paper_update_delivery),
         _fn("paper.update_publication", "修改考试发布的标题、时间、时长、结果展示和状态。", _teacher_schema({"paper_id": _S, "publication_id": _S, "title": _S, "description": _S, "start_at": _S, "end_at": _S, "time_limit_minutes": {"type": "integer"}, "show_results_immediately": {"type": "boolean"}, "status": _S}, ["paper_id", "publication_id"]), teacher_tools.tool_paper_update_publication),
@@ -1123,6 +1169,8 @@ _RAW_TOOLS.extend(
 )
 
 _CONFIRM_LABELS: dict[str, str] = {
+    "paper.publish_wrong_question_practice": "发布个性化历史错题卷",
+    "paper.publish_reinforcement_practice": "调用 AI 生成并发布专项巩固卷",
     "exam.export_paper": "导出试卷文件",
     "exam.validate_paper": "校验选题与卷面结构并写入临时配置",
     "graph.delete_node": "删除知识要点及其关联",

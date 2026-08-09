@@ -119,6 +119,27 @@ export type StudentRecord = {
 };
 
 export type PaperSubmissionMode = "online" | "image_manual" | "image_ai";
+export type PracticePublishMode = "current" | "wrong_questions" | "reinforcement";
+
+export type PracticeHistoryRecord = {
+  id: string;
+  paper_id: string;
+  title: string;
+  subject?: string | null;
+  created_at?: string | null;
+  status?: string;
+  practice_kind?: string | null;
+  submitted_student_count: number;
+  wrong_answer_count: number;
+};
+
+export type PracticeHistoryResponse = {
+  class_id: string;
+  publication_count: number;
+  minimum_reinforcement_history: number;
+  eligible_for_reinforcement: boolean;
+  publications: PracticeHistoryRecord[];
+};
 
 export type StudentAnswerImage = {
   name: string;
@@ -246,6 +267,8 @@ export type PlatformPaperAnalysis = {
     publication_count: number;
   };
   proctoring: {
+    event_count?: number;
+    event_type_counts?: Record<string, number>;
     screen_switch_count: number;
     screen_switch_duration_ms: number;
     flagged_student_count: number;
@@ -314,6 +337,9 @@ export type PlatformPaperAnalysis = {
     screen_switch_exceeded?: boolean;
     screen_switch_remaining?: number;
     screen_switch_duration_ms: number;
+    integrity_event_count?: number;
+    integrity_event_type_counts?: Record<string, number>;
+    integrity_risk_score?: number;
     publication_id?: string | null;
     publication_title?: string | null;
     class_names?: string[];
@@ -342,6 +368,12 @@ export type StudentPaperRecord = {
   end_at?: string | null;
   time_limit_minutes?: number | null;
   can_answer?: boolean;
+  remaining_seconds?: number | null;
+  practice_metadata?: {
+    kind?: "wrong_questions" | "reinforcement" | string;
+    source_count?: number;
+    source_publication_ids?: string[];
+  };
 };
 
 export type StudentQuestionRecord = {
@@ -908,6 +940,48 @@ export function publishPlatformPaper(
   });
 }
 
+export function listClassPracticeHistory(classId: string): Promise<PracticeHistoryResponse> {
+  return platformRequest(`/api/teacher/classes/${encodeURIComponent(classId)}/practice-history`);
+}
+
+type AdaptivePracticePublishPayload = {
+  class_id: string;
+  title: string;
+  start_at?: string | null;
+  end_at?: string | null;
+  show_results_immediately?: boolean;
+  submission_mode?: PaperSubmissionMode;
+  max_screen_switches?: number;
+  time_limit_minutes?: number | null;
+};
+
+export function publishWrongQuestionPractice(
+  payload: AdaptivePracticePublishPayload & { source_publication_id: string },
+): Promise<{
+  publication: PaperPublicationRecord & { practice_kind: "wrong_questions" };
+  assigned_student_count: number;
+  skipped_student_count: number;
+}> {
+  return platformRequest("/api/teacher/practice-publications/wrong-questions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function publishReinforcementPractice(
+  payload: AdaptivePracticePublishPayload & { source_publication_ids: string[]; questions_per_student?: number },
+): Promise<{
+  publication: PaperPublicationRecord & { practice_kind: "reinforcement" };
+  assigned_student_count: number;
+  skipped_student_count: number;
+  generation: { provider?: string | null; model?: string | null; total_tokens: number };
+}> {
+  return platformRequest("/api/teacher/practice-publications/reinforcement", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listPlatformPaperPublications(
   paperId: string,
 ): Promise<{ publications: PaperPublicationRecord[] }> {
@@ -990,7 +1064,11 @@ export function listStudentPapers(): Promise<{ papers: StudentPaperRecord[] }> {
 
 export function startStudentPaper(
   publicationId: string,
-): Promise<{ attempt: StudentAttemptRecord; questions: StudentQuestionRecord[] }> {
+): Promise<{
+  attempt: StudentAttemptRecord;
+  questions: StudentQuestionRecord[];
+  saved_answers?: Array<{ question_id: string; answer?: unknown; images?: StudentAnswerImage[] }>;
+}> {
   return platformRequest(`/api/student/publications/${encodeURIComponent(publicationId)}/start`, { method: "POST" });
 }
 
@@ -1016,7 +1094,10 @@ export function recordStudentProctorEvent(
 
 export function submitStudentAttempt(
   attemptId: string,
-  payload: { time_spent_seconds?: number | null },
+  payload: {
+    time_spent_seconds?: number | null;
+    answers?: Array<{ question_id: string; answer?: unknown; images?: StudentAnswerImage[] }>;
+  },
 ): Promise<{ attempt: StudentAttemptRecord }> {
   return platformRequest(`/api/student/attempts/${encodeURIComponent(attemptId)}/submit`, {
     method: "POST",

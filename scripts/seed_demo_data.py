@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
@@ -355,6 +356,140 @@ def seed_demo_attempts(root: Path, *, publication_id: str, class_id: str) -> Non
                 )
 
 
+def seed_demo_adaptive_histories(
+    root: Path,
+    *,
+    teacher: dict[str, object],
+    class_id: str,
+    students: list[dict[str, object]],
+) -> None:
+    """Create ten idempotent submitted histories for adaptive-practice demos."""
+    init_platform_db(root)
+    now = utc_now()
+    with connect(root) as con:
+        for index in range(1, 11):
+            exam_id = f"demo-history/{index:02d}"
+            title = f"演示历史错题 {index:02d}"
+            paper_row = con.execute(
+                "SELECT id FROM paper_records WHERE exam_id = ? AND subject = 'Math'",
+                (exam_id,),
+            ).fetchone()
+            if paper_row is None:
+                paper_id = new_id()
+                con.execute(
+                    """
+                    INSERT INTO paper_records (
+                      id, exam_id, title, subject, delivery_mode, owner_teacher_id, school_id,
+                      status, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'Math', 'online', ?, ?, 'published', ?, ?)
+                    """,
+                    (paper_id, exam_id, title, str(teacher["id"]), teacher.get("school_id"), now, now),
+                )
+            else:
+                paper_id = str(paper_row["id"])
+
+            publication_row = con.execute(
+                """
+                SELECT ep.id FROM exam_publications ep
+                JOIN publication_classes pc ON pc.publication_id = ep.id
+                WHERE ep.paper_id = ? AND pc.class_id = ? AND ep.status <> 'revoked'
+                LIMIT 1
+                """,
+                (paper_id, class_id),
+            ).fetchone()
+            if publication_row is None:
+                publication_id = new_id()
+                con.execute(
+                    """
+                    INSERT INTO exam_publications (
+                      id, paper_id, teacher_id, title, show_results_immediately, submission_mode,
+                      max_screen_switches, time_limit_minutes, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, 'online', 2, 30, 'published', ?, ?)
+                    """,
+                    (publication_id, paper_id, str(teacher["id"]), title, now, now),
+                )
+                con.execute(
+                    "INSERT INTO publication_classes (publication_id, class_id) VALUES (?, ?)",
+                    (publication_id, class_id),
+                )
+            else:
+                publication_id = str(publication_row["id"])
+
+            question_id = f"demo_history/{index:02d}/q1"
+            correct_answer = "B"
+            questions = [
+                {
+                    "question_id": question_id,
+                    "header": f"历史错题 {index:02d}",
+                    "section_id": "practice",
+                    "score_per_item": 5,
+                    "type": "single_choice",
+                    "content": f"{index + 2} × 4 等于多少？",
+                    "options": {"A": str((index + 2) * 3), "B": str((index + 2) * 4)},
+                }
+            ]
+            for student_index, student in enumerate(students):
+                attempt_row = con.execute(
+                    "SELECT id FROM student_attempts WHERE publication_id = ? AND student_id = ?",
+                    (publication_id, str(student["id"])),
+                ).fetchone()
+                attempt_id = str(attempt_row["id"]) if attempt_row is not None else new_id()
+                if attempt_row is None:
+                    con.execute(
+                        """
+                        INSERT INTO student_attempts (
+                          id, publication_id, student_id, status, started_at, submitted_at,
+                          score, max_score, time_spent_seconds, question_payload_json, answer_key_json
+                        ) VALUES (?, ?, ?, 'submitted', ?, ?, ?, 5, 600, ?, ?)
+                        """,
+                        (
+                            attempt_id,
+                            publication_id,
+                            str(student["id"]),
+                            now,
+                            now,
+                            0 if student_index == 0 else 5,
+                            json.dumps(questions, ensure_ascii=False),
+                            json.dumps({question_id: correct_answer}),
+                        ),
+                    )
+                else:
+                    con.execute(
+                        """
+                        UPDATE student_attempts SET
+                          status = 'submitted', started_at = ?, submitted_at = ?, score = ?, max_score = 5,
+                          time_spent_seconds = 600, question_payload_json = ?, answer_key_json = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            now,
+                            now,
+                            0 if student_index == 0 else 5,
+                            json.dumps(questions, ensure_ascii=False),
+                            json.dumps({question_id: correct_answer}),
+                            attempt_id,
+                        ),
+                    )
+                student_answer = "A" if student_index == 0 else correct_answer
+                con.execute("DELETE FROM student_answers WHERE attempt_id = ? AND question_id = ?", (attempt_id, question_id))
+                con.execute(
+                    """
+                    INSERT INTO student_answers (
+                      id, attempt_id, question_id, answer_payload, is_correct, score, grading_status, responded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'auto_scored', ?)
+                    """,
+                    (
+                        new_id(),
+                        attempt_id,
+                        question_id,
+                        json.dumps({"answer": student_answer}),
+                        0 if student_index == 0 else 1,
+                        0 if student_index == 0 else 5,
+                        now,
+                    ),
+                )
+
+
 def seed_demo_accounts(platform_root: Path) -> dict[str, object]:
     init_platform_db(platform_root)
     school = get_or_create_school(platform_root)
@@ -448,6 +583,12 @@ def main() -> None:
         max_screen_switches=0,
     )
     seed_demo_attempts(platform_root, publication_id=str(online_publication["id"]), class_id=class_id)
+    seed_demo_adaptive_histories(
+        platform_root,
+        teacher=teacher,
+        class_id=class_id,
+        students=seeded["students"],
+    )
 
     print(f"platform_root={platform_root}")
     print(f"content_root={project_root}")

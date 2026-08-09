@@ -38,6 +38,7 @@ type Props = {
 
 type StudentView = "home" | "papers" | "results" | "account" | "exam";
 type AccountMode = "password" | "username";
+type SaveStatus = "saved" | "dirty" | "saving" | "error" | "restored";
 
 function statusLabel(status: string): string {
   if (status === "submitted" || status === "completed") return "已提交";
@@ -79,6 +80,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [imageAnswers, setImageAnswers] = useState<Record<string, StudentAnswerImage[]>>({});
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [loading, setLoading] = useState(true);
   const startedAtRef = useRef<number | null>(null);
   const hiddenAtRef = useRef<number | null>(null);
@@ -87,8 +89,12 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const answersRef = useRef<Record<string, string>>({});
   const imageAnswersRef = useRef<Record<string, StudentAnswerImage[]>>({});
   const answersUrlRef = useRef<string | null>(null);
-  const submitUrlRef = useRef<string | null>(null);
+  const remainingBaselineRef = useRef<number | null>(null);
   const submitInFlightRef = useRef(false);
+  const autoSubmitTriggeredRef = useRef(false);
+  const answerRevisionRef = useRef(0);
+  const draftSaveInFlightRef = useRef(false);
+  const filePickerActiveRef = useRef(false);
 
   const pendingPapers = useMemo(
     () => papers.filter((paper) => paper.status !== "submitted" && paper.status !== "completed"),
@@ -96,6 +102,14 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   );
   const latestResult = results[0] ?? null;
   const mustChangePassword = Boolean(profile.must_change_password);
+  const answeredCount = useMemo(() => {
+    if (!activeAttempt) return 0;
+    return questions.filter((question) =>
+      isImageSubmission(activeAttempt.submission_mode)
+        ? (imageAnswers[question.question_id]?.length ?? 0) > 0
+        : Boolean((answers[question.question_id] ?? "").trim()),
+    ).length;
+  }, [activeAttempt, answers, imageAnswers, questions]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -128,15 +142,21 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     }
     const attemptId = activeAttempt.id;
     const sendEvent = (eventType: string, durationMs?: number | null, payload?: Record<string, unknown>) => {
-      void recordStudentProctorEvent(attemptId, {
-        event_type: eventType,
-        duration_ms: durationMs ?? null,
-        payload: payload ?? null,
-      }).catch(() => {
+      void Promise.resolve(
+        recordStudentProctorEvent(attemptId, {
+          event_type: eventType,
+          duration_ms: durationMs ?? null,
+          payload: payload ?? null,
+        }),
+      ).catch(() => {
         /* best effort proctor event */
       });
     };
     const onVisibilityChange = () => {
+      if (filePickerActiveRef.current) {
+        hiddenAtRef.current = null;
+        return;
+      }
       if (document.hidden) {
         hiddenAtRef.current = Date.now();
         return;
@@ -147,12 +167,35 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         sendEvent("visibility_hidden", duration, { source: "visibilitychange" });
       }
     };
-    const onBlur = () => sendEvent("window_blur", 0, { source: "window.blur" });
+    const onBlur = () => {
+      if (!filePickerActiveRef.current) sendEvent("window_blur", 0, { source: "window.blur" });
+    };
+    const onFocus = () => {
+      window.setTimeout(() => {
+        filePickerActiveRef.current = false;
+      }, 0);
+    };
+    const onCopy = () => sendEvent("copy", 0, { source: "document.copy" });
+    const onPaste = () => sendEvent("paste", 0, { source: "document.paste" });
+    const onContextMenu = () => sendEvent("context_menu", 0, { source: "document.contextmenu" });
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement) sendEvent("fullscreen_exit", 0, { source: "fullscreenchange" });
+    };
     document.addEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("paste", onPaste);
+    document.addEventListener("contextmenu", onContextMenu);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
     window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("paste", onPaste);
+      document.removeEventListener("contextmenu", onContextMenu);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
     };
   }, [activeAttempt]);
 
@@ -166,21 +209,19 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   useEffect(() => {
     if (!activeAttempt) {
       answersUrlRef.current = null;
-      submitUrlRef.current = null;
       setRemainingSeconds(null);
       return;
     }
-    void Promise.all([
-      resolveApiUrl(`/api/student/attempts/${encodeURIComponent(activeAttempt.id)}/answers`),
-      resolveApiUrl(`/api/student/attempts/${encodeURIComponent(activeAttempt.id)}/submit`),
-    ]).then(([answersUrl, submitUrl]) => {
+    void resolveApiUrl(`/api/student/attempts/${encodeURIComponent(activeAttempt.id)}/answers`).then((answersUrl) => {
       if (activeAttemptRef.current?.id === activeAttempt.id) {
         answersUrlRef.current = answersUrl;
-        submitUrlRef.current = submitUrl;
       }
     });
+    const serverRemaining = activeAttempt.remaining_seconds;
     const limitMinutes = Number(activeAttempt.time_limit_minutes || 0);
-    setRemainingSeconds(limitMinutes > 0 ? limitMinutes * 60 : null);
+    const initialRemaining = serverRemaining ?? (limitMinutes > 0 ? limitMinutes * 60 : null);
+    remainingBaselineRef.current = initialRemaining;
+    setRemainingSeconds(initialRemaining);
   }, [activeAttempt]);
 
   useEffect(() => {
@@ -190,10 +231,11 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     }
     const tick = () => {
       const elapsed = startedAtRef.current ? Math.floor((Date.now() - startedAtRef.current) / 1000) : 0;
-      const next = Math.max(0, limitMinutes * 60 - elapsed);
+      const next = Math.max(0, Number(remainingBaselineRef.current ?? limitMinutes * 60) - elapsed);
       setRemainingSeconds(next);
-      if (next <= 0) {
-        void submitActiveAttempt();
+      if (next <= 0 && !autoSubmitTriggeredRef.current) {
+        autoSubmitTriggeredRef.current = true;
+        void submitActiveAttempt(true);
       }
     };
     tick();
@@ -204,7 +246,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
 
   useEffect(() => {
     const onBeforeUnload = () => {
-      submitAttemptBestEffort();
+      saveAttemptBestEffort();
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     window.addEventListener("pagehide", onBeforeUnload);
@@ -214,6 +256,28 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!activeAttempt || activeAttempt.status !== "in_progress") return;
+    const timer = window.setInterval(() => {
+      if (saveStatus !== "dirty" || draftSaveInFlightRef.current) return;
+      const attempt = activeAttemptRef.current;
+      if (!attempt) return;
+      draftSaveInFlightRef.current = true;
+      const revision = answerRevisionRef.current;
+      setSaveStatus("saving");
+      const payload = buildAnswerPayload(attempt, questionsRef.current, answersRef.current, imageAnswersRef.current);
+      void saveStudentAnswers(attempt.id, payload)
+        .then(() => setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty"))
+        .catch(() => setSaveStatus("error"))
+        .finally(() => {
+          draftSaveInFlightRef.current = false;
+        });
+    }, 30_000);
+    return () => window.clearInterval(timer);
+    // buildAnswerPayload only reads refs; restarting the timer on every keypress is intentional.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAttempt?.id, activeAttempt?.status, saveStatus]);
 
   async function submitAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -247,10 +311,20 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       const data = await startStudentPaper(paper.publication_id);
       setActiveAttempt(data.attempt);
       setQuestions(data.questions);
-      setAnswers({});
-      setImageAnswers({});
+      const restoredAnswers: Record<string, string> = {};
+      const restoredImages: Record<string, StudentAnswerImage[]> = {};
+      for (const item of data.saved_answers ?? []) {
+        if (item.answer !== null && item.answer !== undefined) restoredAnswers[item.question_id] = String(item.answer);
+        if (item.images?.length) restoredImages[item.question_id] = item.images;
+      }
+      setAnswers(restoredAnswers);
+      setImageAnswers(restoredImages);
+      setSaveStatus((data.saved_answers?.length ?? 0) > 0 ? "restored" : "saved");
+      answerRevisionRef.current = 0;
+      autoSubmitTriggeredRef.current = false;
       startedAtRef.current = Date.now();
-      setRemainingSeconds(Number(data.attempt.time_limit_minutes || 0) > 0 ? Number(data.attempt.time_limit_minutes) * 60 : null);
+      remainingBaselineRef.current = data.attempt.remaining_seconds ?? null;
+      setRemainingSeconds(data.attempt.remaining_seconds ?? null);
       setActiveView("exam");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -260,7 +334,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   }
 
   function setAnswer(questionId: string, value: string) {
+    answerRevisionRef.current += 1;
     setAnswers((current) => ({ ...current, [questionId]: value }));
+    setSaveStatus("dirty");
   }
 
   function readImageFile(file: File): Promise<StudentAnswerImage> {
@@ -270,7 +346,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   async function setQuestionImages(questionId: string, files: FileList | null) {
     const selected = Array.from(files ?? []);
     const images = await Promise.all(selected.map(readImageFile));
+    answerRevisionRef.current += 1;
     setImageAnswers((current) => ({ ...current, [questionId]: images }));
+    setSaveStatus("dirty");
   }
 
   function buildAnswerPayload(
@@ -297,13 +375,12 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     return startedAtRef.current ? Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000)) : null;
   }
 
-  function submitAttemptBestEffort() {
+  function saveAttemptBestEffort() {
     const attempt = activeAttemptRef.current;
     if (!attempt || attempt.status !== "in_progress") return;
     const token = loadSessionToken();
     const answersUrl = answersUrlRef.current;
-    const submitUrl = submitUrlRef.current;
-    if (!token || !answersUrl || !submitUrl) return;
+    if (!token || !answersUrl) return;
     const headers = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
@@ -312,32 +389,44 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     void fetch(answersUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
-      keepalive: true,
-    }).catch(() => undefined);
-    void fetch(submitUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ time_spent_seconds: elapsedSeconds() }),
+      body: JSON.stringify({ answers: payload }),
       keepalive: true,
     }).catch(() => undefined);
   }
 
-  async function submitActiveAttempt() {
+  async function saveActiveDraft() {
+    if (!activeAttempt || draftSaveInFlightRef.current) return;
+    draftSaveInFlightRef.current = true;
+    const revision = answerRevisionRef.current;
+    setSaveStatus("saving");
+    try {
+      await saveStudentAnswers(activeAttempt.id, buildAnswerPayload(activeAttempt, questions, answers, imageAnswers));
+      setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty");
+    } catch (e) {
+      setSaveStatus("error");
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      draftSaveInFlightRef.current = false;
+    }
+  }
+
+  async function submitActiveAttempt(automatic = false) {
     if (!activeAttempt) return;
+    const unanswered = Math.max(0, questions.length - answeredCount);
+    if (!automatic && unanswered > 0 && !window.confirm(`还有 ${unanswered} 道题未作答，确认提交试卷吗？`)) return;
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
     setBusy("submit");
     setMessage(null);
     try {
       const payload = buildAnswerPayload(activeAttempt, questions, answers, imageAnswers);
-      await saveStudentAnswers(activeAttempt.id, payload);
-      await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsedSeconds() });
+      await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsedSeconds(), answers: payload });
       setActiveAttempt(null);
       setQuestions([]);
       setAnswers({});
       setImageAnswers({});
       setRemainingSeconds(null);
+      setSaveStatus("saved");
       startedAtRef.current = null;
       await refresh();
       setMessage("试卷已提交");
@@ -367,6 +456,18 @@ export function StudentWorkspace({ user, onLogout }: Props) {
               <p className="mt-1 text-sm text-slate-500">
                 {activeAttempt.subject || "未分科"} · {questions.length} 题
               </p>
+              <p className="mt-2 text-sm font-medium text-slate-700">已作答 {answeredCount} / {questions.length}</p>
+              <p className="mt-1 text-xs text-slate-500" role="status">
+                {saveStatus === "restored"
+                  ? "草稿已恢复"
+                  : saveStatus === "dirty"
+                    ? "有未保存修改"
+                    : saveStatus === "saving"
+                      ? "正在保存草稿…"
+                      : saveStatus === "error"
+                        ? "草稿保存失败，请重试"
+                        : "草稿已保存"}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <div className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white">
@@ -375,33 +476,71 @@ export function StudentWorkspace({ user, onLogout }: Props) {
               </div>
               <div className="inline-flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 <AlertTriangle className="h-4 w-4" />
-                已开启切屏检测
+                已记录切屏、复制粘贴、右键与退出全屏；选择答题图片不会计为切屏
               </div>
             </div>
           </div>
+          <nav className="mb-4 flex flex-wrap gap-2" aria-label="答题导航">
+            {questions.map((question, index) => (
+              <a
+                key={question.question_id}
+                href={`#student-question-${index + 1}`}
+                className={`inline-flex h-8 min-w-8 items-center justify-center rounded-md border px-2 text-xs font-semibold ${
+                  (isImageSubmission(activeAttempt.submission_mode)
+                    ? (imageAnswers[question.question_id]?.length ?? 0) > 0
+                    : Boolean((answers[question.question_id] ?? "").trim()))
+                    ? "border-emerald-600 bg-emerald-50 text-emerald-800"
+                    : "border-slate-300 bg-white text-slate-600"
+                }`}
+              >
+                {index + 1}
+              </a>
+            ))}
+          </nav>
           <div className="space-y-4">
-            {questions.map((question) => (
+            {questions.map((question, index) => (
               <QuestionAnswer
                 key={question.question_id}
+                anchorId={`student-question-${index + 1}`}
                 question={question}
                 value={answers[question.question_id] ?? ""}
                 onChange={(value) => setAnswer(question.question_id, value)}
                 imageMode={activeAttempt.submission_mode === "image_manual" || activeAttempt.submission_mode === "image_ai"}
                 images={imageAnswers[question.question_id] ?? []}
                 onImagesChange={(files) => void setQuestionImages(question.question_id, files)}
+                onFileDialogOpen={() => {
+                  filePickerActiveRef.current = true;
+                }}
+                onFileDialogClose={() => {
+                  window.setTimeout(() => {
+                    filePickerActiveRef.current = false;
+                  }, 0);
+                }}
               />
             ))}
           </div>
-          <button
-            type="button"
-            data-testid="student-submit-attempt"
-            disabled={busy === "submit"}
-            onClick={() => void submitActiveAttempt()}
-            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60 sm:w-auto"
-          >
-            <Send className="h-4 w-4" />
-            提交试卷
-          </button>
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              data-testid="student-save-draft"
+              disabled={saveStatus === "saving"}
+              onClick={() => void saveActiveDraft()}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-60 sm:w-auto"
+            >
+              <Save className="h-4 w-4" />
+              保存草稿
+            </button>
+            <button
+              type="button"
+              data-testid="student-submit-attempt"
+              disabled={busy === "submit"}
+              onClick={() => void submitActiveAttempt()}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60 sm:w-auto"
+            >
+              <Send className="h-4 w-4" />
+              提交试卷
+            </button>
+          </div>
           {message ? <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">{message}</div> : null}
         </section>
       </PlatformShell>
@@ -740,22 +879,28 @@ function StudentAnalysisVisual({ result }: { result: StudentResultRecord }) {
 
 function QuestionAnswer({
   question,
+  anchorId,
   value,
   onChange,
   imageMode,
   images,
   onImagesChange,
+  onFileDialogOpen,
+  onFileDialogClose,
 }: {
   question: StudentQuestionRecord;
+  anchorId?: string;
   value: string;
   onChange: (value: string) => void;
   imageMode?: boolean;
   images?: StudentAnswerImage[];
   onImagesChange?: (files: FileList | null) => void;
+  onFileDialogOpen?: () => void;
+  onFileDialogClose?: () => void;
 }) {
   const options = question.options ? Object.entries(question.options) : [];
   return (
-    <article className="rounded-lg border border-slate-200 p-4">
+    <article id={anchorId} className="scroll-mt-4 rounded-lg border border-slate-200 p-4">
       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
         <span>{question.header}</span>
         <span>{question.section_id}</span>
@@ -769,7 +914,11 @@ function QuestionAnswer({
             type="file"
             accept="image/*"
             multiple
-            onChange={(event) => onImagesChange?.(event.target.files)}
+            onClick={() => onFileDialogOpen?.()}
+            onChange={(event) => {
+              onImagesChange?.(event.target.files);
+              onFileDialogClose?.();
+            }}
             className="block w-full text-sm text-slate-700"
           />
           {images && images.length > 0 ? (
@@ -787,11 +936,21 @@ function QuestionAnswer({
           {options.map(([key, text]) => (
             <label key={key} className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm">
               <input
-                type="radio"
+                type={question.type === "multiple_choice" ? "checkbox" : "radio"}
                 name={`question-${question.question_id}`}
                 value={key}
-                checked={value === key}
-                onChange={() => onChange(key)}
+                checked={question.type === "multiple_choice" ? value.includes(key) : value === key}
+                onChange={() => {
+                  if (question.type !== "multiple_choice") {
+                    onChange(key);
+                    return;
+                  }
+                  const optionKeys = options.map(([optionKey]) => optionKey);
+                  const selected = new Set(optionKeys.filter((optionKey) => value.includes(optionKey)));
+                  if (selected.has(key)) selected.delete(key);
+                  else selected.add(key);
+                  onChange(optionKeys.filter((optionKey) => selected.has(optionKey)).join(""));
+                }}
               />
               <span>
                 {key}. {text}

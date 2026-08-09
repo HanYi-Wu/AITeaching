@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from solaire.agent_layer.models import InvocationContext
+from solaire.agent_layer.models import ToolRisk
 from solaire.agent_layer.registry import FOCUS_PRESETS, get_registered_tool, select_tools_for_turn
 from solaire.agent_layer.teacher_capabilities import TEACHER_CAPABILITIES, capability_manifest
 from solaire.knowledge_forge import create_graph, get_taxonomy
@@ -102,3 +103,24 @@ def test_template_tools_reject_invalid_content_and_missing_update_target(tmp_pat
     assert not (tmp_path / "templates" / "broken.yaml").exists()
     assert missing.status == "failed"
     assert not (tmp_path / "templates" / "missing.yaml").exists()
+
+
+def test_adaptive_practice_capabilities_are_registered_with_safe_risk_boundaries() -> None:
+    history = get_registered_tool("paper.practice_history")
+    wrong = get_registered_tool("paper.publish_wrong_question_practice")
+    reinforcement = get_registered_tool("paper.publish_reinforcement_practice")
+
+    assert history is not None and history.risk == ToolRisk.READ
+    assert wrong is not None and wrong.risk == ToolRisk.WRITE
+    assert reinforcement is not None and reinforcement.risk == ToolRisk.WRITE
+    assert history.parameters_schema["required"] == ["class_id"]
+    assert wrong.parameters_schema["required"] == ["class_id", "source_publication_id", "title"]
+    assert reinforcement.parameters_schema["required"] == ["class_id", "source_publication_ids", "title"]
+    assert reinforcement.parameters_schema["properties"]["source_publication_ids"]["minItems"] == 10
+
+    capability_tools = {item.tool_name for item in TEACHER_CAPABILITIES if item.mode == "ai_tool"}
+    assert {
+        "paper.practice_history",
+        "paper.publish_wrong_question_practice",
+        "paper.publish_reinforcement_practice",
+    } <= capability_tools

@@ -294,7 +294,7 @@ function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; c
   const rows = [...analysis.students].sort((a, b) => clampPercent(b.score_percent) - clampPercent(a.score_percent));
   return (
     <div className="overflow-x-auto rounded-md border border-slate-200 bg-white" data-testid="paper-analysis-chart-table">
-      <table className={`w-full text-sm ${compact ? "min-w-[760px]" : "min-w-[920px]"}`}>
+      <table className={`w-full text-sm ${compact ? "min-w-[840px]" : "min-w-[1020px]"}`}>
         <thead className="bg-slate-50 text-xs text-slate-500">
           <tr>
             <th className="px-3 py-2 text-left font-medium">学生</th>
@@ -303,6 +303,7 @@ function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; c
             <th className="px-3 py-2 text-left font-medium">得分表现</th>
             <th className="px-3 py-2 text-right font-medium">用时</th>
             <th className="px-3 py-2 text-right font-medium">切屏</th>
+            <th className="px-3 py-2 text-right font-medium">诚信风险</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -338,6 +339,26 @@ function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; c
                   >
                     {student.screen_switch_count}/{student.screen_switch_limit ?? 0}
                   </span>
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {(() => {
+                    const risk = Number(student.integrity_risk_score ?? 0);
+                    const label = risk >= 60 ? "高风险" : risk >= 30 ? "需关注" : "低风险";
+                    return (
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
+                          risk >= 60
+                            ? "bg-rose-100 text-rose-700"
+                            : risk >= 30
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-emerald-100 text-emerald-700"
+                        }`}
+                        title="仅作为行为信号，需教师结合实际情况复核"
+                      >
+                        {risk} · {label}
+                      </span>
+                    );
+                  })()}
                 </td>
               </tr>
             );
@@ -451,7 +472,7 @@ export function PlatformPaperAnalysisCharts({
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h4 className="text-sm font-semibold text-slate-900">学生个人分析表</h4>
-          <span className="text-xs text-slate-500">含得分、耗时、切屏超限</span>
+          <span className="text-xs text-slate-500">含得分、耗时、切屏与可解释诚信风险（需人工复核）</span>
         </div>
         {analysis.students.length === 0 ? (
           <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">暂无学生作答数据</p>
