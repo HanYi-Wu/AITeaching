@@ -1,5 +1,13 @@
 # 变更日志（开发者）
 
+## [2026-08-10] SolEdu 1.4.4 | 个性化错题与专项复习发布闭环
+
+**改动摘要**：1.4.3 在组卷发布页加入历史错题试卷，并关联教师 AI 查询与发布工具；1.4.4 加入基于至少 10 份历史发布记录的专项复习试卷，由 AI 按学生错题生成举一反三题，并完善学生作答、自动提交、教师批改和分析闭环。
+
+**一致性与安全**：普通试卷和个性化试卷均冻结发布时题目与答案；AI 生成结果校验题型、数量、答案和分值；学生保存与提交使用原子事务，并限制异常答题与监考事件载荷。
+
+**验证范围**：后端全量 Pytest、前端 Vitest、Vite 生产构建、依赖安全审计，以及教师发布和学生作答的真实浏览器流程。
+
 ## [2026-04-11] LLM Wiki 落地 | Schema、索引与路径速查
 
 **改动摘要**：新增 `wiki/README.md`（Schema 与维护约定）；新建 `wiki/architecture/overview.md`、`wiki/architecture/file-map.md`；新建 `wiki/modules/dev-environment.md`；扩展 `wiki/index.md`（总览、专题、`docs/` 链接）；修正 `wiki/modules/desktop-startup.md` 中健康检查超时描述与默认 120s 一致；根目录新增 `AGENTS.md` 指向 wiki 入口。

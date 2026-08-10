@@ -204,7 +204,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Solaire Web", version="0.2.3", lifespan=_lifespan)
+app = FastAPI(title="Solaire Web", version="1.4.4", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
