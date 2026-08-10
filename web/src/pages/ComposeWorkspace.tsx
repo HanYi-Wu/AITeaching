@@ -168,6 +168,7 @@ export function ComposeWorkspace({
   const [publishMode, setPublishMode] = useState<PracticePublishMode>("current");
   const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryRecord[]>([]);
   const [practiceSourceIds, setPracticeSourceIds] = useState<string[]>([]);
+  const [practiceMaxQuestionsPerStudent, setPracticeMaxQuestionsPerStudent] = useState(20);
   const [practiceHistoryLoading, setPracticeHistoryLoading] = useState(false);
 
   const currentExamIdRef = useRef<string | null>(null);
@@ -1357,6 +1358,7 @@ export function ComposeWorkspace({
       setPublishMode("current");
       setPracticeHistory([]);
       setPracticeSourceIds([]);
+      setPracticeMaxQuestionsPerStudent(20);
       setPublishDialogOpen(true);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1421,19 +1423,20 @@ export function ComposeWorkspace({
         const result = await publishWrongQuestionPractice({
           ...adaptiveSettings,
           source_publication_id: practiceSourceIds[0],
+          max_questions_per_student: practiceMaxQuestionsPerStudent,
         });
         setMsg(`历史错题卷已发布：${result.assigned_student_count} 人收到，${result.skipped_student_count} 人无错题`);
         setPublishDialogOpen(false);
         return;
       }
       if (publishMode === "reinforcement") {
-        if (publishClassIds.length !== 1 || practiceSourceIds.length < 10) {
-          throw new Error("专项巩固卷需要选择一个班级和至少 10 份历史试卷");
+        if (publishClassIds.length !== 1 || practiceSourceIds.length < 3) {
+          throw new Error("专项巩固卷需要选择一个班级和至少 3 份历史试卷");
         }
         const result = await publishReinforcementPractice({
           ...adaptiveSettings,
           source_publication_ids: practiceSourceIds,
-          questions_per_student: 5,
+          questions_per_student: practiceMaxQuestionsPerStudent,
         });
         setMsg(
           `专项巩固卷已发布：${result.assigned_student_count} 人收到，AI 使用 ${result.generation.total_tokens} tokens`,
@@ -1826,10 +1829,15 @@ export function ComposeWorkspace({
               mode={publishMode}
               history={practiceHistory}
               selectedIds={practiceSourceIds}
+              maxQuestionsPerStudent={practiceMaxQuestionsPerStudent}
               loading={practiceHistoryLoading}
               disabled={publishClassIds.length !== 1}
-              onModeChange={setPublishMode}
+              onModeChange={(mode) => {
+                setPublishMode(mode);
+                setPracticeMaxQuestionsPerStudent(mode === "reinforcement" ? 5 : 20);
+              }}
               onSelectionChange={setPracticeSourceIds}
+              onMaxQuestionsChange={setPracticeMaxQuestionsPerStudent}
             />
             <div className="mt-4 grid gap-2 sm:grid-cols-3">
               {[
@@ -1914,7 +1922,7 @@ export function ComposeWorkspace({
                   publishClassIds.length === 0 ||
                   (publishMode === "current" && !countsOk) ||
                   (publishMode === "wrong_questions" && (publishClassIds.length !== 1 || practiceSourceIds.length !== 1)) ||
-                  (publishMode === "reinforcement" && (publishClassIds.length !== 1 || practiceSourceIds.length < 10))
+                  (publishMode === "reinforcement" && (publishClassIds.length !== 1 || practiceSourceIds.length < 3))
                 }
                 onClick={() => void publishCurrentPaperOnline()}
               >

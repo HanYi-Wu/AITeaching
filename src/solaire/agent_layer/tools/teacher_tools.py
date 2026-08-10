@@ -393,6 +393,7 @@ def tool_paper_publish_wrong_question_practice(ctx: InvocationContext, args: dic
             class_id=_required(args, "class_id"),
             source_publication_id=_required(args, "source_publication_id"),
             title=_required(args, "title"),
+            max_questions_per_student=int(args.get("max_questions_per_student") or 20),
             user=_actor(ctx),
             **_practice_settings(args),
         )

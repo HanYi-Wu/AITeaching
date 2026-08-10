@@ -266,10 +266,21 @@ export function AnalysisWorkspace({
   const [leftWidth, setLeftWidth] = useState<56 | 64 | 72>(56);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rightChartRef = useRef<HTMLDivElement>(null);
+  const onlineAnalysisRequestIdRef = useRef(0);
   const { setPageContext, requestAgentPrefill } = useAgentContext();
 
   useEffect(() => {
-    if (selectedExamId && examSummary) {
+    const onlinePaper = onlinePapers.find((paper) => paper.paper_id === selectedOnlinePaperId);
+    if (selectedOnlinePaperId && onlinePaper) {
+      const submitted = onlinePaper.submitted_student_count ?? onlineAnalysis?.summary.completed_students ?? 0;
+      const inProgress = onlinePaper.in_progress_student_count ?? onlineAnalysis?.summary.in_progress_students ?? 0;
+      setPageContext({
+        current_page: "analysis",
+        selected_resource_type: "paper",
+        selected_resource_id: selectedOnlinePaperId,
+        summary: `线上试卷分析：${onlinePaper.title}；${submitted} 份已提交，${inProgress} 份答题中`,
+      });
+    } else if (selectedExamId && examSummary) {
       setPageContext({
         current_page: "analysis",
         selected_resource_type: "exam",
@@ -283,7 +294,7 @@ export function AnalysisWorkspace({
       });
     }
     return () => setPageContext(null);
-  }, [selectedExamId, examSummary, setPageContext, t]);
+  }, [selectedExamId, examSummary, selectedOnlinePaperId, onlinePapers, onlineAnalysis, setPageContext, t]);
 
   const loadExams = useCallback(async () => {
     setLoadingExams(true);
@@ -323,6 +334,7 @@ export function AnalysisWorkspace({
   );
 
   const handleOnlinePaperSelect = useCallback(async (paper: PlatformPaperRecord) => {
+    const requestId = ++onlineAnalysisRequestIdRef.current;
     setSelectedOnlinePaperId(paper.paper_id);
     setSelectedExamId(null);
     setExamSummary(null);
@@ -331,16 +343,23 @@ export function AnalysisWorkspace({
     setLoadingOnlineAnalysis(true);
     try {
       const data = await analyzePlatformPaper(paper.paper_id);
-      setOnlineAnalysis(data.analysis);
+      if (onlineAnalysisRequestIdRef.current === requestId) {
+        setOnlineAnalysis(data.analysis);
+      }
     } catch (e) {
       console.error("loadOnlinePaperAnalysis failed", e);
-      setOnlineAnalysis(null);
+      if (onlineAnalysisRequestIdRef.current === requestId) {
+        setOnlineAnalysis(null);
+      }
     } finally {
-      setLoadingOnlineAnalysis(false);
+      if (onlineAnalysisRequestIdRef.current === requestId) {
+        setLoadingOnlineAnalysis(false);
+      }
     }
   }, []);
 
   const loadExamDetail = useCallback(async (examId: string) => {
+    onlineAnalysisRequestIdRef.current += 1;
     setLoadingDetail(true);
     setAnalysis(null);
     setSelectedOnlinePaperId(null);
@@ -702,7 +721,7 @@ export function AnalysisWorkspace({
         <div className="flex-1 overflow-y-auto">
           <div className="border-b border-slate-200 bg-white px-3 py-3">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <h4 className="text-xs font-semibold text-slate-600">线上试卷</h4>
+              <h4 className="text-xs font-semibold text-slate-600">线上历史考试（含答题数据）</h4>
               {loadingOnlinePapers ? <RefreshCw className="h-3 w-3 animate-spin text-slate-400" /> : null}
             </div>
             {onlinePapers.length === 0 ? (
@@ -727,6 +746,11 @@ export function AnalysisWorkspace({
                         .filter(Boolean)
                         .join(" · ")}
                     </span>
+                    {(paper.submitted_student_count ?? 0) > 0 || (paper.in_progress_student_count ?? 0) > 0 ? (
+                      <span className="mt-1 block truncate text-[11px] font-medium text-emerald-700">
+                        {paper.submitted_student_count ?? 0} 份已提交 · {paper.in_progress_student_count ?? 0} 份答题中
+                      </span>
+                    ) : null}
                   </button>
                 ))}
               </div>

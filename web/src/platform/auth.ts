@@ -165,6 +165,9 @@ export type PlatformPaperRecord = {
   latest_batch_id?: string | null;
   publication_count: number;
   published_class_count: number;
+  total_student_count?: number;
+  submitted_student_count?: number;
+  in_progress_student_count?: number;
   mtime?: string | null;
 };
 
@@ -864,6 +867,9 @@ function normalizePaper(raw: Partial<PlatformPaperRecord> & { id?: string }): Pl
     latest_batch_id: raw.latest_batch_id ?? null,
     publication_count: Number(raw.publication_count ?? 0),
     published_class_count: Number(raw.published_class_count ?? 0),
+    total_student_count: Number(raw.total_student_count ?? 0),
+    submitted_student_count: Number(raw.submitted_student_count ?? 0),
+    in_progress_student_count: Number(raw.in_progress_student_count ?? 0),
     mtime: raw.mtime ?? null,
   };
 }
@@ -956,7 +962,7 @@ type AdaptivePracticePublishPayload = {
 };
 
 export function publishWrongQuestionPractice(
-  payload: AdaptivePracticePublishPayload & { source_publication_id: string },
+  payload: AdaptivePracticePublishPayload & { source_publication_id: string; max_questions_per_student?: number },
 ): Promise<{
   publication: PaperPublicationRecord & { practice_kind: "wrong_questions" };
   assigned_student_count: number;

@@ -831,6 +831,44 @@ def test_whitelist_project_ctx_for_prompt() -> None:
     assert slim["exam_summary"] == "e"
 
 
+def test_online_paper_page_context_routes_ai_to_platform_analysis_tool() -> None:
+    from solaire.agent_layer.prompts import format_page_context_brief
+
+    brief = format_page_context_brief(
+        {
+            "current_page": "analysis",
+            "selected_resource_type": "paper",
+            "selected_resource_id": "paper-123",
+            "summary": "线上试卷分析：演示线上答题",
+        }
+    )
+
+    assert "paper.analyze" in brief
+    assert "agent.switch_focus" in brief
+    assert "domain=paper" in brief
+    assert "paper_id" in brief
+    assert "paper-123" in brief
+    assert "不要按本地文件路径" in brief
+
+
+def test_page_context_is_injected_into_latest_user_message_only() -> None:
+    from solaire.agent_layer.orchestrator import _inject_page_context_into_latest_user_message
+
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "旧问题"},
+        {"role": "assistant", "content": "旧回答"},
+        {"role": "user", "content": "读取当前试卷"},
+    ]
+
+    injected = _inject_page_context_into_latest_user_message(messages, "## 界面速览\n- paper-123")
+
+    assert injected is not messages
+    assert injected[1]["content"] == "旧问题"
+    assert injected[3]["content"] == "## 界面速览\n- paper-123\n\n## 教师请求\n读取当前试卷"
+    assert messages[3]["content"] == "读取当前试卷"
+
+
 def test_build_messages_at_most_two_leading_systems() -> None:
     """任务步骤并入动态 system，不得超过两条前缀 system。"""
     from solaire.agent_layer.context import ContextManager
@@ -884,6 +922,18 @@ def test_select_tools_compose_more_than_general(tmp_path: Path) -> None:
         plan_mode_active=False,
     )
     assert len(comp) >= len(g)
+
+
+def test_general_focus_can_read_current_online_paper(tmp_path: Path) -> None:
+    tools = select_tools_for_turn(
+        skill_id=None,
+        include_subtask=False,
+        current_focus="general",
+        project_root=tmp_path,
+        plan_mode_active=False,
+    )
+
+    assert "paper.analyze" in {tool.name for tool in tools}
 
 
 # ---------------------------------------------------------------------------

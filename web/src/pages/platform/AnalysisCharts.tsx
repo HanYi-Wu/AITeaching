@@ -19,6 +19,14 @@ function clampPercent(value: number | null | undefined): number {
   return Math.max(0, Math.min(100, Number(value ?? 0)));
 }
 
+const RADAR_LABELS: Record<string, string> = {
+  completion: "完成率",
+  score: "得分率",
+  time_efficiency: "时间效率",
+  proctoring: "监考诚信",
+  module_mastery: "模块掌握度",
+};
+
 function makeScoreBuckets(analysis: PlatformPaperAnalysis): Bucket[] {
   const students = analysis.students.filter((student) => student.score_percent != null);
   const ranges = [
@@ -110,7 +118,10 @@ function SegmentedStatus({ rows, total }: { rows: Bucket[]; total: number }) {
 }
 
 function RadarChart({ analysis }: { analysis: PlatformPaperAnalysis }) {
-  const axes = analysis.radar ?? [];
+  const axes = (analysis.radar ?? []).map((axis) => ({
+    ...axis,
+    label: RADAR_LABELS[axis.id] ?? axis.label,
+  }));
   if (axes.length < 3) {
     return <p className="text-sm text-slate-500">暂无雷达图数据</p>;
   }
@@ -138,8 +149,8 @@ function RadarChart({ analysis }: { analysis: PlatformPaperAnalysis }) {
   });
   const polygon = points.map((item) => `${item.point.x},${item.point.y}`).join(" ");
   return (
-    <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)]" data-testid="paper-analysis-radar">
-      <svg viewBox={`0 0 ${size} ${size}`} className="h-[220px] w-[220px]">
+    <div className="grid min-w-0 gap-3 overflow-hidden md:grid-cols-[minmax(0,220px)_minmax(0,1fr)]" data-testid="paper-analysis-radar">
+      <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto h-auto w-full max-w-[220px]">
         {[0.25, 0.5, 0.75, 1].map((scale) => (
           <circle key={scale} cx={center} cy={center} r={radius * scale} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
@@ -156,9 +167,9 @@ function RadarChart({ analysis }: { analysis: PlatformPaperAnalysis }) {
           <circle key={`${item.axis.id}:point`} cx={item.point.x} cy={item.point.y} r="3" fill="#0f172a" />
         ))}
       </svg>
-      <div className="space-y-2">
+      <div className="min-w-0 space-y-2 self-center">
         {axes.map((axis) => (
-          <div key={axis.id} className="grid grid-cols-[120px_minmax(0,1fr)_44px] items-center gap-2 text-xs">
+          <div key={axis.id} className="grid min-w-0 grid-cols-[minmax(0,96px)_minmax(40px,1fr)_36px] items-center gap-2 text-xs">
             <span className="truncate text-slate-600">{axis.label}</span>
             <div className="h-2 overflow-hidden rounded-full bg-slate-100">
               <div className="h-full rounded-full bg-slate-900" style={{ width: `${clampPercent(axis.value)}%` }} />
@@ -395,7 +406,7 @@ export function PlatformPaperAnalysisCharts({
       <div className={`grid gap-3 ${compact ? "grid-cols-1" : "lg:grid-cols-3"}`}>
         <section className="rounded-lg border border-slate-200 bg-white p-4" data-testid="paper-analysis-chart-status">
           <h4 className="text-sm font-semibold text-slate-900">答题进度分布</h4>
-          <p className="mt-1 text-xs text-slate-500">对应 PublicQ 的 Exam Taker Progress Distribution。</p>
+          <p className="mt-1 text-xs text-slate-500">查看未开始、答题中和已完成人数，及时提醒未完成学生。</p>
           <div className="mt-4">
             <SegmentedStatus rows={statusRows} total={total} />
           </div>
@@ -439,8 +450,8 @@ export function PlatformPaperAnalysisCharts({
         </div>
       </section>
 
-      <div className={`grid gap-3 ${compact ? "grid-cols-1" : "lg:grid-cols-[420px_minmax(0,1fr)]"}`}>
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className={`grid min-w-0 gap-3 ${compact ? "grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"}`}>
+        <section className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white p-4">
           <h4 className="text-sm font-semibold text-slate-900">雷达 / 蜘蛛图</h4>
           <div className="mt-3">
             <RadarChart analysis={analysis} />

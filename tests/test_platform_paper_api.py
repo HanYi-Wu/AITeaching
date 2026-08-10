@@ -440,6 +440,7 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
                 ("event2", str(attempts[0]["id"]), str(attempts[0]["student_id"]), publication_id, 800),
             ],
         )
+
         con.executemany(
             """
             INSERT INTO student_answers (
@@ -452,6 +453,11 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
                 ("ans2", str(attempts[0]["id"]), "math/q2", '{"answer":"B"}', 0, 0.0),
             ],
         )
+
+    history_paper = web_client.get("/api/papers?delivery_mode=online", headers=teacher_headers).json()["papers"][0]
+    assert history_paper["total_student_count"] == 2
+    assert history_paper["submitted_student_count"] == 1
+    assert history_paper["in_progress_student_count"] == 1
 
     analysis = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=teacher_headers)
     assert analysis.status_code == 200
@@ -485,6 +491,13 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
         "time_efficiency",
         "proctoring",
         "module_mastery",
+    }
+    assert {axis["label"] for axis in body["radar"]} == {
+        "完成率",
+        "得分率",
+        "时间效率",
+        "监考诚信",
+        "模块掌握度",
     }
 
     xlsx_report = web_client.get(f"/api/papers/{paper['paper_id']}/analysis.xlsx", headers=teacher_headers)

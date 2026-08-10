@@ -18,6 +18,7 @@ from solaire.web.platform_db import connect, default_platform_root, init_platfor
 from solaire.web.adaptive_practice_service import (
     _extract_generated_payload,
     _publish_personalized,
+    _source_questions_for_student,
     _validate_generated_questions,
 )
 
@@ -130,7 +131,7 @@ def _setup(client: TestClient, root: Path) -> dict[str, object]:
     }
 
 
-def _seed_nine_more_histories(context: dict[str, object]) -> list[str]:
+def _seed_more_histories(context: dict[str, object], additional_count: int) -> list[str]:
     root = default_platform_root()
     init_platform_db(root)
     klass = context["class"]
@@ -140,7 +141,7 @@ def _seed_nine_more_histories(context: dict[str, object]) -> list[str]:
     ids: list[str] = [str(context["source_publication"]["id"])]  # type: ignore[index]
     now = utc_now()
     with connect(root) as con:
-        for index in range(9):
+        for index in range(additional_count):
             paper_id = uuid.uuid4().hex
             publication_id = uuid.uuid4().hex
             con.execute(
@@ -293,7 +294,83 @@ def test_teacher_publishes_historical_wrong_questions_per_student(web_client: Te
     assert graded.json()["answer"]["score"] == 4
 
 
-def test_reinforcement_requires_ten_histories_and_publishes_validated_ai_variants(
+def test_wrong_question_practice_limits_each_students_question_count(web_client: TestClient, tmp_path: Path) -> None:
+    context = _setup(web_client, tmp_path)
+    first_student = context["students"][0]  # type: ignore[index]
+    with connect(default_platform_root()) as con:
+        attempt = con.execute(
+            "SELECT id FROM student_attempts WHERE publication_id = ? AND student_id = ?",
+            (context["source_publication"]["id"], first_student["id"]),  # type: ignore[index]
+        ).fetchone()
+        assert attempt is not None
+        con.execute(
+            "UPDATE student_answers SET is_correct = 0, score = 0 WHERE attempt_id = ? AND question_id = 'math/q2'",
+            (attempt["id"],),
+        )
+
+    published = web_client.post(
+        "/api/teacher/practice-publications/wrong-questions",
+        json={
+            "class_id": context["class"]["id"],  # type: ignore[index]
+            "source_publication_id": context["source_publication"]["id"],  # type: ignore[index]
+            "title": "限量错题卷",
+            "max_questions_per_student": 1,
+        },
+        headers=context["teacher_headers"],
+    )
+
+    assert published.status_code == 200
+    papers = web_client.get("/api/student/papers", headers=first_student["headers"]).json()["papers"]
+    practice = next(item for item in papers if item.get("practice_metadata", {}).get("kind") == "wrong_questions")
+    started = web_client.post(
+        f"/api/student/publications/{practice['publication_id']}/start",
+        headers=first_student["headers"],
+    ).json()
+    assert len(started["questions"]) == 1
+
+
+def test_all_correct_reinforcement_source_requires_every_selected_exam_to_be_fully_graded(
+    web_client: TestClient, tmp_path: Path
+) -> None:
+    context = _setup(web_client, tmp_path)
+    source_ids = _seed_more_histories(context, 2)
+    student = context["students"][1]  # type: ignore[index]
+    student_id = str(student["id"])
+    root = default_platform_root()
+
+    assert _source_questions_for_student(
+        root,
+        tmp_path,
+        student_id=student_id,
+        source_publication_ids=source_ids,
+    )
+
+    with connect(root) as con:
+        attempt = con.execute(
+            "SELECT id FROM student_attempts WHERE publication_id = ? AND student_id = ?",
+            (source_ids[0], student_id),
+        ).fetchone()
+        assert attempt is not None
+        con.execute("UPDATE student_attempts SET status = 'in_progress' WHERE id = ?", (attempt["id"],))
+    assert _source_questions_for_student(
+        root, tmp_path, student_id=student_id, source_publication_ids=source_ids
+    ) == []
+
+    with connect(root) as con:
+        con.execute("UPDATE student_attempts SET status = 'submitted' WHERE id = ?", (attempt["id"],))
+        con.execute("UPDATE student_answers SET is_correct = NULL WHERE attempt_id = ?", (attempt["id"],))
+    assert _source_questions_for_student(
+        root, tmp_path, student_id=student_id, source_publication_ids=source_ids
+    ) == []
+
+    with connect(root) as con:
+        con.execute("DELETE FROM student_answers WHERE attempt_id = ?", (attempt["id"],))
+    assert _source_questions_for_student(
+        root, tmp_path, student_id=student_id, source_publication_ids=source_ids
+    ) == []
+
+
+def test_reinforcement_requires_three_histories_and_generates_for_students_without_wrong_answers(
     web_client: TestClient,
     tmp_path: Path,
     monkeypatch,
@@ -308,12 +385,12 @@ def test_reinforcement_requires_ten_histories_and_publishes_validated_ai_variant
         headers=teacher_headers,
     )
     assert blocked.status_code == 400
-    assert "10" in blocked.json()["detail"]
+    assert "3" in blocked.json()["detail"]
 
-    source_ids = _seed_nine_more_histories(context)
+    source_ids = _seed_more_histories(context, 2)
 
     async def fake_generate(*, student, wrong_questions, **_kwargs):
-        assert len(wrong_questions) == 10
+        assert len(wrong_questions) >= 3
         return {
             "questions": [
                 {
@@ -338,7 +415,7 @@ def test_reinforcement_requires_ten_histories_and_publishes_validated_ai_variant
         json={
             "class_id": class_id,
             "source_publication_ids": source_ids,
-            "title": "十卷专项巩固",
+            "title": "三卷专项巩固",
             "questions_per_student": 1,
         },
         headers=teacher_headers,
@@ -346,16 +423,17 @@ def test_reinforcement_requires_ten_histories_and_publishes_validated_ai_variant
     assert published.status_code == 200
     body = published.json()
     assert body["publication"]["practice_kind"] == "reinforcement"
-    assert body["assigned_student_count"] == 1
-    assert body["generation"]["total_tokens"] == 321
-    student = context["students"][0]  # type: ignore[index]
-    started = web_client.post(
-        f"/api/student/publications/{body['publication']['id']}/start",
-        headers=student["headers"],
-    ).json()
-    assert started["questions"][0]["content"] == "8+5=?"
-    assert "answer" not in started["questions"][0]
-    assert started["attempt"]["practice_metadata"]["source_count"] == 10
+    assert body["assigned_student_count"] == 2
+    assert body["skipped_student_count"] == 0
+    assert body["generation"]["total_tokens"] == 642
+    for student in context["students"]:  # type: ignore[assignment]
+        started = web_client.post(
+            f"/api/student/publications/{body['publication']['id']}/start",
+            headers=student["headers"],
+        ).json()
+        assert started["questions"][0]["content"] == "8+5=?"
+        assert "answer" not in started["questions"][0]
+        assert started["attempt"]["practice_metadata"]["source_count"] == 3
 
 
 def test_personalized_publish_rejects_invalid_submission_mode(tmp_path: Path) -> None:

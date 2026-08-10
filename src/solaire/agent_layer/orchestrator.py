@@ -68,6 +68,24 @@ _LENGTH_REPEAT_CONTINUE_PROMPT = (
 _LENGTH_REPEAT_LIMIT = 3
 
 
+def _inject_page_context_into_latest_user_message(
+    messages: list[dict[str, Any]], page_context_brief: str
+) -> list[dict[str, Any]]:
+    """Attach volatile UI context to the active request without persisting it in chat history."""
+    brief = page_context_brief.strip()
+    if not brief:
+        return messages
+    injected = [dict(message) for message in messages]
+    for index in range(len(injected) - 1, -1, -1):
+        message = injected[index]
+        if message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "").strip()
+        message["content"] = f"{brief}\n\n## 教师请求\n{content}"
+        break
+    return injected
+
+
 def _pack_done_event(settings: LLMSettings, usage_acc: dict[str, int], peak_context_est: int, **more: Any) -> dict[str, Any]:
     data: dict[str, Any] = {"usage": usage_acc, "context_tokens_est": peak_context_est, **more}
     lim = context_limit_for_provider(settings.provider, settings.base_url)
@@ -569,6 +587,7 @@ async def run_agent_turn(
             session=session,
             user_message=continuation_prompt or "",
         )
+        api_messages = _inject_page_context_into_latest_user_message(api_messages, page_context_brief)
         if api_messages and api_messages[-1].get("role") == "user" and api_messages[-1].get("content") == "":
             api_messages.pop()
         continuation_prompt = None

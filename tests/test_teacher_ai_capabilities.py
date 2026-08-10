@@ -116,7 +116,12 @@ def test_adaptive_practice_capabilities_are_registered_with_safe_risk_boundaries
     assert history.parameters_schema["required"] == ["class_id"]
     assert wrong.parameters_schema["required"] == ["class_id", "source_publication_id", "title"]
     assert reinforcement.parameters_schema["required"] == ["class_id", "source_publication_ids", "title"]
-    assert reinforcement.parameters_schema["properties"]["source_publication_ids"]["minItems"] == 10
+    assert reinforcement.parameters_schema["properties"]["source_publication_ids"]["minItems"] == 3
+    assert wrong.parameters_schema["properties"]["max_questions_per_student"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+    }
 
     capability_tools = {item.tool_name for item in TEACHER_CAPABILITIES if item.mode == "ai_tool"}
     assert {

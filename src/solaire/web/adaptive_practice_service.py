@@ -14,7 +14,7 @@ from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.student_service import _load_attempt_question_payloads
 
 
-MIN_REINFORCEMENT_HISTORY = 10
+MIN_REINFORCEMENT_HISTORY = 3
 PRACTICE_KINDS = {"wrong_questions", "reinforcement"}
 SUBMISSION_MODES = {"online", "image_manual", "image_ai"}
 
@@ -163,6 +163,65 @@ def _wrong_questions_for_student(
     return wrong
 
 
+def _source_questions_for_student(
+    root: Path,
+    project_root: Path,
+    *,
+    student_id: str,
+    source_publication_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Load frozen source questions for an all-correct student.
+
+    Reinforcement still needs a knowledge/difficulty anchor when the selected
+    history contains no wrong answers.  Per-attempt snapshots are used so a
+    later edit to the source exam cannot change the generated practice.
+    """
+    sources: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    with connect(root) as con:
+        for publication_id in source_publication_ids:
+            row = con.execute(
+                """
+                SELECT sa.*, pr.exam_id
+                FROM student_attempts sa
+                JOIN exam_publications ep ON ep.id = sa.publication_id
+                JOIN paper_records pr ON pr.id = ep.paper_id
+                WHERE sa.publication_id = ? AND sa.student_id = ? AND sa.status = 'submitted'
+                """,
+                (publication_id, student_id),
+            ).fetchone()
+            attempt = row_to_dict(row)
+            if attempt is None:
+                return []
+            questions, answer_keys = _load_attempt_question_payloads(project_root, attempt)
+            eligible_questions = [
+                question
+                for question in questions
+                if str(question.get("question_id") or "").strip() in answer_keys
+            ]
+            question_ids = [str(question.get("question_id") or "").strip() for question in eligible_questions]
+            if not question_ids:
+                return []
+            placeholders = ", ".join("?" for _ in question_ids)
+            answer_rows = con.execute(
+                f"SELECT question_id, is_correct FROM student_answers "
+                f"WHERE attempt_id = ? AND question_id IN ({placeholders})",
+                (str(attempt["id"]), *question_ids),
+            ).fetchall()
+            graded = {str(answer_row["question_id"]): answer_row["is_correct"] for answer_row in answer_rows}
+            if any(graded.get(question_id) != 1 for question_id in question_ids):
+                return []
+            for question in eligible_questions:
+                qid = str(question.get("question_id") or "").strip()
+                answer = answer_keys.get(qid)
+                key = (publication_id, qid)
+                if not qid or answer is None or key in seen:
+                    continue
+                seen.add(key)
+                sources.append({**question, "answer": answer, "source_publication_id": publication_id})
+    return sources
+
+
 def _extract_json(value: str) -> dict[str, Any] | None:
     text = value.strip()
     if text.startswith("```"):
@@ -297,7 +356,8 @@ async def generate_reinforcement_questions(
             {
                 "role": "system",
                 "content": (
-                    "你是严谨的中学教师。根据学生历史错题生成同知识点、同难度但数值或情境不同的举一反三题。"
+                    "你是严谨的中学教师。优先根据学生历史错题生成同知识点、同难度但数值或情境不同的举一反三题；"
+                    "如果学生全部答对，则根据所选历史试卷的题目生成同知识点相关变式题。"
                     "必须调用 submit_reinforcement_questions 工具提交结果。每题必须含 "
                     "type/content/options/answer/score_per_item，不得照抄原题。"
                 ),
@@ -384,7 +444,7 @@ def _publish_personalized(
     if clean_submission_mode not in SUBMISSION_MODES:
         raise ValueError("submission_mode must be online, image_manual, or image_ai")
     if not assignments:
-        raise ValueError("No students have wrong questions in the selected history")
+        raise ValueError("No students have eligible source questions in the selected history")
     now = utc_now()
     paper_id = _new_id()
     publication_id = _new_id()
@@ -469,6 +529,7 @@ def publish_wrong_question_practice(
     source_publication_id: str,
     user: dict[str, Any],
     title: str,
+    max_questions_per_student: int = 20,
     **settings: Any,
 ) -> dict[str, Any]:
     clean_source_id = str(source_publication_id).strip()
@@ -493,7 +554,8 @@ def publish_wrong_question_practice(
             continue
         questions: list[dict[str, Any]] = []
         keys: dict[str, str] = {}
-        for item in wrong:
+        limit = max(1, min(100, int(max_questions_per_student or 20)))
+        for item in wrong[:limit]:
             qid = str(item["question_id"])
             keys[qid] = str(item["answer"])
             questions.append({key: value for key, value in item.items() if key not in {"answer", "source_publication_id"}})
@@ -524,7 +586,7 @@ async def publish_reinforcement_practice(
     questions_per_student: int = 5,
     **settings: Any,
 ) -> dict[str, Any]:
-    clean_ids = list(dict.fromkeys(source_publication_ids))
+    clean_ids = list(dict.fromkeys(str(item).strip() for item in source_publication_ids if str(item).strip()))
     if len(clean_ids) < MIN_REINFORCEMENT_HISTORY:
         raise ValueError(f"Reinforcement practice requires at least {MIN_REINFORCEMENT_HISTORY} historical publications")
     sources = _validate_sources(root, class_id=class_id, source_publication_ids=clean_ids, user=user)
@@ -542,6 +604,13 @@ async def publish_reinforcement_practice(
             student_id=str(student["id"]),
             source_publication_ids=clean_ids,
         )
+        if not wrong:
+            wrong = _source_questions_for_student(
+                root,
+                project_root,
+                student_id=str(student["id"]),
+                source_publication_ids=clean_ids,
+            )
         if not wrong:
             continue
         generated = await generate_reinforcement_questions(

@@ -109,20 +109,32 @@ def _paper_record_for_exam(root: Path, exam: dict[str, Any], user: dict[str, Any
 
 def _publication_stats(root: Path, paper_id: str) -> dict[str, int]:
     with connect(root) as con:
-        publication_count = con.execute(
-            "SELECT COUNT(*) AS n FROM exam_publications WHERE paper_id = ? AND status <> 'revoked'",
-            (paper_id,),
-        ).fetchone()["n"]
-        published_class_count = con.execute(
+        row = con.execute(
             """
-            SELECT COUNT(DISTINCT pc.class_id) AS n
-            FROM publication_classes pc
-            JOIN exam_publications ep ON ep.id = pc.publication_id
+            SELECT
+              COUNT(DISTINCT ep.id) AS publication_count,
+              COUNT(DISTINCT pc.class_id) AS published_class_count,
+              COUNT(DISTINCT sa.id) AS total_student_count,
+              COUNT(DISTINCT CASE
+                WHEN sa.status IN ('submitted', 'completed') OR sa.submitted_at IS NOT NULL THEN sa.id
+              END) AS submitted_student_count,
+              COUNT(DISTINCT CASE
+                WHEN sa.status = 'in_progress' AND sa.submitted_at IS NULL THEN sa.id
+              END) AS in_progress_student_count
+            FROM exam_publications ep
+            LEFT JOIN publication_classes pc ON pc.publication_id = ep.id
+            LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
             WHERE ep.paper_id = ? AND ep.status <> 'revoked'
             """,
             (paper_id,),
-        ).fetchone()["n"]
-    return {"publication_count": int(publication_count), "published_class_count": int(published_class_count)}
+        ).fetchone()
+    return {
+        "publication_count": int(row["publication_count"] or 0),
+        "published_class_count": int(row["published_class_count"] or 0),
+        "total_student_count": int(row["total_student_count"] or 0),
+        "submitted_student_count": int(row["submitted_student_count"] or 0),
+        "in_progress_student_count": int(row["in_progress_student_count"] or 0),
+    }
 
 
 def _paper_visible_to_user(paper: dict[str, Any], user: dict[str, Any]) -> bool:
@@ -790,11 +802,11 @@ def _build_radar(
     ]
     module_mastery = round(sum(module_values) / len(module_values), 2) if module_values else float(average_score or 0)
     axes = [
-        ("completion", "Completion", completion_rate),
-        ("score", "Score", average_score or 0),
-        ("time_efficiency", "Time Efficiency", time_efficiency),
-        ("proctoring", "Proctoring", proctoring),
-        ("module_mastery", "Module Mastery", module_mastery),
+        ("completion", "完成率", completion_rate),
+        ("score", "得分率", average_score or 0),
+        ("time_efficiency", "时间效率", time_efficiency),
+        ("proctoring", "监考诚信", proctoring),
+        ("module_mastery", "模块掌握度", module_mastery),
     ]
     return [{"id": axis_id, "label": label, "value": round(max(0.0, min(100.0, float(value))), 2)} for axis_id, label, value in axes]
 

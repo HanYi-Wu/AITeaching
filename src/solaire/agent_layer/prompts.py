@@ -34,6 +34,12 @@ def format_page_context_brief(page_context: dict[str, Any] | None) -> str:
     if sel_id or sel_t:
         st = sel_t or ""
         lines.append(f"- 选中资源：**{st}** `{sel_id or ''}`".strip())
+    if sel_t == "paper" and sel_id:
+        lines.append(
+            f"- 工具路由：这是平台线上试卷；读取当前试卷、答题进度或学情时，"
+            f"若当前工具集中没有 `paper.analyze`，先调用 `agent.switch_focus(domain=paper)`；"
+            f"随后必须调用 `paper.analyze`，并将 `paper_id` 设为 `{sel_id}`，不要按本地文件路径读取。"
+        )
     if summ and str(summ).strip():
         lines.append(f"- 教师备注：**{str(summ).strip()[:500]}**")
     return "\n".join(lines)

@@ -77,7 +77,7 @@ TEACHER_CAPABILITIES: tuple[TeacherCapability, ...] = (
     _tool("publish_paper", "paper", "发布在线考试", "exam.publish_online_paper"),
     _tool("query_practice_history", "paper", "查询班级历史试卷与专项巩固资格", "paper.practice_history"),
     _tool("publish_wrong_question_practice", "paper", "发布个性化历史错题卷", "paper.publish_wrong_question_practice"),
-    _tool("publish_reinforcement_practice", "paper", "AI 生成并发布十卷专项巩固卷", "paper.publish_reinforcement_practice"),
+    _tool("publish_reinforcement_practice", "paper", "AI 生成并发布三卷专项巩固卷", "paper.publish_reinforcement_practice"),
     _tool("manage_publication", "paper", "修改或撤销考试发布", "paper.update_publication"),
     _tool("review_submissions", "paper", "查看答卷", "paper.submissions"),
     _tool("manual_grade", "paper", "人工复核评分", "paper.manual_grade"),

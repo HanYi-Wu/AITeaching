@@ -1116,7 +1116,7 @@ _RAW_TOOLS.extend(
         _fn("paper.publications", "列出试卷的发布记录。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_publications, risk=ToolRisk.READ),
         _fn(
             "paper.practice_history",
-            "查询班级可用于历史错题卷和专项巩固卷的发布记录与十卷资格。",
+            "查询班级可用于历史错题卷和专项巩固卷的发布记录与三卷资格。",
             _teacher_schema({"class_id": _S}, ["class_id"]),
             teacher_tools.tool_paper_practice_history,
             risk=ToolRisk.READ,
@@ -1129,6 +1129,7 @@ _RAW_TOOLS.extend(
                     "class_id": _S,
                     "source_publication_id": _S,
                     "title": _S,
+                    "max_questions_per_student": {"type": "integer", "minimum": 1, "maximum": 100},
                     "start_at": _S,
                     "end_at": _S,
                     "show_results_immediately": {"type": "boolean"},
@@ -1142,11 +1143,11 @@ _RAW_TOOLS.extend(
         ),
         _fn(
             "paper.publish_reinforcement_practice",
-            "根据同一班级至少十条历史发布中每位学生的错题，调用 AI 生成并发布举一反三专项巩固卷。",
+            "根据同一班级至少三条历史发布中每位学生的错题或全对题目，调用 AI 生成并发布举一反三专项巩固卷。",
             _teacher_schema(
                 {
                     "class_id": _S,
-                    "source_publication_ids": {"type": "array", "items": _S, "minItems": 10},
+                    "source_publication_ids": {"type": "array", "items": _S, "minItems": 3},
                     "title": _S,
                     "questions_per_student": {"type": "integer", "minimum": 1, "maximum": 20},
                     "start_at": _S,

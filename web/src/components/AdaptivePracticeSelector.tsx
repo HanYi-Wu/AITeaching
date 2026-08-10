@@ -4,22 +4,26 @@ type Props = {
   mode: PracticePublishMode;
   history: PracticeHistoryRecord[];
   selectedIds: string[];
+  maxQuestionsPerStudent: number;
   loading: boolean;
   disabled?: boolean;
   onModeChange: (mode: PracticePublishMode) => void;
   onSelectionChange: (ids: string[]) => void;
+  onMaxQuestionsChange: (count: number) => void;
 };
 
 export function AdaptivePracticeSelector({
   mode,
   history,
   selectedIds,
+  maxQuestionsPerStudent,
   loading,
   disabled,
   onModeChange,
   onSelectionChange,
+  onMaxQuestionsChange,
 }: Props) {
-  const remaining = Math.max(0, 10 - selectedIds.length);
+  const remaining = Math.max(0, 3 - selectedIds.length);
   const select = (id: string) => {
     if (mode === "wrong_questions") {
       onSelectionChange([id]);
@@ -34,7 +38,7 @@ export function AdaptivePracticeSelector({
         {([
           ["current", "当前试卷", "发布正在编辑的试卷"],
           ["wrong_questions", "历史错题卷", "按学生历史错题个性化发布"],
-          ["reinforcement", "专项巩固卷", "基于至少 10 份历史卷生成举一反三题"],
+          ["reinforcement", "专项巩固卷", "基于至少 3 份历史卷生成举一反三题"],
         ] as const).map(([value, label, description]) => (
           <label
             key={value}
@@ -65,12 +69,28 @@ export function AdaptivePracticeSelector({
         <div className="mt-3">
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
             <span className="font-medium text-slate-800">
-              {mode === "wrong_questions" ? "选择 1 份历史发布" : `已选择 ${selectedIds.length} / 至少 10 份`}
+              {mode === "wrong_questions" ? "选择 1 份历史发布" : `已选择 ${selectedIds.length} / 至少 3 份`}
             </span>
             {mode === "reinforcement" && remaining > 0 ? (
               <span className="text-amber-700">还需选择 {remaining} 份历史试卷</span>
             ) : null}
           </div>
+          <label className="mt-3 flex max-w-xs items-center justify-between gap-3 text-sm font-medium text-slate-700">
+            <span>每名学生最多题数</span>
+            <input
+              type="number"
+              aria-label="每名学生最多题数"
+              min={1}
+              max={mode === "reinforcement" ? 20 : 100}
+              value={maxQuestionsPerStudent}
+              onChange={(event) => {
+                const ceiling = mode === "reinforcement" ? 20 : 100;
+                const requested = Math.trunc(Number(event.target.value || 1));
+                onMaxQuestionsChange(Math.max(1, Math.min(ceiling, Number.isFinite(requested) ? requested : 1)));
+              }}
+              className="w-24 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-right outline-none focus:border-emerald-700"
+            />
+          </label>
           <div className="mt-2 max-h-44 space-y-2 overflow-auto rounded-md border border-slate-200 bg-white p-2">
             {loading ? <p className="p-3 text-sm text-slate-500">正在读取班级历史…</p> : null}
             {!loading && history.length === 0 ? (
