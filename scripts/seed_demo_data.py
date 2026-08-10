@@ -274,6 +274,34 @@ def publish_demo_exam(
 
 def seed_demo_attempts(root: Path, *, publication_id: str, class_id: str) -> None:
     now = utc_now()
+    questions = [
+        {
+            "question_id": "demo/q1",
+            "header": "选择题 1",
+            "section_id": "Choice",
+            "score_per_item": 5,
+            "type": "single_choice",
+            "content": "6 + 7 等于多少？",
+            "options": {"A": "12", "B": "13"},
+        },
+        {
+            "question_id": "demo/q2",
+            "header": "判断题 2",
+            "section_id": "Choice",
+            "score_per_item": 5,
+            "type": "judge",
+            "content": "两条平行直线被第三条直线所截，内错角相等。",
+            "options": {"A": "正确", "B": "错误"},
+        },
+    ]
+    answer_keys = {"demo/q1": "B", "demo/q2": "A"}
+    scenarios = {
+        "S001": {"status": "submitted", "answers": {"demo/q1": "B", "demo/q2": "A"}, "score": 10, "seconds": 780, "events": []},
+        "S002": {"status": "submitted", "answers": {"demo/q1": "B", "demo/q2": "B"}, "score": 5, "seconds": 920, "events": [("visibility_hidden", 1100)]},
+        "S003": {"status": "submitted", "answers": {"demo/q1": "A", "demo/q2": "B"}, "score": 0, "seconds": 1080, "events": [("visibility_hidden", 2400), ("copy", 0), ("paste", 0)]},
+        "S004": {"status": "in_progress", "answers": {"demo/q1": "B"}, "score": None, "seconds": 420, "events": [("window_blur", 0)]},
+        "S005": {"status": "submitted", "answers": {"demo/q1": "A", "demo/q2": "A"}, "score": 5, "seconds": 650, "events": [("context_menu", 0)]},
+    }
     with connect(root) as con:
         students = con.execute(
             """
@@ -305,37 +333,50 @@ def seed_demo_attempts(root: Path, *, publication_id: str, class_id: str) -> Non
         ).fetchall()
         con.execute("DELETE FROM proctor_events WHERE publication_id = ?", (publication_id,))
         for attempt in attempts:
-            if str(attempt["student_no"]) == "S001":
+            student_no = str(attempt["student_no"])
+            scenario = scenarios[student_no]
+            submitted = scenario["status"] == "submitted"
+            con.execute(
+                """
+                UPDATE student_attempts
+                SET status = ?, score = ?, max_score = ?,
+                    started_at = '2026-08-01T08:00:00+00:00', submitted_at = ?,
+                    time_spent_seconds = ?, question_payload_json = ?, answer_key_json = ?
+                WHERE id = ?
+                """,
+                (
+                    scenario["status"],
+                    scenario["score"],
+                    10 if submitted else None,
+                    "2026-08-01T08:20:00+00:00" if submitted else None,
+                    scenario["seconds"],
+                    json.dumps(questions, ensure_ascii=False),
+                    json.dumps(answer_keys, ensure_ascii=False),
+                    str(attempt["id"]),
+                ),
+            )
+            con.execute("DELETE FROM student_answers WHERE attempt_id = ?", (str(attempt["id"]),))
+            for question_id, student_answer in scenario["answers"].items():
+                correct = student_answer == answer_keys[question_id]
                 con.execute(
                     """
-                    UPDATE student_attempts
-                    SET status = 'submitted', score = 8, max_score = 10,
-                        started_at = '2026-07-04T08:00:00+00:00',
-                        submitted_at = '2026-07-04T08:28:00+00:00',
-                        time_spent_seconds = 1680
-                    WHERE id = ?
+                    INSERT INTO student_answers (
+                      id, attempt_id, question_id, answer_payload, is_correct, score,
+                      grading_status, responded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (str(attempt["id"]),),
+                    (
+                        new_id(),
+                        str(attempt["id"]),
+                        question_id,
+                        json.dumps({"answer": student_answer}, ensure_ascii=False),
+                        (1 if correct else 0) if submitted else None,
+                        (5 if correct else 0) if submitted else None,
+                        "auto_scored" if submitted else "pending",
+                        now,
+                    ),
                 )
-                events = [
-                    ("visibility_hidden", 1100),
-                    ("window_blur", 0),
-                ]
-            else:
-                con.execute(
-                    """
-                    UPDATE student_attempts
-                    SET status = 'in_progress',
-                        started_at = '2026-07-04T08:05:00+00:00',
-                        submitted_at = NULL,
-                        score = NULL,
-                        max_score = NULL,
-                        time_spent_seconds = 600
-                    WHERE id = ?
-                    """,
-                    (str(attempt["id"]),),
-                )
-                events = [("visibility_hidden", 700)]
+            events = scenario["events"]
             for event_type, duration_ms in events:
                 con.execute(
                     """
