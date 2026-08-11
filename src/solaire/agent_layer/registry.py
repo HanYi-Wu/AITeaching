@@ -70,6 +70,9 @@ _GENERAL_DOMAIN: tuple[str, ...] = (
     "bank.get_item",
     "paper.list",
     "paper.analyze",
+    "paper.find_submissions",
+    "paper.submissions",
+    "exam.ai_grade_submission",
 )
 
 _COMPOSE_GRAPH: tuple[str, ...] = ("graph.list_nodes", "graph.list_relations", "graph.search_nodes")

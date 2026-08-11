@@ -20,6 +20,7 @@ src/solaire_education.egg-info/
 .eggs/
 dist/
 build/
+.build/
 nuitka_build/
 .venv/
 venv/

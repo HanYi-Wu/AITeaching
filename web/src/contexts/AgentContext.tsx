@@ -15,6 +15,7 @@ export type AgentWorkspacePage =
   | "template"
   | "graph"
   | "analysis"
+  | "student_profile"
   | "help"
   | "log"
   | "settings";

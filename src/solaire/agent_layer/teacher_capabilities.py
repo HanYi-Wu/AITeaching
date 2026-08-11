@@ -49,6 +49,10 @@ def _manual(
 
 
 TEACHER_CAPABILITIES: tuple[TeacherCapability, ...] = (
+    _tool("find_submissions", "paper", "按学生和批改状态定位答卷", "paper.find_submissions"),
+    _tool("batch_ai_pregrade", "paper", "批量生成待批改答卷的 AI 建议", "paper.ai_grade_pending"),
+    _tool("offline_scan_guide", "paper", "获取线下答卷照片采集说明", "paper.offline_upload_guide"),
+    _tool("student_profile", "student", "查看班级学生画像与个体分析", "teacher.student_profile"),
     _tool("list_graphs", "knowledge_graph", "查看知识图谱", "graph.list_graphs"),
     _tool("create_graph", "knowledge_graph", "创建知识图谱", "graph.create_graph"),
     _tool("rename_graph", "knowledge_graph", "重命名知识图谱", "graph.rename_graph"),

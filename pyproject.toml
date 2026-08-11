@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solaire-education"
-version = "1.4.4"
+version = "1.4.5"
 description = "Solaire Paper Education Automation"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -28,6 +28,7 @@ dependencies = [
     "pdfplumber>=0.10",
     "reportlab>=4.2",
     "Pillow>=10.0",
+    "pillow-heif>=0.18",
     "rdkit>=2024.3.1",
     "trafilatura>=1.12",
     "lxml>=5.0",
@@ -38,6 +39,7 @@ primebrush-plot = ["matplotlib>=3.8"]
 primebrush-pdf = ["cairosvg>=2.7"]
 ocr = ["pytesseract>=0.3"]
 dev = ["pytest>=7", "httpx2>=2.9.1"]
+release = ["pyinstaller>=6.0"]
 
 [project.scripts]
 solaire-exam = "solaire.exam_compiler.cli:main"
@@ -56,4 +58,5 @@ where = ["src"]
   "bundled_project_templates/math/.solaire/**/*",
   "bundled_common_templates/**/*",
   "assets/help_docs/**/*",
+  "assets/tools/**/*",
 ]

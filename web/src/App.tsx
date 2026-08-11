@@ -11,6 +11,7 @@ import {
   Network,
   Settings,
   Sparkles,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { DesktopTitleBar } from "./components/DesktopTitleBar";
@@ -52,6 +53,9 @@ const AdminWorkspace = lazy(() =>
 );
 const PapersWorkspace = lazy(() =>
   import("./pages/platform/PapersWorkspace").then((module) => ({ default: module.PapersWorkspace })),
+);
+const TeacherStudentInsightsWorkspace = lazy(() =>
+  import("./pages/platform/TeacherStudentInsightsWorkspace").then((module) => ({ default: module.TeacherStudentInsightsWorkspace })),
 );
 const PlatformLogin = lazy(() =>
   import("./pages/platform/PlatformLogin").then((module) => ({ default: module.PlatformLogin })),
@@ -271,6 +275,14 @@ function AppShell() {
                     title={t("app:nav.papersTitle")}
                   />
                   <SidebarNavButton
+                    icon={Users}
+                    label={t("app:nav.students")}
+                    active={page === "students"}
+                    onClick={() => setPage("students")}
+                    testId="nav-students"
+                    title={t("app:nav.studentsTitle")}
+                  />
+                  <SidebarNavButton
                     icon={BarChart3}
                     label={t("app:nav.analysis")}
                     active={page === "analysis"}
@@ -378,6 +390,7 @@ function AppShell() {
                       onError={setErr}
                     />
                   )}
+                  {page === "students" && <TeacherStudentInsightsWorkspace onError={setErr} />}
                   {page === "settings" && (
                     <SettingsWorkspace onError={setErr} userRole={currentUser?.role} />
                   )}

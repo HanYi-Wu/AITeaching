@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import sqlite3
 import logging
+import hashlib
 from io import BytesIO
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from PIL import Image, ImageOps, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
 
 from solaire.web import state
 from solaire.web.analysis_report_service import (
@@ -26,9 +30,13 @@ from solaire.web.adaptive_practice_service import (
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.paper_service import (
     analyze_paper,
+    get_attempt_scan_image,
+    get_teacher_student_profile,
     grade_paper_answer,
+    ingest_offline_submission,
     list_paper_publications,
     list_paper_submissions,
+    list_teacher_class_students,
     list_teacher_classes,
     publish_online_paper,
     query_papers,
@@ -42,6 +50,38 @@ from solaire.web.project_layout import ensure_project_layout
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+OFFLINE_SCAN_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
+OFFLINE_SCAN_MAX_FILES = 20
+OFFLINE_SCAN_MAX_FILE_BYTES = 15 * 1024 * 1024
+OFFLINE_SCAN_MAX_TOTAL_BYTES = 100 * 1024 * 1024
+OFFLINE_UPLOADER_EXE = Path(__file__).resolve().parent / "assets" / "tools" / "SolEdu-Offline-Answer-Uploader.exe"
+
+
+def _normalize_offline_scan(name: str, content: bytes) -> tuple[str, str, bytes]:
+    extension = Path(name).suffix.lower()
+    try:
+        if extension in {".heic", ".heif"}:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        with Image.open(BytesIO(content)) as opened:
+            if opened.width * opened.height > 50_000_000:
+                raise ValueError("图片像素超过 5000 万")
+            opened.load()
+            image = ImageOps.exif_transpose(opened)
+            output = BytesIO()
+            if extension in {".jpg", ".jpeg"}:
+                if image.mode not in {"RGB", "L"}:
+                    image = image.convert("RGB")
+                image.save(output, format="JPEG", quality=92, optimize=True)
+                return f"{Path(name).stem}.jpg", "image/jpeg", output.getvalue()
+            if image.mode not in {"RGB", "RGBA", "L"}:
+                image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+            image.save(output, format="PNG", optimize=True)
+            return f"{Path(name).stem}.png", "image/png", output.getvalue()
+    except (ImportError, OSError, UnidentifiedImageError, Image.DecompressionBombError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"文件 {name} 不是可读取的答卷图片：{exc}") from exc
 
 
 class PaperUpdateBody(BaseModel):
@@ -124,6 +164,23 @@ def require_content_project_root():
     root = state.get_content_root()
     ensure_project_layout(root)
     return root
+
+
+@router.get("/tools/offline-answer-uploader.exe")
+def download_offline_answer_uploader(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> FileResponse:
+    if user.get("role") not in {"admin", "teacher"}:
+        raise HTTPException(status_code=403, detail="仅教师或管理员可以下载线下答卷采集器")
+    if not OFFLINE_UPLOADER_EXE.is_file():
+        raise HTTPException(status_code=503, detail="线下答卷采集器尚未包含在当前构建中，请联系管理员重新生成发布包")
+    checksum = hashlib.sha256(OFFLINE_UPLOADER_EXE.read_bytes()).hexdigest()
+    return FileResponse(
+        OFFLINE_UPLOADER_EXE,
+        media_type="application/vnd.microsoft.portable-executable",
+        filename="SolEdu-Offline-Answer-Uploader.exe",
+        headers={"X-SolEdu-SHA256": checksum, "X-SolEdu-Code-Signed": "false"},
+    )
 
 
 @router.get("/papers")
@@ -264,6 +321,93 @@ def papers_submissions(
     return {"submissions": submissions}
 
 
+@router.post("/papers/{paper_id}/offline-submissions")
+async def papers_offline_submission_upload(
+    paper_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    class_id: Annotated[str, Form(...)],
+    student_id: Annotated[str, Form(...)],
+    files: Annotated[list[UploadFile], File(...)],
+) -> dict[str, Any]:
+    if not files or len(files) > OFFLINE_SCAN_MAX_FILES:
+        raise HTTPException(status_code=400, detail=f"每名学生需上传 1-{OFFLINE_SCAN_MAX_FILES} 张答卷照片")
+    payloads: list[dict[str, Any]] = []
+    total_raw_size = 0
+    total_size = 0
+    for upload in files:
+        name = Path(upload.filename or "").name
+        extension = Path(name).suffix.lower()
+        if extension not in OFFLINE_SCAN_EXTENSIONS:
+            supported = "、".join(sorted(OFFLINE_SCAN_EXTENSIONS))
+            raise HTTPException(status_code=400, detail=f"不支持文件 {name}；支持的答卷照片格式：{supported}")
+        content = await upload.read(OFFLINE_SCAN_MAX_FILE_BYTES + 1)
+        if not content:
+            raise HTTPException(status_code=400, detail=f"文件 {name} 为空")
+        if len(content) > OFFLINE_SCAN_MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail=f"文件 {name} 超过 15MB")
+        total_raw_size += len(content)
+        if total_raw_size > OFFLINE_SCAN_MAX_TOTAL_BYTES:
+            raise HTTPException(status_code=413, detail="单份答卷原始照片总大小不能超过 100MB")
+        normalized_name, normalized_mime, normalized_content = await run_in_threadpool(
+            _normalize_offline_scan,
+            name,
+            content,
+        )
+        if len(normalized_content) > OFFLINE_SCAN_MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail=f"文件 {name} 转换后超过 15MB，请降低照片分辨率")
+        total_size += len(normalized_content)
+        if total_size > OFFLINE_SCAN_MAX_TOTAL_BYTES:
+            raise HTTPException(status_code=413, detail="单份答卷照片总大小不能超过 100MB")
+        payloads.append(
+            {
+                "name": normalized_name,
+                "mime_type": normalized_mime,
+                "content": normalized_content,
+            }
+        )
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        attempt = await run_in_threadpool(
+            ingest_offline_submission,
+            root,
+            project_root,
+            paper_id=paper_id,
+            class_id=class_id,
+            student_id=student_id,
+            files=payloads,
+            user=user,
+        )
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"attempt": attempt}
+
+
+@router.get("/papers/{paper_id}/attempts/{attempt_id}/scan-images/{page_index}")
+def papers_attempt_scan_image(
+    paper_id: str,
+    attempt_id: str,
+    page_index: int,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> StreamingResponse:
+    root = require_platform_root()
+    try:
+        image = get_attempt_scan_image(
+            root,
+            paper_id=paper_id,
+            attempt_id=attempt_id,
+            page_index=page_index,
+            user=user,
+        )
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return StreamingResponse(
+        BytesIO(image["content"]),
+        media_type=str(image["mime_type"]),
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(str(image['name']))}"},
+    )
+
+
 @router.post("/papers/{paper_id}/attempts/{attempt_id}/ai-grade")
 def papers_attempt_ai_grade(
     paper_id: str,
@@ -363,6 +507,38 @@ def teacher_classes_list(user: Annotated[dict[str, Any], Depends(current_platfor
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"classes": classes}
+
+
+@router.get("/teacher/classes/{class_id}/students")
+def teacher_class_students_list(
+    class_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    try:
+        students = list_teacher_class_students(root, class_id=class_id, user=user)
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"students": students}
+
+
+@router.get("/teacher/classes/{class_id}/students/{student_id}/profile")
+def teacher_student_profile(
+    class_id: str,
+    student_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    try:
+        profile = get_teacher_student_profile(
+            root,
+            class_id=class_id,
+            student_id=student_id,
+            user=user,
+        )
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"profile": profile}
 
 
 @router.get("/teacher/classes/{class_id}/practice-history")

@@ -328,6 +328,88 @@ class ContextManager:
             _sanitize_tool_chains(messages, start=prefix)
 
 
+def _paper_submissions_for_llm(data: dict[str, Any]) -> dict[str, Any]:
+    """Keep identifiers/statuses visible while removing large answer image payloads."""
+    container = data.get("data") if isinstance(data.get("data"), dict) else data
+    raw_items = container.get("items") if isinstance(container, dict) else None
+    if not isinstance(raw_items, list):
+        return data
+    items: list[dict[str, Any]] = []
+    truncated = False
+    for raw in raw_items[:100]:
+        if not isinstance(raw, dict):
+            continue
+        raw_answers = raw.get("answers") if isinstance(raw.get("answers"), list) else None
+        answer_statuses: dict[str, list[str]] = {"pending": [], "needs_review": [], "reviewed": []}
+        image_answer_count = 0
+        for answer in raw_answers or []:
+            if not isinstance(answer, dict):
+                continue
+            images = answer.get("images") if isinstance(answer.get("images"), list) else []
+            image_answer_count += int(bool(images))
+            status = str(answer.get("grading_status") or "pending")
+            bucket = answer_statuses.get(status)
+            if bucket is not None and len(bucket) < 30:
+                bucket.append(str(answer.get("question_id") or ""))
+        compact_item = {
+                key: raw.get(key)
+                for key in (
+                    "attempt_id",
+                    "publication_id",
+                    "paper_id",
+                    "student_id",
+                    "student_no",
+                    "student_name",
+                    "account_username",
+                    "status",
+                    "submission_mode",
+                    "score",
+                    "max_score",
+                    "submitted_at",
+                )
+            }
+        compact_item |= {
+                "scan_image_count": len(raw.get("scan_images") or []) if isinstance(raw.get("scan_images"), list) else 0,
+                "answer_count": len(raw_answers) if raw_answers is not None else raw.get("answer_count"),
+                "pending_count": (
+                    len(answer_statuses["pending"])
+                    if raw_answers is not None
+                    else raw.get("pending_answer_count")
+                ),
+                "needs_review_count": (
+                    len(answer_statuses["needs_review"])
+                    if raw_answers is not None
+                    else raw.get("ai_suggested_count")
+                ),
+                "reviewed_count": (
+                    len(answer_statuses["reviewed"])
+                    if raw_answers is not None
+                    else raw.get("reviewed_answer_count")
+                ),
+                "pending_question_ids": answer_statuses["pending"],
+                "needs_review_question_ids": answer_statuses["needs_review"],
+                "reviewed_question_ids": answer_statuses["reviewed"],
+                "image_answer_count": image_answer_count,
+            }
+        candidate = items + [compact_item]
+        if len(json.dumps({"items": candidate}, ensure_ascii=False, default=str)) > 8500:
+            truncated = True
+            break
+        items.append(compact_item)
+    result: dict[str, Any] = {
+        "items": items,
+        "total": len(raw_items),
+        "truncated": truncated or len(raw_items) > len(items),
+        "id_guidance": "后续批改必须使用 items[].attempt_id；publication_id 不是 attempt_id，不得代替。",
+    }
+    if container is data:
+        return result
+    wrapped = {key: value for key, value in data.items() if key != "data"}
+    wrapped["data"] = result
+    return wrapped
+
+
 def tool_result_to_content(tool_name: str, data: dict[str, Any]) -> str:
-    payload, _ = compact_for_llm(data, max_chars=10000)
+    source = _paper_submissions_for_llm(data) if tool_name in {"paper.submissions", "paper.find_submissions"} else data
+    payload, _ = compact_for_llm(source, max_chars=10000)
     return json.dumps({"tool": tool_name, "result": payload}, ensure_ascii=False, default=str)

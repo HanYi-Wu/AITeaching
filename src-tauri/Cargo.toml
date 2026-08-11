@@ -1,6 +1,6 @@
 [package]
 name = "solaire-desktop"
-version = "1.4.4"
+version = "1.4.5"
 description = "SolEdu UI"
 authors = ["SolEdu"]
 edition = "2021"

@@ -1,4 +1,4 @@
-import { ChangeEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   CheckCircle2,
@@ -18,6 +18,8 @@ import { resolveApiUrl } from "../../api/client";
 import {
   analyzePlatformPaper,
   downloadPaperAnalysisReport,
+  downloadOfflineAnswerUploader,
+  downloadOfflineScanImage,
   gradePaperAnswer,
   listPaperSubmissions,
   listPlatformPaperPublications,
@@ -25,6 +27,7 @@ import {
   listTeacherAssignedClasses,
   publishPlatformPaper,
   revokePlatformPaperPublication,
+  suggestAiGradesForAttempt,
   updatePlatformPaperPublication,
   updatePlatformPaperDeliveryMode,
   uploadPaperScores,
@@ -138,6 +141,20 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   const [message, setMessage] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<PlatformPaperAnalysis | null>(null);
   const [loading, setLoading] = useState(true);
+  const [scanImageUrls, setScanImageUrls] = useState<Record<string, string>>({});
+  const scanObjectUrlsRef = useRef<string[]>([]);
+  const publicationRequestIdRef = useRef(0);
+  const submissionRequestIdRef = useRef(0);
+
+  const clearScanObjectUrls = useCallback(() => {
+    scanObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    scanObjectUrlsRef.current = [];
+    setScanImageUrls({});
+  }, []);
+
+  useEffect(() => {
+    return () => scanObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+  }, []);
 
   const selectedPaper = useMemo(
     () => papers.find((paper) => paper.paper_id === selectedPaperId) ?? papers[0] ?? null,
@@ -160,11 +177,12 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   }
 
   async function loadPublications(paperId: string) {
+    const requestId = ++publicationRequestIdRef.current;
     try {
       const data = await listPlatformPaperPublications(paperId);
-      setPublications(data.publications);
+      if (publicationRequestIdRef.current === requestId) setPublications(data.publications);
     } catch (e) {
-      reportError(e);
+      if (publicationRequestIdRef.current === requestId) reportError(e);
     }
   }
 
@@ -209,6 +227,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize]);
 
   useEffect(() => {
+    submissionRequestIdRef.current += 1;
     if (selectedPaperId) {
       void loadPublications(selectedPaperId);
     } else {
@@ -217,9 +236,10 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     setSubmissions([]);
     setGradeDrafts({});
     setFeedbackDrafts({});
+    clearScanObjectUrls();
     setSelectedClassIds([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPaperId]);
+  }, [selectedPaperId, clearScanObjectUrls]);
 
   async function setDeliveryMode(paper: PlatformPaperRecord, mode: PlatformPaperRecord["delivery_mode"]) {
     setBusy(`mode:${paper.paper_id}`);
@@ -442,13 +462,15 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
 
   async function loadSelectedSubmissions() {
     if (!selectedPaper) return;
+    const requestId = ++submissionRequestIdRef.current;
+    clearScanObjectUrls();
     setBusy(`submissions:${selectedPaper.paper_id}`);
     setMessage(null);
     try {
       const result = await listPaperSubmissions(selectedPaper.paper_id);
-      setSubmissions(result.submissions);
+      if (submissionRequestIdRef.current === requestId) setSubmissions(result.submissions);
     } catch (e) {
-      reportError(e);
+      if (submissionRequestIdRef.current === requestId) reportError(e);
     } finally {
       setBusy(null);
     }
@@ -495,6 +517,200 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     }
   }
 
+  async function suggestSubmissionGrades(submission: PaperSubmissionRecord) {
+    if (!selectedPaper) return;
+    const pendingQuestionIds = submission.answers
+      .filter((answer) => (answer.grading_status || "pending") === "pending")
+      .map((answer) => answer.question_id);
+    if (pendingQuestionIds.length === 0) {
+      setMessage("该答卷没有待预批改题目。");
+      return;
+    }
+    const questionIds = pendingQuestionIds.slice(0, 50);
+    setBusy(`ai-grade:${submission.attempt_id}`);
+    setMessage(null);
+    try {
+      const result = await suggestAiGradesForAttempt(selectedPaper.paper_id, submission.attempt_id, questionIds);
+      const suggestions = new Map(result.suggestions.map((item) => [item.question_id, item]));
+      setSubmissions((current) =>
+        current.map((item) =>
+          item.attempt_id === submission.attempt_id
+            ? {
+                ...item,
+                answers: item.answers.map((answer) => {
+                  const suggestion = suggestions.get(answer.question_id);
+                  return suggestion
+                    ? {
+                        ...answer,
+                        grading_status: suggestion.status || "needs_review",
+                        ai_suggested_score: suggestion.suggested_score ?? null,
+                        ai_feedback: suggestion.feedback ?? null,
+                      }
+                    : answer;
+                }),
+              }
+            : item,
+        ),
+      );
+      setGradeDrafts((current) => {
+        const next = { ...current };
+        result.suggestions.forEach((suggestion) => {
+          if (suggestion.suggested_score != null) {
+            next[gradeKey(submission.attempt_id, suggestion.question_id)] = String(suggestion.suggested_score);
+          }
+        });
+        return next;
+      });
+      setFeedbackDrafts((current) => {
+        const next = { ...current };
+        result.suggestions.forEach((suggestion) => {
+          if (suggestion.feedback) {
+            next[gradeKey(submission.attempt_id, suggestion.question_id)] = suggestion.feedback;
+          }
+        });
+        return next;
+      });
+      const generatedCount = result.suggestions.filter((item) => item.status === "needs_review" || !item.status).length;
+      const retryableCount = result.suggestions.length - generatedCount;
+      const remainingCount = Math.max(0, pendingQuestionIds.length - questionIds.length);
+      setMessage(
+        generatedCount > 0
+          ? `已生成 ${generatedCount} 条 AI 预批改建议；${retryableCount + remainingCount} 题仍待处理，请教师复核后保存。`
+          : `本次未生成有效 AI 建议，${retryableCount + remainingCount} 题仍保持待处理，可检查模型/OCR 后重试。`,
+      );
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function suggestLoadedPendingGrades() {
+    if (!selectedPaper) return;
+    const candidates = submissions
+      .filter(
+        (submission) =>
+          submission.status === "submitted" &&
+          submission.answers.some((answer) => (answer.grading_status || "pending") === "pending"),
+      )
+      .slice(0, 10);
+    if (candidates.length === 0) {
+      setMessage("当前已加载答卷中没有待预批改内容。");
+      return;
+    }
+    let remainingQuestionBudget = 50;
+    const batchPlan = candidates
+      .map((submission) => {
+        const questionIds = submission.answers
+          .filter((answer) => (answer.grading_status || "pending") === "pending")
+          .map((answer) => answer.question_id)
+          .slice(0, remainingQuestionBudget);
+        remainingQuestionBudget -= questionIds.length;
+        return { submission, questionIds };
+      })
+      .filter((item) => item.questionIds.length > 0);
+    const plannedQuestionCount = batchPlan.reduce((total, item) => total + item.questionIds.length, 0);
+    if (!window.confirm(`将为 ${batchPlan.length} 份答卷的 ${plannedQuestionCount} 道题生成 AI 建议（本次最多 50 题），是否继续？`)) return;
+    setBusy("ai-grade:batch");
+    setMessage(null);
+    const completed: Array<{
+      attemptId: string;
+      suggestions: Array<{ question_id: string; suggested_score?: number | null; feedback?: string | null; status: string }>;
+    }> = [];
+    let failed = 0;
+    try {
+      for (const { submission, questionIds } of batchPlan) {
+        try {
+          const result = await suggestAiGradesForAttempt(selectedPaper.paper_id, submission.attempt_id, questionIds);
+          completed.push({ attemptId: submission.attempt_id, suggestions: result.suggestions });
+        } catch {
+          failed += 1;
+        }
+      }
+      const byAttempt = new Map(completed.map((item) => [item.attemptId, new Map(item.suggestions.map((s) => [s.question_id, s]))]));
+      setSubmissions((current) =>
+        current.map((submission) => {
+          const suggestions = byAttempt.get(submission.attempt_id);
+          if (!suggestions) return submission;
+          return {
+            ...submission,
+            answers: submission.answers.map((answer) => {
+              const suggestion = suggestions.get(answer.question_id);
+              return suggestion
+                ? {
+                    ...answer,
+                    grading_status: suggestion.status || "needs_review",
+                    ai_suggested_score: suggestion.suggested_score ?? null,
+                    ai_feedback: suggestion.feedback ?? null,
+                  }
+                : answer;
+            }),
+          };
+        }),
+      );
+      setGradeDrafts((current) => {
+        const next = { ...current };
+        completed.forEach(({ attemptId, suggestions }) =>
+          suggestions.forEach((suggestion) => {
+            if (suggestion.suggested_score != null) next[gradeKey(attemptId, suggestion.question_id)] = String(suggestion.suggested_score);
+          }),
+        );
+        return next;
+      });
+      setFeedbackDrafts((current) => {
+        const next = { ...current };
+        completed.forEach(({ attemptId, suggestions }) =>
+          suggestions.forEach((suggestion) => {
+            if (suggestion.feedback) next[gradeKey(attemptId, suggestion.question_id)] = suggestion.feedback;
+          }),
+        );
+        return next;
+      });
+      const generatedCount = completed.reduce(
+        (total, item) => total + item.suggestions.filter((suggestion) => suggestion.status === "needs_review" || !suggestion.status).length,
+        0,
+      );
+      const retryableCount = completed.reduce(
+        (total, item) => total + item.suggestions.filter((suggestion) => suggestion.status === "pending").length,
+        0,
+      );
+      setMessage(`AI 批量预批改完成：生成 ${generatedCount} 条建议，${retryableCount} 题可重试${failed ? `，${failed} 份处理失败` : ""}。请教师逐题复核。`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function downloadOfflineUploader() {
+    setBusy("offline-uploader");
+    setMessage(null);
+    try {
+      const blob = await downloadOfflineAnswerUploader();
+      downloadBlob(blob, "SolEdu-Offline-Answer-Uploader.exe");
+      setMessage("线下答卷采集器已下载。当前程序未做商业代码签名，Windows 可能提示“未知发布者”；请确认文件来自本系统后再运行。");
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadOfflineScanImage(submission: PaperSubmissionRecord, pageIndex: number) {
+    if (!selectedPaper) return;
+    const key = `${submission.attempt_id}:${pageIndex}`;
+    if (scanImageUrls[key]) return;
+    setBusy(`scan:${key}`);
+    try {
+      const blob = await downloadOfflineScanImage(selectedPaper.paper_id, submission.attempt_id, pageIndex);
+      const url = URL.createObjectURL(blob);
+      scanObjectUrlsRef.current.push(url);
+      setScanImageUrls((current) => ({ ...current, [key]: url }));
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function updatePaperQuery(patch: Partial<PaperQuery>) {
     setPaperQuery((current) => ({ ...current, ...patch, page: patch.page ?? 1 }));
   }
@@ -519,15 +735,27 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
             <p className="text-sm text-slate-500">线上发布、线下成绩和分析入口</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          disabled={loading}
-          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-        >
-          <RefreshCw className="h-4 w-4" />
-          刷新
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            data-testid="paper-download-offline-uploader"
+            onClick={() => void downloadOfflineUploader()}
+            disabled={busy === "offline-uploader"}
+            className="inline-flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+          >
+            <Download className="h-4 w-4" />
+            {busy === "offline-uploader" ? "准备下载..." : "下载线下答卷采集器"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+          >
+            <RefreshCw className="h-4 w-4" />
+            刷新
+          </button>
+        </div>
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,390px)_minmax(0,1fr)] overflow-hidden">
@@ -1002,16 +1230,27 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                       <h3 className="text-base font-semibold text-slate-950">线上提交批改</h3>
                       <p className="mt-1 text-sm text-slate-500">图片提交在这里审核，最终分数以教师保存为准。</p>
                     </div>
-                    <button
-                      type="button"
-                      data-testid="paper-load-submissions"
-                      disabled={submissionsBusy}
-                      onClick={() => void loadSelectedSubmissions()}
-                      className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                      {submissionsBusy ? "加载中..." : "刷新提交"}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        data-testid="paper-ai-grade-batch"
+                        disabled={busy === "ai-grade:batch" || submissions.length === 0}
+                        onClick={() => void suggestLoadedPendingGrades()}
+                        className="rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                      >
+                        {busy === "ai-grade:batch" ? "AI 批量处理中..." : "AI 批量预批改"}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="paper-load-submissions"
+                        disabled={submissionsBusy}
+                        onClick={() => void loadSelectedSubmissions()}
+                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        {submissionsBusy ? "加载中..." : "刷新提交"}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-4">
                     {submissions.map((submission) => (
@@ -1023,10 +1262,54 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                               {[submission.student_no, submission.status, submission.submitted_at].filter(Boolean).join(" · ")}
                             </p>
                           </div>
-                          <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                            {submission.score ?? "-"} / {submission.max_score ?? "-"}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              data-testid={`paper-ai-grade-${submission.attempt_id}`}
+                              disabled={
+                                busy === `ai-grade:${submission.attempt_id}` ||
+                                submission.status !== "submitted" ||
+                                !submission.answers.some((answer) => (answer.grading_status || "pending") === "pending")
+                              }
+                              onClick={() => void suggestSubmissionGrades(submission)}
+                              className="rounded-md border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                            >
+                              {busy === `ai-grade:${submission.attempt_id}` ? "AI 处理中..." : "AI 预批改"}
+                            </button>
+                            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                              {submission.score ?? "-"} / {submission.max_score ?? "-"}
+                            </span>
+                          </div>
                         </div>
+                        {submission.scan_images && submission.scan_images.length > 0 ? (
+                          <div className="mt-4">
+                            <p className="mb-2 text-xs font-semibold text-slate-600">线下答卷原图（{submission.scan_images.length} 页）</p>
+                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                              {submission.scan_images.map((image, index) => (
+                                <div
+                                  key={`${submission.attempt_id}:scan:${index}`}
+                                  className="overflow-hidden rounded-md border border-slate-200 bg-white"
+                                >
+                                  {scanImageUrls[`${submission.attempt_id}:${image.page_index}`] ? (
+                                    <a href={scanImageUrls[`${submission.attempt_id}:${image.page_index}`]} target="_blank" rel="noreferrer">
+                                      <img src={scanImageUrls[`${submission.attempt_id}:${image.page_index}`]} alt={`答卷第 ${index + 1} 页`} className="aspect-[4/3] w-full object-contain" />
+                                    </a>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => void loadOfflineScanImage(submission, image.page_index)}
+                                      disabled={busy === `scan:${submission.attempt_id}:${image.page_index}`}
+                                      className="flex aspect-[4/3] w-full items-center justify-center bg-slate-50 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-60"
+                                    >
+                                      {busy === `scan:${submission.attempt_id}:${image.page_index}` ? "正在加载..." : `加载第 ${index + 1} 页`}
+                                    </button>
+                                  )}
+                                  <p className="truncate border-t border-slate-100 px-2 py-1 text-xs text-slate-500">第 {index + 1} 页 · {image.name}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                         <div className="mt-4 space-y-4">
                           {submission.answers.map((answer) => {
                             const key = gradeKey(submission.attempt_id, answer.question_id);
@@ -1074,6 +1357,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                                     }
                                   />
                                   <input
+                                    data-testid={`paper-feedback-${answer.question_id}`}
                                     className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                                     value={feedback}
                                     placeholder="批改反馈"

@@ -78,9 +78,17 @@ def _setup_teacher_paper(client: TestClient, root: Path) -> tuple[str, dict[str,
 def test_teacher_ai_tools_include_online_publish_and_grading() -> None:
     publish_tool = get_registered_tool("exam.publish_online_paper")
     grade_tool = get_registered_tool("exam.ai_grade_submission")
+    find_tool = get_registered_tool("paper.find_submissions")
+    batch_grade_tool = get_registered_tool("paper.ai_grade_pending")
+    profile_tool = get_registered_tool("teacher.student_profile")
+    upload_guide_tool = get_registered_tool("paper.offline_upload_guide")
 
     assert publish_tool is not None
     assert grade_tool is not None
+    assert find_tool is not None
+    assert batch_grade_tool is not None
+    assert profile_tool is not None
+    assert upload_guide_tool is not None
     assert "submission_mode" in publish_tool.parameters_schema["properties"]
     assert "max_screen_switches" in publish_tool.parameters_schema["properties"]
     assert "time_limit_minutes" in publish_tool.parameters_schema["properties"]
@@ -90,6 +98,10 @@ def test_teacher_ai_tools_include_online_publish_and_grading() -> None:
     assert "exam_id" in publish_tool.parameters_schema["properties"]
     assert "class_names" in publish_tool.parameters_schema["properties"]
     assert "question_ids" in grade_tool.parameters_schema["properties"]
+    assert "student_query" in grade_tool.parameters_schema["properties"]
+    assert grade_tool.parameters_schema["required"] == ["paper_id"]
+    assert find_tool.risk.value == "read"
+    assert batch_grade_tool.parameters_schema["properties"]["max_attempts"]["maximum"] == 20
 
 
 def test_compose_focus_exposes_publish_and_analysis_focus_exposes_ai_grading() -> None:

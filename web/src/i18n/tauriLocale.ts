@@ -2,6 +2,10 @@ export const LOCALE_STORAGE_KEY = "soleedu.locale";
 
 export type AppLang = "zh" | "en";
 
+export function resolveInitialLocale(fromTauri: AppLang | null, stored: AppLang | null): AppLang {
+  return fromTauri ?? stored ?? "zh";
+}
+
 export async function tauriGetLocale(): Promise<AppLang | null> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");

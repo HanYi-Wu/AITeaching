@@ -118,7 +118,7 @@ export type StudentRecord = {
   status: string;
 };
 
-export type PaperSubmissionMode = "online" | "image_manual" | "image_ai";
+export type PaperSubmissionMode = "online" | "image_manual" | "image_ai" | "offline_scan";
 export type PracticePublishMode = "current" | "wrong_questions" | "reinforcement";
 
 export type PracticeHistoryRecord = {
@@ -236,7 +236,53 @@ export type PaperSubmissionRecord = {
   submitted_at?: string | null;
   screen_switch_count?: number;
   submission_mode?: PaperSubmissionMode;
+  scan_images?: Array<{ page_index: number; name: string; mime_type: string; size: number }>;
   answers: PaperSubmissionAnswerRecord[];
+};
+
+export type TeacherClassStudentRecord = {
+  id: string;
+  student_no: string;
+  display_name: string;
+  account_username?: string | null;
+  email?: string | null;
+  status: string;
+};
+
+export type TeacherStudentProfile = {
+  student: TeacherClassStudentRecord;
+  class_id: string;
+  summary: {
+    exam_count: number;
+    submitted_exam_count: number;
+    graded_exam_count: number;
+    completion_rate: number;
+    average_score_percent?: number | null;
+    average_time_seconds?: number | null;
+    integrity_event_count: number;
+  };
+  recent_exams: Array<{
+    attempt_id: string;
+    paper_id: string;
+    title: string;
+    subject?: string | null;
+    status: string;
+    score?: number | null;
+    max_score?: number | null;
+    score_percent?: number | null;
+    submitted_at?: string | null;
+    submission_mode?: PaperSubmissionMode;
+    scan_image_count?: number;
+    integrity_event_count?: number;
+  }>;
+  weak_questions: Array<{
+    paper_id: string;
+    paper_title: string;
+    question_id: string;
+    attempt_count: number;
+    wrong_count: number;
+    average_score_percent?: number | null;
+  }>;
 };
 
 export type TeacherClassAssignmentRecord = {
@@ -924,6 +970,23 @@ export function listTeacherAssignedClasses(): Promise<{ classes: TeacherClassRec
   return platformRequest("/api/teacher/classes");
 }
 
+export function listTeacherClassStudents(classId: string): Promise<{ students: TeacherClassStudentRecord[] }> {
+  return platformRequest(`/api/teacher/classes/${encodeURIComponent(classId)}/students`);
+}
+
+export function getTeacherStudentProfile(
+  classId: string,
+  studentId: string,
+): Promise<{ profile: TeacherStudentProfile }> {
+  return platformRequest(
+    `/api/teacher/classes/${encodeURIComponent(classId)}/students/${encodeURIComponent(studentId)}/profile`,
+  );
+}
+
+export function downloadOfflineAnswerUploader(): Promise<Blob> {
+  return downloadAuthorizedBlob("/api/tools/offline-answer-uploader.exe");
+}
+
 export function publishPlatformPaper(
   paperId: string,
   payload: {
@@ -1044,6 +1107,16 @@ export function suggestAiGradesForAttempt(
     method: "POST",
     body: JSON.stringify({ question_ids: questionIds ?? null }),
   });
+}
+
+export function downloadOfflineScanImage(
+  paperId: string,
+  attemptId: string,
+  pageIndex: number,
+): Promise<Blob> {
+  return downloadAuthorizedBlob(
+    `/api/papers/${encodeURIComponent(paperId)}/attempts/${encodeURIComponent(attemptId)}/scan-images/${pageIndex}`,
+  );
 }
 
 export function gradePaperAnswer(

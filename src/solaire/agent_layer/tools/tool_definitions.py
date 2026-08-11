@@ -325,9 +325,13 @@ _RAW_TOOLS: list[RegisteredTool] = [
             "properties": {
                 "paper_id": {"type": "string"},
                 "attempt_id": {"type": "string"},
+                "student_query": {
+                    "type": "string",
+                    "description": "学生学号、登录账号或姓名；未提供 attempt_id 时使用。",
+                },
                 "question_ids": {"type": "array", "items": {"type": "string"}},
             },
-            "required": ["paper_id", "attempt_id"],
+            "required": ["paper_id"],
             "additionalProperties": False,
         },
         exam_tools.tool_ai_grade_submission,
@@ -1112,7 +1116,7 @@ _RAW_TOOLS.extend(
         _fn("exam.workspace_delete", "删除组卷工作区草稿。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_delete, risk=ToolRisk.DESTRUCTIVE),
         _fn("exam.workspace_copy", "从现有试卷复制一份新的组卷工作区。", _teacher_schema({"source_exam_id": _S, "export_label": _S}, ["source_exam_id", "export_label"]), teacher_tools.tool_exam_workspace_copy),
         _fn("paper.list", "按关键字、学科、状态和交付模式查询当前教师的试卷。", _teacher_schema({"q": _S, "delivery_mode": _S, "status": _S, "subject": _S, "page": {"type": "integer"}, "page_size": {"type": "integer"}}), teacher_tools.tool_paper_list, risk=ToolRisk.READ),
-        _fn("paper.analyze", "分析试卷提交、成绩、用时和监考事件。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_analyze, risk=ToolRisk.READ),
+        _fn("paper.analyze", "分析试卷提交、成绩、用时和监考事件；本工具不提供可用于批改的 attempt_id，需要答卷标识时必须再调用 paper.find_submissions。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_analyze, risk=ToolRisk.READ),
         _fn("paper.publications", "列出试卷的发布记录。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_publications, risk=ToolRisk.READ),
         _fn(
             "paper.practice_history",
@@ -1161,6 +1165,52 @@ _RAW_TOOLS.extend(
             ),
             teacher_tools.tool_paper_publish_reinforcement_practice,
         ),
+        _fn(
+            "paper.find_submissions",
+            "按学生、提交状态或批改状态定位答卷。返回的 attempt_id 是后续 AI/人工批改唯一可用的答卷标识；publication_id 只是发布记录标识，绝不能当作 attempt_id。",
+            _teacher_schema(
+                {
+                    "paper_id": _S,
+                    "student_query": _S,
+                    "status": _S,
+                    "grading_status": _S,
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+                ["paper_id"],
+            ),
+            teacher_tools.tool_paper_find_submissions,
+            risk=ToolRisk.READ,
+        ),
+        _fn(
+            "paper.ai_grade_pending",
+            "为已提交且仍待批改的答卷批量生成 AI 建议；只生成建议，不直接写入最终分。",
+            _teacher_schema(
+                {
+                    "paper_id": _S,
+                    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "max_questions_total": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+                ["paper_id"],
+            ),
+            teacher_tools.tool_paper_ai_grade_pending,
+        ),
+        _fn(
+            "paper.offline_upload_guide",
+            "说明如何下载并使用线下答卷采集器、支持格式和上传限制。",
+            _teacher_schema({}, []),
+            teacher_tools.tool_paper_offline_upload_guide,
+            risk=ToolRisk.READ,
+        ),
+        _fn(
+            "teacher.student_profile",
+            "读取教师已分配班级内某名学生的考试完成率、得分、诚信事件、最近答卷和薄弱题目。",
+            _teacher_schema(
+                {"class_id": _S, "student_id": _S, "student_query": _S},
+                [],
+            ),
+            teacher_tools.tool_teacher_student_profile,
+            risk=ToolRisk.READ,
+        ),
         _fn("paper.submissions", "列出试卷答卷及答案。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_submissions, risk=ToolRisk.READ),
         _fn("paper.update_delivery", "修改试卷的线上或线下交付模式。", _teacher_schema({"paper_id": _S, "delivery_mode": _S}, ["paper_id", "delivery_mode"]), teacher_tools.tool_paper_update_delivery),
         _fn("paper.update_publication", "修改考试发布的标题、时间、时长、结果展示和状态。", _teacher_schema({"paper_id": _S, "publication_id": _S, "title": _S, "description": _S, "start_at": _S, "end_at": _S, "time_limit_minutes": {"type": "integer"}, "show_results_immediately": {"type": "boolean"}, "status": _S}, ["paper_id", "publication_id"]), teacher_tools.tool_paper_update_publication),
@@ -1170,6 +1220,7 @@ _RAW_TOOLS.extend(
 )
 
 _CONFIRM_LABELS: dict[str, str] = {
+    "paper.ai_grade_pending": "批量生成 AI 预批改建议",
     "paper.publish_wrong_question_practice": "发布个性化历史错题卷",
     "paper.publish_reinforcement_practice": "调用 AI 生成并发布专项巩固卷",
     "exam.export_paper": "导出试卷文件",

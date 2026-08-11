@@ -1,6 +1,7 @@
 export type AppPage =
   | "compose"
   | "papers"
+  | "students"
   | "bank"
   | "template"
   | "graph"

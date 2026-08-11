@@ -78,6 +78,13 @@
       "section": "考后分析"
     },
     {
+      "id": "offline-answer-upload",
+      "title": "线下答卷照片采集与 AI 预批改",
+      "path": "user/offline-answer-upload.md",
+      "audience": "user",
+      "section": "考后分析"
+    },
+    {
       "id": "teaching-assistant",
       "title": "智能助手侧栏",
       "path": "user/teaching-assistant.md",

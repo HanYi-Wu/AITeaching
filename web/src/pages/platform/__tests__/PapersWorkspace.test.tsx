@@ -369,13 +369,28 @@ describe("PapersWorkspace", () => {
     mocks.gradePaperAnswer.mockResolvedValue({
       answer: { question_id: "math/q1", score: 4, feedback: "Reviewed", grading_status: "reviewed" },
     });
+    mocks.suggestAiGradesForAttempt.mockResolvedValue({
+      suggestions: [
+        {
+          question_id: "math/q1",
+          suggested_score: 4.5,
+          feedback: "步骤完整，计算结果正确。",
+          confidence: 0.92,
+        },
+      ],
+    });
 
     render(<PapersWorkspace />);
 
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByTestId("paper-tab-grading"));
     expect(await screen.findByText("Student One")).toBeInTheDocument();
-    expect(screen.queryByTestId("paper-ai-grade-a1")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("paper-ai-grade-a1"));
+    await waitFor(() =>
+      expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledWith("p1", "a1", ["math/q1"]),
+    );
+    expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("4.5");
+    expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("步骤完整，计算结果正确。");
     expect(screen.getByTestId("paper-answer-image-math/q1")).toBeInTheDocument();
     await userEvent.clear(screen.getByTestId("paper-grade-math/q1"));
     await userEvent.type(screen.getByTestId("paper-grade-math/q1"), "4");
@@ -383,7 +398,7 @@ describe("PapersWorkspace", () => {
     await waitFor(() =>
       expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "math/q1", {
         score: 4,
-        feedback: null,
+        feedback: "步骤完整，计算结果正确。",
         is_correct: null,
       }),
     );

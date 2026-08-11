@@ -6,7 +6,10 @@ from pathlib import Path
 import yaml
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
+from PIL import Image
 
+from solaire.agent_layer.models import InvocationContext, SessionState
+from solaire.agent_layer.registry import invoke_registered_tool
 from solaire.exam_compiler.models import ExamConfig, QuestionLibraryRef, SelectedSection
 from solaire.web import recent_projects, state
 from solaire.web.app import ensure_project_layout
@@ -15,6 +18,12 @@ from solaire.web.platform_db import connect, default_platform_root
 
 def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _tiny_image_bytes(image_format: str) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (4, 4), "white").save(output, format=image_format)
+    return output.getvalue()
 
 
 def _bootstrap_admin(client: TestClient) -> str:
@@ -517,6 +526,36 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
     assert pdf_report.headers["content-type"].startswith("application/pdf")
     assert pdf_report.content.startswith(b"%PDF")
 
+    other_teacher = web_client.post(
+        "/api/school/teachers",
+        json={"username": "teacher_other", "password": "teacher123", "display_name": "Other Teacher", "subjects": ["Math"]},
+        headers=school_headers,
+    )
+    other_class = web_client.post(
+        "/api/school/classes",
+        json={"name": "Class 2", "grade": "G10"},
+        headers=school_headers,
+    )
+    assert other_teacher.status_code == 200
+    assert other_class.status_code == 200
+    assigned = web_client.post(
+        "/api/school/teacher-class-assignments",
+        json={"teacher_id": other_teacher.json()["teacher"]["id"], "class_id": other_class.json()["class"]["id"]},
+        headers=school_headers,
+    )
+    assert assigned.status_code == 200
+    with connect(platform_root) as con:
+        con.execute("UPDATE paper_records SET owner_teacher_id = NULL, school_id = NULL WHERE id = ?", (paper["paper_id"],))
+    other_login = web_client.post("/api/auth/login", json={"username": "teacher_other", "password": "teacher123"})
+    other_headers = _headers(str(other_login.json()["token"]))
+    other_history = web_client.get("/api/papers?delivery_mode=online", headers=other_headers).json()["papers"][0]
+    assert other_history["submitted_student_count"] == 0
+    assert web_client.get(f"/api/papers/{paper['paper_id']}/publications", headers=other_headers).json()["publications"] == []
+    assert web_client.get(f"/api/papers/{paper['paper_id']}/submissions", headers=other_headers).json()["submissions"] == []
+    isolated = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=other_headers)
+    assert isolated.status_code == 200
+    assert isolated.json()["analysis"]["summary"]["total_students"] == 0
+
 
 def test_teacher_reviews_image_submission_with_manual_and_ai_grade_suggestions(
     web_client: TestClient,
@@ -594,7 +633,9 @@ def test_teacher_reviews_image_submission_with_manual_and_ai_grade_suggestions(
     assert suggested.status_code == 200
     suggestion = suggested.json()["suggestions"][0]
     assert suggestion["question_id"] == "math/q1"
-    assert suggestion["status"] == "needs_review"
+    assert suggestion["status"] == "pending"
+    retryable = web_client.get(f"/api/papers/{paper['paper_id']}/submissions", headers=teacher_headers)
+    assert retryable.json()["submissions"][0]["answers"][0]["grading_status"] == "pending"
 
     graded = web_client.patch(
         f"/api/papers/{paper['paper_id']}/attempts/{attempt_id}/answers/math%2Fq1/grade",
@@ -604,4 +645,153 @@ def test_teacher_reviews_image_submission_with_manual_and_ai_grade_suggestions(
     assert graded.status_code == 200
     assert graded.json()["answer"]["score"] == 4
     refreshed = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=teacher_headers).json()["analysis"]
+    assert refreshed["summary"]["average_score"] is None
+    fully_graded = web_client.patch(
+        f"/api/papers/{paper['paper_id']}/attempts/{attempt_id}/answers/math%2Fq2/grade",
+        json={"score": 4, "feedback": "Reviewed"},
+        headers=teacher_headers,
+    )
+    assert fully_graded.status_code == 200
+    refreshed = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=teacher_headers).json()["analysis"]
     assert refreshed["summary"]["average_score"] == 80
+
+
+def test_teacher_uploads_multiple_offline_scan_pages_and_reads_student_profile(
+    web_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _, _, class_id = _create_school_teacher_class(web_client, admin_token)
+    school_login = web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"})
+    school_headers = _headers(str(school_login.json()["token"]))
+    imported = web_client.post(
+        "/api/school/students/import",
+        json={"class_id": class_id, "students": [{"student_no": "S001", "display_name": "Student One"}]},
+        headers=school_headers,
+    )
+    assert imported.status_code == 200
+    student_id = str(imported.json()["students"][0]["id"])
+    _write_exam(tmp_path)
+    teacher_login = web_client.post("/api/auth/login", json={"username": "teacher_li", "password": "teacher123"})
+    assert teacher_login.status_code == 200
+    teacher_headers = _headers(str(teacher_login.json()["token"]))
+    paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+
+    uploader = web_client.get("/api/tools/offline-answer-uploader.exe", headers=teacher_headers)
+    assert uploader.status_code == 200
+    assert uploader.content.startswith(b"MZ")
+    assert "SolEdu-Offline-Answer-Uploader.exe" in uploader.headers["content-disposition"]
+    assert len(uploader.headers["x-soledu-sha256"]) == 64
+    assert uploader.headers["x-soledu-code-signed"] == "false"
+
+    class_students = web_client.get(f"/api/teacher/classes/{class_id}/students", headers=teacher_headers)
+    assert class_students.status_code == 200
+    assert class_students.json()["students"][0]["student_no"] == "S001"
+
+    unsupported = web_client.post(
+        f"/api/papers/{paper['paper_id']}/offline-submissions",
+        data={"class_id": class_id, "student_id": student_id},
+        files=[("files", ("answers.docx", b"not-an-image", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))],
+        headers=teacher_headers,
+    )
+    assert unsupported.status_code == 400
+    assert "支持的答卷照片格式" in unsupported.json()["detail"]
+
+    uploaded = web_client.post(
+        f"/api/papers/{paper['paper_id']}/offline-submissions",
+        data={"class_id": class_id, "student_id": student_id},
+        files=[
+            ("files", ("page-1.jpg", _tiny_image_bytes("JPEG"), "image/jpeg")),
+            ("files", ("page-2.png", _tiny_image_bytes("PNG"), "image/png")),
+        ],
+        headers=teacher_headers,
+    )
+    assert uploaded.status_code == 200
+    attempt_id = uploaded.json()["attempt"]["attempt_id"]
+    assert uploaded.json()["attempt"]["status"] == "submitted"
+    assert uploaded.json()["attempt"]["scan_image_count"] == 2
+
+    submissions = web_client.get(f"/api/papers/{paper['paper_id']}/submissions", headers=teacher_headers)
+    assert submissions.status_code == 200
+    submission = submissions.json()["submissions"][0]
+    assert submission["attempt_id"] == attempt_id
+    assert submission["submission_mode"] == "offline_scan"
+    assert len(submission["scan_images"]) == 2
+    assert "data_url" not in submission["scan_images"][0]
+    first_scan = web_client.get(
+        f"/api/papers/{paper['paper_id']}/attempts/{attempt_id}/scan-images/0",
+        headers=teacher_headers,
+    )
+    assert first_scan.status_code == 200
+    assert first_scan.headers["content-type"].startswith("image/")
+    assert first_scan.content.startswith(b"\xff\xd8")
+    assert first_scan.content.endswith(b"\xff\xd9")
+    assert {answer["question_id"] for answer in submission["answers"]} == {"math/q1", "math/q2"}
+
+    tool_context = InvocationContext(
+        project_root=tmp_path,
+        session_id="offline-scan-grade",
+        session=SessionState(session_id="offline-scan-grade", current_focus="analysis"),
+        platform_user=teacher_login.json()["user"],
+    )
+    batch_result = invoke_registered_tool(
+        "paper.ai_grade_pending",
+        {"paper_id": paper["paper_id"], "max_attempts": 1},
+        tool_context,
+    )
+    assert batch_result.status == "succeeded"
+    assert batch_result.data["processed_count"] == 1
+    assert batch_result.data["suggestion_count"] == 0
+
+    suggested = web_client.post(
+        f"/api/papers/{paper['paper_id']}/attempts/{attempt_id}/ai-grade",
+        json={"question_ids": ["math/q1"]},
+        headers=teacher_headers,
+    )
+    assert suggested.status_code == 200
+    assert suggested.json()["suggestions"][0]["status"] == "pending"
+
+    tool_result = invoke_registered_tool(
+        "exam.ai_grade_submission",
+        {"paper_id": paper["paper_id"], "student_query": "S001", "question_ids": ["math/q2"]},
+        tool_context,
+    )
+    assert tool_result.status == "succeeded"
+    assert tool_result.data["attempt_id"] == attempt_id
+    assert tool_result.data["student_no"] == "S001"
+    assert tool_result.data["suggestions"][0]["status"] == "pending"
+
+    reviewed = web_client.patch(
+        f"/api/papers/{paper['paper_id']}/attempts/{attempt_id}/answers/math%2Fq1/grade",
+        json={"score": 4, "feedback": "Checked"},
+        headers=teacher_headers,
+    )
+    assert reviewed.status_code == 200
+    repeated = web_client.post(
+        f"/api/papers/{paper['paper_id']}/offline-submissions",
+        data={"class_id": class_id, "student_id": student_id},
+        files=[("files", ("replacement.png", _tiny_image_bytes("PNG"), "image/png"))],
+        headers=teacher_headers,
+    )
+    assert repeated.status_code == 400
+    assert "已进入批改流程" in repeated.json()["detail"]
+    preserved = web_client.get(f"/api/papers/{paper['paper_id']}/submissions", headers=teacher_headers)
+    preserved_q1 = next(
+        answer
+        for answer in preserved.json()["submissions"][0]["answers"]
+        if answer["question_id"] == "math/q1"
+    )
+    assert preserved_q1["grading_status"] == "reviewed"
+    assert preserved_q1["score"] == 4
+    assert preserved_q1["is_correct"] is False
+
+    profile = web_client.get(
+        f"/api/teacher/classes/{class_id}/students/{student_id}/profile",
+        headers=teacher_headers,
+    )
+    assert profile.status_code == 200
+    body = profile.json()["profile"]
+    assert body["student"]["student_no"] == "S001"
+    assert body["summary"]["submitted_exam_count"] == 1
+    assert body["recent_exams"][0]["paper_id"] == paper["paper_id"]
+    assert body["weak_questions"][0]["question_id"] == "math/q1"

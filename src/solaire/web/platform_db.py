@@ -8,7 +8,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -170,6 +170,21 @@ CREATE TABLE IF NOT EXISTS student_answers (
   responded_at TEXT NOT NULL,
   UNIQUE(attempt_id, question_id)
 );
+
+CREATE TABLE IF NOT EXISTS attempt_scan_images (
+  id TEXT PRIMARY KEY,
+  attempt_id TEXT NOT NULL REFERENCES student_attempts(id) ON DELETE CASCADE,
+  page_index INTEGER NOT NULL,
+  file_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  content BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(attempt_id, page_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_attempt_scan_images_attempt_page
+ON attempt_scan_images(attempt_id, page_index);
 
 CREATE TABLE IF NOT EXISTS proctor_events (
   id TEXT PRIMARY KEY,

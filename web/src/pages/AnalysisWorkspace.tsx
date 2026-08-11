@@ -267,6 +267,8 @@ export function AnalysisWorkspace({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rightChartRef = useRef<HTMLDivElement>(null);
   const onlineAnalysisRequestIdRef = useRef(0);
+  const legacyDetailRequestIdRef = useRef(0);
+  const legacyAnalysisRequestIdRef = useRef(0);
   const { setPageContext, requestAgentPrefill } = useAgentContext();
 
   useEffect(() => {
@@ -278,7 +280,7 @@ export function AnalysisWorkspace({
         current_page: "analysis",
         selected_resource_type: "paper",
         selected_resource_id: selectedOnlinePaperId,
-        summary: `线上试卷分析：${onlinePaper.title}；${submitted} 份已提交，${inProgress} 份答题中`,
+        summary: `试卷分析：${onlinePaper.title}；${submitted} 份已提交，${inProgress} 份答题中`,
       });
     } else if (selectedExamId && examSummary) {
       setPageContext({
@@ -315,8 +317,13 @@ export function AnalysisWorkspace({
   const loadOnlinePapers = useCallback(async () => {
     setLoadingOnlinePapers(true);
     try {
-      const data = await listPlatformPapers({ deliveryMode: "online", status: "all", page: 1, pageSize: 50 });
-      setOnlinePapers((data.papers ?? []).filter((paper) => paper.delivery_mode === "online"));
+      const first = await listPlatformPapers({ deliveryMode: "all", status: "all", page: 1, pageSize: 100 });
+      const papers = [...(first.papers ?? [])];
+      for (let page = 2; page <= (first.total_pages ?? 1); page += 1) {
+        const next = await listPlatformPapers({ deliveryMode: "all", status: "all", page, pageSize: 100 });
+        papers.push(...(next.papers ?? []));
+      }
+      setOnlinePapers(papers);
     } catch {
       setOnlinePapers([]);
     } finally {
@@ -332,9 +339,15 @@ export function AnalysisWorkspace({
     () => onlinePapers.find((paper) => paper.paper_id === selectedOnlinePaperId) ?? null,
     [onlinePapers, selectedOnlinePaperId],
   );
+  const legacyExams = useMemo(
+    () => exams.filter((exam) => !onlinePapers.some((paper) => paper.exam_id === exam.exam_id)),
+    [exams, onlinePapers],
+  );
 
   const handleOnlinePaperSelect = useCallback(async (paper: PlatformPaperRecord) => {
     const requestId = ++onlineAnalysisRequestIdRef.current;
+    legacyDetailRequestIdRef.current += 1;
+    legacyAnalysisRequestIdRef.current += 1;
     setSelectedOnlinePaperId(paper.paper_id);
     setSelectedExamId(null);
     setExamSummary(null);
@@ -359,6 +372,8 @@ export function AnalysisWorkspace({
   }, []);
 
   const loadExamDetail = useCallback(async (examId: string) => {
+    const requestId = ++legacyDetailRequestIdRef.current;
+    legacyAnalysisRequestIdRef.current += 1;
     onlineAnalysisRequestIdRef.current += 1;
     setLoadingDetail(true);
     setAnalysis(null);
@@ -367,25 +382,30 @@ export function AnalysisWorkspace({
     setSelectedBatchId(null);
     try {
       const data = await apiGet<ExamSummary>(`/api/exams/${encodeURIComponent(examId)}/summary`);
-      setExamSummary(data);
-      if (data.latest_batch_id) {
-        setSelectedBatchId(data.latest_batch_id);
+      if (legacyDetailRequestIdRef.current === requestId) {
+        setExamSummary(data);
+        if (data.latest_batch_id) {
+          setSelectedBatchId(data.latest_batch_id);
+        }
       }
     } catch (e) {
       console.error("loadExamDetail failed", e);
     } finally {
-      setLoadingDetail(false);
+      if (legacyDetailRequestIdRef.current === requestId) setLoadingDetail(false);
     }
   }, []);
 
   const loadAnalysis = useCallback(
     async (examId: string, batchId: string) => {
+      const requestId = ++legacyAnalysisRequestIdRef.current;
       try {
         const data = await apiGet<ScoreAnalysis>(
           `/api/exams/${encodeURIComponent(examId)}/scores/${encodeURIComponent(batchId)}`,
         );
-        setAnalysis(data);
-        setImportWarnings([]);
+        if (legacyAnalysisRequestIdRef.current === requestId) {
+          setAnalysis(data);
+          setImportWarnings([]);
+        }
       } catch (e) {
         console.error("loadAnalysis failed", e);
       }
@@ -718,95 +738,98 @@ export function AnalysisWorkspace({
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          <div className="border-b border-slate-200 bg-white px-3 py-3">
+        <div className="flex-1 overflow-y-auto bg-white px-3 py-3">
+          <div>
             <div className="mb-2 flex items-center justify-between gap-2">
-              <h4 className="text-xs font-semibold text-slate-600">线上历史考试（含答题数据）</h4>
-              {loadingOnlinePapers ? <RefreshCw className="h-3 w-3 animate-spin text-slate-400" /> : null}
+              <h4 className="text-xs font-semibold text-slate-600">考试记录与分析</h4>
+              {loadingOnlinePapers || loadingExams ? <RefreshCw className="h-3 w-3 animate-spin text-slate-400" /> : null}
             </div>
-            {onlinePapers.length === 0 ? (
-              <p className="text-xs text-slate-400">暂无线上试卷分析数据</p>
+            {onlinePapers.length === 0 && legacyExams.length === 0 ? (
+              <p className="text-xs text-slate-400">暂无考试记录</p>
             ) : (
               <div className="space-y-1">
-                {onlinePapers.slice(0, 20).map((paper) => (
-                  <button
-                    key={paper.paper_id}
-                    type="button"
-                    onClick={() => void handleOnlinePaperSelect(paper)}
-                    className={cn(
-                      "w-full rounded px-2 py-2 text-left text-xs transition-colors",
-                      selectedOnlinePaperId === paper.paper_id
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "text-slate-600 hover:bg-slate-100",
-                    )}
-                  >
-                    <span className="block truncate font-medium">{paper.title}</span>
-                    <span className="mt-0.5 block truncate text-[11px] text-slate-400">
-                      {[paper.subject, `${paper.question_count} 题`, `${paper.published_class_count} 班`]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </span>
-                    {(paper.submitted_student_count ?? 0) > 0 || (paper.in_progress_student_count ?? 0) > 0 ? (
-                      <span className="mt-1 block truncate text-[11px] font-medium text-emerald-700">
-                        {paper.submitted_student_count ?? 0} 份已提交 · {paper.in_progress_student_count ?? 0} 份答题中
+                {onlinePapers.map((paper) => {
+                  const hasSubmittedAnswers = (paper.submitted_student_count ?? 0) > 0;
+                  const hasImportedScores = paper.score_batch_count > 0;
+                  const hasBothSources = hasSubmittedAnswers && hasImportedScores;
+                  return (
+                    <div key={paper.paper_id} className="flex items-stretch rounded hover:bg-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (paper.delivery_mode === "offline" && !hasSubmittedAnswers && hasImportedScores) {
+                            void handleExamSelect(paper.exam_id);
+                          } else {
+                            void handleOnlinePaperSelect(paper);
+                          }
+                        }}
+                        className={cn(
+                          "min-w-0 flex-1 rounded-l px-2 py-2 text-left text-xs transition-colors",
+                          selectedOnlinePaperId === paper.paper_id
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "text-slate-600",
+                        )}
+                      >
+                        <span className="block truncate font-medium">{paper.title}</span>
+                        <span className="mt-0.5 block truncate text-[11px] text-slate-400">
+                          {[paper.subject, `${paper.question_count} 题`, `${paper.published_class_count} 班`]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                        {hasSubmittedAnswers || (paper.in_progress_student_count ?? 0) > 0 ? (
+                          <span className="mt-1 block truncate text-[11px] font-medium text-emerald-700">
+                            {paper.submitted_student_count ?? 0} 份已提交 · {paper.in_progress_student_count ?? 0} 份答题中
+                          </span>
+                        ) : null}
+                      </button>
+                      {hasBothSources ? (
+                        <button
+                          type="button"
+                          className="shrink-0 rounded-r border-l border-slate-200 px-2 text-[11px] font-medium text-blue-600 hover:bg-blue-50"
+                          onClick={() => void handleExamSelect(paper.exam_id)}
+                          title="查看已导入的成绩批次"
+                        >
+                          导入成绩
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {legacyExams.map((exam) => (
+                  <div key={exam.exam_id} className="flex items-stretch rounded hover:bg-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => void handleExamSelect(exam.exam_id)}
+                      className={cn(
+                        "min-w-0 flex-1 rounded-l px-2 py-2 text-left text-xs transition-colors",
+                        selectedExamId === exam.exam_id
+                          ? "bg-blue-50 text-blue-700"
+                          : "text-slate-600",
+                      )}
+                    >
+                      <span className="block truncate font-medium">{exam.exam_title || exam.exam_id}</span>
+                      <span className="mt-0.5 block truncate text-[11px] text-slate-400">
+                        {[exam.subject, `${exam.question_count} 题`, exam.score_batch_count > 0 ? `${exam.score_batch_count} 批成绩` : null]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </span>
-                    ) : null}
-                  </button>
+                      <span className="mt-0.5 block truncate text-[11px] text-slate-400">
+                        {formatLocaleDate(exam.mtime)}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-r border-l border-slate-200 px-2 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                      disabled={browsePdfBusyId === exam.exam_id}
+                      onClick={() => void openExamPdfWithDefaultApp(exam.exam_id)}
+                    >
+                      {browsePdfBusyId === exam.exam_id ? "…" : t("browse")}
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
           </div>
-          {loadingExams ? (
-            <div className="p-4 text-sm text-slate-400">{t("loading")}</div>
-          ) : exams.length === 0 ? (
-            <div className="p-4 text-sm text-slate-400">{t("noExams")}</div>
-          ) : (
-            <ul className="divide-y divide-slate-200">
-              {exams.map((exam) => (
-                <li key={exam.exam_id} className="flex items-stretch">
-                  <button
-                    type="button"
-                    onClick={() => void handleExamSelect(exam.exam_id)}
-                    className={cn(
-                      "min-w-0 flex-1 px-3 py-2.5 text-left transition-colors",
-                      selectedExamId === exam.exam_id
-                        ? "bg-blue-50 text-blue-700"
-                        : "hover:bg-slate-100 text-slate-700",
-                    )}
-                  >
-                    <div className="truncate text-sm font-medium">
-                      {exam.exam_title || exam.exam_id}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400">
-                      {exam.subject && <span>{exam.subject}</span>}
-                      <span>{t("questionCount", { n: exam.question_count })}</span>
-                      {exam.score_batch_count > 0 && (
-                        <span className="flex items-center gap-0.5 text-green-600">
-                          <BarChart3 className="h-3 w-3" />
-                          {t("batchCount", { n: exam.score_batch_count })}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-0.5 truncate text-xs text-slate-400">
-                      {formatLocaleDate(exam.mtime)}
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    className="shrink-0 self-stretch border-l border-slate-200 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-                    disabled={browsePdfBusyId === exam.exam_id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      void openExamPdfWithDefaultApp(exam.exam_id);
-                    }}
-                  >
-                    {browsePdfBusyId === exam.exam_id ? "…" : t("browse")}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       </div>
 
@@ -816,7 +839,7 @@ export function AnalysisWorkspace({
           <div className="min-h-0 flex-1 overflow-y-auto p-6">
             <div className="mb-4 border-b border-slate-200 pb-4">
               <h2 className="text-lg font-semibold text-slate-800">
-                {selectedOnlinePaper?.title ?? onlineAnalysis?.paper.title ?? "线上试卷分析"}
+                {selectedOnlinePaper?.title ?? onlineAnalysis?.paper.title ?? "试卷分析"}
               </h2>
               <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-slate-500">
                 {selectedOnlinePaper?.subject ? <span>{selectedOnlinePaper.subject}</span> : null}
@@ -857,7 +880,7 @@ export function AnalysisWorkspace({
               </div>
             ) : (
               <div className="flex min-h-[20rem] items-center justify-center text-sm text-slate-400">
-                暂无线上分析数据
+                暂无分析数据；线下考试请先上传成绩或答卷照片。
               </div>
             )}
           </div>

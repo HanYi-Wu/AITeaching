@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from solaire.agent_layer.history_writer import emit_memory_after_assistant_turn
+from solaire.agent_layer.context import tool_result_to_content
 from solaire.agent_layer.guardrails import (
     GuardrailDecision,
     SAFETY_MODE_ALLEGRO,
@@ -35,6 +36,84 @@ from solaire.agent_layer.registry import invoke_registered_tool, openai_tools_pa
 from solaire.agent_layer.tool_executor import consecutive_subtask_tool_indices
 from solaire.agent_layer.tools import file_tools
 from solaire.agent_layer.llm.providers import ReasoningEffort
+
+
+def test_paper_submissions_tool_content_keeps_attempt_metadata_without_images() -> None:
+    content = tool_result_to_content(
+        "paper.submissions",
+        {
+            "items": [
+                {
+                    "attempt_id": "attempt-image-1",
+                    "student_no": "S001",
+                    "student_name": "演示学生1",
+                    "status": "submitted",
+                    "submission_mode": "image_ai",
+                    "answers": [
+                        {
+                            "question_id": "math/q1",
+                            "grading_status": "pending",
+                            "images": [
+                                {
+                                    "name": "answer.png",
+                                    "data_url": "data:image/png;base64," + ("A" * 20_000),
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert "attempt-image-1" in content
+    assert "S001" in content
+    assert "pending" in content
+    assert "publication_id 不是 attempt_id" in content
+    assert "data:image" not in content
+    assert "A" * 100 not in content
+
+
+def test_large_paper_submission_results_keep_attempt_ids_within_context_budget() -> None:
+    items = [
+        {
+            "attempt_id": f"attempt-{index}",
+            "student_no": f"S{index:03d}",
+            "student_name": f"学生{index}",
+            "status": "submitted",
+            "pending_count": 30,
+            "answers": [
+                {"question_id": f"math/q{question}", "grading_status": "pending"}
+                for question in range(30)
+            ],
+        }
+        for index in range(25)
+    ]
+
+    submissions = tool_result_to_content("paper.submissions", {"items": items})
+    found_items = [
+        {
+            "attempt_id": item["attempt_id"],
+            "student_no": item["student_no"],
+            "student_name": item["student_name"],
+            "status": item["status"],
+            "answer_count": 30,
+            "pending_answer_count": 24,
+            "ai_suggested_count": 4,
+            "reviewed_answer_count": 2,
+        }
+        for item in items
+    ]
+    found = tool_result_to_content("paper.find_submissions", {"items": found_items})
+
+    assert "attempt-0" in submissions
+    assert "pending_question_ids" in submissions
+    assert '"items": []' not in submissions
+    assert "attempt-0" in found
+    assert '"answer_count": 30' in found
+    assert '"pending_count": 24' in found
+    assert len(submissions) < 10_500
+    assert len(found) < 10_500
 
 
 def test_doc_ocr_image_uses_saved_tesseract_path(tmp_path: Path, monkeypatch) -> None:
@@ -933,7 +1012,19 @@ def test_general_focus_can_read_current_online_paper(tmp_path: Path) -> None:
         plan_mode_active=False,
     )
 
-    assert "paper.analyze" in {tool.name for tool in tools}
+    names = {tool.name for tool in tools}
+    assert "paper.analyze" in names
+    assert "paper.find_submissions" in names
+    assert "paper.submissions" in names
+    assert "exam.ai_grade_submission" in names
+
+
+def test_system_constraints_forbid_confusing_attempt_and_publication_ids() -> None:
+    from solaire.agent_layer.prompts import _layer_constraints
+
+    constraints = _layer_constraints()
+    assert "必须调用 `paper.find_submissions`" in constraints
+    assert "`publication_id` 不是 `attempt_id`" in constraints
 
 
 # ---------------------------------------------------------------------------

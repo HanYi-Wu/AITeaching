@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { BootstrapShell } from "./BootstrapShell";
 import { initI18n } from "./i18n/i18n";
-import { readStoredLocale, tauriGetLocale, writeStoredLocale, type AppLang } from "./i18n/tauriLocale";
+import { readStoredLocale, resolveInitialLocale, tauriGetLocale, writeStoredLocale } from "./i18n/tauriLocale";
 import { installGlobalLogging } from "./lib/appLog";
 import { isTauriShell } from "./lib/tauriEnv";
 import "./index.css";
@@ -14,14 +14,11 @@ installGlobalLogging();
 
 void (async () => {
   const fromTauri = await tauriGetLocale();
-  let lng: AppLang = "zh";
+  const stored = readStoredLocale();
   if (fromTauri) {
-    lng = fromTauri;
     writeStoredLocale(fromTauri);
-  } else {
-    const stored = readStoredLocale();
-    lng = stored ?? (typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("en") ? "en" : "zh");
   }
+  const lng = resolveInitialLocale(fromTauri, stored);
   await initI18n(lng);
   createRoot(document.getElementById("root")!).render(<BootstrapShell />);
 })();

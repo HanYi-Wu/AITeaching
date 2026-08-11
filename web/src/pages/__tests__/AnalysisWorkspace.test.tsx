@@ -222,10 +222,11 @@ describe("AnalysisWorkspace", () => {
     expect(await screen.findByText("从左侧选择一个历史考试")).toBeInTheDocument();
   });
 
-  it("shows online answer history and exposes the selected paper to the AI assistant", async () => {
+  it("shows online and offline papers in one history list and exposes the selected paper to AI", async () => {
     renderWs();
 
-    expect(await screen.findByText("线上历史考试（含答题数据）")).toBeInTheDocument();
+    expect(await screen.findByText("考试记录与分析")).toBeInTheDocument();
+    expect(screen.queryByText("线上历史考试（含答题数据）")).not.toBeInTheDocument();
     expect(screen.getByText("4 份已提交 · 1 份答题中")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /演示线上答题/ }));
 
@@ -234,6 +235,36 @@ describe("AnalysisWorkspace", () => {
       expect(screen.getByTestId("page-context-probe")).toHaveTextContent('"selected_resource_type":"paper"');
       expect(screen.getByTestId("page-context-probe")).toHaveTextContent('"selected_resource_id":"online-1"');
     });
+  });
+
+  it("keeps imported score batches reachable from a paper that also has submissions", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({
+      papers: [
+        {
+          paper_id: "mixed-1",
+          exam_id: "e1",
+          title: "线下月考",
+          subject: "数学",
+          delivery_mode: "offline",
+          status: "published",
+          question_count: 3,
+          section_count: 1,
+          score_batch_count: 1,
+          has_score: true,
+          has_pdf: true,
+          has_docx: false,
+          publication_count: 1,
+          published_class_count: 1,
+          submitted_student_count: 2,
+          in_progress_student_count: 0,
+        },
+      ],
+    });
+    renderWs();
+
+    fireEvent.click(await screen.findByRole("button", { name: "导入成绩" }));
+
+    await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledWith("/api/exams/e1/summary"));
   });
 
   it("keeps the latest online paper analysis when requests finish out of order", async () => {

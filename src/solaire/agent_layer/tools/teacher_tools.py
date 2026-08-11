@@ -36,11 +36,15 @@ from solaire.web.exam_workspace_service import (
 )
 from solaire.web.paper_service import (
     analyze_paper,
+    find_paper_submissions,
+    get_teacher_student_profile,
     grade_paper_answer,
     list_paper_publications,
     list_paper_submissions,
+    list_teacher_classes,
     query_papers,
     revoke_paper_publication,
+    suggest_ai_grades_for_pending_attempts,
     update_paper_delivery_mode,
     update_paper_publication,
 )
@@ -426,6 +430,83 @@ def tool_paper_submissions(ctx: InvocationContext, args: dict[str, Any]) -> Tool
         lambda: list_paper_submissions(
             default_platform_root(), ctx.project_root, paper_id=_required(args, "paper_id"), user=_actor(ctx)
         )
+    )
+
+
+def tool_paper_find_submissions(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(
+        lambda: find_paper_submissions(
+            default_platform_root(),
+            paper_id=_required(args, "paper_id"),
+            user=_actor(ctx),
+            student_query=str(args.get("student_query") or "") or None,
+            status=str(args.get("status") or "") or None,
+            grading_status=str(args.get("grading_status") or "") or None,
+            limit=int(args.get("limit") or 20),
+        )
+    )
+
+
+def tool_paper_ai_grade_pending(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(
+        lambda: suggest_ai_grades_for_pending_attempts(
+            default_platform_root(),
+            ctx.project_root,
+            paper_id=_required(args, "paper_id"),
+            user=_actor(ctx),
+            max_attempts=int(args.get("max_attempts") or 5),
+            max_questions_total=int(args.get("max_questions_total") or 50),
+        )
+    )
+
+
+def tool_teacher_student_profile(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    def invoke() -> dict[str, Any]:
+        class_id = str(args.get("class_id") or "").strip()
+        if not class_id:
+            matches: set[str] = set()
+            for klass in list_teacher_classes(default_platform_root(), _actor(ctx)):
+                try:
+                    profile = get_teacher_student_profile(
+                        default_platform_root(),
+                        class_id=str(klass["id"]),
+                        user=_actor(ctx),
+                        student_id=str(args.get("student_id") or "") or None,
+                        student_query=str(args.get("student_query") or "") or None,
+                    )
+                except ValueError:
+                    continue
+                matches.add(str(klass["id"]))
+                if len(matches) == 1:
+                    selected = profile
+            if not matches:
+                raise ValueError("未在教师已分配班级中找到该学生")
+            if len(matches) > 1:
+                raise ValueError("该学生属于多个已分配班级，请同时提供 class_id")
+            return selected
+        return get_teacher_student_profile(
+            default_platform_root(),
+            class_id=class_id,
+            user=_actor(ctx),
+            student_id=str(args.get("student_id") or "") or None,
+            student_query=str(args.get("student_query") or "") or None,
+        )
+
+    return _run(invoke)
+
+
+def tool_paper_offline_upload_guide(_ctx: InvocationContext, _args: dict[str, Any]) -> ToolResult:
+    return _ok(
+        title="线下答卷照片采集",
+        supported_formats=["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "heic", "heif"],
+        limits={"max_files_per_student": 20, "max_file_mb": 15, "max_total_mb": 100},
+        steps=[
+            "教师在试卷管理页下载并打开“线下答卷采集器”。",
+            "使用教师账号登录，选择试卷、班级和学生。",
+            "按页码顺序选择该学生的多张答卷照片并上传。",
+            "返回系统的在线提交批改页，运行 AI 预批改并逐题复核保存。",
+        ],
+        safety_note="本地照片选择和账号登录必须由教师亲自完成；AI 不会读取未主动选择的本机文件，也不会直接确认最终分数。",
     )
 
 

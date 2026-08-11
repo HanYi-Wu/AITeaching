@@ -112,7 +112,13 @@ def _layer_tools(tool_descriptions: str) -> str:
 
 
 def _layer_constraints() -> str:
+    identifier_rule = (
+        "- 当教师询问、批改或操作某份学生答卷时，必须调用 `paper.find_submissions` 取得真实 "
+        "`attempt_id`；`publication_id` 不是 `attempt_id`，严禁相互替代或自行推断。\n"
+    )
     return (
+        identifier_rule
+        +
         "## 行为约束（必须遵守）\n"
         "- 严禁编造不存在的考试数据或分析结果。\n"
         "- 严禁在未获教师确认的情况下执行删除、覆盖或导出试卷等高风险操作。\n"
