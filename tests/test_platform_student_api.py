@@ -414,6 +414,8 @@ def test_student_answers_online_paper_and_views_result_analysis(web_client: Test
     assert result["analysis"]["wrong_count"] == 1
     assert result["answers"][0]["is_correct"] is True
     assert result["answers"][1]["is_correct"] is False
+    assert result["answers"][0]["correct_answer"] == "A"
+    assert result["answers"][0]["analysis"] == "1+1=2"
 
 
 def test_paused_publication_blocks_student_collection_and_exposes_time_limit(

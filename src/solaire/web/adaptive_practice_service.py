@@ -489,7 +489,7 @@ def _publish_personalized(
                 INSERT INTO student_attempts
                   (id, publication_id, student_id, status, question_payload_json, answer_key_json,
                    practice_metadata_json, question_payload_version)
-                VALUES (?, ?, ?, 'not_started', ?, ?, ?, 2)
+                VALUES (?, ?, ?, 'not_started', ?, ?, ?, 3)
                 """,
                 (
                     _new_id(),

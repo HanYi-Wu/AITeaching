@@ -211,6 +211,7 @@ def _load_exam_question_payloads(project_root: Path, exam_id: str) -> tuple[list
             "type": "unknown",
             "content": qid,
             "options": None,
+            "analysis": None,
         }
         if isinstance(record, QuestionItem):
             payload.update(
@@ -218,6 +219,7 @@ def _load_exam_question_payloads(project_root: Path, exam_id: str) -> tuple[list
                     "type": record.type,
                     "content": record.content,
                     "options": record.options if record.options else None,
+                    "analysis": record.analysis,
                 }
             )
             answer_keys[qid] = record.answer
@@ -263,7 +265,8 @@ def _load_attempt_question_payloads(
         is_personalized = practice_metadata not in {"", "null", "{}"}
         payload_version = int(attempt.get("question_payload_version") or 1)
         needs_legacy_score_repair = not is_personalized and payload_version < 2
-        if has_placeholder or needs_legacy_score_repair:
+        needs_legacy_analysis_repair = not is_personalized and payload_version < 3
+        if has_placeholder or needs_legacy_score_repair or needs_legacy_analysis_repair:
             try:
                 source_questions, source_answers = _load_exam_question_payloads(
                     project_root,
@@ -290,6 +293,8 @@ def _load_attempt_question_payloads(
                     repaired = dict(item)
                     if source is not None and needs_legacy_score_repair:
                         repaired["score_per_item"] = source.get("score_per_item", item.get("score_per_item"))
+                    if source is not None and needs_legacy_analysis_repair:
+                        repaired["analysis"] = source.get("analysis", item.get("analysis"))
                 repaired_questions.append(repaired)
                 if question_id in source_answers and (has_placeholder or question_id not in repaired_answers):
                     repaired_answers[question_id] = source_answers[question_id]
@@ -304,7 +309,7 @@ def _load_attempt_question_payloads(
                 repaired_questions != questions
                 or repaired_answers != normalized_answers
                 or (attempt.get("status") == "submitted" and current_max != canonical_max)
-                or payload_version < 2
+                or payload_version < 3
             )
             if root is not None and attempt.get("id") and needs_update:
                 with connect(root) as con:
@@ -313,7 +318,7 @@ def _load_attempt_question_payloads(
                         UPDATE student_attempts
                         SET question_payload_json = ?, answer_key_json = ?,
                             max_score = CASE WHEN status = 'submitted' THEN ? ELSE max_score END,
-                            question_payload_version = 2
+                            question_payload_version = 3
                         WHERE id = ? AND question_payload_json = ?
                         """,
                         (repaired_json, answers_json, canonical_max, str(attempt["id"]), str(raw_questions)),
@@ -529,9 +534,17 @@ def start_student_publication(
             )
         attempt = _attempt_for_student(root, str(attempt["id"]), str(student["id"]))
     questions, _answers = _load_attempt_question_payloads(project_root, attempt, root=root)
+    public_questions = [
+        {
+            key: value
+            for key, value in question.items()
+            if key not in {"analysis", "answer", "correct_answer"}
+        }
+        for question in questions
+    ]
     return {
         "attempt": _attempt_payload(attempt),
-        "questions": questions,
+        "questions": public_questions,
         "saved_answers": _saved_answer_payloads(root, str(attempt["id"])),
     }
 
@@ -852,7 +865,7 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
         question_order: list[str] = []
         question_by_id: dict[str, dict[str, Any]] = {}
         try:
-            questions, _answer_keys = _load_attempt_question_payloads(project_root, attempt, root=root)
+            questions, answer_keys = _load_attempt_question_payloads(project_root, attempt, root=root)
             question_order = [str(q["question_id"]) for q in questions]
             question_by_id = {str(q["question_id"]): q for q in questions}
         except Exception:
@@ -897,6 +910,8 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
                         "section_id": question.get("section_id"),
                         "score_per_item": question.get("score_per_item"),
                         "tags": question.get("tags") or [],
+                        "correct_answer": answer_keys.get(str(answer.get("question_id") or "")),
+                        "analysis": question.get("analysis"),
                     }
                 )
             answers.append(item)

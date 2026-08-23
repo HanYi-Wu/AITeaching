@@ -487,6 +487,8 @@ export type StudentResultRecord = StudentAttemptRecord & {
     score_per_item?: number | null;
     tags?: string[];
     responded_at?: string | null;
+    correct_answer?: unknown;
+    analysis?: string | null;
   }>;
   analysis?: {
     correct_count?: number | null;

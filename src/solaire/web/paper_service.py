@@ -1565,7 +1565,7 @@ def publish_online_paper(
             """
             INSERT OR IGNORE INTO student_attempts
               (id, publication_id, student_id, status, question_payload_json, answer_key_json, question_payload_version)
-            VALUES (?, ?, ?, 'not_started', ?, ?, 2)
+            VALUES (?, ?, ?, 'not_started', ?, ?, 3)
             """,
             [
                 (_new_id(), publication_id, str(row["student_id"]), frozen_questions_json, frozen_answer_keys_json)
@@ -1677,7 +1677,7 @@ def ingest_offline_submission(
                 INSERT INTO student_attempts (
                   id, publication_id, student_id, status, started_at, submitted_at,
                   question_payload_json, answer_key_json, question_payload_version
-                ) VALUES (?, ?, ?, 'submitted', ?, ?, ?, ?, 2)
+                ) VALUES (?, ?, ?, 'submitted', ?, ?, ?, ?, 3)
                 """,
                 (attempt_id, publication_id, student_id, now, now, question_json, answer_json),
             )
@@ -1687,7 +1687,7 @@ def ingest_offline_submission(
                 UPDATE student_attempts
                 SET status = 'submitted', started_at = COALESCE(started_at, ?), submitted_at = ?,
                     score = NULL, max_score = NULL, question_payload_json = ?, answer_key_json = ?,
-                    question_payload_version = 2
+                    question_payload_version = 3
                 WHERE id = ?
                 """,
                 (now, now, question_json, answer_json, attempt_id),

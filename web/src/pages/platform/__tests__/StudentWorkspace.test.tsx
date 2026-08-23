@@ -126,6 +126,31 @@ describe("StudentWorkspace", () => {
     expect(screen.getAllByText("已完成").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("shows every graded question and can filter the review to wrong answers", async () => {
+    mocks.listStudentResults.mockResolvedValue({
+      results: [{
+        attempt_id: "done1", publication_id: "pub0", exam_id: "quiz/Math", title: "Old Quiz", subject: "Math",
+        status: "submitted", score: 8, max_score: 10, score_percent: 80, time_spent_seconds: 300, show_results: true,
+        analysis: { correct_count: 1, wrong_count: 1, answered_count: 2 },
+        answers: [
+          { question_id: "q1", header: "1", content: "1+1=?", answer: "A", correct_answer: "A", analysis: "因为 1+1=2", score: 5, score_per_item: 5, is_correct: true, feedback: "回答正确。" },
+          { question_id: "q2", header: "2", content: "2+2=?", answer: "3", correct_answer: "4", analysis: "两个 2 相加等于 4", score: 0, score_per_item: 5, is_correct: false, feedback: "注意基本运算。" },
+        ],
+      }],
+    });
+
+    render(<StudentWorkspace user={{ id: "s1", role: "student", username: "stu_abcd", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId("student-page-results"));
+
+    expect(await screen.findByText("逐题复盘")).toBeInTheDocument();
+    expect(screen.getByText("回答正确。")).toBeInTheDocument();
+    expect(screen.getByText("因为 1+1=2")).toBeInTheDocument();
+    expect(screen.getByText("正确答案：A")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "只看错题" }));
+    expect(screen.queryByText("回答正确。")).not.toBeInTheDocument();
+    expect(screen.getByText("注意基本运算。")).toBeInTheDocument();
+  });
+
   it("forces first-login students to change password before entering papers", async () => {
     mocks.updateStudentAccount.mockResolvedValue({
       user: {

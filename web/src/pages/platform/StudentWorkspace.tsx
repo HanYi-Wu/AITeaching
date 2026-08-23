@@ -950,7 +950,8 @@ function StudentAnalysisVisual({ result }: { result: StudentResultRecord }) {
 }
 
 function StudentResultDetails({ result }: { result: StudentResultRecord }) {
-  const wrongAnswers = result.answers.filter((answer) => answer.is_correct === false);
+  const [wrongOnly, setWrongOnly] = useState(false);
+  const reviewAnswers = wrongOnly ? result.answers.filter((answer) => answer.is_correct === false) : result.answers;
   const sections = new Map<string, { score: number; max: number; count: number }>();
   result.answers.forEach((answer) => {
     const section = answer.section_id || "其他";
@@ -971,19 +972,34 @@ function StudentResultDetails({ result }: { result: StudentResultRecord }) {
         ))}
       </div>
       <p className="text-xs text-slate-500">平均每题用时：{result.analysis?.average_time_per_question_seconds ?? 0} 秒</p>
-      <div className="rounded-md border border-rose-100 bg-rose-50/50 p-3">
-        <p className="text-sm font-semibold text-rose-900">错题与教师反馈</p>
-        <div className="mt-2 space-y-2">
-          {wrongAnswers.map((answer) => (
-            <div key={answer.question_id} className="rounded bg-white p-3 text-sm">
-              <p className="font-medium text-slate-900">{answer.header || answer.question_id}</p>
-              {answer.content ? <KatexText text={answer.content} className="mt-1 text-slate-700" /> : null}
-              <p className="mt-2 text-xs text-slate-600">你的答案：{String(answer.answer || "未作答")}</p>
-              <p className="mt-1 text-xs text-slate-600">得分：{answer.score ?? 0}/{answer.score_per_item ?? "-"}</p>
-              {answer.feedback ? <p className="mt-1 text-xs text-blue-700">教师反馈：{answer.feedback}</p> : null}
-            </div>
+      <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-slate-900">逐题复盘</p>
+          <button type="button" onClick={() => setWrongOnly((value) => !value)} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+            {wrongOnly ? "查看全部题目" : "只看错题"}
+          </button>
+        </div>
+        <div className="mt-3 space-y-3">
+          {reviewAnswers.map((answer, index) => (
+            <article key={answer.question_id} className={`rounded-lg border bg-white p-4 text-sm ${answer.is_correct === false ? "border-rose-200" : answer.is_correct === true ? "border-emerald-200" : "border-slate-200"}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-medium text-slate-900">{answer.header || `第 ${index + 1} 题`}</p>
+                <span className={`rounded-full px-2 py-1 text-xs font-semibold ${answer.is_correct === false ? "bg-rose-50 text-rose-700" : answer.is_correct === true ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                  {answer.is_correct === false ? "需订正" : answer.is_correct === true ? "回答正确" : "已评分"} · {answer.score ?? 0}/{answer.score_per_item ?? "-"} 分
+                </span>
+              </div>
+              {answer.content ? <KatexText text={answer.content} className="mt-2 text-slate-800" /> : null}
+              {answer.options ? <div className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">{Object.entries(answer.options).map(([key, text]) => <div key={key}><b>{key}.</b> <KatexText text={text} className="inline" /></div>)}</div> : null}
+              <div className="mt-3 grid gap-2 rounded-md bg-slate-50 p-3 text-xs text-slate-700 sm:grid-cols-2">
+                <p>我的答案：{String(answer.answer ?? "未作答")}</p>
+                <p>正确答案：{String(answer.correct_answer ?? "以教师批改为准")}</p>
+              </div>
+              {answer.images?.length ? <div className="mt-3 flex flex-wrap gap-2">{answer.images.map((image) => <img key={image.name} src={image.data_url} alt={`答题图片 ${image.name}`} className="h-24 max-w-40 rounded border border-slate-200 object-contain" />)}</div> : null}
+              {answer.analysis ? <div className="mt-3 rounded-md bg-amber-50 p-3 text-xs text-amber-900"><b>题目解析：</b><KatexText text={answer.analysis} className="mt-1" /></div> : null}
+              {answer.feedback ? <p className="mt-3 rounded-md bg-blue-50 p-3 text-xs text-blue-800">教师评语：<span>{answer.feedback}</span></p> : null}
+            </article>
           ))}
-          {wrongAnswers.length === 0 ? <p className="text-xs text-slate-500">本次没有已确认错题。</p> : null}
+          {reviewAnswers.length === 0 ? <p className="py-3 text-center text-xs text-slate-500">本次没有已确认错题。</p> : null}
         </div>
       </div>
     </div>
