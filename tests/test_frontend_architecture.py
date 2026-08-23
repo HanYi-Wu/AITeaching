@@ -21,11 +21,10 @@ def test_app_shell_uses_lazy_page_imports_and_i18n() -> None:
         assert literal not in app_source
 
 
-def test_vite_requires_explicit_public_hosts() -> None:
+def test_vite_accepts_lan_and_custom_domain_hosts() -> None:
     vite_source = (ROOT / "web" / "vite.config.ts").read_text(encoding="utf-8")
 
-    assert "SOLAIRE_PUBLIC_HOSTS" in vite_source
-    assert '".frp-van.com"' not in vite_source
+    assert "allowedHosts: true" in vite_source
 
 
 def test_web_shell_declares_an_existing_favicon() -> None:

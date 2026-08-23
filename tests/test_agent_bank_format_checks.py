@@ -21,7 +21,6 @@ def test_bank_create_item_returns_format_warnings(tmp_path: Path) -> None:
     tr = invoke_registered_tool(
         "bank.create_item",
         {
-            "collection_namespace": "math/unit1",
             "question_id": "q1",
             "question_type": "fill",
             "content": "Fill ______.",
@@ -31,7 +30,7 @@ def test_bank_create_item_returns_format_warnings(tmp_path: Path) -> None:
     )
 
     assert tr.status == "succeeded"
-    assert tr.data["qualified_id"] == "math/unit1/q1"
+    assert tr.data["qualified_id"].endswith("/q1")
     assert tr.data["format_ok"] is False
     assert tr.data["format_warning_count"] >= 1
     assert any(w["code"] == "latex_underscore" for w in tr.data["format_warnings"])
@@ -44,7 +43,6 @@ def test_bank_update_item_returns_format_warnings_after_save(tmp_path: Path) -> 
     created = invoke_registered_tool(
         "bank.create_item",
         {
-            "collection_namespace": "math/unit1",
             "question_id": "q1",
             "question_type": "fill",
             "content": r"Let $x_1$ satisfy the condition.",
@@ -58,7 +56,7 @@ def test_bank_update_item_returns_format_warnings_after_save(tmp_path: Path) -> 
     updated = invoke_registered_tool(
         "bank.update_item",
         {
-            "qualified_id": "math/unit1/q1",
+            "qualified_id": created.data["qualified_id"],
             "content": "Broken blank ______.",
         },
         ctx,

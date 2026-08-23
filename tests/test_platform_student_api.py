@@ -264,6 +264,7 @@ def test_exam_without_library_refs_loads_real_question_content_and_scores(
     assert submitted.json()["attempt"]["score"] is None
     assert submitted.json()["attempt"]["max_score"] is None
 
+    teacher_headers = _teacher_headers(web_client)
     pending_paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
     assert pending_paper["submitted_student_count"] == 1
     assert pending_paper["published_student_count"] == 0

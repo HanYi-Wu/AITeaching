@@ -278,7 +278,7 @@ def test_teacher_publishes_historical_wrong_questions_per_student(web_client: Te
         headers=students[0]["headers"],  # type: ignore[index]
     )
     assert submitted.status_code == 200
-    assert submitted.json()["attempt"]["score"] == 0
+    assert submitted.json()["attempt"]["score"] is None
 
     adaptive_paper_id = published.json()["publication"]["paper_id"]
     submissions = web_client.get(f"/api/papers/{adaptive_paper_id}/submissions", headers=teacher_headers)
