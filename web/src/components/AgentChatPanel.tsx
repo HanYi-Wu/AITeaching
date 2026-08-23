@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import { MarkdownProseImg, MarkdownProseLink } from "../lib/markdownTauriUrls";
 import remarkGfm from "remark-gfm";
@@ -202,6 +202,7 @@ export function AgentChatPanel({
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [fileDragActive, setFileDragActive] = useState(false);
   const [currentFocus, setCurrentFocus] = useState<string | null>(null);
+  const assistantEnabled = config?.llm_configured !== false;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileDragDepthRef = useRef(0);
   const sendGateRef = useRef<ReturnType<typeof createAgentSubmissionGate> | null>(null);
@@ -526,6 +527,7 @@ export function AgentChatPanel({
   );
 
   const send = useCallback(async () => {
+    if (!assistantEnabled) return;
     const typedInput = input.trim();
     const filesToUpload = [...pendingFiles];
     const msgText = agentSendMessage(typedInput, filesToUpload.length, t("fileOnlyPrompt"));
@@ -578,7 +580,7 @@ export function AgentChatPanel({
       gate.release();
       setBusy(false);
     }
-  }, [busy, ensureSession, input, pendingFiles, runStream, t]);
+  }, [assistantEnabled, busy, ensureSession, input, pendingFiles, runStream, t]);
 
   const confirm = useCallback(
     async (action_id: string, accepted: boolean) => {
@@ -946,18 +948,7 @@ export function AgentChatPanel({
       {config && !config.llm_configured && (
         <div className="mx-2 mt-2 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
           <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>
-            <Trans
-              ns="agent"
-              i18nKey="noLlmConfig"
-              components={{
-                code1: <code className="rounded bg-amber-100 px-0.5" />,
-                code2: <code className="rounded bg-amber-100 px-0.5" />,
-                code3: <code className="rounded bg-amber-100 px-0.5" />,
-                code4: <code className="rounded bg-amber-100 px-0.5" />,
-              }}
-            />
-          </span>
+          <span>{t("noLlmConfig")}</span>
         </div>
       )}
       <div className="flex-1 space-y-2 overflow-y-auto px-2 py-2 text-sm">
@@ -1236,6 +1227,7 @@ export function AgentChatPanel({
               type="button"
               title={t("addAttachment")}
               aria-label={t("addAttachment")}
+              disabled={!assistantEnabled}
               onClick={() => fileInputRef.current?.click()}
               className="rounded-md border border-slate-300 bg-white p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             >
@@ -1244,6 +1236,7 @@ export function AgentChatPanel({
           </div>
           <textarea
             value={input}
+            disabled={!assistantEnabled}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (isImeComposingKeyboardEvent(e)) return;
@@ -1253,7 +1246,7 @@ export function AgentChatPanel({
               }
             }}
             rows={2}
-            placeholder={t("inputPh")}
+            placeholder={assistantEnabled ? t("inputPh") : t("disabledInputPh")}
             className="min-h-[44px] flex-1 resize-none rounded-md border border-slate-300 px-2 py-1.5 text-sm"
           />
           {busy ? (
@@ -1269,7 +1262,7 @@ export function AgentChatPanel({
           ) : (
             <button
               type="button"
-              disabled={busy || (!input.trim() && pendingFiles.length === 0)}
+              disabled={!assistantEnabled || busy || (!input.trim() && pendingFiles.length === 0)}
               onClick={() => void send()}
               className="self-end rounded-md bg-violet-600 p-2 text-white hover:bg-violet-700 disabled:opacity-50"
             >

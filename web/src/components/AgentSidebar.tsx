@@ -4,6 +4,11 @@ import { AgentChatPanel } from "./AgentChatPanel";
 import { useAgentContext } from "../contexts/AgentContext";
 import { cn } from "../lib/utils";
 
+export function getAssistantOverlayWidth(hostWidth: number): number {
+  if (hostWidth <= 0) return 0;
+  return Math.min(hostWidth, 420, Math.max(320, hostWidth * 0.34));
+}
+
 export function AgentSidebar({
   projectBound = false,
   mode = "overlay",
@@ -25,7 +30,7 @@ export function AgentSidebar({
 
     const updateOverlayStyle = () => {
       const rect = overlayHost.getBoundingClientRect();
-      const width = Math.min(352, Math.max(rect.width, 0));
+      const width = getAssistantOverlayWidth(rect.width);
       setOverlayStyle({
         position: "fixed",
         top: rect.top,
