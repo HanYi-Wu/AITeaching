@@ -84,6 +84,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [loading, setLoading] = useState(true);
+  const [submitReviewOpen, setSubmitReviewOpen] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const hiddenAtRef = useRef<number | null>(null);
   const activeAttemptRef = useRef<StudentAttemptRecord | null>(null);
@@ -243,7 +244,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setRemainingSeconds(next);
       if (next <= 0 && !autoSubmitTriggeredRef.current) {
         autoSubmitTriggeredRef.current = true;
-        void submitActiveAttempt(true);
+        void submitActiveAttempt();
       }
     };
     tick();
@@ -345,6 +346,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setAnswers(restoredAnswers);
       setImageAnswers(restoredImages);
       setSaveStatus((data.saved_answers?.length ?? 0) > 0 ? "restored" : "saved");
+      setSubmitReviewOpen(false);
       answerRevisionRef.current = 0;
       autoSubmitTriggeredRef.current = false;
       startedAtRef.current = Date.now();
@@ -427,10 +429,8 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     }
   }
 
-  async function submitActiveAttempt(automatic = false) {
+  async function submitActiveAttempt() {
     if (!activeAttempt) return;
-    const unanswered = Math.max(0, questions.length - answeredCount);
-    if (!automatic && unanswered > 0 && !window.confirm(`还有 ${unanswered} 道题未作答，确认提交试卷吗？`)) return;
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
     setBusy("submit");
@@ -444,6 +444,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setImageAnswers({});
       setRemainingSeconds(null);
       setSaveStatus("saved");
+      setSubmitReviewOpen(false);
       startedAtRef.current = null;
       await refresh();
       setMessage("试卷已提交");
@@ -550,7 +551,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
               type="button"
               data-testid="student-submit-attempt"
               disabled={busy === "submit"}
-              onClick={() => void submitActiveAttempt()}
+              onClick={() => setSubmitReviewOpen(true)}
               className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60 sm:w-auto"
             >
               <Send className="h-4 w-4" />
@@ -559,6 +560,33 @@ export function StudentWorkspace({ user, onLogout }: Props) {
           </div>
           {message ? <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">{message}</div> : null}
         </section>
+        {submitReviewOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-label="提交前确认">
+            <section className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl sm:p-6">
+              <h2 className="text-lg font-semibold text-slate-950">提交前确认</h2>
+              <p className="mt-1 text-sm text-slate-600">提交后不能撤回，请核对答题进度。</p>
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <div className="rounded-lg bg-emerald-50 p-4">
+                  <p className="text-xs text-emerald-700">答题进度</p>
+                  <p className="mt-1 text-lg font-semibold text-emerald-900">已答 {answeredCount} 题</p>
+                </div>
+                <div className={`rounded-lg p-4 ${questions.length - answeredCount > 0 ? "bg-rose-50" : "bg-slate-50"}`}>
+                  <p className={`text-xs ${questions.length - answeredCount > 0 ? "text-rose-700" : "text-slate-600"}`}>需要检查</p>
+                  <p className={`mt-1 text-lg font-semibold ${questions.length - answeredCount > 0 ? "text-rose-900" : "text-slate-900"}`}>未答 {Math.max(0, questions.length - answeredCount)} 题</p>
+                </div>
+              </div>
+              <dl className="mt-4 space-y-2 rounded-lg border border-slate-200 p-4 text-sm">
+                <div className="flex justify-between gap-3"><dt className="text-slate-500">草稿状态</dt><dd className="text-right font-medium text-slate-800">{saveStatus === "dirty" ? "有未保存修改，将随提交一并保存" : saveStatus === "saving" ? "草稿正在保存，提交时会携带最新答案" : saveStatus === "error" ? "草稿保存失败，但提交时会携带当前答案" : saveStatus === "restored" ? "草稿已恢复，可安全提交" : "草稿已保存，可安全提交"}</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-slate-500">剩余时间</dt><dd className="font-medium text-slate-800">{formatCountdown(remainingSeconds)}</dd></div>
+              </dl>
+              {questions.length - answeredCount > 0 ? <p className="mt-4 text-sm font-medium text-rose-700">还有未答题，建议返回检查后再提交。</p> : null}
+              <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setSubmitReviewOpen(false)} className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">继续检查</button>
+                <button type="button" disabled={busy === "submit"} onClick={() => { setSubmitReviewOpen(false); void submitActiveAttempt(); }} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60">确认提交</button>
+              </div>
+            </section>
+          </div>
+        ) : null}
       </PlatformShell>
     );
   }

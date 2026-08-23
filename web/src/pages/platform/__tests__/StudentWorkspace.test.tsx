@@ -257,6 +257,11 @@ describe("StudentWorkspace", () => {
     await userEvent.click(screen.getByTestId("student-submit-attempt"));
 
     expect(mocks.saveStudentAnswers).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "提交前确认" })).toBeInTheDocument();
+    expect(screen.getByText("已答 3 题")).toBeInTheDocument();
+    expect(screen.getByText("未答 0 题")).toBeInTheDocument();
+    expect(screen.getByText("有未保存修改，将随提交一并保存")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
     await waitFor(() =>
       expect(mocks.submitStudentAttempt).toHaveBeenCalledWith(
         "attempt1",
@@ -361,6 +366,7 @@ describe("StudentWorkspace", () => {
       const file = new File(["fake"], "answer.png", { type: "image/png" });
       await userEvent.upload(await screen.findByTestId("student-image-math/q1"), file);
       await userEvent.click(screen.getByTestId("student-submit-attempt"));
+      await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
 
       await waitFor(() =>
         expect(mocks.submitStudentAttempt).toHaveBeenCalledWith(
@@ -420,8 +426,6 @@ describe("StudentWorkspace", () => {
     });
     mocks.saveStudentAnswers.mockResolvedValue({ answer_count: 2 });
     mocks.submitStudentAttempt.mockResolvedValue({ attempt: { id: "attempt1", status: "submitted" } });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
-
     render(
       <StudentWorkspace
         user={{ id: "s1", role: "student", username: "stu_abcd", display_name: "Student", status: "active" }}
@@ -458,11 +462,15 @@ describe("StudentWorkspace", () => {
     );
 
     await userEvent.click(screen.getByTestId("student-submit-attempt"));
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("1 道题未作答"));
+    expect(screen.getByRole("dialog", { name: "提交前确认" })).toBeInTheDocument();
+    expect(screen.getByText("已答 1 题")).toBeInTheDocument();
+    expect(screen.getByText("未答 1 题")).toBeInTheDocument();
+    expect(screen.getByText("草稿已恢复，可安全提交")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "继续检查" }));
     expect(mocks.submitStudentAttempt).not.toHaveBeenCalled();
     await userEvent.click(screen.getByTestId("student-submit-attempt"));
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
     await waitFor(() => expect(mocks.submitStudentAttempt).toHaveBeenCalledTimes(1));
-    confirmSpy.mockRestore();
     fetchSpy.mockRestore();
   });
 
