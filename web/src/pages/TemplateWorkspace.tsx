@@ -8,6 +8,7 @@ import { useAgentContext } from "../contexts/AgentContext";
 import { useToolBar } from "../contexts/ToolBarContext";
 import i18n from "../i18n/i18n";
 import { SOLAIRE_SAVE_EVENT } from "../lib/saveEvents";
+import { notifyContentLibraryChanged } from "../lib/contentEvents";
 import { isImeCompositionActive } from "../lib/ime";
 import { confirmDialog } from "../lib/confirmDialog";
 import { cn } from "../lib/utils";
@@ -648,6 +649,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         setPath(finalPath);
       }
       await refreshList();
+      notifyContentLibraryChanged("template");
       setMsg(t("saved"));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -676,6 +678,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         return next;
       });
       await refreshList();
+      notifyContentLibraryChanged("template");
       setMsg(t("deleted"));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -694,6 +697,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         {},
       );
       await refreshList();
+      notifyContentLibraryChanged("template");
       setPath(r.path);
       setOpenTabs((prev) => (prev.includes(r.path) ? prev : [...prev, r.path]));
       setNewName("");

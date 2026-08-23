@@ -11,6 +11,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../api/client";
+import { useContentLibraryChanged } from "../lib/contentEvents";
 import { AdaptivePracticeSelector } from "../components/AdaptivePracticeSelector";
 import { KatexPlainPreview } from "../components/KatexText";
 import { PdfPreview } from "../components/PdfPreview";
@@ -127,6 +128,8 @@ export function ComposeWorkspace({
   const [rightListAnchor, setRightListAnchor] = useState<{ sectionId: string; slotIndex: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [contentSyncing, setContentSyncing] = useState(false);
+  const contentRequestIdRef = useRef(0);
 
   const [scoreBySection, setScoreBySection] = useState<Record<string, number | undefined>>({});
   const [scoreOverrides, setScoreOverrides] = useState<Record<string, Record<string, number>>>({});
@@ -260,6 +263,30 @@ export function ComposeWorkspace({
     return next;
   }, []);
 
+  const refreshContentLibrary = useCallback(async () => {
+    const requestId = ++contentRequestIdRef.current;
+    const [templateData, questionData, subjectData] = await Promise.all([
+      apiGet<{ templates: TemplateRow[] }>("/api/templates"),
+      apiGet<{ questions: QuestionRow[] }>("/api/questions"),
+      apiGet<{ subjects: string[] }>("/api/bank/subjects"),
+    ]);
+    if (requestId !== contentRequestIdRef.current) return false;
+    const nextTemplates = templateData.templates ?? [];
+    setTemplates(nextTemplates);
+    setQuestions(questionData.questions);
+    const list = subjectData.subjects.length
+      ? subjectData.subjects
+      : [...new Set(questionData.questions.map((item) => item.subject).filter(Boolean) as string[])];
+    setSubjectOptions(list);
+    if (!currentExamIdRef.current) {
+      setSubject((previous) => {
+        const value = previous.trim();
+        return list.length && !list.includes(value) ? list[0] ?? previous : previous;
+      });
+    }
+    return true;
+  }, []);
+
   useEffect(() => {
     const parts: string[] = [];
     parts.push(t("compose:pageContext.subject", { v: subject.trim() || "—" }));
@@ -379,37 +406,22 @@ export function ComposeWorkspace({
   }, [filteredQuestions]);
 
   useEffect(() => {
-    let cancelled = false;
     onError(null);
-    void Promise.all([
-      refreshTemplates().then((templates) => ({ templates })),
-      apiGet<{ questions: QuestionRow[] }>("/api/questions"),
-      apiGet<{ subjects: string[] }>("/api/bank/subjects"),
-    ])
-      .then(([t, q, subs]) => {
-        if (cancelled) {
-          return;
-        }
-        setTemplates(t.templates);
-        setQuestions(q.questions);
-        const list = subs.subjects.length ? subs.subjects : [...new Set(q.questions.map((x) => x.subject).filter(Boolean) as string[])];
-        setSubjectOptions(list);
-        /** 若用户已先打开某套考试工作区，勿覆盖学科与模板（避免慢请求晚于侧栏加载而冲掉 exam.yaml） */
-        if (!currentExamIdRef.current) {
-          setSubject((prev) => {
-            const p = prev.trim();
-            if (list.length && !list.includes(p)) {
-              return list[0] ?? prev;
-            }
-            return prev;
-          });
-        }
-      })
+    void refreshContentLibrary()
       .catch((e: Error) => onError(e.message));
-    return () => {
-      cancelled = true;
-    };
-  }, [onError, refreshTemplates]);
+  }, [onError, refreshContentLibrary]);
+
+  useContentLibraryChanged(() => {
+    setContentSyncing(true);
+    void refreshContentLibrary()
+      .catch((error: Error) => {
+        onError(error.message);
+        return true;
+      })
+      .then((latest) => {
+        if (latest) setContentSyncing(false);
+      });
+  });
 
   /** 首屏默认模板：仅在尚未关联考试且未选模板时写入，避免与 loadExamById / applyExamDocument 竞态 */
   useEffect(() => {
@@ -2180,7 +2192,9 @@ export function ComposeWorkspace({
             <p className="mt-2 text-[10px] leading-snug text-slate-500">{t("compose:bankListMultiSelectHint")}</p>
           </div>
           <ul className="min-h-0 flex-1 overflow-auto p-2">
-            {questions.length === 0 ? (
+            {contentSyncing ? (
+              <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-700">正在更新内容库...</div>
+            ) : questions.length === 0 ? (
               <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
                 <p className="font-medium text-slate-800">{t("compose:emptyBank")}</p>
                 <p className="mt-2 text-xs leading-relaxed text-slate-500">{t("compose:emptyBankHint")}</p>
@@ -2330,7 +2344,7 @@ export function ComposeWorkspace({
             </div>
           </div>
 
-          {templates.length === 0 && (
+          {contentSyncing ? null : templates.length === 0 && (
             <p className="text-sm text-red-600">{t("compose:templatesMissing")}</p>
           )}
 

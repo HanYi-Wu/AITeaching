@@ -32,6 +32,7 @@ import i18n from "../i18n/i18n";
 import { confirmDialog } from "../lib/confirmDialog";
 import { localeCompareStrings } from "../lib/locale";
 import { SOLAIRE_SAVE_EVENT } from "../lib/saveEvents";
+import { notifyContentLibraryChanged } from "../lib/contentEvents";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../lib/ime";
 import { cn } from "../lib/utils";
 import { downloadPlatformBlob } from "../platform/auth";
@@ -766,6 +767,7 @@ export function BankWorkspace({
       }
       await loadList();
       await loadDetail(detail.qualified_id);
+      notifyContentLibraryChanged("question");
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -797,6 +799,7 @@ export function BankWorkspace({
       }
       await loadList();
       await loadDetail(detail.qualified_id);
+      notifyContentLibraryChanged("question");
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -843,6 +846,7 @@ export function BankWorkspace({
       }
       const r = await apiPost<{ ok: boolean; qualified_id: string }>("/api/bank/items", body);
       await loadList();
+      notifyContentLibraryChanged("question");
       openModalAfterCreateRef.current = true;
       setOpenTabs((prev) => (prev.includes(r.qualified_id) ? prev : [...prev, r.qualified_id]));
       setSelectedId(r.qualified_id);
@@ -865,6 +869,7 @@ export function BankWorkspace({
       });
       setImportYaml("");
       await loadList();
+      notifyContentLibraryChanged("question");
       setBankImportOpen(false);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -895,6 +900,7 @@ export function BankWorkspace({
           );
         }
         await loadList();
+        notifyContentLibraryChanged("question");
         setBankImportOpen(false);
       } else if (name.endsWith(".yaml") || name.endsWith(".yml")) {
         const text = await f.text();
@@ -904,6 +910,7 @@ export function BankWorkspace({
           target_collection: importTarget.trim() || "imported",
         });
         await loadList();
+        notifyContentLibraryChanged("question");
         setBankImportOpen(false);
       } else {
         onError(t("errors.pickYamlZip"));
