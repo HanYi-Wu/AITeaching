@@ -5,6 +5,8 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock,
+  Eye,
+  EyeOff,
   Home,
   RefreshCw,
   Save,
@@ -70,6 +72,8 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [username, setUsername] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showAccountPasswords, setShowAccountPasswords] = useState(false);
   const [theme, setTheme] = useState(profile.preferences?.theme ?? "classic");
   const [density, setDensity] = useState(profile.preferences?.density ?? "comfortable");
   const [fontScale, setFontScale] = useState(Number(profile.preferences?.font_scale ?? 1));
@@ -290,6 +294,10 @@ export function StudentWorkspace({ user, onLogout }: Props) {
 
   async function submitAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (accountMode === "password" && newPassword !== confirmPassword) {
+      setMessage("两次输入的新密码不一致");
+      return;
+    }
     setBusy("account");
     setMessage(null);
     try {
@@ -302,6 +310,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setUsername("");
       setCurrentPassword("");
       setNewPassword("");
+      setConfirmPassword("");
       setMessage(accountMode === "password" ? "密码已更新" : "用户名已更新");
       if (profile.must_change_password && !result.user.must_change_password) {
         setActiveView("home");
@@ -596,7 +605,6 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       roleLabel="学生端"
       title={profile.display_name || profile.username}
       subtitle={mustChangePassword ? "首次登录需要先修改密码。" : "查看待答试卷、历史成绩和个人分析。"}
-      userName={profile.username}
       onLogout={onLogout}
       compactMobile
     >
@@ -840,26 +848,29 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                   required
                 />
               ) : null}
+              <label className="block text-sm text-slate-700">当前密码
               <input
                 data-testid="student-account-current-password"
-                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="当前密码"
-                type="password"
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                type={showAccountPasswords ? "text" : "password"}
                 value={currentPassword}
                 onChange={(event) => setCurrentPassword(event.target.value)}
                 required
               />
+              </label>
               {accountMode === "password" ? (
-                <input
-                  data-testid="student-account-new-password"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  placeholder="新密码"
-                  type="password"
-                  minLength={6}
-                  value={newPassword}
-                  onChange={(event) => setNewPassword(event.target.value)}
-                  required
-                />
+                <>
+                  <label className="block text-sm text-slate-700">新密码
+                    <input data-testid="student-account-new-password" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" type={showAccountPasswords ? "text" : "password"} minLength={6} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+                  </label>
+                  <label className="block text-sm text-slate-700">确认新密码
+                    <input data-testid="student-account-confirm-password" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" type={showAccountPasswords ? "text" : "password"} minLength={6} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+                  </label>
+                  <p className="text-xs text-slate-500">密码至少 6 位，建议同时包含字母和数字，且不要与其他网站共用。</p>
+                  <button type="button" onClick={() => setShowAccountPasswords((value) => !value)} className="inline-flex items-center gap-2 text-xs font-medium text-slate-600">
+                    {showAccountPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{showAccountPasswords ? "隐藏密码" : "显示密码"}
+                  </button>
+                </>
               ) : null}
               <button
                 data-testid="student-account-save"

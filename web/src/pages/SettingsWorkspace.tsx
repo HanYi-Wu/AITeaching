@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FolderInput, Loader2 } from "lucide-react";
+import { Eye, EyeOff, FolderInput, Loader2 } from "lucide-react";
 import {
   apiAgentLlmSettingsGet,
   apiAgentSafetyModeGet,
@@ -20,7 +20,7 @@ import { changeAppLanguage } from "../i18n/changeLanguage";
 import type { AppLang } from "../i18n/tauriLocale";
 import { SOLAIRE_SAVE_EVENT } from "../lib/saveEvents";
 import type { PlatformRole } from "../platform/roles";
-import { getAccountProfile, updateAccountProfile, type PlatformUser } from "../platform/auth";
+import { getAccountProfile, updateAccountCredentials, updateAccountProfile, type PlatformUser } from "../platform/auth";
 import { LogWorkspace } from "./LogWorkspace";
 
 export function SettingsWorkspace({
@@ -50,6 +50,10 @@ export function SettingsWorkspace({
   const [density, setDensity] = useState("comfortable");
   const [fontScale, setFontScale] = useState(1);
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPasswords, setShowPasswords] = useState(false);
   const modelFormRef = useRef<AgentModelSettingsFormHandle>(null);
   const canManageModelSettings = userRole === "admin";
 
@@ -80,6 +84,30 @@ export function SettingsWorkspace({
       localStorage.setItem("eh-theme", theme);
       localStorage.setItem("eh-density", density);
       setMsg("个性化设置已保存");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function savePassword() {
+    if (newPassword.length < 6) {
+      onError("新密码至少 6 位");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      onError("两次输入的新密码不一致");
+      return;
+    }
+    setSaving(true);
+    try {
+      await updateAccountCredentials({ current_password: currentPassword, new_password: newPassword });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setMsg("密码已修改");
+      onError(null);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -209,6 +237,19 @@ export function SettingsWorkspace({
       </div>
       {userRole === "teacher" ? <label className="mt-4 block text-sm font-medium text-slate-700">我的学科（可设置多个，用顿号或逗号分隔）<textarea value={subjectsText} onChange={(event) => setSubjectsText(event.target.value)} className="mt-2 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="例如：数学、物理" /></label> : null}
       <button type="button" disabled={saving} onClick={() => void savePersonalization()} className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">保存个性化设置</button>
+      <div className="mt-6 border-t border-slate-200 pt-5">
+        <h3 className="text-sm font-semibold text-slate-900">修改登录密码</h3>
+        <p className="mt-1 text-xs text-slate-500">密码至少 6 位，建议同时包含字母和数字。</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <label className="text-sm text-slate-700">当前密码<input aria-label="当前密码" type={showPasswords ? "text" : "password"} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" /></label>
+          <label className="text-sm text-slate-700">新密码<input aria-label="新密码" type={showPasswords ? "text" : "password"} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" /></label>
+          <label className="text-sm text-slate-700">确认新密码<input aria-label="确认新密码" type={showPasswords ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" /></label>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" disabled={saving || !currentPassword || !newPassword || !confirmPassword} onClick={() => void savePassword()} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50">修改密码</button>
+          <button type="button" onClick={() => setShowPasswords((value) => !value)} className="inline-flex items-center gap-2 px-2 text-sm text-slate-600">{showPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{showPasswords ? "隐藏密码" : "显示密码"}</button>
+        </div>
+      </div>
     </div>
   ) : null;
 

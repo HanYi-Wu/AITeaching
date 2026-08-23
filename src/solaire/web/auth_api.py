@@ -121,7 +121,7 @@ def auth_login(body: LoginBody) -> dict[str, Any]:
     root = require_platform_root()
     user = authenticate_user(root, body.username, body.password)
     if user is None:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = create_session(root, str(user["id"]))
     return {"user": user, "token": token}
 
@@ -163,15 +163,10 @@ def auth_profile_update(
     return {"profile": profile}
 
 
-@router.patch("/student/account")
-def student_account_update(
+def _update_account_credentials(
     body: StudentAccountUpdateBody,
-    authorization: Annotated[str | None, Header()] = None,
-    x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
+    user: dict[str, Any],
 ) -> dict[str, Any]:
-    user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
-    if user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Student role required")
     wants_username = bool(body.username and body.username.strip())
     wants_password = bool(body.new_password)
     if wants_username == wants_password:
@@ -188,8 +183,36 @@ def student_account_update(
             new_password=body.new_password,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        message = str(e)
+        friendly = {
+            "current password is invalid": "当前密码错误",
+            "username already exists": "该用户名已被使用",
+            "password change is required before username changes": "首次登录必须先修改密码",
+        }.get(message, message)
+        raise HTTPException(status_code=400, detail=friendly) from e
     return {"user": updated}
+
+
+@router.patch("/auth/account")
+def auth_account_update(
+    body: StudentAccountUpdateBody,
+    authorization: Annotated[str | None, Header()] = None,
+    x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
+) -> dict[str, Any]:
+    user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
+    return _update_account_credentials(body, user)
+
+
+@router.patch("/student/account")
+def student_account_update(
+    body: StudentAccountUpdateBody,
+    authorization: Annotated[str | None, Header()] = None,
+    x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
+) -> dict[str, Any]:
+    user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
+    if user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Student role required")
+    return _update_account_credentials(body, user)
 
 
 @router.post("/auth/logout")

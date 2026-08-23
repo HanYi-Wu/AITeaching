@@ -68,3 +68,20 @@ def test_login_me_and_logout(web_client: TestClient) -> None:
     logout = web_client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
     assert logout.status_code == 200
     assert web_client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code == 401
+
+
+def test_authenticated_user_can_change_own_password(web_client: TestClient) -> None:
+    created = web_client.post(
+        "/api/auth/bootstrap-admin",
+        json={"username": "admin", "password": "secret123", "display_name": "Administrator"},
+    ).json()
+    headers = {"Authorization": f"Bearer {created['token']}"}
+
+    changed = web_client.patch(
+        "/api/auth/account",
+        json={"current_password": "secret123", "new_password": "safer456"},
+        headers=headers,
+    )
+    assert changed.status_code == 200
+    assert web_client.post("/api/auth/login", json={"username": "admin", "password": "secret123"}).status_code == 401
+    assert web_client.post("/api/auth/login", json={"username": "admin", "password": "safer456"}).status_code == 200

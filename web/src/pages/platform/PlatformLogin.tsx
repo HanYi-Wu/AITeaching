@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { KeyRound, LogIn, UserPlus } from "lucide-react";
+import { Eye, EyeOff, KeyRound, LogIn, UserPlus } from "lucide-react";
 import {
   bootstrapAdmin,
   loginPlatform,
@@ -21,6 +21,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
   const [displayName, setDisplayName] = useState(mode === "bootstrap" ? "Administrator" : "");
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const isBootstrap = mode === "bootstrap";
 
   function showError(message: string) {
@@ -66,7 +67,16 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
       saveSessionToken(result.token);
       onAuthenticated(result.user);
     } catch (e) {
-      showError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      showError(
+        /Invalid username or password/i.test(message)
+          ? "用户名或密码错误"
+          : /Authentication required/i.test(message)
+            ? "登录状态已失效，请重新登录"
+            : /Bad Gateway|Failed to fetch|NetworkError/i.test(message)
+              ? "暂时无法连接平台服务，请稍后重试或联系系统维护人员"
+              : message,
+      );
     } finally {
       setBusy(false);
     }
@@ -127,21 +137,28 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
           </label>
         )}
 
-        <label className="mb-5 block">
+        <label className="mb-3 block">
           <span className="mb-1 block text-sm font-medium text-slate-700">密码</span>
-          <input
-            value={password}
-            onChange={(event) => {
-              setPassword(event.target.value);
-              clearError();
-            }}
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-            type="password"
-            autoComplete={isBootstrap ? "new-password" : "current-password"}
-            minLength={6}
-            required
-          />
+          <span className="relative block">
+            <input
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                clearError();
+              }}
+              className="w-full rounded-md border border-slate-300 px-3 py-2 pr-11 text-sm outline-none focus:border-slate-700"
+              type={showPassword ? "text" : "password"}
+              autoComplete={isBootstrap ? "new-password" : "current-password"}
+              minLength={6}
+              required
+            />
+            <button type="button" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword((value) => !value)} className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-500">
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </span>
         </label>
+
+        {!isBootstrap ? <p className="mb-5 text-xs leading-5 text-slate-500">账号由学校或平台管理员创建。忘记密码请联系学校管理员；平台管理员请联系系统维护人员重置。</p> : null}
 
         {formError && (
           <div

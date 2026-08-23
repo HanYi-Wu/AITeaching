@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentProvider } from "../../contexts/AgentContext";
@@ -8,7 +9,14 @@ const mocks = vi.hoisted(() => ({
   apiAgentLlmSettingsGet: vi.fn(),
   apiAgentSafetyModeGet: vi.fn(),
   apiAgentSafetyModePut: vi.fn(),
+  getAccountProfile: vi.fn(),
+  updateAccountCredentials: vi.fn(),
 }));
+
+vi.mock("../../platform/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../platform/auth")>();
+  return { ...actual, getAccountProfile: mocks.getAccountProfile, updateAccountCredentials: mocks.updateAccountCredentials };
+});
 
 vi.mock("../../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/client")>();
@@ -62,6 +70,8 @@ describe("SettingsWorkspace role gating", () => {
       mode: "allegro",
       options: [],
     });
+    mocks.getAccountProfile.mockResolvedValue({ profile: { id: "t1", role: "teacher", username: "teacher", display_name: "教师", status: "active" } });
+    mocks.updateAccountCredentials.mockResolvedValue({ user: { id: "t1", role: "teacher", username: "teacher", display_name: "教师", status: "active" } });
   });
 
   it("hides model and extension configuration for teachers and keeps logs inside settings", async () => {
@@ -79,5 +89,14 @@ describe("SettingsWorkspace role gating", () => {
     expect(await screen.findByTestId("model-settings-form")).toBeInTheDocument();
     expect(screen.getByTestId("settings-log")).toBeInTheDocument();
     expect(mocks.apiAgentLlmSettingsGet).toHaveBeenCalled();
+  });
+
+  it("lets a teacher change their own password", async () => {
+    renderSettings("teacher");
+    await userEvent.type(await screen.findByLabelText("当前密码"), "oldpass1");
+    await userEvent.type(screen.getByLabelText("新密码"), "newpass2");
+    await userEvent.type(screen.getByLabelText("确认新密码"), "newpass2");
+    await userEvent.click(screen.getByRole("button", { name: "修改密码" }));
+    await waitFor(() => expect(mocks.updateAccountCredentials).toHaveBeenCalledWith({ current_password: "oldpass1", new_password: "newpass2" }));
   });
 });

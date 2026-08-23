@@ -51,9 +51,9 @@ _HOST_CONTROL_PREFIXES = (
     "/api/analysis/jobs/script",
     "/api/analysis/tools",
 )
-_STUDENT_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout", "/api/auth/profile"})
+_STUDENT_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout", "/api/auth/profile", "/api/auth/account"})
 _STUDENT_RESOURCE_EXTENSIONS = frozenset({".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
-_SCHOOL_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout"})
+_SCHOOL_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout", "/api/auth/profile", "/api/auth/account"})
 
 _login_attempts: dict[str, deque[float]] = defaultdict(deque)
 _login_lock = threading.Lock()

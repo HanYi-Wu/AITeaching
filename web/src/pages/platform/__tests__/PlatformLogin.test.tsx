@@ -57,9 +57,21 @@ describe("PlatformLogin", () => {
     await waitFor(() =>
       expect(mocks.loginPlatform).toHaveBeenCalledWith({ username: "admin", password: "wrong123" }),
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent("Invalid username or password");
-    expect(onError).toHaveBeenCalledWith("Invalid username or password");
+    expect(await screen.findByRole("alert")).toHaveTextContent("用户名或密码错误");
+    expect(onError).toHaveBeenCalledWith("用户名或密码错误");
     expect(onAuthenticated).not.toHaveBeenCalled();
+  });
+
+  it("can reveal the password and explains how accounts are recovered", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <PlatformLogin mode="login" onAuthenticated={vi.fn()} onError={vi.fn()} />,
+    );
+    const password = field(container, 'input[autocomplete="current-password"]');
+    expect(password).toHaveAttribute("type", "password");
+    await user.click(screen.getByRole("button", { name: "显示密码" }));
+    expect(password).toHaveAttribute("type", "text");
+    expect(screen.getByText(/忘记密码请联系/)).toBeInTheDocument();
   });
 
   it("shows form validation feedback for short passwords", async () => {

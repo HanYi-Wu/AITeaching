@@ -89,6 +89,7 @@ describe("StudentWorkspace", () => {
     await userEvent.click(await screen.findByTestId("student-page-account"));
     await userEvent.type(screen.getByTestId("student-account-current-password"), "initial123");
     await userEvent.type(screen.getByTestId("student-account-new-password"), "changed123");
+    await userEvent.type(screen.getByTestId("student-account-confirm-password"), "changed123");
     await userEvent.click(screen.getByTestId("student-account-save"));
 
     await waitFor(() =>
@@ -184,6 +185,7 @@ describe("StudentWorkspace", () => {
 
     await userEvent.type(screen.getByTestId("student-account-current-password"), "initial123");
     await userEvent.type(screen.getByTestId("student-account-new-password"), "changed123");
+    await userEvent.type(screen.getByTestId("student-account-confirm-password"), "changed123");
     await userEvent.click(screen.getByTestId("student-account-save"));
 
     await waitFor(() =>

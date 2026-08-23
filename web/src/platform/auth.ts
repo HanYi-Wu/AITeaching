@@ -265,6 +265,13 @@ export function updateAccountProfile(payload: {
   return platformRequest("/api/auth/profile", { method: "PATCH", body: JSON.stringify(payload) });
 }
 
+export function updateAccountCredentials(payload: {
+  current_password: string;
+  new_password: string;
+}): Promise<{ user: PlatformUser }> {
+  return platformRequest("/api/auth/account", { method: "PATCH", body: JSON.stringify(payload) });
+}
+
 export type TeacherClassStudentRecord = {
   id: string;
   student_no: string;
