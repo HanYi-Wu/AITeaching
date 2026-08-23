@@ -5,12 +5,12 @@ import { PlatformPaperAnalysisCharts } from "../AnalysisCharts";
 
 const analysis = {
   paper: { paper_id: "p1", exam_id: "e1", title: "线上测试", subject: "数学", delivery_mode: "online", status: "published" },
-  summary: { total_students: 2, completed_students: 1, in_progress_students: 1, not_started_students: 0, completion_rate: 50, average_score: 50, average_time_seconds: 600, publication_count: 1 },
+  summary: { total_students: 2, completed_students: 1, in_progress_students: 1, not_started_students: 0, completion_rate: 50, average_score: 50, average_time_seconds: 22, publication_count: 1 },
   proctoring: { event_count: 0, event_type_counts: {}, screen_switch_count: 0, screen_switch_duration_ms: 0, flagged_student_count: 0, exceeded_student_count: 0 },
   modules: [],
-  questions: [],
-  classes: [],
-  students: [],
+  questions: [{ question_id: "q1", header: "1", section_id: "选择题", type: "single_choice", content: "1+1", score_per_item: 5, answered_count: 1, scored_count: 1, correct_count: 1, wrong_count: 0, average_score_percent: 100, accuracy_rate: 100, risk_level: "low" }],
+  classes: [{ class_id: "c1", class_name: "七年级一班", class_grade: "七年级", student_count: 1, completed_count: 1, in_progress_count: 0, not_started_count: 0, completion_rate: 100, average_score: 100, average_time_seconds: 22, screen_switch_count: 0 }],
+  students: [{ student_id: "s1", display_name: "学生", status: "completed", score_percent: 100, time_spent_seconds: 22, screen_switch_count: 0, screen_switch_limit: 0, class_names: ["七年级一班"] }],
   radar: [
     { id: "completion", label: "Completion", value: 50 },
     { id: "score", label: "Score", value: 50 },
@@ -31,5 +31,10 @@ describe("PlatformPaperAnalysisCharts", () => {
     expect(screen.getAllByText("模块掌握度").length).toBeGreaterThan(0);
     expect(screen.queryByText("Time Efficiency")).not.toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-radar")).toHaveClass("min-w-0", "overflow-hidden");
+    expect(screen.getAllByText("22 秒").length).toBeGreaterThan(0);
+    expect(screen.getByText("低风险")).toBeInTheDocument();
+    expect(screen.getAllByText("七年级一班").length).toBeGreaterThan(0);
+    expect(screen.queryByText("七年级一班七年级")).not.toBeInTheDocument();
+    expect(screen.getByText(/风险等级说明/)).toBeInTheDocument();
   });
 });

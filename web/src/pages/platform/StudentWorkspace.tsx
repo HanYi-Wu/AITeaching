@@ -16,6 +16,7 @@ import {
 import { resolveApiUrl } from "../../api/client";
 import { KatexText } from "../../components/KatexText";
 import { compressImageFileToDataUrl } from "../../lib/imageCompression";
+import { formatLocaleDateTime } from "../../lib/locale";
 import {
   loadSessionToken,
   updateAccountProfile,
@@ -727,6 +728,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                       <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                         <span>{paper.subject || "未分科"}</span>
                         <span>{paper.question_count} 题</span>
+                        <span>总分 {paper.paper_max_score ?? "-"} 分</span>
+                        <span>{paper.time_limit_minutes ? `限时 ${paper.time_limit_minutes} 分钟` : "不限时"}</span>
+                        <span>{paper.end_at ? `截止 ${formatLocaleDateTime(paper.end_at)}` : "无截止时间"}</span>
                         <span>{statusLabel(paper.status)}</span>
                         {paper.can_answer === false ? <span>暂不可答</span> : null}
                       </div>

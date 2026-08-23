@@ -42,10 +42,12 @@ describe("StudentWorkspace", () => {
           subject: "Math",
           status: "not_started",
           question_count: 2,
+          paper_max_score: 10,
           screen_switch_count: 0,
           screen_switch_limit: 2,
           time_spent_seconds: 0,
           time_limit_minutes: 30,
+          end_at: "2026-08-25T08:00:00Z",
           show_results: true,
         },
       ],
@@ -270,6 +272,9 @@ describe("StudentWorkspace", () => {
 
     await userEvent.click(await screen.findByTestId("student-page-papers"));
     expect(await screen.findByText("Online Midterm")).toBeInTheDocument();
+    expect(screen.getByText("总分 10 分")).toBeInTheDocument();
+    expect(screen.getByText("限时 30 分钟")).toBeInTheDocument();
+    expect(screen.getByText(/截止/)).toBeInTheDocument();
     await userEvent.click(screen.getByTestId("student-start-pub1"));
     expect(await screen.findByText("1+1=?")).toBeInTheDocument();
     expect(document.querySelector(".katex")).not.toBeNull();

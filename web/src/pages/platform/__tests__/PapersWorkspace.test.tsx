@@ -350,6 +350,7 @@ describe("PapersWorkspace", () => {
           student_name: "Student One",
           student_no: "S001",
           status: "submitted",
+          submitted_at: "2026-08-23T08:30:00Z",
           score: null,
           max_score: 10,
           answers: [
@@ -387,6 +388,9 @@ describe("PapersWorkspace", () => {
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByTestId("paper-tab-grading"));
     expect(await screen.findByText("Student One")).toBeInTheDocument();
+    expect(screen.getAllByText(/已提交/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/待批改/)).toBeInTheDocument();
+    expect(screen.queryByText("submitted")).not.toBeInTheDocument();
     await userEvent.click(screen.getByTestId("paper-ai-grade-a1"));
     await waitFor(() =>
       expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledWith("p1", "a1", ["math/q1"]),

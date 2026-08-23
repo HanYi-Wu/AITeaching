@@ -15,6 +15,21 @@ function minutes(seconds: number | null | undefined): number {
   return Math.round(Number(seconds || 0) / 60);
 }
 
+export function formatAnalysisDuration(seconds: number | null | undefined): string {
+  const value = Math.max(0, Math.round(Number(seconds || 0)));
+  if (value < 60) return `${value} 秒`;
+  if (value < 3600) return `${Math.round(value / 60)} 分钟`;
+  return `${(value / 3600).toFixed(1)} 小时`;
+}
+
+function riskLabel(level?: string | null): string {
+  return ({ low: "低风险", medium: "中风险", high: "高风险" } as Record<string, string>)[String(level || "").toLowerCase()] ?? level ?? "-";
+}
+
+function classDisplayName(name: string, grade?: string | null): string {
+  return grade && !name.includes(grade) ? `${name} · ${grade}` : name;
+}
+
 function clampPercent(value: number | null | undefined): number {
   return Math.max(0, Math.min(100, Number(value ?? 0)));
 }
@@ -212,7 +227,7 @@ function ModuleReport({ analysis }: { analysis: PlatformPaperAnalysis }) {
               <td className="px-3 py-2 text-right text-slate-600">
                 {item.accuracy_rate == null ? "-" : `${Math.round(item.accuracy_rate)}%`}
               </td>
-              <td className="px-3 py-2 text-right text-slate-600">{item.risk_level || "-"}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{riskLabel(item.risk_level)}</td>
             </tr>
           ))}
         </tbody>
@@ -243,13 +258,12 @@ function ClassReport({ analysis }: { analysis: PlatformPaperAnalysis }) {
           {rows.map((item) => (
             <tr key={item.class_id}>
               <td className="px-3 py-2 font-medium text-slate-800">
-                {item.class_name}
-                {item.class_grade ? <span className="ml-2 text-xs font-normal text-slate-400">{item.class_grade}</span> : null}
+                {classDisplayName(item.class_name, item.class_grade)}
               </td>
               <td className="px-3 py-2 text-right text-slate-600">{item.student_count}</td>
               <td className="px-3 py-2 text-right text-slate-600">{Math.round(item.completion_rate)}%</td>
               <td className="px-3 py-2 text-right text-slate-600">{item.average_score == null ? "-" : `${Math.round(item.average_score)}%`}</td>
-              <td className="px-3 py-2 text-right text-slate-600">{item.average_time_seconds == null ? "-" : `${minutes(item.average_time_seconds)} 分钟`}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{item.average_time_seconds == null ? "-" : formatAnalysisDuration(item.average_time_seconds)}</td>
               <td className="px-3 py-2 text-right text-slate-600">{item.screen_switch_count}</td>
             </tr>
           ))}
@@ -292,7 +306,7 @@ function QuestionReport({ analysis }: { analysis: PlatformPaperAnalysis }) {
               <td className="px-3 py-2 text-right text-slate-600">
                 {item.average_score_percent == null ? "-" : `${Math.round(item.average_score_percent)}%`}
               </td>
-              <td className="px-3 py-2 text-right text-slate-600">{item.risk_level || "-"}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{riskLabel(item.risk_level)}</td>
             </tr>
           ))}
         </tbody>
@@ -341,7 +355,7 @@ function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; c
                     <span className="text-right font-mono text-xs text-slate-700">{score == null ? "-" : `${score}%`}</span>
                   </div>
                 </td>
-                <td className="px-3 py-2 text-right text-slate-600">{minutes(student.time_spent_seconds)} 分钟</td>
+                <td className="px-3 py-2 text-right text-slate-600">{formatAnalysisDuration(student.time_spent_seconds)}</td>
                 <td className="px-3 py-2 text-right">
                   <span
                     className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
@@ -392,12 +406,11 @@ export function PlatformPaperAnalysisCharts({
   const scoreRows = makeScoreBuckets(analysis);
   const timeRows = makeTimeBuckets(analysis);
   const completed = analysis.students.filter((student) => student.status === "completed");
-  const avgTimeMinutes =
+  const avgTimeSeconds =
     completed.length > 0
       ? Math.round(
           completed.reduce((sum, student) => sum + Number(student.time_spent_seconds || 0), 0) /
-            completed.length /
-            60,
+            completed.length,
         )
       : 0;
 
@@ -420,7 +433,7 @@ export function PlatformPaperAnalysisCharts({
         </section>
         <section className="rounded-lg border border-slate-200 bg-white p-4" data-testid="paper-analysis-chart-time">
           <h4 className="text-sm font-semibold text-slate-900">耗时区间分布</h4>
-          <p className="mt-1 text-xs text-slate-500">平均耗时 {avgTimeMinutes || "-"} 分钟。</p>
+          <p className="mt-1 text-xs text-slate-500">平均耗时 {completed.length > 0 ? formatAnalysisDuration(avgTimeSeconds) : "-"}。</p>
           <div className="mt-4">
             <BarRows rows={timeRows} total={Math.max(analysis.students.length, 1)} />
           </div>
@@ -428,6 +441,7 @@ export function PlatformPaperAnalysisCharts({
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <p className="mb-3 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">风险等级说明：低风险表示当前数据较稳定；中风险建议关注；高风险需要教师结合答卷和课堂情况复核。风险是提示，不是对学生的定性。</p>
         <div className="grid gap-3 sm:grid-cols-4">
           <div className="rounded-md bg-slate-50 p-3">
             <p className="text-xs text-slate-500">完成率</p>

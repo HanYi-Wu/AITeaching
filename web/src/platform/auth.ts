@@ -446,6 +446,7 @@ export type StudentPaperRecord = {
   submitted_at?: string | null;
   score?: number | null;
   max_score?: number | null;
+  paper_max_score?: number | null;
   score_percent?: number | null;
   time_spent_seconds: number;
   show_results: boolean;

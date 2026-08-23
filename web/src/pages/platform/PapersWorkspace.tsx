@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { resolveApiUrl } from "../../api/client";
+import { formatLocaleDateTime } from "../../lib/locale";
 import { KatexText } from "../../components/KatexText";
 import {
   analyzePlatformPaper,
@@ -120,6 +121,14 @@ function publicationStatusLabel(status: string): string {
   if (status === "closed") return "已关闭";
   if (status === "revoked") return "已撤回";
   return "草稿";
+}
+
+function submissionStatusLabel(status?: string | null): string {
+  return ({ not_started: "未开始", in_progress: "答题中", submitted: "已提交", completed: "已完成" } as Record<string, string>)[status || ""] ?? status ?? "未知状态";
+}
+
+function gradingStatusLabel(status?: string | null): string {
+  return ({ pending: "待批改", auto_scored: "已自动判分，待复核", needs_review: "AI 建议待复核", reviewed: "教师已复核" } as Record<string, string>)[status || ""] ?? status ?? "待批改";
 }
 
 function formatStudentAnswer(value: unknown): string {
@@ -1300,7 +1309,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                         >
                           {submissions.map((submission) => (
                             <option key={submission.attempt_id} value={submission.attempt_id}>
-                              {[submission.student_no, submission.student_name, submission.status].filter(Boolean).join(" · ")}
+                              {[submission.student_no, submission.student_name, submissionStatusLabel(submission.status)].filter(Boolean).join(" · ")}
                             </option>
                           ))}
                         </select>
@@ -1312,7 +1321,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                           <div className="min-w-0">
                             <p className="font-medium text-slate-950">{submission.student_name || submission.student_no}</p>
                             <p className="mt-1 text-xs text-slate-500">
-                              {[submission.student_no, submission.status, submission.submitted_at].filter(Boolean).join(" · ")}
+                              {[submission.student_no, submissionStatusLabel(submission.status), submission.submitted_at ? formatLocaleDateTime(submission.submitted_at) : null].filter(Boolean).join(" · ")}
                             </p>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1373,7 +1382,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                                 <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                                   <span className="font-medium">{answer.header || answer.question_id}</span>
                                   <span className="text-xs text-slate-500">
-                                    本题 {answer.score_per_item ?? "-"} 分 · {answer.grading_status || "pending"}
+                                    本题 {answer.score_per_item ?? "-"} 分 · {gradingStatusLabel(answer.grading_status)}
                                   </span>
                                 </div>
                                 {answer.content ? <KatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}

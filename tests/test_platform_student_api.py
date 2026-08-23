@@ -351,6 +351,7 @@ def test_student_answers_online_paper_and_views_result_analysis(web_client: Test
     assert assigned["publication_id"] == publication_id
     assert assigned["status"] == "not_started"
     assert assigned["question_count"] == 2
+    assert assigned["paper_max_score"] == 10.0
     assert assigned["time_limit_minutes"] is None
     assert "screen_switch_count" not in assigned
     assert "screen_switch_limit" not in assigned

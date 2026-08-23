@@ -20,6 +20,10 @@ function formatSeconds(seconds?: number | null): string {
   return seconds >= 60 ? `${(seconds / 60).toFixed(1)} 分钟/题` : `${Number(seconds).toFixed(1)} 秒/题`;
 }
 
+function classLabel(name: string, grade?: string | null): string {
+  return grade && !name.includes(grade) ? `${name} · ${grade}` : name;
+}
+
 export function TeacherStudentInsightsWorkspace({ onError }: Props) {
   const [classes, setClasses] = useState<TeacherClassRecord[]>([]);
   const [students, setStudents] = useState<ListedStudent[]>([]);
@@ -135,7 +139,7 @@ export function TeacherStudentInsightsWorkspace({ onError }: Props) {
             <div className="relative"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索姓名、学号、账号" className="w-full rounded-md border border-slate-300 py-2 pl-8 pr-3 text-sm" /></div>
             <select value={selectedClassId} onChange={(e) => { profileRequestIdRef.current += 1; setSelectedStudentKey(""); setProfile(null); setSelectedClassId(e.target.value); }} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
               <option value="">全部班级</option>
-              {classes.map((klass) => <option key={klass.id} value={klass.id}>{klass.name}{klass.grade ? ` · ${klass.grade}` : ""}</option>)}
+              {classes.map((klass) => <option key={klass.id} value={klass.id}>{classLabel(klass.name, klass.grade)}</option>)}
             </select>
           </div>
         </aside>

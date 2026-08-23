@@ -496,13 +496,16 @@ def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) ->
         try:
             questions, _answers = _load_attempt_question_payloads(project_root, attempt, root=root)
             question_count = len(questions)
+            paper_max_score = round(sum(float(item.get("score_per_item") or 0) for item in questions), 2)
         except Exception:
             question_count = 0
+            paper_max_score = None
         payload.update(
             {
                 "publication_id": attempt["publication_id"],
                 "attempt_id": attempt["id"],
                 "question_count": question_count,
+                "paper_max_score": paper_max_score,
             }
         )
         items.append(payload)
