@@ -316,6 +316,17 @@ type Draft = {
   metadata_extra: Record<string, unknown>;
 };
 
+export type TemplatePresetId = "practice" | "unit" | "major";
+
+export function applyTemplatePreset(draft: Draft, preset: TemplatePresetId): Draft {
+  const settings = {
+    practice: { layout: "single_column" as const, margin_cm: 2.2, body_font_size_pt: 11, show_binding_line: false, show_name_column: true },
+    unit: { layout: "single_column" as const, margin_cm: 1.8, body_font_size_pt: 11, show_binding_line: false, show_name_column: true },
+    major: { layout: "double_column" as const, margin_cm: 1.6, body_font_size_pt: 10.5, show_binding_line: true, show_name_column: true },
+  }[preset];
+  return { ...draft, layout: settings.layout, metadata_defaults: { ...draft.metadata_defaults, ...settings } };
+}
+
 /** 与后端 `safe_filename_component` 一致，用于由模板编号生成文件名 */
 function safeFilenameComponent(s: string): string {
   const t = s.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
@@ -396,6 +407,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
   const [draft, setDraft] = useState<Draft>(() => createDefaultDraft());
   const [yamlTab, setYamlTab] = useState("");
   const [tab, setTab] = useState<"visual" | "yaml">("visual");
+  const [advancedMode, setAdvancedMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -801,7 +813,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         >
           {t("visual")}
         </button>
-        <button
+        {advancedMode ? <button
           type="button"
           className={cn(
             "rounded-md px-2.5 py-1 text-xs",
@@ -813,6 +825,9 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
           }}
         >
           {t("editSource")}
+        </button> : null}
+        <button type="button" className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs" onClick={() => { setAdvancedMode((value) => !value); setTab("visual"); }}>
+          {advancedMode ? "返回简单模式" : "高级版式"}
         </button>
         <button
           type="button"
@@ -857,7 +872,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
                   onClick={() => openOrFocusTemplate(tpl.path)}
                 >
                   <span className="block font-medium">{tpl.id}</span>
-                  <span className="block truncate font-mono text-[10px] opacity-80">{tpl.path}</span>
+                  {advancedMode ? <span className="block truncate font-mono text-[10px] opacity-80">{tpl.path}</span> : null}
                 </button>
               </li>
             ))}
@@ -909,6 +924,9 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
           />
         ) : (
           <div className="mx-auto max-w-3xl space-y-6">
+            <section className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-slate-900">常用版式</h2><p className="mt-1 text-xs text-slate-600">选择预设后仍可继续调整题型结构和分值。</p></div><div className="flex flex-wrap gap-2">{([['practice', '随堂练习'], ['unit', '单元测验'], ['major', '期中 / 期末']] as const).map(([id, label]) => <button key={id} type="button" onClick={() => setDraft((current) => applyTemplatePreset(current, id))} className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">{label}</button>)}</div></div>
+            </section>
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-sm font-semibold text-slate-800">{t("basicInfo")}</h2>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -936,7 +954,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
                     <option value="double_column">{t("colDouble")}</option>
                   </select>
                 </label>
-                <label className="text-xs text-slate-600 sm:col-span-2">
+                {advancedMode ? <label className="text-xs text-slate-600 sm:col-span-2">
                   {t("layoutTemplate")}
                   <p className="mt-0.5 text-[11px] leading-snug text-slate-400">{t("layoutTemplateHint")}</p>
                   <select
@@ -957,10 +975,11 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
                       </option>
                     ))}
                   </select>
-                </label>
+                </label> : null}
               </div>
             </section>
 
+            {advancedMode ? <>
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-sm font-semibold text-slate-800">{t("defaultLayoutTitle")}</h2>
               <p className="mt-1 text-[11px] text-slate-500">{t("defaultLayoutHint")}</p>
@@ -1282,6 +1301,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
                 </div>
               </div>
             </section>
+            </> : null}
 
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center justify-between gap-2">

@@ -31,6 +31,7 @@ export type ChoiceOptionsFieldsProps = {
   beginMermaidEmbed: (kind: EmbedKind, sel: { start: number; end: number } | null) => void;
   beginPrimeBrushEmbed: (kind: EmbedKind, sel: { start: number; end: number } | null) => void;
   beginImageEmbed: (kind: EmbedKind, sel: { start: number; end: number } | null) => void;
+  hideToolbar?: boolean;
 };
 
 function ChoiceOptionRow({
@@ -45,6 +46,7 @@ function ChoiceOptionRow({
   onChange,
   onRemove,
   removable,
+  hideToolbar,
 }: {
   optionKey: string;
   value: string;
@@ -57,6 +59,7 @@ function ChoiceOptionRow({
   onChange: (next: string) => void;
   onRemove: () => void;
   removable: boolean;
+  hideToolbar?: boolean;
 }) {
   const { t } = useTranslation("components");
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -87,6 +90,7 @@ function ChoiceOptionRow({
         onRequestPrimeBrush={(sel) => beginPrimeBrushEmbed(makeEmbedKind(optionKey), sel)}
         onRequestImage={(sel) => beginImageEmbed(makeEmbedKind(optionKey), sel)}
         busy={busy}
+        hideToolbar={hideToolbar}
       />
     </div>
   );
@@ -101,6 +105,7 @@ export function ChoiceOptionsFields({
   beginMermaidEmbed,
   beginPrimeBrushEmbed,
   beginImageEmbed,
+  hideToolbar = false,
 }: ChoiceOptionsFieldsProps) {
   const { t } = useTranslation("components");
   const keys = useMemo(() => orderedKeys(options), [options]);
@@ -150,6 +155,7 @@ export function ChoiceOptionsFields({
             onChange={(next) => updateKey(key, next)}
             onRemove={() => removeKey(key)}
             removable={!DEFAULT_KEYS.includes(key as (typeof DEFAULT_KEYS)[number])}
+            hideToolbar={hideToolbar}
           />
         ))}
       </div>

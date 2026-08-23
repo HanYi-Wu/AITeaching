@@ -28,13 +28,14 @@ vi.mock("../api/client", () => ({
   resourceApiUrl: (path: string) => path,
 }));
 
-function renderField(value: string, onChange = vi.fn()) {
+function renderField(value: string, onChange = vi.fn(), hideToolbar = false) {
   const textAreaRef = createRef<HTMLTextAreaElement>();
   const view = render(
     <LatexRichTextField
       value={value}
       onChange={onChange}
       textAreaRef={textAreaRef}
+      hideToolbar={hideToolbar}
     />,
   );
   const editor = view.container.querySelector("[contenteditable='true']") as HTMLDivElement;
@@ -66,6 +67,12 @@ describe("LatexRichTextField widget deletion", () => {
   afterEach(() => {
     rafSpy.mockRestore();
     vi.unstubAllGlobals();
+  });
+
+  it("keeps the editor available while hiding advanced tools in simple mode", () => {
+    const { editor, queryByTitle } = renderField("普通题干", vi.fn(), true);
+    expect(editor).toBeInTheDocument();
+    expect(queryByTitle("分数")).not.toBeInTheDocument();
   });
 
   it("deletes an inline math widget through the native undoable edit command", async () => {

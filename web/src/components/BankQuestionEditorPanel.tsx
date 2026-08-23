@@ -6,6 +6,7 @@ import {
   type SetStateAction,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { ImagePlus } from "lucide-react";
@@ -109,6 +110,7 @@ function BankGiLatexField({
   beginPrimeBrushEmbed,
   beginImageEmbed,
   busy,
+  hideToolbar,
 }: {
   memberIndex: number;
   field: GiLatexMemberField;
@@ -120,6 +122,7 @@ function BankGiLatexField({
   beginPrimeBrushEmbed: BankQuestionEditorPanelProps["beginPrimeBrushEmbed"];
   beginImageEmbed: BankQuestionEditorPanelProps["beginImageEmbed"];
   busy: boolean;
+  hideToolbar: boolean;
 }) {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const syncId = giFieldId(memberIndex, field);
@@ -136,6 +139,7 @@ function BankGiLatexField({
         onRequestPrimeBrush={(sel) => beginPrimeBrushEmbed({ k: "gi", i: memberIndex, f: field }, sel)}
         onRequestImage={(sel) => beginImageEmbed({ k: "gi", i: memberIndex, f: field }, sel)}
         busy={busy}
+        hideToolbar={hideToolbar}
       />
     </div>
   );
@@ -171,6 +175,7 @@ export function BankQuestionEditorPanel({
 }: BankQuestionEditorPanelProps) {
   const { t } = useTranslation(["lib", "components", "bank"]);
   const removeText = removeLabel ?? t("bank:remove");
+  const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false);
   const qg = detail.question_group;
   /** 同型题组：与 synthetic question id 的 __01 后缀对应；整组编辑时为 0 */
   const memberIdx = useMemo(() => {
@@ -260,6 +265,10 @@ export function BankQuestionEditorPanel({
             aria-hidden
             onChange={(e) => void onImageFileSelected(e)}
           />
+          <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+            <div><p className="text-xs font-semibold text-slate-800">{advancedToolsOpen ? "高级编辑模式" : "简单编辑模式"}</p><p className="text-[11px] text-slate-500">{advancedToolsOpen ? "公式、绘图、图表、表格与图片工具已展开。" : "保留题型、题干、选项、答案、解析和分值；公式可直接输入 $...$。"}</p></div>
+            <button type="button" onClick={() => setAdvancedToolsOpen((value) => !value)} className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">{advancedToolsOpen ? "返回简单模式" : "展开公式与绘图工具"}</button>
+          </div>
           {qg ? (
             <>
               <p className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-900">
@@ -392,6 +401,7 @@ export function BankQuestionEditorPanel({
                   onRequestPrimeBrush={(sel) => beginPrimeBrushEmbed({ k: "gm" }, sel)}
                   onRequestImage={(sel) => beginImageEmbed({ k: "gm" }, sel)}
                   busy={busy}
+                  hideToolbar={!advancedToolsOpen}
                 />
               </div>
               <div className="flex flex-wrap gap-2">
@@ -537,6 +547,7 @@ export function BankQuestionEditorPanel({
                       beginPrimeBrushEmbed={beginPrimeBrushEmbed}
                       beginImageEmbed={beginImageEmbed}
                       busy={busy}
+                      hideToolbar={!advancedToolsOpen}
                     />
                   </div>
                   {(unifiedUi === "mixed" ? isChoiceQuestionType(it.type) : isChoiceQuestionType(innerTypeForItems)) && (
@@ -560,6 +571,7 @@ export function BankQuestionEditorPanel({
                         beginMermaidEmbed={beginMermaidEmbed}
                         beginPrimeBrushEmbed={beginPrimeBrushEmbed}
                         beginImageEmbed={beginImageEmbed}
+                        hideToolbar={!advancedToolsOpen}
                       />
                     </div>
                   )}
@@ -580,6 +592,7 @@ export function BankQuestionEditorPanel({
                       beginPrimeBrushEmbed={beginPrimeBrushEmbed}
                       beginImageEmbed={beginImageEmbed}
                       busy={busy}
+                      hideToolbar={!advancedToolsOpen}
                     />
                   </div>
                   <div className="mt-2">
@@ -599,6 +612,7 @@ export function BankQuestionEditorPanel({
                       beginPrimeBrushEmbed={beginPrimeBrushEmbed}
                       beginImageEmbed={beginImageEmbed}
                       busy={busy}
+                      hideToolbar={!advancedToolsOpen}
                     />
                   </div>
                 </div>
@@ -655,6 +669,7 @@ export function BankQuestionEditorPanel({
                   onRequestPrimeBrush={(sel) => beginPrimeBrushEmbed({ k: "q", f: "content" }, sel)}
                   onRequestImage={(sel) => beginImageEmbed({ k: "q", f: "content" }, sel)}
                   busy={busy}
+                  hideToolbar={!advancedToolsOpen}
                 />
               </div>
               {isChoiceQuestionType(detail.question.type) && (
@@ -668,6 +683,7 @@ export function BankQuestionEditorPanel({
                     beginMermaidEmbed={beginMermaidEmbed}
                     beginPrimeBrushEmbed={beginPrimeBrushEmbed}
                     beginImageEmbed={beginImageEmbed}
+                    hideToolbar={!advancedToolsOpen}
                   />
                 </div>
               )}
@@ -682,6 +698,7 @@ export function BankQuestionEditorPanel({
                   onRequestPrimeBrush={(sel) => beginPrimeBrushEmbed({ k: "q", f: "answer" }, sel)}
                   onRequestImage={(sel) => beginImageEmbed({ k: "q", f: "answer" }, sel)}
                   busy={busy}
+                  hideToolbar={!advancedToolsOpen}
                 />
               </div>
               <div className="block">
@@ -695,6 +712,7 @@ export function BankQuestionEditorPanel({
                   onRequestPrimeBrush={(sel) => beginPrimeBrushEmbed({ k: "q", f: "analysis" }, sel)}
                   onRequestImage={(sel) => beginImageEmbed({ k: "q", f: "analysis" }, sel)}
                   busy={busy}
+                  hideToolbar={!advancedToolsOpen}
                 />
               </div>
               <div>

@@ -455,6 +455,8 @@ export type LatexRichTextFieldProps = {
   onRequestPrimeBrush?: (sel: { start: number; end: number } | null) => void;
   onRequestImage?: (sel: { start: number; end: number } | null) => void;
   busy?: boolean;
+  /** 日常录题时隐藏重复工具栏；编辑能力保留，由上层统一展开。 */
+  hideToolbar?: boolean;
 };
 
 type MathPopupState = {
@@ -492,6 +494,7 @@ export function LatexRichTextField({
   onRequestPrimeBrush,
   onRequestImage,
   busy = false,
+  hideToolbar = false,
 }: LatexRichTextFieldProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const lastEmittedRef = useRef<string | null>(null);
@@ -1058,7 +1061,7 @@ export function LatexRichTextField({
       />
 
       {/* ── Toolbar ── */}
-      <div className="flex flex-wrap items-center gap-0.5 rounded-t-md border border-slate-300 bg-gradient-to-b from-slate-50 to-slate-100/80 px-1.5 py-1">
+      {!hideToolbar ? <div className="flex flex-wrap items-center gap-0.5 rounded-t-md border border-slate-300 bg-gradient-to-b from-slate-50 to-slate-100/80 px-1.5 py-1">
         {/* mode toggle */}
         <span className="mr-0.5 inline-flex overflow-hidden rounded border border-slate-200 bg-white text-[11px]">
           <button
@@ -1228,13 +1231,13 @@ export function LatexRichTextField({
         <div className="ml-auto text-[10px] text-slate-400">
           <kbd className="rounded border border-slate-200 bg-slate-50 px-1">$</kbd> 公式
         </div>
-      </div>
+      </div> : null}
 
       {/* ── Editor area ── */}
       {mode === "visual" ? (
         <div
           ref={editorRef}
-          className="w-full rounded-b-md border border-t-0 border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 focus-visible:ring-offset-0"
+          className={`w-full border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 focus-visible:ring-offset-0 ${hideToolbar ? "rounded-md" : "rounded-b-md border-t-0"}`}
           style={{ minHeight: minH }}
           contentEditable
           suppressContentEditableWarning
@@ -1261,7 +1264,7 @@ export function LatexRichTextField({
         />
       ) : (
         <textarea
-          className="w-full rounded-b-md border border-t-0 border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-relaxed text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50"
+          className={`w-full border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-relaxed text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 ${hideToolbar ? "rounded-md" : "rounded-b-md border-t-0"}`}
           style={{ minHeight: minH }}
           value={value}
           onChange={(e) => {
