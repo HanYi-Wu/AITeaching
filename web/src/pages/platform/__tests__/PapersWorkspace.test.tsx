@@ -73,7 +73,9 @@ describe("PapersWorkspace", () => {
   });
 
   it("lists exported papers and updates online/offline delivery mode", async () => {
-    mocks.listPlatformPapers.mockResolvedValue({ papers: [offlinePaper] });
+    mocks.listPlatformPapers.mockResolvedValue({
+      papers: [{ ...offlinePaper, submitted_student_count: 2, published_student_count: 1 }],
+    });
     mocks.updatePlatformPaperDeliveryMode.mockResolvedValue({
       paper: { ...offlinePaper, delivery_mode: "online", status: "draft" },
     });
@@ -82,6 +84,8 @@ describe("PapersWorkspace", () => {
 
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("线下").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2 份已提交").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1 份批改并发布").length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole("button", { name: "设为线上" }));
 

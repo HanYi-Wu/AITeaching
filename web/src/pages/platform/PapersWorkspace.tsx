@@ -71,11 +71,11 @@ function mergePaper(existing: PlatformPaperRecord, patch: PlatformPaperRecord): 
   return {
     ...existing,
     ...patch,
-    question_count: patch.question_count || existing.question_count,
-    section_count: patch.section_count || existing.section_count,
-    score_batch_count: patch.score_batch_count || existing.score_batch_count,
-    publication_count: patch.publication_count || existing.publication_count,
-    published_class_count: patch.published_class_count || existing.published_class_count,
+    question_count: patch.question_count ?? existing.question_count,
+    section_count: patch.section_count ?? existing.section_count,
+    score_batch_count: patch.score_batch_count ?? existing.score_batch_count,
+    publication_count: patch.publication_count ?? existing.publication_count,
+    published_class_count: patch.published_class_count ?? existing.published_class_count,
   };
 }
 
@@ -902,7 +902,9 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                 <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                   <span>{paper.subject}</span>
                   <span>{paper.question_count} 题</span>
-                  <span>{Number(paper.score_batch_count || 0) + Number(paper.graded_student_count || 0)} 份已批改成绩</span>
+                  <span>{paper.submitted_student_count ?? 0} 份已提交</span>
+                  <span>{paper.published_student_count ?? paper.graded_student_count ?? 0} 份批改并发布</span>
+                  {paper.score_batch_count > 0 ? <span>{paper.score_batch_count} 批线下成绩</span> : null}
                   <span>{paper.publication_count} 次发布</span>
                 </div>
               </button>
@@ -927,9 +929,11 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                     <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-600">
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.question_count} 题</span>
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.section_count} 个题组</span>
-                      <span className="rounded-md bg-slate-100 px-2 py-1">
-                        {Number(selectedPaper.score_batch_count || 0) + Number(selectedPaper.graded_student_count || 0)} 份已批改成绩
+                      <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.submitted_student_count ?? 0} 份已提交</span>
+                      <span className="rounded-md bg-emerald-50 px-2 py-1 text-emerald-700">
+                        {selectedPaper.published_student_count ?? selectedPaper.graded_student_count ?? 0} 份批改并发布
                       </span>
+                      {selectedPaper.score_batch_count > 0 ? <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.score_batch_count} 批线下成绩</span> : null}
                       {selectedPaper.status === "published" ? (
                         <span className="rounded-md bg-emerald-100 px-2 py-1 text-emerald-700">已发布</span>
                       ) : null}

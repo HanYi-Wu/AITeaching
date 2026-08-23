@@ -31,6 +31,8 @@ describe("listPlatformPapers", () => {
                 total_student_count: 5,
                 submitted_student_count: 4,
                 in_progress_student_count: 1,
+                graded_student_count: 3,
+                published_student_count: 3,
               },
             ],
             total: 1,
@@ -49,6 +51,8 @@ describe("listPlatformPapers", () => {
       total_student_count: 5,
       submitted_student_count: 4,
       in_progress_student_count: 1,
+      graded_student_count: 3,
+      published_student_count: 3,
     });
   });
 });

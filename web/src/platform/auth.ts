@@ -175,6 +175,7 @@ export type PlatformPaperRecord = {
   submitted_student_count?: number;
   in_progress_student_count?: number;
   graded_student_count?: number;
+  published_student_count?: number;
   mtime?: string | null;
 };
 
@@ -966,6 +967,8 @@ function normalizePaper(raw: Partial<PlatformPaperRecord> & { id?: string }): Pl
     total_student_count: Number(raw.total_student_count ?? 0),
     submitted_student_count: Number(raw.submitted_student_count ?? 0),
     in_progress_student_count: Number(raw.in_progress_student_count ?? 0),
+    graded_student_count: Number(raw.graded_student_count ?? 0),
+    published_student_count: Number(raw.published_student_count ?? raw.graded_student_count ?? 0),
     mtime: raw.mtime ?? null,
   };
 }

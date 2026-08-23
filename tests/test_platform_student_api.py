@@ -263,6 +263,10 @@ def test_exam_without_library_refs_loads_real_question_content_and_scores(
     assert submitted.status_code == 200
     assert submitted.json()["attempt"]["score"] is None
     assert submitted.json()["attempt"]["max_score"] is None
+
+    pending_paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+    assert pending_paper["submitted_student_count"] == 1
+    assert pending_paper["published_student_count"] == 0
     assert submitted.json()["attempt"]["results_released"] is False
 
 
@@ -399,6 +403,10 @@ def test_student_answers_online_paper_and_views_result_analysis(web_client: Test
     )
     assert completed.status_code == 200
     assert completed.json()["attempt"]["grading_completed_at"]
+
+    published_paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+    assert published_paper["submitted_student_count"] == 1
+    assert published_paper["published_student_count"] == 1
 
     results = web_client.get("/api/student/results", headers=student_headers)
     assert results.status_code == 200

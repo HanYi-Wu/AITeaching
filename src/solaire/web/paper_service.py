@@ -123,7 +123,8 @@ def _publication_stats(root: Path, paper_id: str, user: dict[str, Any]) -> dict[
               COUNT(DISTINCT CASE
                 WHEN sa.status = 'in_progress' AND sa.submitted_at IS NULL THEN sa.id
               END) AS in_progress_student_count,
-              COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS graded_student_count
+              COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS graded_student_count,
+              COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS published_student_count
             FROM exam_publications ep
             LEFT JOIN publication_classes pc ON pc.publication_id = ep.id
             LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
@@ -138,6 +139,7 @@ def _publication_stats(root: Path, paper_id: str, user: dict[str, Any]) -> dict[
         "submitted_student_count": int(row["submitted_student_count"] or 0),
         "in_progress_student_count": int(row["in_progress_student_count"] or 0),
         "graded_student_count": int(row["graded_student_count"] or 0),
+        "published_student_count": int(row["published_student_count"] or 0),
     }
 
 
