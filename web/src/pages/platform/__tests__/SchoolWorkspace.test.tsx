@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   importSchoolAiFile: vi.fn(),
   importStudents: vi.fn(),
   importStudentsFile: vi.fn(),
+  importTeacherClassAssignmentsFile: vi.fn(),
   importTeachersFile: vi.fn(),
   listClasses: vi.fn(),
   listStudents: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     importSchoolAiFile: mocks.importSchoolAiFile,
     importStudents: mocks.importStudents,
     importStudentsFile: mocks.importStudentsFile,
+    importTeacherClassAssignmentsFile: mocks.importTeacherClassAssignmentsFile,
     importTeachersFile: mocks.importTeachersFile,
     listClasses: mocks.listClasses,
     listStudents: mocks.listStudents,
@@ -147,6 +149,7 @@ describe("SchoolWorkspace", () => {
     expect(screen.getByTestId("students-import-file")).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("school-page-assignments"));
+    expect(screen.getByTestId("assignments-import-file")).toBeInTheDocument();
     await userEvent.click(screen.getByTestId("assign-teacher-class"));
 
     await waitFor(() =>
@@ -209,12 +212,15 @@ describe("SchoolWorkspace", () => {
     );
 
     await userEvent.click(await screen.findByTestId("school-page-ai"));
+    expect(screen.getByTestId("school-ai-panel")).toHaveClass("h-[calc(100vh-9rem)]");
+    expect(screen.getByTestId("school-ai-messages")).toHaveClass("overflow-y-auto");
     await userEvent.type(screen.getByPlaceholderText("询问教师导入、学生账号、班级管理或教师分配"), "有哪些教师名字");
     await userEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(mocks.askSchoolAi).toHaveBeenCalledWith("有哪些教师名字"));
     expect(await screen.findByText(/Teacher Li/)).toBeInTheDocument();
 
+    await userEvent.selectOptions(screen.getByTestId("school-ai-import-kind"), "students");
     const file = new File([JSON.stringify([{ student_no: "S002", display_name: "Student Two" }])], "students.json", {
       type: "application/json",
     });
@@ -228,6 +234,50 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(screen.getByTestId("school-ai-import-confirm"));
 
     await waitFor(() => expect(mocks.importSchoolAiFile).toHaveBeenCalledWith("students", file, "c1"));
-    expect(await screen.findByText(/Confirmed and wrote 1 student rows/)).toBeInTheDocument();
+    expect(await screen.findByText(/已确认并写入 1 行数据/)).toBeInTheDocument();
+  });
+
+  it("reviews and imports all school data in one AI operation", async () => {
+    mocks.getSchoolAiSettings.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+    });
+    mocks.reviewSchoolAiImportFile.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+      kind: "all",
+      row_count: 4,
+      review: "完整学校数据可导入",
+      preview: [],
+    });
+    mocks.importSchoolAiFile.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+      kind: "all",
+      imported: 4,
+      review: "完整学校数据已导入",
+      result: {},
+    });
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-ai"));
+    await userEvent.selectOptions(screen.getByTestId("school-ai-import-kind"), "all");
+    const file = new File([JSON.stringify({ classes: [], teachers: [], students: [], assignments: [] })], "school.json", {
+      type: "application/json",
+    });
+    await userEvent.upload(screen.getByTestId("school-ai-import-file"), file);
+    await userEvent.click(screen.getByTestId("school-ai-import-run"));
+    await waitFor(() => expect(mocks.reviewSchoolAiImportFile).toHaveBeenCalledWith("all", file, null));
+    await userEvent.click(screen.getByTestId("school-ai-import-confirm"));
+    await waitFor(() => expect(mocks.importSchoolAiFile).toHaveBeenCalledWith("all", file, null));
   });
 });

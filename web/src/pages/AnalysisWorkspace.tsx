@@ -42,6 +42,7 @@ import {
   Download,
   FileSpreadsheet,
   RefreshCw,
+  Search,
   Sparkles,
   TrendingUp,
   Trash2,
@@ -264,6 +265,9 @@ export function AnalysisWorkspace({
   const [jobOutput, setJobOutput] = useState<any | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
   const [leftWidth, setLeftWidth] = useState<56 | 64 | 72>(56);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historySubject, setHistorySubject] = useState("all");
+  const [historyMode, setHistoryMode] = useState<"all" | "online" | "offline">("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rightChartRef = useRef<HTMLDivElement>(null);
   const onlineAnalysisRequestIdRef = useRef(0);
@@ -343,6 +347,26 @@ export function AnalysisWorkspace({
     () => exams.filter((exam) => !onlinePapers.some((paper) => paper.exam_id === exam.exam_id)),
     [exams, onlinePapers],
   );
+  const historySubjects = useMemo(() => Array.from(new Set([
+    ...onlinePapers.map((item) => item.subject),
+    ...legacyExams.map((item) => item.subject),
+  ].filter(Boolean) as string[])).sort(), [onlinePapers, legacyExams]);
+  const filteredOnlinePapers = useMemo(() => {
+    const needle = historyQuery.trim().toLowerCase();
+    return onlinePapers.filter((paper) =>
+      (historyMode === "all" || paper.delivery_mode === historyMode) &&
+      (historySubject === "all" || paper.subject === historySubject) &&
+      (!needle || `${paper.title} ${paper.exam_id} ${paper.subject || ""}`.toLowerCase().includes(needle)),
+    );
+  }, [historyMode, historyQuery, historySubject, onlinePapers]);
+  const filteredLegacyExams = useMemo(() => {
+    const needle = historyQuery.trim().toLowerCase();
+    return legacyExams.filter((exam) =>
+      historyMode !== "online" &&
+      (historySubject === "all" || exam.subject === historySubject) &&
+      (!needle || `${exam.exam_title} ${exam.exam_id} ${exam.subject || ""}`.toLowerCase().includes(needle)),
+    );
+  }, [historyMode, historyQuery, historySubject, legacyExams]);
 
   const handleOnlinePaperSelect = useCallback(async (paper: PlatformPaperRecord) => {
     const requestId = ++onlineAnalysisRequestIdRef.current;
@@ -739,16 +763,20 @@ export function AnalysisWorkspace({
           </div>
         </div>
         <div className="flex-1 overflow-y-auto bg-white px-3 py-3">
+          <div className="mb-3 space-y-2 rounded-md border border-slate-200 bg-slate-50 p-2">
+            <div className="relative"><Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-400" /><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="搜索考试名称" className="w-full rounded border border-slate-300 bg-white py-1.5 pl-7 pr-2 text-xs" /></div>
+            <div className="grid grid-cols-2 gap-2"><select value={historySubject} onChange={(event) => setHistorySubject(event.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs"><option value="all">全部学科</option>{historySubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}</select><select value={historyMode} onChange={(event) => setHistoryMode(event.target.value as "all" | "online" | "offline")} className="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs"><option value="all">全部形式</option><option value="online">线上</option><option value="offline">线下</option></select></div>
+          </div>
           <div>
             <div className="mb-2 flex items-center justify-between gap-2">
               <h4 className="text-xs font-semibold text-slate-600">考试记录与分析</h4>
               {loadingOnlinePapers || loadingExams ? <RefreshCw className="h-3 w-3 animate-spin text-slate-400" /> : null}
             </div>
-            {onlinePapers.length === 0 && legacyExams.length === 0 ? (
+            {filteredOnlinePapers.length === 0 && filteredLegacyExams.length === 0 ? (
               <p className="text-xs text-slate-400">暂无考试记录</p>
             ) : (
               <div className="space-y-1">
-                {onlinePapers.map((paper) => {
+                {filteredOnlinePapers.map((paper) => {
                   const hasSubmittedAnswers = (paper.submitted_student_count ?? 0) > 0;
                   const hasImportedScores = paper.score_batch_count > 0;
                   const hasBothSources = hasSubmittedAnswers && hasImportedScores;
@@ -795,7 +823,7 @@ export function AnalysisWorkspace({
                     </div>
                   );
                 })}
-                {legacyExams.map((exam) => (
+                {filteredLegacyExams.map((exam) => (
                   <div key={exam.exam_id} className="flex items-stretch rounded hover:bg-slate-100">
                     <button
                       type="button"

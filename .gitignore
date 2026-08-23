@@ -41,6 +41,7 @@ venv/
 # 项目内智能助手模型参数（可能含敏感信息）
 **/llm_overrides.json
 examples/web_sample_project/.solaire
+/.solaire/
 **/.solaire/previews/
 **/.solaire/platform.db
 **/.solaire/platform_secret

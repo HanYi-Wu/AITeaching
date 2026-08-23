@@ -14,9 +14,11 @@ from solaire.web.auth_service import (
     bootstrap_admin,
     create_session,
     get_session_user,
+    get_user_profile,
     has_admin,
     revoke_session,
     update_user_credentials,
+    update_user_profile,
 )
 from solaire.web.platform_db import default_platform_root, init_platform_db
 
@@ -38,6 +40,12 @@ class StudentAccountUpdateBody(BaseModel):
     username: str | None = Field(default=None, min_length=3)
     current_password: str = Field(..., min_length=1)
     new_password: str | None = Field(default=None, min_length=6)
+
+
+class ProfileUpdateBody(BaseModel):
+    avatar_data_url: str | None = None
+    preferences: dict[str, Any] = Field(default_factory=dict)
+    subjects: list[str] | None = None
 
 
 def require_platform_root() -> Path:
@@ -124,6 +132,35 @@ def auth_me_route(
     x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
 ) -> dict[str, Any]:
     return {"user": current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)}
+
+
+@router.get("/auth/profile")
+def auth_profile_get(
+    authorization: Annotated[str | None, Header()] = None,
+    x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
+) -> dict[str, Any]:
+    user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
+    return {"profile": get_user_profile(require_platform_root(), str(user["id"]))}
+
+
+@router.patch("/auth/profile")
+def auth_profile_update(
+    body: ProfileUpdateBody,
+    authorization: Annotated[str | None, Header()] = None,
+    x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
+) -> dict[str, Any]:
+    user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
+    try:
+        profile = update_user_profile(
+            require_platform_root(),
+            user=user,
+            avatar_data_url=body.avatar_data_url,
+            preferences=body.preferences,
+            subjects=body.subjects,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"profile": profile}
 
 
 @router.patch("/student/account")

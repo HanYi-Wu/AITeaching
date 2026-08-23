@@ -22,7 +22,9 @@ import {
   FileText,
   Play,
   Pencil,
+  Download,
 } from "lucide-react";
+import { downloadPlatformBlob } from "../platform/auth";
 import {
   apiAgentChatStream,
   apiAgentConfig,
@@ -61,7 +63,7 @@ type FileAttachment = { path: string; mime_type: string | null; original_name: s
 type ChatLine =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
-  | { kind: "tool"; tool_name: string; summary: string; subagent?: boolean }
+  | { kind: "tool"; tool_name: string; summary: string; subagent?: boolean; download_url?: string; filename?: string }
   | { kind: "tool_pending"; tool_name: string; label: string; key: string }
   | {
       kind: "confirm";
@@ -391,7 +393,14 @@ export function AgentChatPanel({
               const next = [...prev];
               const idx = next.findIndex((l) => l.kind === "tool_pending" && l.tool_name === tool_name);
               if (idx >= 0) next.splice(idx, 1);
-              next.push({ kind: "tool", tool_name, summary, subagent });
+              next.push({
+                kind: "tool",
+                tool_name,
+                summary,
+                subagent,
+                download_url: typeof data.download_url === "string" ? data.download_url : undefined,
+                filename: typeof data.filename === "string" ? data.filename : undefined,
+              });
               return next;
             });
           }
@@ -1047,6 +1056,22 @@ export function AgentChatPanel({
                   {formatToolLineLabel(ln.tool_name)}
                 </span>
                 <div className="mt-0.5 text-slate-700">{ln.summary}</div>
+                {ln.download_url ? (
+                  <button
+                    type="button"
+                    className="mt-2 inline-flex items-center gap-1 rounded bg-violet-600 px-2 py-1 font-semibold text-white hover:bg-violet-700"
+                    onClick={() => void downloadPlatformBlob(ln.download_url!).then((blob) => {
+                      const url = URL.createObjectURL(blob);
+                      const anchor = document.createElement("a");
+                      anchor.href = url;
+                      anchor.download = ln.filename || "EH-export.yaml";
+                      anchor.click();
+                      URL.revokeObjectURL(url);
+                    })}
+                  >
+                    <Download className="h-3.5 w-3.5" /> 下载已梳理文件
+                  </button>
+                ) : null}
               </div>
             )}
             {ln.kind === "confirm" && (

@@ -37,3 +37,21 @@ html.tauri-shell #root {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
+
+/* EducationHelper user-selectable skins.  They intentionally reuse the
+   existing accessible slate palette while changing the workspace atmosphere. */
+html[data-eh-theme="ocean"] .bg-slate-50 { background-color: #eff8ff !important; }
+html[data-eh-theme="ocean"] .bg-slate-900 { background-color: #075985 !important; }
+html[data-eh-theme="forest"] .bg-slate-50 { background-color: #f0fdf4 !important; }
+html[data-eh-theme="forest"] .bg-slate-900 { background-color: #166534 !important; }
+html[data-eh-theme="warm"] .bg-slate-50 { background-color: #fff7ed !important; }
+html[data-eh-theme="warm"] .bg-slate-900 { background-color: #9a3412 !important; }
+html[data-eh-theme="night"] body { background: #0f172a; }
+html[data-eh-theme="night"] .bg-slate-50 { background-color: #111827 !important; }
+html[data-eh-theme="night"] .bg-white { background-color: #1e293b !important; }
+html[data-eh-theme="night"] .text-slate-950,
+html[data-eh-theme="night"] .text-slate-900,
+html[data-eh-theme="night"] .text-slate-800 { color: #f8fafc !important; }
+html[data-eh-theme="night"] .text-slate-700,
+html[data-eh-theme="night"] .text-slate-600,
+html[data-eh-theme="night"] .text-slate-500 { color: #cbd5e1 !important; }

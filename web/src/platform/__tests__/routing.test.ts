@@ -3,6 +3,18 @@ import { describe, expect, it } from "vitest";
 import { resolvePlatformRoute } from "../routing";
 
 describe("platform route resolution", () => {
+  it("does not misroute an unavailable backend to administrator bootstrap", () => {
+    expect(
+      resolvePlatformRoute({
+        loading: false,
+        adminExists: false,
+        userRole: null,
+        adminProjectMode: false,
+        statusAvailable: false,
+      } as Parameters<typeof resolvePlatformRoute>[0] & { statusAvailable: boolean }),
+    ).toBe("unavailable");
+  });
+
   it("starts on platform bootstrap or login even when no project is open", () => {
     expect(
       resolvePlatformRoute({

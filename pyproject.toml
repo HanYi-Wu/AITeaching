@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solaire-education"
-version = "1.4.5"
-description = "Solaire Paper Education Automation"
+version = "1.4.8"
+description = "EducationHelper teaching and assessment platform"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"

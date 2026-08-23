@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.4.5"
+VERSION = "1.4.8"
 
 
 def test_product_versions_are_aligned() -> None:
@@ -30,20 +30,17 @@ def test_release_notes_include_adaptive_practice_versions() -> None:
         ROOT / "src" / "solaire" / "web" / "assets" / "help_docs" / "changelog.md"
     ).read_text(encoding="utf-8")
 
-    assert changelog.index("## version 1.4.5") < changelog.index("## version 1.4.4")
+    assert changelog.index("## version 1.4.8") < changelog.index("## version 1.4.7")
     assert "专项复习试卷" in changelog
     assert "历史错题试卷" in changelog
     assert "AI 工具" in changelog
 
 
-def test_docs_do_not_claim_a_standard_open_source_license() -> None:
+def test_manual_omits_removed_copyright_page() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    legal = (
-        ROOT / "src" / "solaire" / "web" / "assets" / "help_docs" / "introduction" / "legal-and-contact.md"
-    ).read_text(encoding="utf-8")
+    manifest = json.loads((ROOT / "src" / "solaire" / "web" / "assets" / "help_docs" / "help-manifest.json").read_text(encoding="utf-8"))
 
     assert "MIT" not in readme
     assert "AGPL" not in readme
-    assert "AGPL" not in legal
     assert "非商业" in readme
-    assert "非商业" in legal
+    assert all(page["id"] != "legal-and-contact" for page in manifest["pages"])

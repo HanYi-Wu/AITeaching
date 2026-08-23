@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from io import BytesIO
 
 import pytest
@@ -333,6 +334,124 @@ def test_school_imports_teachers_classes_and_students_from_excel(web_client: Tes
     assert students.json()["students"][0]["email"] is None
 
 
+def test_student_file_row_class_overrides_selected_fallback(web_client: TestClient) -> None:
+    school_headers, _ = _school_headers(web_client)
+    class_a = web_client.post(
+        "/api/school/classes", json={"name": "Class A", "grade": "G10"}, headers=school_headers
+    ).json()["class"]
+    class_b = web_client.post(
+        "/api/school/classes", json={"name": "Class B", "grade": "G10"}, headers=school_headers
+    ).json()["class"]
+
+    response = web_client.post(
+        "/api/school/students/import-file",
+        data={"class_id": class_a["id"]},
+        files={
+            "file": _xlsx_upload(
+                [
+                    {"student_no": "A001", "display_name": "Student A", "class_name": "Class A"},
+                    {"student_no": "B001", "display_name": "Student B", "class_name": "Class B"},
+                ]
+            )
+        },
+        headers=school_headers,
+    )
+
+    assert response.status_code == 200
+    students_a = web_client.get(
+        f"/api/school/students?class_id={class_a['id']}", headers=school_headers
+    ).json()["students"]
+    students_b = web_client.get(
+        f"/api/school/students?class_id={class_b['id']}", headers=school_headers
+    ).json()["students"]
+    assert [item["student_no"] for item in students_a] == ["A001"]
+    assert [item["student_no"] for item in students_b] == ["B001"]
+
+
+def test_school_imports_teacher_class_assignments_from_file(web_client: TestClient) -> None:
+    school_headers, _ = _school_headers(web_client)
+    web_client.post(
+        "/api/school/teachers",
+        json={"username": "teacher_imported", "password": "teacher123", "display_name": "Imported Teacher"},
+        headers=school_headers,
+    )
+    web_client.post(
+        "/api/school/classes", json={"name": "Imported Class", "grade": "G11"}, headers=school_headers
+    )
+
+    response = web_client.post(
+        "/api/school/teacher-class-assignments/import-file",
+        files={
+            "file": _xlsx_upload(
+                [{"teacher_username": "teacher_imported", "class_name": "Imported Class", "subject": "Math"}]
+            )
+        },
+        headers=school_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["imported"] == 1
+    assignments = web_client.get("/api/school/teacher-class-assignments", headers=school_headers).json()["assignments"]
+    assert assignments[0]["teacher_username"] == "teacher_imported"
+    assert assignments[0]["class_name"] == "Imported Class"
+    assert assignments[0]["subject"] == "Math"
+
+
+def test_school_ai_imports_complete_school_bundle(
+    web_client: TestClient,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_review(kind: str, rows: list[dict[str, object]]) -> str:
+        return f"reviewed {kind}: {len(rows)} rows"
+
+    monkeypatch.setenv("SOLAIRE_USER_CONFIG_DIR", str(tmp_path / "user-ai-all-import"))
+    monkeypatch.setattr(school_api, "_review_school_import_with_ai", fake_review)
+    school_headers, _ = _school_headers(web_client)
+    assert web_client.put("/api/agent/llm-settings", json={"api_key": "sk-test-key-abcdef"}).status_code == 200
+    assert web_client.patch(
+        "/api/school/ai-settings", json={"ai_enabled": True}, headers=school_headers
+    ).status_code == 200
+    bundle = {
+        "classes": [{"name": "AI Class", "grade": "G12"}],
+        "teachers": [
+            {
+                "username": "teacher_ai_all",
+                "password": "teacher123",
+                "display_name": "AI Teacher",
+                "subjects": "Math",
+            }
+        ],
+        "students": [{"student_no": "AI001", "display_name": "AI Student", "class_name": "AI Class"}],
+        "assignments": [
+            {"teacher_username": "teacher_ai_all", "class_name": "AI Class", "subject": "Math"}
+        ],
+    }
+
+    review = web_client.post(
+        "/api/school/ai/import-review",
+        data={"kind": "all"},
+        files={"file": ("school.json", json.dumps(bundle).encode("utf-8"), "application/json")},
+        headers=school_headers,
+    )
+    assert review.status_code == 200
+    assert review.json()["row_count"] == 4
+
+    response = web_client.post(
+        "/api/school/ai/import-file",
+        data={"kind": "all"},
+        files={"file": ("school.json", json.dumps(bundle).encode("utf-8"), "application/json")},
+        headers=school_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["imported"] == 4
+    assert web_client.get("/api/school/classes?q=AI%20Class", headers=school_headers).json()["total"] == 1
+    assert web_client.get("/api/school/teachers?q=teacher_ai_all", headers=school_headers).json()["total"] == 1
+    assert web_client.get("/api/school/students?q=AI001", headers=school_headers).json()["total"] == 1
+    assert web_client.get("/api/school/teacher-class-assignments", headers=school_headers).json()["total"] == 1
+
+
 def test_school_exports_student_initial_accounts(web_client: TestClient) -> None:
     school_headers, _ = _school_headers(web_client)
     klass = web_client.post("/api/school/classes", json={"name": "Class Export"}, headers=school_headers)
@@ -554,6 +673,10 @@ def test_school_downloads_import_templates(web_client: TestClient) -> None:
         ("/api/school/teachers/template.xlsx", ("username", "password", "display_name", "email", "subjects")),
         ("/api/school/classes/template.xlsx", ("name", "grade")),
         ("/api/school/students/template.xlsx", ("student_no", "display_name", "email", "class_name")),
+        (
+            "/api/school/teacher-class-assignments/template.xlsx",
+            ("teacher_username", "class_name", "subject"),
+        ),
     ]:
         response = web_client.get(path, headers=school_headers)
         assert response.status_code == 200

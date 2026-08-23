@@ -715,7 +715,7 @@ def import_students(
                 raise ValueError("student_no and display_name are required")
             target_class_id = class_id
             class_name = _cell_text(raw.get("class_name"))
-            if target_class_id is None and class_name:
+            if class_name:
                 klass_row = con.execute(
                     "SELECT id FROM classes WHERE school_id = ? AND name = ?",
                     (school_id, class_name),
@@ -1048,6 +1048,64 @@ def assign_teacher_class(root: Path, *, school_id: str, teacher_id: str, class_i
     if clean_subject:
         result["subject"] = clean_subject
     return result
+
+
+def import_teacher_class_assignments(
+    root: Path,
+    *,
+    school_id: str,
+    assignments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    init_platform_db(root)
+    if not assignments:
+        return {"imported": 0, "assignments": []}
+    imported: list[dict[str, Any]] = []
+    with connect(root) as con:
+        for raw in assignments:
+            teacher_id = _cell_text(raw.get("teacher_id"))
+            teacher_username = _cell_text(raw.get("teacher_username")) or _cell_text(raw.get("username"))
+            class_id = _cell_text(raw.get("class_id"))
+            class_name = _cell_text(raw.get("class_name"))
+            subject = _cell_text(raw.get("subject"))
+            if teacher_id:
+                teacher = con.execute(
+                    "SELECT id FROM users WHERE id = ? AND school_id = ? AND role = 'teacher' AND status = 'active'",
+                    (teacher_id, school_id),
+                ).fetchone()
+            else:
+                if not teacher_username:
+                    raise ValueError("teacher_username is required")
+                teacher = con.execute(
+                    "SELECT id FROM users WHERE username = ? AND school_id = ? AND role = 'teacher' AND status = 'active'",
+                    (teacher_username, school_id),
+                ).fetchone()
+            if teacher is None:
+                raise ValueError(f"teacher not found: {teacher_username or teacher_id}")
+            if class_id:
+                klass = con.execute(
+                    "SELECT id FROM classes WHERE id = ? AND school_id = ?",
+                    (class_id, school_id),
+                ).fetchone()
+            else:
+                if not class_name:
+                    raise ValueError("class_name is required")
+                klass = con.execute(
+                    "SELECT id FROM classes WHERE name = ? AND school_id = ?",
+                    (class_name, school_id),
+                ).fetchone()
+            if klass is None:
+                raise ValueError(f"class not found: {class_name or class_id}")
+            resolved_teacher_id = str(teacher["id"])
+            resolved_class_id = str(klass["id"])
+            con.execute(
+                "INSERT OR IGNORE INTO teacher_class_assignments (teacher_id, class_id, subject) VALUES (?, ?, ?)",
+                (resolved_teacher_id, resolved_class_id, subject),
+            )
+            item = {"teacher_id": resolved_teacher_id, "class_id": resolved_class_id}
+            if subject:
+                item["subject"] = subject
+            imported.append(item)
+    return {"imported": len(imported), "assignments": imported}
 
 
 def list_teacher_class_assignments(

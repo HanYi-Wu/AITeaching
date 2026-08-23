@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -48,6 +49,10 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 
 def _public_user(row: dict[str, object]) -> dict[str, object]:
+    try:
+        preferences = json.loads(str(row.get("preferences_json") or "{}"))
+    except json.JSONDecodeError:
+        preferences = {}
     return {
         "id": row["id"],
         "school_id": row.get("school_id"),
@@ -57,9 +62,61 @@ def _public_user(row: dict[str, object]) -> dict[str, object]:
         "email": row.get("email"),
         "status": row["status"],
         "must_change_password": bool(int(row.get("must_change_password") or 0)),
+        "avatar_data_url": row.get("avatar_data_url"),
+        "preferences": preferences if isinstance(preferences, dict) else {},
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def get_user_profile(root: Path, user_id: str) -> dict[str, object]:
+    init_platform_db(root)
+    with connect(root) as con:
+        row = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        subjects = [str(item["subject"]) for item in con.execute(
+            "SELECT subject FROM teacher_subjects WHERE teacher_id = ? ORDER BY subject",
+            (user_id,),
+        ).fetchall()]
+    data = row_to_dict(row)
+    if data is None:
+        raise ValueError("用户不存在")
+    return {**_public_user(data), "subjects": subjects}
+
+
+def update_user_profile(
+    root: Path,
+    *,
+    user: dict[str, object],
+    avatar_data_url: str | None,
+    preferences: dict[str, object],
+    subjects: list[str] | None,
+) -> dict[str, object]:
+    init_platform_db(root)
+    clean_avatar = str(avatar_data_url or "").strip() or None
+    if clean_avatar and (not clean_avatar.startswith("data:image/") or len(clean_avatar) > 2_000_000):
+        raise ValueError("头像必须是小于约 1.5MB 的图片")
+    allowed_themes = {"classic", "ocean", "forest", "warm", "night"}
+    clean_preferences = {
+        "theme": str(preferences.get("theme") or "classic") if str(preferences.get("theme") or "classic") in allowed_themes else "classic",
+        "density": "compact" if preferences.get("density") == "compact" else "comfortable",
+        "font_scale": max(0.85, min(1.2, float(preferences.get("font_scale") or 1))),
+    }
+    user_id = str(user.get("id") or "")
+    with connect(root) as con:
+        con.execute(
+            "UPDATE users SET avatar_data_url = ?, preferences_json = ?, updated_at = ? WHERE id = ?",
+            (clean_avatar, json.dumps(clean_preferences, ensure_ascii=False), utc_now(), user_id),
+        )
+        if user.get("role") == "teacher" and subjects is not None:
+            clean_subjects = list(dict.fromkeys(str(item).strip() for item in subjects if str(item).strip()))[:20]
+            if not clean_subjects:
+                raise ValueError("教师至少需要设置一个学科")
+            con.execute("DELETE FROM teacher_subjects WHERE teacher_id = ?", (user_id,))
+            con.executemany(
+                "INSERT INTO teacher_subjects (id, teacher_id, subject) VALUES (?, ?, ?)",
+                [(uuid.uuid4().hex, user_id, subject) for subject in clean_subjects],
+            )
+    return get_user_profile(root, user_id)
 
 
 def _validate_username(username: str) -> str:

@@ -129,7 +129,7 @@ fn dev_backend_health_wait_secs() -> u64 {
 }
 
 /// `/api/health` JSON 中用于识别本产品的字段值（与 FastAPI 一致）。
-const SOLAIRE_HEALTH_PRODUCT: &str = "sol_edu";
+const SOLAIRE_HEALTH_PRODUCT: &str = "education_helper";
 
 /// Python `desktop_entry` 打印的首行协议前缀（与 `solaire/desktop_entry.py` 一致）。
 const HANDSHAKE_PREFIX: &str = "SOLAIRE_LISTEN_PORT=";
@@ -309,11 +309,11 @@ fn resolve_embedded_python(_app: &tauri::AppHandle) -> Option<PathBuf> {
 fn wrong_health_msg(port: u16, lang: &str) -> String {
     match lang {
         "en" => format!(
-            "Port {} is not the SolEdu service (unexpected health response).",
+            "Port {} is not the EducationHelper service (unexpected health response).",
             port
         ),
         _ => format!(
-            "端口 {} 上不是 SolEdu 本地服务（健康检查响应异常）。",
+            "端口 {} 上不是 EducationHelper 本地服务（健康检查响应异常）。",
             port
         ),
     }
@@ -642,7 +642,7 @@ fn main() {
                         if let Err(_) = TrayIconBuilder::with_id("tray")
                             .icon(tray_icon)
                             .menu(&menu)
-                            .tooltip("SolEdu")
+                            .tooltip("EducationHelper")
                             .on_menu_event(move |app, event| match event.id.as_ref() {
                                 "quit" => {
                                     if let Ok(mut guard) =
@@ -742,7 +742,7 @@ mod tests {
             let (mut stream, _) = listener.accept().expect("accept");
             let mut buf = [0u8; 1024];
             let _ = stream.read(&mut buf);
-            let body = r#"{"status":"ok","product":"sol_edu"}"#;
+            let body = r#"{"status":"ok","product":"education_helper"}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

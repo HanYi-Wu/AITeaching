@@ -13,14 +13,18 @@ import {
   Trash2,
   Upload,
   Wifi,
+  X,
 } from "lucide-react";
 import { resolveApiUrl } from "../../api/client";
+import { KatexText } from "../../components/KatexText";
 import {
   analyzePlatformPaper,
+  completePaperAttemptGrading,
   downloadPaperAnalysisReport,
   downloadOfflineAnswerUploader,
   downloadOfflineScanImage,
   gradePaperAnswer,
+  getAccountProfile,
   listPaperSubmissions,
   listPlatformPaperPublications,
   listPlatformPapers,
@@ -114,6 +118,16 @@ function publicationStatusLabel(status: string): string {
   return "草稿";
 }
 
+function formatStudentAnswer(value: unknown): string {
+  if (value == null) return "未作答";
+  if (typeof value === "string") return value.trim() || "未作答";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   const [papers, setPapers] = useState<PlatformPaperRecord[]>([]);
   const [paperMeta, setPaperMeta] = useState<PageMeta>({ total: 0, page: 1, pageSize: 10, totalPages: 1 });
@@ -127,6 +141,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   const [classes, setClasses] = useState<TeacherClassRecord[]>([]);
   const [publications, setPublications] = useState<PaperPublicationRecord[]>([]);
   const [submissions, setSubmissions] = useState<PaperSubmissionRecord[]>([]);
+  const [selectedGradingAttemptId, setSelectedGradingAttemptId] = useState("");
   const [submissionMode, setSubmissionMode] = useState<PaperSubmissionMode>("online");
   const [maxScreenSwitches, setMaxScreenSwitches] = useState(0);
   const [timeLimitMinutes, setTimeLimitMinutes] = useState(0);
@@ -137,6 +152,8 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<string, string>>({});
   const [selectedPaperId, setSelectedPaperId] = useState("");
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
+  const [teacherSubjects, setTeacherSubjects] = useState<string[]>([]);
+  const [selectedSubject, setSelectedSubject] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<PlatformPaperAnalysis | null>(null);
@@ -154,6 +171,17 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
 
   useEffect(() => {
     return () => scanObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+  }, []);
+
+  useEffect(() => {
+    void getAccountProfile()
+      .then(({ profile }) => {
+        const subjects = profile.subjects ?? [];
+        setTeacherSubjects(subjects);
+        setSelectedSubject((current) => current || (subjects.length === 1 ? subjects[0] : ""));
+      })
+      .catch(reportError);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectedPaper = useMemo(
@@ -234,6 +262,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
       setPublications([]);
     }
     setSubmissions([]);
+    setSelectedGradingAttemptId("");
     setGradeDrafts({});
     setFeedbackDrafts({});
     clearScanObjectUrls();
@@ -275,6 +304,10 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
       setMessage("请选择要发布的班级。");
       return;
     }
+    if (teacherSubjects.length > 1 && !selectedSubject) {
+      setMessage("你设置了多个学科，请选择本次发布所用学科。");
+      return;
+    }
     setBusy(`publish:${selectedPaper.paper_id}`);
     setMessage(null);
     try {
@@ -286,6 +319,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
         submission_mode: submissionMode,
         max_screen_switches: maxScreenSwitches,
         time_limit_minutes: timeLimitMinutes > 0 ? timeLimitMinutes : null,
+        subject: selectedSubject || teacherSubjects[0] || selectedPaper.subject,
       });
       setPapers((current) =>
         current.map((item) =>
@@ -468,7 +502,17 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     setMessage(null);
     try {
       const result = await listPaperSubmissions(selectedPaper.paper_id);
-      if (submissionRequestIdRef.current === requestId) setSubmissions(result.submissions);
+      if (submissionRequestIdRef.current === requestId) {
+        setSubmissions(result.submissions);
+        setSelectedGradingAttemptId((current) => {
+          if (result.submissions.some((item) => item.attempt_id === current)) return current;
+          return (
+            result.submissions.find((item) => item.status === "submitted" && item.answers.length > 0)?.attempt_id ??
+            result.submissions[0]?.attempt_id ??
+            ""
+          );
+        });
+      }
     } catch (e) {
       if (submissionRequestIdRef.current === requestId) reportError(e);
     } finally {
@@ -483,8 +527,10 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   async function saveGrade(submission: PaperSubmissionRecord, questionId: string) {
     if (!selectedPaper) return;
     const key = gradeKey(submission.attempt_id, questionId);
-    const score = Number(gradeDrafts[key] ?? "");
-    if (!Number.isFinite(score)) {
+    const answer = submission.answers.find((item) => item.question_id === questionId);
+    const rawScore = gradeDrafts[key] ?? String(answer?.score ?? answer?.ai_suggested_score ?? "");
+    const score = Number(rawScore);
+    if (!rawScore.trim() || !Number.isFinite(score)) {
       setMessage("请输入有效分数。");
       return;
     }
@@ -509,9 +555,26 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
             : item,
         ),
       );
+      setGradeDrafts((current) => ({ ...current, [key]: String(result.answer.score ?? "") }));
+      await loadSelectedSubmissions();
       setMessage("已保存批改结果");
     } catch (e) {
       reportError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function completeGrading(submission: PaperSubmissionRecord) {
+    if (!selectedPaper) return;
+    setBusy(`complete:${submission.attempt_id}`);
+    setMessage(null);
+    try {
+      await completePaperAttemptGrading(selectedPaper.paper_id, submission.attempt_id);
+      await Promise.all([loadSelectedSubmissions(), refresh()]);
+      setMessage(`已完成 ${submission.student_name || submission.student_no || "该学生"} 的批改并向学生发布成绩。`);
+    } catch (error) {
+      reportError(error);
     } finally {
       setBusy(null);
     }
@@ -685,7 +748,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
     setMessage(null);
     try {
       const blob = await downloadOfflineAnswerUploader();
-      downloadBlob(blob, "SolEdu-Offline-Answer-Uploader.exe");
+      downloadBlob(blob, "EducationHelper-Offline-Answer-Uploader.exe");
       setMessage("线下答卷采集器已下载。当前程序未做商业代码签名，Windows 可能提示“未知发布者”；请确认文件来自本系统后再运行。");
     } catch (e) {
       reportError(e);
@@ -720,6 +783,8 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
   const scoresBusy = selectedPaper ? busy === `scores:${selectedPaper.paper_id}` : false;
   const analysisBusy = selectedPaper ? busy === `analysis:${selectedPaper.paper_id}` : false;
   const submissionsBusy = selectedPaper ? busy === `submissions:${selectedPaper.paper_id}` : false;
+  const selectedGradingSubmission =
+    submissions.find((submission) => submission.attempt_id === selectedGradingAttemptId) ?? submissions[0] ?? null;
   const canPublish =
     Boolean(selectedPaper) && !publishBusy && Number(selectedPaper?.question_count || 0) > 0 && selectedClassIds.length > 0;
 
@@ -833,7 +898,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                 <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                   <span>{paper.subject}</span>
                   <span>{paper.question_count} 题</span>
-                  <span>{paper.score_batch_count} 次成绩</span>
+                  <span>{Number(paper.score_batch_count || 0) + Number(paper.graded_student_count || 0)} 份已批改成绩</span>
                   <span>{paper.publication_count} 次发布</span>
                 </div>
               </button>
@@ -859,7 +924,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.question_count} 题</span>
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.section_count} 个题组</span>
                       <span className="rounded-md bg-slate-100 px-2 py-1">
-                        {selectedPaper.score_batch_count} 次成绩
+                        {Number(selectedPaper.score_batch_count || 0) + Number(selectedPaper.graded_student_count || 0)} 份已批改成绩
                       </span>
                       {selectedPaper.status === "published" ? (
                         <span className="rounded-md bg-emerald-100 px-2 py-1 text-emerald-700">已发布</span>
@@ -927,6 +992,19 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
                 <section className="space-y-5">
                   <Panel title="发布班级" icon={<Wifi className="h-5 w-5 text-slate-600" />}>
+                    <label className="mb-4 block text-sm font-medium text-slate-700">
+                      发布学科
+                      <select
+                        data-testid="paper-publish-subject"
+                        value={selectedSubject || (teacherSubjects.length === 1 ? teacherSubjects[0] : "")}
+                        onChange={(event) => setSelectedSubject(event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      >
+                        {teacherSubjects.length > 1 ? <option value="">请选择学科</option> : null}
+                        {teacherSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                        {teacherSubjects.length === 0 ? <option value={selectedPaper.subject}>{selectedPaper.subject || "通用"}</option> : null}
+                      </select>
+                    </label>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {classes.map((klass) => {
                         const alreadyPublished = activePublishedClassIds.has(klass.id);
@@ -1162,57 +1240,7 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                     >
                       {analysisBusy ? "加载中..." : "查看分析摘要"}
                     </button>
-                    {analysis ? (
-                      <div className="mt-4 space-y-3">
-                        <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-                          <div className="rounded-md bg-slate-50 p-3">
-                            <p className="text-xs text-slate-500">完成率</p>
-                            <p data-testid="paper-analysis-completion-rate" className="mt-1 text-lg font-semibold">
-                              {analysis.summary.completion_rate}%
-                            </p>
-                          </div>
-                          <div className="rounded-md bg-slate-50 p-3">
-                            <p className="text-xs text-slate-500">诚信事件</p>
-                            <p data-testid="paper-analysis-integrity-events" className="mt-1 text-lg font-semibold">
-                              {analysis.proctoring.event_count ?? analysis.proctoring.screen_switch_count}
-                            </p>
-                          </div>
-                          <div className="rounded-md bg-slate-50 p-3">
-                            <p className="text-xs text-slate-500">切屏</p>
-                            <p data-testid="paper-analysis-switch-count" className="mt-1 text-lg font-semibold">
-                              {analysis.proctoring.screen_switch_count}
-                            </p>
-                          </div>
-                          <div className="rounded-md bg-slate-50 p-3">
-                            <p className="text-xs text-slate-500">超限</p>
-                            <p data-testid="paper-analysis-flagged-count" className="mt-1 text-lg font-semibold">
-                              {analysis.proctoring.exceeded_student_count ?? analysis.proctoring.flagged_student_count}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <button
-                            type="button"
-                            data-testid="paper-export-report-xlsx"
-                            onClick={downloadAnalysisReport}
-                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            <Download className="h-4 w-4" />
-                            导出完整报表
-                          </button>
-                          <button
-                            type="button"
-                            data-testid="paper-export-report-pdf"
-                            onClick={() => void printAnalysisReport()}
-                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            <Download className="h-4 w-4" />
-                            PDF 报告
-                          </button>
-                        </div>
-                        <PlatformPaperAnalysisCharts analysis={analysis} compact />
-                      </div>
-                    ) : null}
+                    {analysis ? <p className="mt-3 text-xs text-emerald-700">分析已在大窗口中打开</p> : null}
                     <button
                       type="button"
                       onClick={() => onOpenAnalysis?.(selectedPaper.exam_id)}
@@ -1253,7 +1281,24 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                     </div>
                   </div>
                   <div className="space-y-4">
-                    {submissions.map((submission) => (
+                    {submissions.length > 0 ? (
+                      <label className="block rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-medium text-slate-700">
+                        选择学生答卷
+                        <select
+                          data-testid="paper-grading-student-select"
+                          value={selectedGradingSubmission?.attempt_id ?? ""}
+                          onChange={(event) => setSelectedGradingAttemptId(event.target.value)}
+                          className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                        >
+                          {submissions.map((submission) => (
+                            <option key={submission.attempt_id} value={submission.attempt_id}>
+                              {[submission.student_no, submission.student_name, submission.status].filter(Boolean).join(" · ")}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    {selectedGradingSubmission ? [selectedGradingSubmission].map((submission) => (
                       <article key={submission.attempt_id} className="rounded-lg border border-slate-200 p-4">
                         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
                           <div className="min-w-0">
@@ -1319,9 +1364,27 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                               <div key={answer.question_id} className="rounded-md bg-slate-50 p-3">
                                 <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                                   <span className="font-medium">{answer.header || answer.question_id}</span>
-                                  <span className="text-xs text-slate-500">{answer.grading_status || "pending"}</span>
+                                  <span className="text-xs text-slate-500">
+                                    本题 {answer.score_per_item ?? "-"} 分 · {answer.grading_status || "pending"}
+                                  </span>
                                 </div>
-                                {answer.content ? <p className="mt-2 text-sm text-slate-700">{answer.content}</p> : null}
+                                {answer.content ? <KatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}
+                                {answer.options && Object.keys(answer.options).length > 0 ? (
+                                  <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                                    {Object.entries(answer.options).map(([optionKey, optionText]) => (
+                                      <div key={optionKey} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
+                                        <span className="mr-1 font-semibold">{optionKey}.</span>
+                                        <KatexText text={optionText} className="inline" />
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                <div className="mt-3 rounded-md border border-blue-100 bg-white p-3">
+                                  <p className="text-xs font-semibold text-blue-700">学生作答</p>
+                                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-900">
+                                    {formatStudentAnswer(answer.answer)}
+                                  </p>
+                                </div>
                                 {answer.images && answer.images.length > 0 ? (
                                   <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                     {answer.images.map((image, index) => (
@@ -1379,8 +1442,24 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
                             );
                           })}
                         </div>
+                        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
+                          {submission.grading_completed_at ? (
+                            <span className="text-sm font-medium text-emerald-700">成绩已发布给学生</span>
+                          ) : (
+                            <span className="text-xs text-slate-500">所有题目保存分数后，完成整卷批改才会向学生展示成绩。</span>
+                          )}
+                          <button
+                            type="button"
+                            data-testid={`paper-complete-grading-${submission.attempt_id}`}
+                            disabled={busy === `complete:${submission.attempt_id}`}
+                            onClick={() => void completeGrading(submission)}
+                            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            {busy === `complete:${submission.attempt_id}` ? "正在发布..." : "完成批改并发布成绩"}
+                          </button>
+                        </div>
                       </article>
-                    ))}
+                    )) : null}
                     {submissions.length === 0 ? (
                       <p className="rounded-md border border-dashed border-slate-300 p-6 text-sm text-slate-500">
                         暂无已加载提交
@@ -1402,6 +1481,28 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
           )}
         </main>
       </div>
+      {analysis ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="试卷分析">
+          <section className="flex h-[85vh] w-[85vw] min-w-0 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">{analysis.paper.title} · 试卷分析</h2>
+                <p className="mt-1 text-sm text-slate-500">完成情况、题目表现、模块掌握和考试行为数据</p>
+              </div>
+              <button type="button" aria-label="关闭试卷分析" onClick={() => setAnalysis(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100">
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+            <div className="min-h-0 flex-1 overflow-auto p-6">
+              <div className="mb-4 flex flex-wrap gap-2">
+                <button type="button" data-testid="paper-export-report-xlsx" onClick={downloadAnalysisReport} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium">导出 Excel</button>
+                <button type="button" data-testid="paper-export-report-pdf" onClick={() => void printAnalysisReport()} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium">导出 PDF</button>
+              </div>
+              <PlatformPaperAnalysisCharts analysis={analysis} />
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

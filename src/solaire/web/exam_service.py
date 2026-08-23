@@ -37,7 +37,39 @@ from solaire.web.security import assert_within_project, safe_filename_component
 def _load_exam_config(exam_yaml_path: Path) -> ExamConfig:
     with exam_yaml_path.open(encoding="utf-8") as f:
         raw = yaml.safe_load(f)
-    return ExamConfig.model_validate(raw)
+    exam = ExamConfig.model_validate(raw)
+    if all(section.score_per_item is not None for section in exam.selected_items):
+        return exam
+
+    template_path: Path | None = None
+    try:
+        template_path = resolve_template_yaml_path(exam_yaml_path, exam)
+    except FileNotFoundError:
+        if exam.template_path:
+            exams_root = next((parent for parent in exam_yaml_path.resolve().parents if parent.name == "exams"), None)
+            if exams_root is not None:
+                project_root = exams_root.parent
+                relative = Path(exam.template_path.replace("\\", "/"))
+                if not relative.is_absolute():
+                    candidate = (project_root / relative).resolve()
+                    try:
+                        candidate.relative_to(project_root)
+                    except ValueError:
+                        candidate = Path()
+                    if candidate.is_file():
+                        template_path = candidate
+    if template_path is None:
+        return exam
+
+    template = load_template(template_path)
+    defaults = {section.section_id: section.score_per_item for section in template.sections}
+    selected_items = [
+        section
+        if section.score_per_item is not None or section.section_id not in defaults
+        else section.model_copy(update={"score_per_item": float(defaults[section.section_id])})
+        for section in exam.selected_items
+    ]
+    return exam.model_copy(update={"selected_items": selected_items})
 
 
 def _iter_exam_workspace_dirs(project_root: Path):

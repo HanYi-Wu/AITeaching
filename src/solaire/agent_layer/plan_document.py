@@ -1,4 +1,4 @@
-"""Parse SolEdu agent plan files (.md): YAML --- frontmatter + todos → task_plan steps."""
+"""Parse EducationHelper agent plan files (.md): YAML frontmatter plus todo steps."""
 
 from __future__ import annotations
 

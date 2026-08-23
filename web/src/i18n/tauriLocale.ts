@@ -3,7 +3,10 @@ export const LOCALE_STORAGE_KEY = "soleedu.locale";
 export type AppLang = "zh" | "en";
 
 export function resolveInitialLocale(fromTauri: AppLang | null, stored: AppLang | null): AppLang {
-  return fromTauri ?? stored ?? "zh";
+  // First use is always Chinese. A language selected inside EH is stored by
+  // the web UI and takes precedence over the operating-system locale.
+  void fromTauri;
+  return stored ?? "zh";
 }
 
 export async function tauriGetLocale(): Promise<AppLang | null> {

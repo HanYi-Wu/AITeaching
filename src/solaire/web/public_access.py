@@ -51,7 +51,7 @@ _HOST_CONTROL_PREFIXES = (
     "/api/analysis/jobs/script",
     "/api/analysis/tools",
 )
-_STUDENT_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout"})
+_STUDENT_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout", "/api/auth/profile"})
 _STUDENT_RESOURCE_EXTENSIONS = frozenset({".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
 _SCHOOL_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout"})
 

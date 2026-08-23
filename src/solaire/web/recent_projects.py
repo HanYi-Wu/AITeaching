@@ -1,4 +1,4 @@
-"""Recent project list persisted under the application data directory (Windows: %APPDATA%/SolEdu)."""
+"""EH project history stored in the legacy SolEdu directory for data compatibility."""
 
 from __future__ import annotations
 

@@ -129,6 +129,194 @@ def _write_online_exam(root: Path) -> str:
     return exam_id
 
 
+def _write_online_exam_without_library_refs(root: Path) -> str:
+    """Mirror workspaces created by the compose page: qualified IDs but no question_libraries."""
+    ensure_project_layout(root)
+    library = root / "resource" / "math" / "sequence-review"
+    library.mkdir(parents=True, exist_ok=True)
+    (library / "choice_01.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "choice_01",
+                "type": "single_choice",
+                "content": "等差数列 2, 5, 8 的下一项是？",
+                "options": {"A": "10", "B": "11", "C": "12"},
+                "answer": "B",
+                "analysis": "公差为 3。",
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (library / "short_01.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "short_01",
+                "type": "short_answer",
+                "content": "写出该数列的公差。",
+                "answer": "3",
+                "analysis": "相邻两项之差为 3。",
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (root / "templates" / "test.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "template_id": "test",
+                "layout": "single_column",
+                "latex_base": "exam-zh-base.tex.j2",
+                "sections": [
+                    {"section_id": "选择题", "type": "single_choice", "required_count": 1, "score_per_item": 5},
+                    {"section_id": "解答题", "type": "short_answer", "required_count": 1, "score_per_item": 10},
+                ],
+                "metadata_defaults": {},
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    exam_id = "summer/Math"
+    exam_dir = root / "exams" / "summer" / "Math"
+    exam_dir.mkdir(parents=True, exist_ok=True)
+    (exam_dir / "exam.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "exam_id": exam_id,
+                "name": "暑假测试",
+                "subject": "Math",
+                "export_label": "summer",
+                "template_ref": "default",
+                "template_path": "templates/test.yaml",
+                "selected_items": [
+                    {
+                        "section_id": "选择题",
+                        "question_ids": ["math/sequence-review/choice_01"],
+                        "score_per_item": 5,
+                    },
+                    {
+                        "section_id": "解答题",
+                        "question_ids": ["math/sequence-review/short_01"],
+                    },
+                ],
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return exam_id
+
+
+def _publish_exam_for_student(
+    client: TestClient,
+    tmp_path: Path,
+    *,
+    exam_id: str,
+) -> tuple[dict[str, str], str, str]:
+    admin_token = _bootstrap_admin(client)
+    school_headers, _ = _school_headers(client, admin_token)
+    class_id, student_account = _create_teacher_class_student(client, school_headers)
+    teacher_headers = _teacher_headers(client)
+    paper = next(
+        item for item in client.get("/api/papers", headers=teacher_headers).json()["papers"] if item["exam_id"] == exam_id
+    )
+    published = client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "title": "暑假测试", "show_results_immediately": True},
+        headers=teacher_headers,
+    )
+    assert published.status_code == 200
+    login = client.post("/api/auth/login", json=student_account)
+    assert login.status_code == 200
+    return _headers(str(login.json()["token"])), str(published.json()["publication"]["id"]), str(paper["paper_id"])
+
+
+def test_exam_without_library_refs_loads_real_question_content_and_scores(
+    web_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    exam_id = _write_online_exam_without_library_refs(tmp_path)
+    student_headers, publication_id, _paper_id = _publish_exam_for_student(
+        web_client,
+        tmp_path,
+        exam_id=exam_id,
+    )
+
+    started = web_client.post(f"/api/student/publications/{publication_id}/start", headers=student_headers)
+    assert started.status_code == 200
+    question = started.json()["questions"][0]
+    assert question["type"] == "single_choice"
+    assert question["content"] == "等差数列 2, 5, 8 的下一项是？"
+    assert question["options"] == {"A": "10", "B": "11", "C": "12"}
+    assert question["content"] != question["question_id"]
+
+    submitted = web_client.post(
+        f"/api/student/attempts/{started.json()['attempt']['id']}/submit",
+        json={"answers": [{"question_id": question["question_id"], "answer": "B"}]},
+        headers=student_headers,
+    )
+    assert submitted.status_code == 200
+    assert submitted.json()["attempt"]["score"] is None
+    assert submitted.json()["attempt"]["max_score"] is None
+    assert submitted.json()["attempt"]["results_released"] is False
+
+
+def test_legacy_placeholder_snapshot_is_repaired_and_frozen_before_answering(
+    web_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    exam_id = _write_online_exam_without_library_refs(tmp_path)
+    student_headers, publication_id, _paper_id = _publish_exam_for_student(
+        web_client,
+        tmp_path,
+        exam_id=exam_id,
+    )
+    platform_root = default_platform_root()
+    with connect(platform_root) as con:
+        attempt = con.execute(
+            "SELECT id, question_payload_json FROM student_attempts WHERE publication_id = ?",
+            (publication_id,),
+        ).fetchone()
+        assert attempt is not None
+        original = json.loads(str(attempt["question_payload_json"]))
+        placeholder = [
+            {
+                **item,
+                "score_per_item": 5,
+                "type": "unknown",
+                "content": item["question_id"],
+                "options": None,
+            }
+            for item in original
+        ]
+        con.execute(
+            "UPDATE student_attempts SET question_payload_json = ?, answer_key_json = '{}' WHERE id = ?",
+            (json.dumps(placeholder, ensure_ascii=False), str(attempt["id"])),
+        )
+
+    started = web_client.post(f"/api/student/publications/{publication_id}/start", headers=student_headers)
+    assert started.status_code == 200
+    assert started.json()["questions"][0]["content"] == "等差数列 2, 5, 8 的下一项是？"
+    with connect(platform_root) as con:
+        repaired = con.execute(
+            "SELECT question_payload_json, answer_key_json FROM student_attempts WHERE id = ?",
+            (str(attempt["id"]),),
+        ).fetchone()
+    assert repaired is not None
+    repaired_questions = json.loads(str(repaired["question_payload_json"]))
+    assert repaired_questions[0]["type"] == "single_choice"
+    assert [item["score_per_item"] for item in repaired_questions] == [5.0, 10.0]
+    assert json.loads(str(repaired["answer_key_json"])) == {
+        "math/sequence-review/choice_01": "B",
+        "math/sequence-review/short_01": "3",
+    }
+
+
 def test_student_answers_online_paper_and_views_result_analysis(web_client: TestClient, tmp_path: Path) -> None:
     admin_token = _bootstrap_admin(web_client)
     school_headers, _ = _school_headers(web_client, admin_token)
@@ -197,8 +385,20 @@ def test_student_answers_online_paper_and_views_result_analysis(web_client: Test
     )
     assert submitted.status_code == 200
     assert submitted.json()["attempt"]["status"] == "submitted"
-    assert submitted.json()["attempt"]["score"] == 5.0
-    assert submitted.json()["attempt"]["max_score"] == 10.0
+    assert submitted.json()["attempt"]["score"] is None
+    assert submitted.json()["attempt"]["max_score"] is None
+
+    hidden_results = web_client.get("/api/student/results", headers=student_headers)
+    assert hidden_results.status_code == 200
+    assert hidden_results.json()["results"][0]["score"] is None
+    assert hidden_results.json()["results"][0]["answers"] == []
+
+    completed = web_client.post(
+        f"/api/papers/{paper['paper_id']}/attempts/{attempt_id}/complete-grading",
+        headers=teacher_headers,
+    )
+    assert completed.status_code == 200
+    assert completed.json()["attempt"]["grading_completed_at"]
 
     results = web_client.get("/api/student/results", headers=student_headers)
     assert results.status_code == 200
@@ -381,8 +581,8 @@ def test_student_resumes_saved_answers_and_personalized_questions_are_scored(
         headers=student_headers,
     )
     assert submitted.status_code == 200
-    assert submitted.json()["attempt"]["score"] == 6.0
-    assert submitted.json()["attempt"]["max_score"] == 6.0
+    assert submitted.json()["attempt"]["score"] is None
+    assert submitted.json()["attempt"]["max_score"] is None
     assert submitted.json()["attempt"]["time_spent_seconds"] == 60
 
     late_save = web_client.post(
@@ -392,7 +592,7 @@ def test_student_resumes_saved_answers_and_personalized_questions_are_scored(
     )
     assert late_save.status_code == 400
     result = web_client.get("/api/student/results", headers=student_headers).json()["results"][0]
-    assert result["score"] == 6.0
+    assert result["score"] is None
 
 
 def test_proctor_events_are_validated_deduplicated_and_only_visibility_counts_as_switch(

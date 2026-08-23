@@ -299,6 +299,7 @@ _RAW_TOOLS: list[RegisteredTool] = [
                     "description": "班级名称或名称关键词；当用户没有给出 class_ids 时使用。",
                 },
                 "title": {"type": "string"},
+                "subject": {"type": "string", "description": "教师设置多个学科时必填，必须选择本次发布所属学科。"},
                 "description": {"type": "string"},
                 "start_at": {"type": "string"},
                 "end_at": {"type": "string"},
@@ -358,11 +359,27 @@ _RAW_TOOLS: list[RegisteredTool] = [
         ui_label="正在检索题库…",
     ),
     _fn(
-        "bank.get_item",
-        "读取单道独立题目的完整内容与结构（题组请改用软件界面编辑）。",
+        "bank.export_items",
+        "将已检索并选定的部分题目按题型和标识梳理为 EducationHelper YAML 文件，并在对话中提供直接下载按钮。",
         {
             "type": "object",
-            "properties": {"qualified_id": {"type": "string", "description": "题目完整标识，如 科目/题集/题目编号"}},
+            "properties": {
+                "qualified_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 300},
+                "title": {"type": "string"},
+            },
+            "required": ["qualified_ids"],
+            "additionalProperties": False,
+        },
+        bank_tools.tool_bank_export_items,
+        risk=ToolRisk.READ,
+        ui_label="正在梳理并导出题目…",
+    ),
+    _fn(
+        "bank.get_item",
+        "读取教师个人题库中一道题目的完整内容与结构。",
+        {
+            "type": "object",
+            "properties": {"qualified_id": {"type": "string", "description": "题目完整标识"}},
             "required": ["qualified_id"],
             "additionalProperties": False,
         },
@@ -391,13 +408,13 @@ _RAW_TOOLS: list[RegisteredTool] = [
     ),
     _fn(
         "bank.create_item",
-        "在指定题集中新建一道独立题目（须符合题型、选项规则与格式检查）。保存后会返回 format_warnings；若 format_ok=false，必须继续调用 bank.update_item 修正。",
+        "在教师个人题库中新建一道题目。由模型原创时 source_kind=AI生成；依据教师文件整理导入时必须用 AI辅助导入。",
         {
             "type": "object",
             "properties": {
-                "collection_namespace": {
+                "subject": {
                     "type": "string",
-                    "description": "题集路径，格式 科目/题集，如 math/unit1",
+                    "description": "题目所属学科，未提供时使用通用",
                 },
                 "question_id": {"type": "string"},
                 "question_type": {"type": "string"},
@@ -406,8 +423,9 @@ _RAW_TOOLS: list[RegisteredTool] = [
                 "analysis": {"type": "string"},
                 "options": {"type": "string", "description": "选择题必填，JSON 对象字符串"},
                 "metadata": {"type": "string", "description": "JSON 对象字符串"},
+                "source_kind": {"type": "string", "enum": ["AI生成", "AI辅助导入"]},
             },
-            "required": ["collection_namespace", "question_id", "question_type", "content", "answer"],
+            "required": ["question_id", "question_type", "content", "answer"],
             "additionalProperties": False,
         },
         bank_tools.tool_bank_create_item,
@@ -1102,8 +1120,6 @@ _RAW_TOOLS.extend(
         _fn("graph.unbind_question", "解除题目与知识点的关联。", _teacher_schema({"question_qualified_id": _S, "node_id": _S, "graph": _S}, ["question_qualified_id", "node_id"]), teacher_tools.tool_graph_unbind_question),
         _fn("graph.detach_resource", "移除知识点上的资源链接，不删除原始资源文件。", _teacher_schema({"link_id": _S, "graph": _S}, ["link_id"]), teacher_tools.tool_graph_detach_resource),
         _fn("bank.delete_item", "删除一道题目。", _teacher_schema({"qualified_id": _S, "storage_path": _S}, ["qualified_id"]), teacher_tools.tool_bank_delete_item, risk=ToolRisk.DESTRUCTIVE),
-        _fn("bank.rename_collection", "重命名或移动一个题集。", _teacher_schema({"namespace": _S, "new_subject": _S, "new_collection": _S}, ["namespace", "new_subject", "new_collection"]), teacher_tools.tool_bank_rename_collection),
-        _fn("bank.delete_collection", "删除整个题集及其题目文件。", _teacher_schema({"namespace": _S}, ["namespace"]), teacher_tools.tool_bank_delete_collection, risk=ToolRisk.DESTRUCTIVE),
         _fn("template.list", "列出当前项目中的试卷模板文件。", _teacher_schema(), teacher_tools.tool_template_list, risk=ToolRisk.READ),
         _fn("template.get", "读取一个试卷模板文件。", _teacher_schema({"path": _S}, ["path"]), teacher_tools.tool_template_get, risk=ToolRisk.READ),
         _fn("template.create", "创建试卷模板文件。", _teacher_schema({"path": _S, "content": _S}, ["path", "content"]), teacher_tools.tool_template_create),
@@ -1203,9 +1219,9 @@ _RAW_TOOLS.extend(
         ),
         _fn(
             "teacher.student_profile",
-            "读取教师已分配班级内某名学生的考试完成率、得分、诚信事件、最近答卷和薄弱题目。",
+            "按可选日期范围读取教师班级内某名学生的完成率、得分、考试行为事件、答题时长和薄弱题目。",
             _teacher_schema(
-                {"class_id": _S, "student_id": _S, "student_query": _S},
+                {"class_id": _S, "student_id": _S, "student_query": _S, "date_from": _S, "date_to": _S},
                 [],
             ),
             teacher_tools.tool_teacher_student_profile,
@@ -1216,11 +1232,13 @@ _RAW_TOOLS.extend(
         _fn("paper.update_publication", "修改考试发布的标题、时间、时长、结果展示和状态。", _teacher_schema({"paper_id": _S, "publication_id": _S, "title": _S, "description": _S, "start_at": _S, "end_at": _S, "time_limit_minutes": {"type": "integer"}, "show_results_immediately": {"type": "boolean"}, "status": _S}, ["paper_id", "publication_id"]), teacher_tools.tool_paper_update_publication),
         _fn("paper.revoke_publication", "撤销考试发布。", _teacher_schema({"paper_id": _S, "publication_id": _S}, ["paper_id", "publication_id"]), teacher_tools.tool_paper_revoke_publication, risk=ToolRisk.DESTRUCTIVE),
         _fn("paper.manual_grade", "人工复核并保存一道主观题得分和反馈。", _teacher_schema({"paper_id": _S, "attempt_id": _S, "question_id": _S, "score": {"type": "number"}, "feedback": _S, "is_correct": {"type": "boolean"}}, ["paper_id", "attempt_id", "question_id", "score"]), teacher_tools.tool_paper_manual_grade),
+        _fn("paper.complete_grading", "确认一份答卷已全部批改并向学生发布成绩。", _teacher_schema({"paper_id": _S, "attempt_id": _S}, ["paper_id", "attempt_id"]), teacher_tools.tool_paper_complete_grading),
     ]
 )
 
 _CONFIRM_LABELS: dict[str, str] = {
     "paper.ai_grade_pending": "批量生成 AI 预批改建议",
+    "paper.complete_grading": "确认完成批改并向学生发布成绩",
     "paper.publish_wrong_question_practice": "发布个性化历史错题卷",
     "paper.publish_reinforcement_practice": "调用 AI 生成并发布专项巩固卷",
     "exam.export_paper": "导出试卷文件",
@@ -1239,7 +1257,7 @@ _CONFIRM_LABELS: dict[str, str] = {
     "graph.create_graph": "新建科目图谱",
     "graph.delete_graph": "删除科目图谱",
     "bank.update_item": "修改题库中的题目内容",
-    "bank.create_item": "在题集中新建题目",
+    "bank.create_item": "在个人题库中新建题目",
     "analysis.save_script": "保存分析脚本",
     "analysis.run_script": "运行分析脚本",
     "analysis.run_builtin": "运行内置学情分析",

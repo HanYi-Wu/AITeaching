@@ -12,9 +12,11 @@ import {
   UserCog,
 } from "lucide-react";
 import { resolveApiUrl } from "../../api/client";
+import { KatexText } from "../../components/KatexText";
 import { compressImageFileToDataUrl } from "../../lib/imageCompression";
 import {
   loadSessionToken,
+  updateAccountProfile,
   listStudentPapers,
   listStudentResults,
   recordStudentProctorEvent,
@@ -60,10 +62,6 @@ function formatCountdown(seconds: number | null): string {
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
 
-function isImageSubmission(mode?: string | null): boolean {
-  return mode === "image_manual" || mode === "image_ai";
-}
-
 export function StudentWorkspace({ user, onLogout }: Props) {
   const [profile, setProfile] = useState(user);
   const [activeView, setActiveView] = useState<StudentView>(user.must_change_password ? "account" : "home");
@@ -71,6 +69,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [username, setUsername] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [theme, setTheme] = useState(profile.preferences?.theme ?? "classic");
+  const [density, setDensity] = useState(profile.preferences?.density ?? "comfortable");
+  const [fontScale, setFontScale] = useState(Number(profile.preferences?.font_scale ?? 1));
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [papers, setPapers] = useState<StudentPaperRecord[]>([]);
@@ -104,10 +105,10 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const mustChangePassword = Boolean(profile.must_change_password);
   const answeredCount = useMemo(() => {
     if (!activeAttempt) return 0;
-    return questions.filter((question) =>
-      isImageSubmission(activeAttempt.submission_mode)
-        ? (imageAnswers[question.question_id]?.length ?? 0) > 0
-        : Boolean((answers[question.question_id] ?? "").trim()),
+    return questions.filter(
+      (question) =>
+        Boolean((answers[question.question_id] ?? "").trim()) ||
+        (imageAnswers[question.question_id]?.length ?? 0) > 0,
     ).length;
   }, [activeAttempt, answers, imageAnswers, questions]);
 
@@ -159,13 +160,17 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       }
       if (document.hidden) {
         hiddenAtRef.current = Date.now();
+        sendEvent("visibility_hidden", 0, { source: "visibilitychange", phase: "hidden" });
         return;
       }
       if (hiddenAtRef.current != null) {
         const duration = Date.now() - hiddenAtRef.current;
         hiddenAtRef.current = null;
-        sendEvent("visibility_hidden", duration, { source: "visibilitychange" });
+        sendEvent("visibility_return", duration, { source: "visibilitychange", phase: "visible" });
       }
+    };
+    const onPageHide = () => {
+      if (!filePickerActiveRef.current) sendEvent("visibility_hidden", 0, { source: "pagehide", phase: "hidden" });
     };
     const onBlur = () => {
       if (!filePickerActiveRef.current) sendEvent("window_blur", 0, { source: "window.blur" });
@@ -188,6 +193,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     document.addEventListener("fullscreenchange", onFullscreenChange);
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
+    window.addEventListener("pagehide", onPageHide);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       document.removeEventListener("copy", onCopy);
@@ -196,6 +202,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       document.removeEventListener("fullscreenchange", onFullscreenChange);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pagehide", onPageHide);
     };
   }, [activeAttempt]);
 
@@ -266,7 +273,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       draftSaveInFlightRef.current = true;
       const revision = answerRevisionRef.current;
       setSaveStatus("saving");
-      const payload = buildAnswerPayload(attempt, questionsRef.current, answersRef.current, imageAnswersRef.current);
+      const payload = buildAnswerPayload(questionsRef.current, answersRef.current, imageAnswersRef.current);
       void saveStudentAnswers(attempt.id, payload)
         .then(() => setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty"))
         .catch(() => setSaveStatus("error"))
@@ -299,6 +306,23 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function savePersonalization() {
+    setBusy("personalization");
+    try {
+      const result = await updateAccountProfile({ preferences: { theme, density, font_scale: fontScale } });
+      setProfile((current) => ({ ...current, ...result.profile }));
+      document.documentElement.dataset.ehTheme = theme;
+      document.documentElement.style.fontSize = `${fontScale * 100}%`;
+      localStorage.setItem("eh-theme", theme);
+      localStorage.setItem("eh-density", density);
+      setMessage("个性化设置已保存");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(null);
     }
@@ -352,23 +376,15 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   }
 
   function buildAnswerPayload(
-    attempt: StudentAttemptRecord,
     sourceQuestions: StudentQuestionRecord[],
     sourceAnswers: Record<string, string>,
     sourceImageAnswers: Record<string, StudentAnswerImage[]>,
   ) {
-    const imageMode = isImageSubmission(attempt.submission_mode);
-    return sourceQuestions.map((question) =>
-      imageMode
-        ? {
-            question_id: question.question_id,
-            images: sourceImageAnswers[question.question_id] ?? [],
-          }
-        : {
-            question_id: question.question_id,
-            answer: sourceAnswers[question.question_id] ?? "",
-          },
-    );
+    return sourceQuestions.map((question) => ({
+      question_id: question.question_id,
+      answer: sourceAnswers[question.question_id] ?? "",
+      images: sourceImageAnswers[question.question_id] ?? [],
+    }));
   }
 
   function elapsedSeconds(): number | null {
@@ -385,7 +401,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     };
-    const payload = buildAnswerPayload(attempt, questionsRef.current, answersRef.current, imageAnswersRef.current);
+    const payload = buildAnswerPayload(questionsRef.current, answersRef.current, imageAnswersRef.current);
     void fetch(answersUrl, {
       method: "POST",
       headers,
@@ -400,7 +416,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     const revision = answerRevisionRef.current;
     setSaveStatus("saving");
     try {
-      await saveStudentAnswers(activeAttempt.id, buildAnswerPayload(activeAttempt, questions, answers, imageAnswers));
+      await saveStudentAnswers(activeAttempt.id, buildAnswerPayload(questions, answers, imageAnswers));
       setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty");
     } catch (e) {
       setSaveStatus("error");
@@ -419,7 +435,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     setBusy("submit");
     setMessage(null);
     try {
-      const payload = buildAnswerPayload(activeAttempt, questions, answers, imageAnswers);
+      const payload = buildAnswerPayload(questions, answers, imageAnswers);
       await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsedSeconds(), answers: payload });
       setActiveAttempt(null);
       setQuestions([]);
@@ -486,9 +502,8 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                 key={question.question_id}
                 href={`#student-question-${index + 1}`}
                 className={`inline-flex h-8 min-w-8 items-center justify-center rounded-md border px-2 text-xs font-semibold ${
-                  (isImageSubmission(activeAttempt.submission_mode)
-                    ? (imageAnswers[question.question_id]?.length ?? 0) > 0
-                    : Boolean((answers[question.question_id] ?? "").trim()))
+                  (Boolean((answers[question.question_id] ?? "").trim()) ||
+                    (imageAnswers[question.question_id]?.length ?? 0) > 0)
                     ? "border-emerald-600 bg-emerald-50 text-emerald-800"
                     : "border-slate-300 bg-white text-slate-600"
                 }`}
@@ -705,7 +720,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                         <p className="mt-1 text-xs text-slate-500">{result.subject || "未分科"}</p>
                       </div>
                       <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-800">
-                        {result.score_percent ?? "-"}%
+                        {result.show_results ? `${result.score_percent ?? "-"}%` : "待教师批改"}
                       </span>
                     </div>
                     <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
@@ -722,7 +737,14 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                         <p className="mt-1 font-semibold text-slate-950">{result.analysis?.wrong_count ?? "-"}</p>
                       </div>
                     </div>
-                    <StudentAnalysisVisual result={result} />
+                    {result.show_results ? (
+                      <>
+                        <StudentAnalysisVisual result={result} />
+                        <StudentResultDetails result={result} />
+                      </>
+                    ) : (
+                      <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">老师完成整份批改并发布后，这里会显示分数、错题、逐题反馈和模块数据。</p>
+                    )}
                   </article>
                 ))}
                 {!loading && results.length === 0 ? <p className="text-sm text-slate-500">暂无历史成绩</p> : null}
@@ -810,6 +832,17 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                 {accountMode === "password" ? "保存密码" : "保存用户名"}
               </button>
             </form>
+            {!mustChangePassword ? (
+              <div className="mt-6 border-t border-slate-200 pt-5">
+                <h3 className="text-sm font-semibold text-slate-900">界面个性化</h3>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="text-sm text-slate-700">皮肤<select value={theme} onChange={(event) => setTheme(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"><option value="classic">经典明亮</option><option value="ocean">海洋蓝</option><option value="forest">森林绿</option><option value="warm">暖阳橙</option><option value="night">深色夜间</option></select></label>
+                  <label className="text-sm text-slate-700">界面密度<select value={density} onChange={(event) => setDensity(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"><option value="comfortable">舒适</option><option value="compact">紧凑</option></select></label>
+                  <label className="text-sm text-slate-700 sm:col-span-2">字号比例<input type="range" min="0.85" max="1.2" step="0.05" value={fontScale} onChange={(event) => setFontScale(Number(event.target.value))} className="mt-2 w-full" /></label>
+                </div>
+                <button type="button" disabled={busy === "personalization"} onClick={() => void savePersonalization()} className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold">保存个性化设置</button>
+              </div>
+            ) : null}
           </section>
         ) : null}
       </div>
@@ -877,6 +910,47 @@ function StudentAnalysisVisual({ result }: { result: StudentResultRecord }) {
   );
 }
 
+function StudentResultDetails({ result }: { result: StudentResultRecord }) {
+  const wrongAnswers = result.answers.filter((answer) => answer.is_correct === false);
+  const sections = new Map<string, { score: number; max: number; count: number }>();
+  result.answers.forEach((answer) => {
+    const section = answer.section_id || "其他";
+    const item = sections.get(section) ?? { score: 0, max: 0, count: 0 };
+    item.score += Number(answer.score || 0);
+    item.max += Number(answer.score_per_item || 0);
+    item.count += 1;
+    sections.set(section, item);
+  });
+  return (
+    <div className="mt-3 space-y-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        {Array.from(sections.entries()).map(([section, item]) => (
+          <div key={section} className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <p className="font-semibold text-slate-800">{section}</p>
+            <p className="mt-1">{item.count} 题 · {item.max > 0 ? `${Math.round((item.score / item.max) * 100)}%` : "暂无得分率"}</p>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-slate-500">平均每题用时：{result.analysis?.average_time_per_question_seconds ?? 0} 秒</p>
+      <div className="rounded-md border border-rose-100 bg-rose-50/50 p-3">
+        <p className="text-sm font-semibold text-rose-900">错题与教师反馈</p>
+        <div className="mt-2 space-y-2">
+          {wrongAnswers.map((answer) => (
+            <div key={answer.question_id} className="rounded bg-white p-3 text-sm">
+              <p className="font-medium text-slate-900">{answer.header || answer.question_id}</p>
+              {answer.content ? <KatexText text={answer.content} className="mt-1 text-slate-700" /> : null}
+              <p className="mt-2 text-xs text-slate-600">你的答案：{String(answer.answer || "未作答")}</p>
+              <p className="mt-1 text-xs text-slate-600">得分：{answer.score ?? 0}/{answer.score_per_item ?? "-"}</p>
+              {answer.feedback ? <p className="mt-1 text-xs text-blue-700">教师反馈：{answer.feedback}</p> : null}
+            </div>
+          ))}
+          {wrongAnswers.length === 0 ? <p className="text-xs text-slate-500">本次没有已确认错题。</p> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function QuestionAnswer({
   question,
   anchorId,
@@ -906,7 +980,7 @@ function QuestionAnswer({
         <span>{question.section_id}</span>
         <span>{question.score_per_item} 分</span>
       </div>
-      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-950">{question.content}</p>
+      <KatexText text={question.content} className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-950" />
       {imageMode ? (
         <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-3">
           <input
@@ -939,6 +1013,7 @@ function QuestionAnswer({
                 type={question.type === "multiple_choice" ? "checkbox" : "radio"}
                 name={`question-${question.question_id}`}
                 value={key}
+                aria-label={`${key}. ${text}`}
                 checked={question.type === "multiple_choice" ? value.includes(key) : value === key}
                 onChange={() => {
                   if (question.type !== "multiple_choice") {
@@ -952,19 +1027,43 @@ function QuestionAnswer({
                   onChange(optionKeys.filter((optionKey) => selected.has(optionKey)).join(""));
                 }}
               />
-              <span>
-                {key}. {text}
+              <span className="flex min-w-0 items-baseline gap-1">
+                <span>{key}.</span>
+                <KatexText text={text} className="min-w-0" />
               </span>
             </label>
           ))}
         </div>
       ) : (
-        <textarea
-          data-testid={`student-answer-${question.question_id}`}
-          className="mt-3 min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
+        <div className="mt-3 space-y-3">
+          <textarea
+            data-testid={`student-answer-${question.question_id}`}
+            className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder="可输入文字、公式说明，也可以在下方上传手写过程图片"
+          />
+          <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-3">
+            <p className="mb-2 text-xs font-medium text-slate-600">上传答题图片（可多张）</p>
+            <input
+              data-testid={`student-image-${question.question_id}`}
+              type="file"
+              accept="image/*"
+              multiple
+              onClick={() => onFileDialogOpen?.()}
+              onChange={(event) => {
+                onImagesChange?.(event.target.files);
+                onFileDialogClose?.();
+              }}
+              className="block w-full text-sm text-slate-700"
+            />
+            {images && images.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                {images.map((image) => <span key={image.name} className="rounded bg-white px-2 py-1">{image.name}</span>)}
+              </div>
+            ) : null}
+          </div>
+        </div>
       )}
     </article>
   );

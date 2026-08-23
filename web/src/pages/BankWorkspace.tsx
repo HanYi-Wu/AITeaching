@@ -9,7 +9,6 @@ import {
   apiPost,
   apiPostFormData,
   apiPut,
-  downloadBankExportBundle,
 } from "../api/client";
 import {
   BankQuestionEditorPanel,
@@ -35,7 +34,7 @@ import { localeCompareStrings } from "../lib/locale";
 import { SOLAIRE_SAVE_EVENT } from "../lib/saveEvents";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../lib/ime";
 import { cn } from "../lib/utils";
-import { collapseGroupRowsForList } from "../lib/groupQuestions";
+import { downloadPlatformBlob } from "../platform/auth";
 import { QUESTION_TYPE_OPTIONS, isChoiceQuestionType } from "../lib/questionTypes";
 import {
   buildMetadataFilterDefinitions,
@@ -111,6 +110,7 @@ export function BankWorkspace({
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
   /** 已打开的题目标签（多窗口编辑） */
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   /** 中间工作区：字段编辑 / 浏览 / 源文件 */
@@ -119,7 +119,7 @@ export function BankWorkspace({
   const [busy, setBusy] = useState(false);
   const [importYaml, setImportYaml] = useState("");
   const [importSubject, setImportSubject] = useState(() => i18n.t("bank:defaultSubject"));
-  const [importTarget, setImportTarget] = useState("imported");
+  const [importTarget] = useState("默认");
   const importFileRef = useRef<HTMLInputElement>(null);
   const openModalAfterCreateRef = useRef(false);
   const [editorModalOpen, setEditorModalOpen] = useState(false);
@@ -134,7 +134,7 @@ export function BankWorkspace({
   const [manageDraftSubject, setManageDraftSubject] = useState("");
   const [manageDraftCollection, setManageDraftCollection] = useState("");
   const [newSubject, setNewSubject] = useState(() => i18n.t("bank:defaultSubject"));
-  const [newCollection, setNewCollection] = useState("");
+  const [newCollection] = useState("默认");
   const [newId, setNewId] = useState("new_question_001");
   const [newType, setNewType] = useState("single_choice");
   /** 新建题组：混编或同型 */
@@ -431,7 +431,8 @@ export function BankWorkspace({
     });
   }, [collections, filterSubject]);
 
-  const collapsedBankItems = useMemo(() => collapseGroupRowsForList(items), [items]);
+  // Legacy grouped files are exposed as ordinary questions in the unified bank.
+  const collapsedBankItems = items;
 
   const metadataScopeItems = useMemo(() => {
     return collapsedBankItems.filter((it) => {
@@ -914,15 +915,25 @@ export function BankWorkspace({
     }
   }
 
-  async function doExportBundle() {
-    if (filterCollection === "__all__") {
-      onError(t("errors.selectCollectionFirst"));
+  async function doExportSelection() {
+    if (selectedExportIds.length === 0) {
+      onError("请在左侧勾选需要导出的题目");
       return;
     }
     setBusy(true);
     onError(null);
     try {
-      await downloadBankExportBundle(filterCollection);
+      const result = await apiPost<{ download_url: string; filename: string; question_count: number }>("/api/bank/export-selection", {
+        qualified_ids: selectedExportIds,
+        title: "我的题目导出",
+      });
+      const blob = await downloadPlatformBlob(result.download_url);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = result.filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1175,21 +1186,6 @@ export function BankWorkspace({
                   </select>
                 </label>
                 <label className="block text-[11px] font-medium text-slate-600">
-                  {t("collection")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm"
-                    value={filterCollection}
-                    onChange={(e) => setFilterCollection(e.target.value)}
-                  >
-                    <option value="__all__">{t("filterAllLabel")}</option>
-                    {collectionOptions.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
                   {t("questionType")}
                   <select
                     className="mt-0.5 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
@@ -1197,7 +1193,6 @@ export function BankWorkspace({
                     onChange={(e) => setFilterType(e.target.value)}
                   >
                     <option value="__all__">{t("filterAllLabel")}</option>
-                    <option value="group">{t("typeGroup")}</option>
                     {QUESTION_TYPE_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
                         {t(`lib:questionTypes.${o.value}`)}
@@ -1288,31 +1283,6 @@ export function BankWorkspace({
                   </div>
                 </label>
                 <label className="block text-[11px] font-medium text-slate-600">
-                  {t("newCollection")}
-                  <div className="mt-0.5 space-y-1">
-                    <select
-                      className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                      value={newCollectionSelectValue}
-                      onChange={(e) => setNewCollection(e.target.value === "__custom__" ? "" : e.target.value)}
-                    >
-                      {newCollectionList.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                      <option value="__custom__">{t("otherCollection")}</option>
-                    </select>
-                    {newCollectionSelectValue === "__custom__" && (
-                      <input
-                        className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
-                        value={newCollection}
-                        onChange={(e) => setNewCollection(e.target.value)}
-                        placeholder={t("targetCollectionPh")}
-                      />
-                    )}
-                  </div>
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
                   {t("newId")}
                   <input
                     className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 font-mono text-sm"
@@ -1327,7 +1297,6 @@ export function BankWorkspace({
                     value={newType}
                     onChange={(e) => setNewType(e.target.value)}
                   >
-                    <option value="group">{t("typeGroup")}</option>
                     {QUESTION_TYPE_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
                         {t(`lib:questionTypes.${o.value}`)}
@@ -1452,15 +1421,6 @@ export function BankWorkspace({
                   />
                 )}
               </label>
-              <label className="mt-2 block text-[11px] font-medium text-slate-600">
-                {t("targetCollection")}
-                <input
-                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                  value={importTarget}
-                  onChange={(e) => setImportTarget(e.target.value)}
-                  placeholder={t("targetCollectionPh")}
-                />
-              </label>
               <input
                 ref={importFileRef}
                 type="file"
@@ -1502,24 +1462,11 @@ export function BankWorkspace({
         <button
           type="button"
           className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-          disabled={busy || filterCollection === "__all__"}
-          title={filterCollection === "__all__" ? t("exportNeedCollection") : undefined}
-          onClick={() => void doExportBundle()}
+          disabled={busy || selectedExportIds.length === 0}
+          title={selectedExportIds.length === 0 ? "先在左侧勾选题目" : undefined}
+          onClick={() => void doExportSelection()}
         >
-          {t("exportBundle")}
-        </button>
-        <button
-          type="button"
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-          disabled={busy}
-          onClick={() => {
-            setBankFilterMenuOpen(false);
-            setBankNewQuestionOpen(false);
-            setBankImportOpen(false);
-            setBankManageOpen(true);
-          }}
-        >
-          {t("title")}
+          导出已选 {selectedExportIds.length || ""} 题
         </button>
       </div>
     );
@@ -1720,7 +1667,6 @@ export function BankWorkspace({
             </li>
           ) : (
             filtered.map((it) => {
-              const isBundle = (it.group_member_qualified_ids?.length ?? 0) > 1;
               const graphNodes = graphLinkIndex[it.qualified_id] ?? [];
               return (
                 <li
@@ -1732,6 +1678,13 @@ export function BankWorkspace({
                       : "border-transparent bg-slate-50 hover:border-slate-200 hover:bg-white",
                   )}
                 >
+                  <input
+                    type="checkbox"
+                    aria-label={`选择导出 ${it.qualified_id}`}
+                    checked={selectedExportIds.includes(it.qualified_id)}
+                    onChange={() => setSelectedExportIds((current) => current.includes(it.qualified_id) ? current.filter((id) => id !== it.qualified_id) : [...current, it.qualified_id])}
+                    className="absolute right-7 top-2 h-4 w-4"
+                  />
                   <button
                     type="button"
                     className="w-full min-w-0 pr-5 text-left text-sm"
@@ -1741,13 +1694,8 @@ export function BankWorkspace({
                       <span className="shrink-0 rounded bg-slate-200 px-1 py-0.5 text-[10px] font-medium text-slate-700">
                         {t(`lib:questionTypes.${it.type}`, { defaultValue: it.type })}
                       </span>
-                      {isBundle ? (
-                        <span className="shrink-0 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-900">
-                          {t("groupNItems", { n: it.group_member_qualified_ids!.length })}
-                        </span>
-                      ) : null}
                       <span className="min-w-0 flex-1 break-all font-mono text-[11px] leading-snug text-slate-800">
-                        {isBundle && it.group_id ? `${it.collection} / ${it.group_id}` : it.qualified_id}
+                        {it.qualified_id}
                       </span>
                     </div>
                     <div className="mt-0.5 block w-full min-w-0">

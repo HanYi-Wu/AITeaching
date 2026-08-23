@@ -14,6 +14,9 @@ export type PlatformUser = {
   email?: string | null;
   status: string;
   must_change_password?: boolean;
+  avatar_data_url?: string | null;
+  preferences?: { theme?: string; density?: string; font_scale?: number };
+  subjects?: string[];
 };
 
 export type PlatformStatus = {
@@ -61,15 +64,17 @@ export type SchoolAiResponse = SchoolAiSettings & {
   error?: string;
 };
 
+export type SchoolImportKind = "teachers" | "classes" | "students" | "assignments" | "all";
+
 export type SchoolAiImportResponse = SchoolAiSettings & {
-  kind: "teachers" | "classes" | "students";
+  kind: SchoolImportKind;
   imported: number;
   review: string;
   result: unknown;
 };
 
 export type SchoolAiImportReviewResponse = SchoolAiSettings & {
-  kind: "teachers" | "classes" | "students";
+  kind: SchoolImportKind;
   class_id?: string | null;
   row_count: number;
   review: string;
@@ -168,6 +173,7 @@ export type PlatformPaperRecord = {
   total_student_count?: number;
   submitted_student_count?: number;
   in_progress_student_count?: number;
+  graded_student_count?: number;
   mtime?: string | null;
 };
 
@@ -207,6 +213,10 @@ export type PaperSubmissionAnswerRecord = {
   content?: string | null;
   type?: string | null;
   score_per_item?: number | null;
+  options?: Record<string, string> | null;
+  analysis?: string | null;
+  section_id?: string | null;
+  tags?: string[];
   answer?: unknown;
   images?: StudentAnswerImage[];
   score?: number | null;
@@ -234,11 +244,24 @@ export type PaperSubmissionRecord = {
   score?: number | null;
   max_score?: number | null;
   submitted_at?: string | null;
+  grading_completed_at?: string | null;
   screen_switch_count?: number;
   submission_mode?: PaperSubmissionMode;
   scan_images?: Array<{ page_index: number; name: string; mime_type: string; size: number }>;
   answers: PaperSubmissionAnswerRecord[];
 };
+
+export function getAccountProfile(): Promise<{ profile: PlatformUser }> {
+  return platformRequest("/api/auth/profile");
+}
+
+export function updateAccountProfile(payload: {
+  avatar_data_url?: string | null;
+  preferences: { theme: string; density: string; font_scale: number };
+  subjects?: string[] | null;
+}): Promise<{ profile: PlatformUser }> {
+  return platformRequest("/api/auth/profile", { method: "PATCH", body: JSON.stringify(payload) });
+}
 
 export type TeacherClassStudentRecord = {
   id: string;
@@ -258,8 +281,9 @@ export type TeacherStudentProfile = {
     graded_exam_count: number;
     completion_rate: number;
     average_score_percent?: number | null;
-    average_time_seconds?: number | null;
+    average_time_per_question_seconds?: number | null;
     integrity_event_count: number;
+    behavior_event_average_per_exam: number;
   };
   recent_exams: Array<{
     attempt_id: string;
@@ -282,7 +306,13 @@ export type TeacherStudentProfile = {
     attempt_count: number;
     wrong_count: number;
     average_score_percent?: number | null;
+    header?: string | null;
+    content?: string | null;
+    section_id?: string | null;
+    tags?: string[];
   }>;
+  radar?: Array<{ id: string; label: string; value: number }>;
+  date_range?: { from?: string | null; to?: string | null };
 };
 
 export type TeacherClassAssignmentRecord = {
@@ -447,12 +477,21 @@ export type StudentResultRecord = StudentAttemptRecord & {
     images?: StudentAnswerImage[];
     score?: number | null;
     is_correct?: boolean | null;
+    feedback?: string | null;
+    header?: string | null;
+    content?: string | null;
+    type?: string | null;
+    options?: Record<string, string> | null;
+    section_id?: string | null;
+    score_per_item?: number | null;
+    tags?: string[];
     responded_at?: string | null;
   }>;
   analysis?: {
     correct_count?: number | null;
     wrong_count?: number | null;
     answered_count?: number;
+    average_time_per_question_seconds?: number | null;
   };
 };
 
@@ -644,7 +683,7 @@ export function askSchoolAi(message: string): Promise<SchoolAiResponse> {
 }
 
 export function importSchoolAiFile(
-  kind: "teachers" | "classes" | "students",
+  kind: SchoolImportKind,
   file: File,
   classId?: string | null,
 ): Promise<SchoolAiImportResponse> {
@@ -656,7 +695,7 @@ export function importSchoolAiFile(
 }
 
 export function reviewSchoolAiImportFile(
-  kind: "teachers" | "classes" | "students",
+  kind: SchoolImportKind,
   file: File,
   classId?: string | null,
 ): Promise<SchoolAiImportReviewResponse> {
@@ -806,6 +845,14 @@ export function importStudentsFile(
   return platformRequest("/api/school/students/import-file", { method: "POST", body: fd });
 }
 
+export function importTeacherClassAssignmentsFile(
+  file: File,
+): Promise<{ imported: number; assignments: TeacherClassAssignmentRecord[] }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return platformRequest("/api/school/teacher-class-assignments/import-file", { method: "POST", body: fd });
+}
+
 export function updateStudent(
   studentId: string,
   payload: { student_no?: string | null; display_name?: string | null; email?: string | null; status?: string | null },
@@ -852,7 +899,7 @@ export function exportStudentAccounts(): Promise<Blob> {
   return downloadAuthorizedBlob("/api/school/students/export.xlsx");
 }
 
-export function downloadSchoolImportTemplate(kind: "teachers" | "classes" | "students"): Promise<Blob> {
+export function downloadSchoolImportTemplate(kind: SchoolImportKind): Promise<Blob> {
   return downloadAuthorizedBlob(`/api/school/${kind}/template.xlsx`);
 }
 
@@ -970,6 +1017,10 @@ export function listTeacherAssignedClasses(): Promise<{ classes: TeacherClassRec
   return platformRequest("/api/teacher/classes");
 }
 
+export function downloadPlatformBlob(path: string): Promise<Blob> {
+  return downloadAuthorizedBlob(path);
+}
+
 export function listTeacherClassStudents(classId: string): Promise<{ students: TeacherClassStudentRecord[] }> {
   return platformRequest(`/api/teacher/classes/${encodeURIComponent(classId)}/students`);
 }
@@ -977,9 +1028,15 @@ export function listTeacherClassStudents(classId: string): Promise<{ students: T
 export function getTeacherStudentProfile(
   classId: string,
   studentId: string,
+  dateFrom?: string,
+  dateTo?: string,
 ): Promise<{ profile: TeacherStudentProfile }> {
+  const params = new URLSearchParams();
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+  const suffix = params.toString() ? `?${params}` : "";
   return platformRequest(
-    `/api/teacher/classes/${encodeURIComponent(classId)}/students/${encodeURIComponent(studentId)}/profile`,
+    `/api/teacher/classes/${encodeURIComponent(classId)}/students/${encodeURIComponent(studentId)}/profile${suffix}`,
   );
 }
 
@@ -1001,6 +1058,7 @@ export function publishPlatformPaper(
     submission_mode?: PaperSubmissionMode;
     max_screen_switches?: number;
     time_limit_minutes?: number | null;
+    subject?: string | null;
   },
 ): Promise<{ publication: PaperPublicationRecord }> {
   return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/publish`, {
@@ -1128,6 +1186,16 @@ export function gradePaperAnswer(
   return platformRequest(
     `/api/papers/${encodeURIComponent(paperId)}/attempts/${encodeURIComponent(attemptId)}/answers/${encodeURIComponent(questionId)}/grade`,
     { method: "PATCH", body: JSON.stringify(payload) },
+  );
+}
+
+export function completePaperAttemptGrading(
+  paperId: string,
+  attemptId: string,
+): Promise<{ attempt: PaperSubmissionRecord }> {
+  return platformRequest(
+    `/api/papers/${encodeURIComponent(paperId)}/attempts/${encodeURIComponent(attemptId)}/complete-grading`,
+    { method: "POST" },
   );
 }
 

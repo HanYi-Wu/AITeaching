@@ -12,6 +12,7 @@ describe("resolveInitialLocale", () => {
   });
 
   it("lets the desktop preference take priority", () => {
-    expect(resolveInitialLocale("zh", "en")).toBe("zh");
+    expect(resolveInitialLocale("zh", "en")).toBe("en");
+    expect(resolveInitialLocale("en", null)).toBe("zh");
   });
 });

@@ -32,6 +32,7 @@ import {
   importSchoolAiFile,
   importStudents,
   importStudentsFile,
+  importTeacherClassAssignmentsFile,
   importTeachersFile,
   listClasses,
   listStudents,
@@ -49,6 +50,7 @@ import {
   type PlatformUser,
   type SchoolAiImportReviewResponse,
   type SchoolAiSettings,
+  type SchoolImportKind,
   type StudentRecord,
   type TeacherClassAssignmentRecord,
   type TeacherRecord,
@@ -69,7 +71,7 @@ type PageMeta = { total: number; page: number; pageSize: number; totalPages: num
 type SchoolPage = "overview" | "teachers" | "classes" | "students" | "assignments" | "ai";
 type SchoolAiMessage = { role: "user" | "assistant" | "system"; content: string; source?: string };
 type PendingSchoolAiImport = {
-  kind: "teachers" | "classes" | "students";
+  kind: SchoolImportKind;
   file: File;
   classId: string | null;
   review: SchoolAiImportReviewResponse;
@@ -156,7 +158,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
   const [schoolAiInput, setSchoolAiInput] = useState("");
   const [schoolAiMessages, setSchoolAiMessages] = useState<SchoolAiMessage[]>([]);
   const [schoolAiBusy, setSchoolAiBusy] = useState(false);
-  const [schoolAiImportKind, setSchoolAiImportKind] = useState<"teachers" | "classes" | "students">("students");
+  const [schoolAiImportKind, setSchoolAiImportKind] = useState<SchoolImportKind>("all");
   const [schoolAiImportFile, setSchoolAiImportFile] = useState<File | null>(null);
   const [pendingSchoolAiImport, setPendingSchoolAiImport] = useState<PendingSchoolAiImport | null>(null);
 
@@ -308,7 +310,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     });
   }
 
-  async function handleFile(event: ChangeEvent<HTMLInputElement>, kind: "teachers" | "classes" | "students") {
+  async function handleFile(event: ChangeEvent<HTMLInputElement>, kind: Exclude<SchoolImportKind, "all">) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
@@ -316,10 +318,11 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
       if (kind === "teachers") await importTeachersFile(file);
       if (kind === "classes") await importClassesFile(file);
       if (kind === "students") await importStudentsFile(file, studentClassId || null);
+      if (kind === "assignments") await importTeacherClassAssignmentsFile(file);
     });
   }
 
-  async function downloadTemplate(kind: "teachers" | "classes" | "students") {
+  async function downloadTemplate(kind: SchoolImportKind) {
     await run(async () => {
       const blob = await downloadSchoolImportTemplate(kind);
       downloadBlob(blob, `${kind}_template.xlsx`);
@@ -370,7 +373,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
         ...current,
         {
           role: "assistant",
-          content: `${result.review}\n\n${file.name} has been reviewed by AI. Confirm before writing ${result.imported} rows.`,
+          content: `${result.review}\n\n已审核 ${file.name}，确认后将写入 ${result.imported} 行数据。`,
           source: "review",
         },
       ]);
@@ -388,7 +391,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     if (!pending) return;
     if (!accepted) {
       setPendingSchoolAiImport(null);
-      setSchoolAiMessages((current) => [...current, { role: "system", content: "AI import review cancelled." }]);
+      setSchoolAiMessages((current) => [...current, { role: "system", content: "已取消本次 AI 导入。" }]);
       return;
     }
     setSchoolAiBusy(true);
@@ -400,9 +403,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
         ...current,
         {
           role: "assistant",
-          content: `${result.review}\n\nConfirmed and wrote ${result.imported} ${
-            pending.kind === "teachers" ? "teacher" : pending.kind === "classes" ? "class" : "student"
-          } rows.`,
+          content: `${result.review}\n\n已确认并写入 ${result.imported} 行数据。`,
           source: "import",
         },
       ]);
@@ -412,7 +413,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
       onError(text);
-      setSchoolAiMessages((current) => [...current, { role: "system", content: `Import failed: ${text}` }]);
+      setSchoolAiMessages((current) => [...current, { role: "system", content: `导入失败：${text}` }]);
     } finally {
       setSchoolAiBusy(false);
     }
@@ -962,7 +963,10 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
           ) : null}
 
           {activePage === "ai" ? (
-            <section className="grid min-h-[34rem] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm xl:grid-cols-[minmax(0,1fr)_340px]">
+            <section
+              data-testid="school-ai-panel"
+              className="grid h-[calc(100vh-9rem)] min-h-[34rem] max-h-[52rem] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm xl:grid-cols-[minmax(0,1fr)_340px]"
+            >
               <div className="flex min-h-0 flex-col">
                 <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
@@ -975,7 +979,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                     </p>
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 space-y-3 overflow-auto bg-slate-50 p-4">
+                <div data-testid="school-ai-messages" className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
                   {schoolAiMessages.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-sm leading-6 text-slate-500">
                       可以直接问“有哪些教师名字”“哪些班级没有老师”“导入学生模板字段是什么”。AI 会基于当前学校数据回答。
@@ -1060,16 +1064,19 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                   </div>
                   <div className="space-y-3">
                     <select
+                      data-testid="school-ai-import-kind"
                       className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                       value={schoolAiImportKind}
                       onChange={(event) => {
-                        setSchoolAiImportKind(event.target.value as "teachers" | "classes" | "students");
+                        setSchoolAiImportKind(event.target.value as SchoolImportKind);
                         setPendingSchoolAiImport(null);
                       }}
                     >
+                      <option value="all">一次导入全部学校数据</option>
                       <option value="students">导入学生</option>
                       <option value="teachers">导入教师</option>
                       <option value="classes">导入班级</option>
+                      <option value="assignments">导入教师班级分配</option>
                     </select>
                     {schoolAiImportKind === "students" ? (
                       <select
@@ -1100,8 +1107,19 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                       />
                     </label>
                     <div className="rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-500">
-                      上传后会按学校端模板字段检查并写入当前学校数据；导入结果会作为 AI 审核消息保留在对话流。
+                      {schoolAiImportKind === "all"
+                        ? "完整模板包含 classes、teachers、students、assignments 四个工作表；AI 审核后一次确认即可全部导入。"
+                        : "上传后会按对应模板字段审核，确认后写入当前学校数据。"}
                     </div>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void downloadTemplate(schoolAiImportKind)}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      <Download className="h-4 w-4" />
+                      下载当前导入模板
+                    </button>
                     {pendingSchoolAiImport ? (
                       <div
                         data-testid="school-ai-import-confirm-card"
@@ -1125,7 +1143,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                             onClick={() => void confirmSchoolAiImport(false)}
                             className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
                           >
-                            Cancel
+                            取消
                           </button>
                           <button
                             type="button"
@@ -1134,7 +1152,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
                             onClick={() => void confirmSchoolAiImport(true)}
                             className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
                           >
-                            Confirm import
+                            确认导入
                           </button>
                         </div>
                       </div>
@@ -1252,6 +1270,13 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               <Link2 className="h-4 w-4" />
               分配
             </button>
+            <ImportActions
+              kind="assignments"
+              label="导入教师班级分配 JSON / Excel"
+              testId="assignments-import-file"
+              onTemplate={() => void downloadTemplate("assignments")}
+              onChange={(event) => void handleFile(event, "assignments")}
+            />
           </form>
           ) : null}
         </aside>
@@ -1443,7 +1468,7 @@ function ImportActions({
   onTemplate,
   onChange,
 }: {
-  kind: "teachers" | "classes" | "students";
+  kind: Exclude<SchoolImportKind, "all">;
   label: string;
   testId: string;
   onTemplate: () => void;

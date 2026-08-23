@@ -476,6 +476,7 @@ def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> T
             max_screen_switches=int(args.get("max_screen_switches") or 0),
             time_limit_minutes=int(args.get("time_limit_minutes") or 0) or None,
             show_results_immediately=bool(args.get("show_results_immediately")),
+            subject=str(args.get("subject") or "").strip() or None,
         )
     except (ValueError, PermissionError, FileNotFoundError) as e:
         return ToolResult(status="failed", error_code="publish_failed", error_message=str(e))
@@ -518,6 +519,7 @@ def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> T
             max_screen_switches=int(args.get("max_screen_switches") or 0),
             time_limit_minutes=int(args.get("time_limit_minutes") or 0) or None,
             show_results_immediately=bool(args.get("show_results_immediately")),
+            subject=str(args.get("subject") or "").strip() or None,
         )
     except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         return ToolResult(status="failed", error_code="publish_failed", error_message=str(e))

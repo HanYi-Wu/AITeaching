@@ -76,6 +76,7 @@ from solaire.edu_analysis.diagnosis import (
 )
 from solaire.web.bank_service import (
     collections_list,
+    create_question_selection_export,
     delete_question,
     delete_question_collection,
     expand_question_for_web,
@@ -84,6 +85,7 @@ from solaire.web.bank_service import (
     list_bank_entries,
     list_subjects,
     question_exists,
+    question_selection_export_path,
     rename_question_collection,
     save_bank_record,
     save_question,
@@ -204,7 +206,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Solaire Web", version="1.4.5", lifespan=_lifespan)
+app = FastAPI(title="EducationHelper API", version="1.4.8", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
@@ -323,6 +325,11 @@ class BankExportBundleBody(BaseModel):
     """题集 namespace（科目/题集）；用 POST 传递，避免 GET 查询串中 / 的编码问题。"""
 
     namespace: str = Field(..., min_length=1)
+
+
+class BankSelectionExportBody(BaseModel):
+    qualified_ids: list[str] = Field(..., min_length=1, max_length=300)
+    title: str | None = Field(default=None, max_length=200)
 
 
 BankRecordBody = Annotated[Union[QuestionItem, QuestionGroupRecord], Field(discriminator="type")]
@@ -477,7 +484,7 @@ def health() -> dict[str, str]:
     """
     return {
         "status": "ok",
-        "product": "sol_edu",
+        "product": "education_helper",
         "exam_workspace_layout": "two_level",
     }
 
@@ -1367,6 +1374,25 @@ def bank_export_bundle_get(
 def bank_export_bundle_post(body: BankExportBundleBody) -> Response:
     """推荐：JSON body 传递 namespace，避免查询串编码问题。"""
     return _bank_export_bundle_response(body.namespace)
+
+
+@app.post("/api/bank/export-selection")
+def bank_export_selection(body: BankSelectionExportBody) -> dict[str, Any]:
+    try:
+        return create_question_selection_export(_require_root(), body.qualified_ids, title=body.title)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/bank/exports/{filename}")
+def bank_export_selection_download(filename: str) -> FileResponse:
+    try:
+        target = question_selection_export_path(_require_root(), filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(target, media_type="application/x-yaml", filename=filename)
 
 
 def _draft_to_sections(body: ExamDraftBody) -> list[SelectedSection]:

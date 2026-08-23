@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +98,55 @@ def list_bank_entries(project_root: Path) -> list[dict[str, Any]]:
                 )
     out.sort(key=lambda x: x["qualified_id"])
     return out
+
+
+def create_question_selection_export(
+    project_root: Path,
+    qualified_ids: list[str],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    """Create an organized, partial YAML export and return a guarded artifact."""
+    clean_ids = list(dict.fromkeys(str(item).strip() for item in qualified_ids if str(item).strip()))
+    if not clean_ids:
+        raise ValueError("请至少选择一道题目")
+    if len(clean_ids) > 300:
+        raise ValueError("单次最多导出 300 道题目")
+    questions: list[dict[str, Any]] = []
+    for qualified_id in clean_ids:
+        detail = get_question_detail(project_root, qualified_id)
+        record = detail.get("question") or detail.get("question_group")
+        if not isinstance(record, dict):
+            continue
+        questions.append({"qualified_id": qualified_id, **record})
+    if not questions:
+        raise ValueError("所选题目无法导出")
+    questions.sort(key=lambda item: (str(item.get("type") or ""), str(item.get("qualified_id") or "")))
+    payload = {
+        "format": "EducationHelper-question-selection-v1",
+        "title": str(title or "我的题目导出").strip() or "我的题目导出",
+        "question_count": len(questions),
+        "questions": questions,
+    }
+    export_dir = (project_root / ".solaire" / "exports").resolve()
+    export_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"EH-questions-{uuid.uuid4().hex[:12]}.yaml"
+    target = export_dir / filename
+    target.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    manifest = export_dir / f"{filename}.json"
+    manifest.write_text(json.dumps({"filename": filename, "question_count": len(questions)}, ensure_ascii=False), encoding="utf-8")
+    return {"filename": filename, "question_count": len(questions), "download_url": f"/api/bank/exports/{filename}"}
+
+
+def question_selection_export_path(project_root: Path, filename: str) -> Path:
+    safe = safe_filename_component(str(filename or ""))
+    if safe != filename or not safe.endswith(".yaml"):
+        raise FileNotFoundError("导出文件不存在")
+    target = (project_root / ".solaire" / "exports" / safe).resolve()
+    assert_within_project(project_root, target)
+    if not target.is_file():
+        raise FileNotFoundError("导出文件不存在或已清理")
+    return target
 
 
 def _expand_group_record_for_web(project_root: Path, namespace: str, group: QuestionGroupRecord) -> dict[str, Any]:
@@ -404,7 +455,9 @@ def import_merged_yaml(
     target.mkdir(parents=True, exist_ok=True)
     written = 0
     for q in raw.get("questions") or []:
-        qi = QuestionItem.model_validate(q)
+        source_meta = dict(q.get("metadata") or {}) if isinstance(q, dict) else {}
+        source_meta.setdefault("source", "人工导入")
+        qi = QuestionItem.model_validate({**q, "metadata": source_meta})
         path = target / f"{_safe_filename_id(qi.id)}.yaml"
         with path.open("w", encoding="utf-8") as f:
             yaml.safe_dump(question_item_to_author_dict(qi), f, allow_unicode=True, sort_keys=False)

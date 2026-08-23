@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from solaire.agent_layer.models import InvocationContext, SessionState
 from solaire.agent_layer.registry import get_registered_tool, invoke_registered_tool, select_tools_for_turn
-from solaire.exam_compiler.models import ExamConfig, SelectedSection
+from solaire.exam_compiler.models import ExamConfig, QuestionLibraryRef, SelectedSection
 from solaire.web.app import ensure_project_layout
 
 
@@ -17,6 +17,23 @@ def _headers(token: str) -> dict[str, str]:
 
 def _write_ai_tool_exam(root: Path) -> str:
     ensure_project_layout(root)
+    library = root / "resource" / "math"
+    library.mkdir(parents=True, exist_ok=True)
+    (library / "q1.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "q1",
+                "type": "single_choice",
+                "content": "1+1=?",
+                "options": {"A": "2", "B": "3"},
+                "answer": "A",
+                "analysis": "1+1=2",
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
     exam_id = "midterm/Math"
     exam_dir = root / "exams" / "midterm" / "Math"
     exam_dir.mkdir(parents=True, exist_ok=True)
@@ -24,7 +41,7 @@ def _write_ai_tool_exam(root: Path) -> str:
         exam_id=exam_id,
         template_ref="default",
         metadata={"title": "Midterm", "subject": "Math", "export_label": "midterm"},
-        question_libraries=[],
+        question_libraries=[QuestionLibraryRef(namespace="math", path="../../../resource/math")],
         template_path="templates/test.yaml",
         selected_items=[SelectedSection(section_id="Choice", question_ids=["math/q1"], score_per_item=5.0)],
     )
@@ -143,7 +160,7 @@ def test_teacher_ai_publish_tool_resolves_paper_title_and_class_name(web_client:
         ctx,
     )
 
-    assert result.status == "succeeded"
+    assert result.status == "succeeded", result.error_message
     assert result.data["publication"]["paper_id"] == paper_id
     assert len(result.data["publication"]["class_ids"]) == 1
     assert result.data["publication"]["title"] == "Midterm Online"

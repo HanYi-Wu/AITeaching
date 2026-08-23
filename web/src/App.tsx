@@ -202,6 +202,7 @@ function AppShell() {
 
   const platformRoute = resolvePlatformRoute({
     loading: platformLoading,
+    statusAvailable: platformStatus !== null,
     adminExists: Boolean(platformStatus?.admin_exists),
     userRole: currentUser?.role ?? null,
     adminProjectMode,
@@ -221,6 +222,21 @@ function AppShell() {
         {platformRoute === "loading" ? (
           <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-sm text-slate-500">
             {t("app:loading.permissions")}
+          </div>
+        ) : platformRoute === "unavailable" ? (
+          <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-slate-50 p-6">
+            <div className="w-full max-w-md rounded-xl border border-amber-200 bg-white p-6 text-center shadow-sm">
+              <h1 className="text-lg font-semibold text-slate-950">平台服务暂时不可用</h1>
+              <p className="mt-2 text-sm text-slate-600">后端服务尚未启动或正在重启，请稍后重试。</p>
+              {err ? <p className="mt-2 break-words text-xs text-amber-700">{err}</p> : null}
+              <button
+                type="button"
+                onClick={() => void refreshPlatform()}
+                className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                重新连接
+              </button>
+            </div>
           </div>
         ) : platformRoute === "bootstrap" ? (
           <PlatformLogin mode="bootstrap" onAuthenticated={onAuthenticated} onError={setErr} />
@@ -392,7 +408,7 @@ function AppShell() {
                   )}
                   {page === "students" && <TeacherStudentInsightsWorkspace onError={setErr} />}
                   {page === "settings" && (
-                    <SettingsWorkspace onError={setErr} userRole={currentUser?.role} />
+                    <SettingsWorkspace onError={setErr} userRole={currentUser?.role} onProfileUpdated={setCurrentUser} />
                   )}
                   {page === "help" && <HelpWorkspace onError={setErr} />}
                   {page === "analysis" && (
@@ -433,9 +449,11 @@ function TeacherUserBadge({ user }: { user: PlatformUser }) {
         className="flex min-w-0 flex-col items-center gap-1 rounded-lg px-1 py-2 text-center"
         title={`${displayName} / ${user.username}`}
       >
-        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-900">
-          {initial}
-        </span>
+        {user.avatar_data_url ? (
+          <img src={user.avatar_data_url} alt="教师头像" className="h-9 w-9 rounded-full border border-slate-600 object-cover" />
+        ) : (
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-900">{initial}</span>
+        )}
         <span className="block max-w-12 truncate text-[10px] font-medium leading-tight text-slate-200">
           {displayName}
         </span>

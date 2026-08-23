@@ -9,6 +9,10 @@ import "./index.css";
 if (typeof document !== "undefined" && isTauriShell()) {
   document.documentElement.classList.add("tauri-shell");
 }
+if (typeof document !== "undefined") {
+  const theme = localStorage.getItem("eh-theme") || "classic";
+  document.documentElement.dataset.ehTheme = theme;
+}
 
 installGlobalLogging();
 

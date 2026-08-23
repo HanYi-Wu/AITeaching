@@ -177,11 +177,16 @@ async def _post_tool_events(
     if extra_detail:
         detail.update(extra_detail)
     append_audit(project_root, session_id=session_id, tool_name=name, status=status, detail=detail)
-    await emit("tool_result", {
+    event_payload = {
         "tool_name": name,
         "status": status,
         "summary": summarize_tool_result(name, payload),
-    })
+    }
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(data, dict) and isinstance(data.get("download_url"), str):
+        event_payload["download_url"] = data["download_url"]
+        event_payload["filename"] = str(data.get("filename") or "EH-export.yaml")
+    await emit("tool_result", event_payload)
     if ctx.session and name in ("agent.set_task_plan", "agent.update_task_step"):
         await emit("task_update", {"steps": list(ctx.session.task_plan)})
 

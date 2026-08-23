@@ -1,32 +1,53 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "PYTHONPATH=%~dp0src;%PYTHONPATH%"
+set "SOLAIRE_PROJECT_ROOT=%~dp0"
+set "SOLAIRE_BIND_PROJECT_FROM_ENV=1"
 
-echo [Solaire] Checking backend http://127.0.0.1:8000 ...
+echo [EducationHelper] Checking backend http://127.0.0.1:8000 ...
 powershell -NoProfile -Command "try { $r = Invoke-WebRequest 'http://127.0.0.1:8000/api/health' -TimeoutSec 2 -UseBasicParsing; if ($r.StatusCode -ne 200) { exit 1 } } catch { exit 1 }"
 if %ERRORLEVEL%==0 (
-  echo [Solaire] Backend already running — skip starting uvicorn ^(avoids WinError 10048^).
+  echo [EducationHelper] Backend already running.
   goto :frontend
 )
 
 powershell -NoProfile -Command "$l = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($l) { exit 2 } else { exit 0 }"
 if %ERRORLEVEL%==2 (
-  echo [Solaire] ERROR: Port 8000 is in use but /api/health did not succeed. End the process on 8000 ^(Task Manager^) or run: netstat -ano ^| findstr :8000
-  echo [Solaire] Starting frontend only.
-  goto :frontend
+  echo [EducationHelper] ERROR: Port 8000 is occupied by another program.
+  pause
+  exit /b 1
 )
 
-echo [Solaire] Starting backend http://127.0.0.1:8000 ...
+echo [EducationHelper] Starting backend http://127.0.0.1:8000 ...
+if exist "%~dp0.pixi\envs\default\python.exe" (
+  start "EducationHelper - Backend" cmd /k ""%~dp0.pixi\envs\default\python.exe" -m uvicorn solaire.web.app:app --host 0.0.0.0 --port 8000"
+  goto :backend_started
+)
 where py >nul 2>&1
 if %ERRORLEVEL%==0 (
-  start "Solaire Web - Backend" cmd /k "py -3.12 -m uvicorn solaire.web.app:app --host 127.0.0.1 --port 8000"
+  start "EducationHelper - Backend" cmd /k "py -3.12 -m uvicorn solaire.web.app:app --host 0.0.0.0 --port 8000"
 ) else (
-  start "Solaire Web - Backend" cmd /k "python -m uvicorn solaire.web.app:app --host 127.0.0.1 --port 8000"
+  start "EducationHelper - Backend" cmd /k "python -m uvicorn solaire.web.app:app --host 0.0.0.0 --port 8000"
 )
+:backend_started
 timeout /t 2 /nobreak >nul
 
 :frontend
-echo [Solaire] Starting frontend http://0.0.0.0:5173 ...
-start "Solaire Web - Frontend" cmd /k "cd /d %~dp0web && npm run dev -- --host 0.0.0.0 --port 5173 --strictPort"
-echo Done. Two windows opened ^(or one if backend was already up^).
-pause
+echo [EducationHelper] Checking frontend http://127.0.0.1:5173 ...
+powershell -NoProfile -Command "try { $r = Invoke-WebRequest 'http://127.0.0.1:5173' -TimeoutSec 2 -UseBasicParsing; if ($r.StatusCode -ne 200) { exit 1 } } catch { exit 1 }"
+if %ERRORLEVEL%==0 (
+  start "" "http://127.0.0.1:5173"
+  exit /b 0
+)
+powershell -NoProfile -Command "$l = Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($l) { exit 2 } else { exit 0 }"
+if %ERRORLEVEL%==2 (
+  echo [EducationHelper] ERROR: Port 5173 is occupied by another program.
+  pause
+  exit /b 1
+)
+echo [EducationHelper] Starting frontend http://127.0.0.1:5173 ...
+start "EducationHelper - Frontend" cmd /k "cd /d %~dp0web && npm run dev -- --host 0.0.0.0 --port 5173 --strictPort"
+timeout /t 3 /nobreak >nul
+start "" "http://127.0.0.1:5173"
+exit /b 0

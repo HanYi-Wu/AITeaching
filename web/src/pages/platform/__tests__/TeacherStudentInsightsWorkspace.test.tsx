@@ -36,8 +36,11 @@ describe("TeacherStudentInsightsWorkspace", () => {
           completion_rate: 100,
           average_score_percent: 82.5,
           average_time_seconds: 1200,
+          average_time_per_question_seconds: 120,
           integrity_event_count: 1,
+          behavior_event_average_per_exam: 0.3,
         },
+        radar: [{ id: "score", label: "得分表现", value: 82.5 }],
         recent_exams: [
           { attempt_id: "a1", paper_id: "p1", title: "期中考试", subject: "数学", status: "submitted", score_percent: 82.5 },
         ],
@@ -53,11 +56,12 @@ describe("TeacherStudentInsightsWorkspace", () => {
       </AgentProvider>,
     );
 
-    expect(await screen.findByText("演示学生1")).toBeInTheDocument();
-    await waitFor(() => expect(mocks.getTeacherStudentProfile).toHaveBeenCalledWith("c1", "s1"));
+    const student = await screen.findByText("演示学生1");
+    await userEvent.click(student);
+    await waitFor(() => expect(mocks.getTeacherStudentProfile).toHaveBeenCalledWith("c1", "s1", "", ""));
     expect(screen.getAllByText("82.5%").length).toBeGreaterThan(0);
     expect(screen.getByText("期中考试")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "查看薄弱题排名" }));
     expect(screen.getByText("期中考试 · math/q2")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /演示学生1/ }));
   });
 });

@@ -37,7 +37,7 @@ export function PlatformShell({
           </div>
           <div className="min-w-0">
             <p className={`${compactMobile ? "hidden lg:block" : ""} text-xs font-semibold uppercase tracking-wide text-slate-500`}>
-              Solaire Platform
+              EducationHelper · EH
             </p>
             <h1 className={`${compactMobile ? "text-sm lg:mt-1 lg:text-lg" : "mt-1 text-lg"} font-semibold text-white`}>{roleLabel}</h1>
             {userName ? (

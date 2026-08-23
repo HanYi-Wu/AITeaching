@@ -20,17 +20,20 @@ import { changeAppLanguage } from "../i18n/changeLanguage";
 import type { AppLang } from "../i18n/tauriLocale";
 import { SOLAIRE_SAVE_EVENT } from "../lib/saveEvents";
 import type { PlatformRole } from "../platform/roles";
+import { getAccountProfile, updateAccountProfile, type PlatformUser } from "../platform/auth";
 import { LogWorkspace } from "./LogWorkspace";
 
 export function SettingsWorkspace({
   onError,
   onSwitchProject,
   userRole,
+  onProfileUpdated,
 }: {
   onError: (msg: string | null) => void;
   /** 可选：切换内容目录并回到入口页 */
   onSwitchProject?: () => void | Promise<void>;
   userRole?: PlatformRole;
+  onProfileUpdated?: (profile: PlatformUser) => void;
 }) {
   const { t, i18n } = useTranslation(["settings", "common"]);
   const { setPageContext } = useAgentContext();
@@ -41,8 +44,59 @@ export function SettingsWorkspace({
   const [safetyMode, setSafetyMode] = useState("allegro");
   const [safetyOptions, setSafetyOptions] = useState<AgentSafetyModeOption[]>([]);
   const [settingsTab, setSettingsTab] = useState("model");
+  const [profile, setProfile] = useState<PlatformUser | null>(null);
+  const [subjectsText, setSubjectsText] = useState("");
+  const [theme, setTheme] = useState("classic");
+  const [density, setDensity] = useState("comfortable");
+  const [fontScale, setFontScale] = useState(1);
+  const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
   const modelFormRef = useRef<AgentModelSettingsFormHandle>(null);
   const canManageModelSettings = userRole === "admin";
+
+  useEffect(() => {
+    void getAccountProfile().then(({ profile: value }) => {
+      setProfile(value);
+      setSubjectsText((value.subjects ?? []).join("、"));
+      setTheme(value.preferences?.theme ?? "classic");
+      setDensity(value.preferences?.density ?? "comfortable");
+      setFontScale(Number(value.preferences?.font_scale ?? 1));
+      setAvatarDataUrl(value.avatar_data_url ?? null);
+    }).catch((error) => onError(error instanceof Error ? error.message : String(error)));
+  }, [onError]);
+
+  async function savePersonalization() {
+    setSaving(true);
+    try {
+      const subjects = subjectsText.split(/[、,，;；\n]/).map((item) => item.trim()).filter(Boolean);
+      const result = await updateAccountProfile({
+        avatar_data_url: avatarDataUrl,
+        preferences: { theme, density, font_scale: fontScale },
+        subjects: userRole === "teacher" ? subjects : null,
+      });
+      setProfile(result.profile);
+      onProfileUpdated?.(result.profile);
+      document.documentElement.dataset.ehTheme = theme;
+      document.documentElement.style.fontSize = `${fontScale * 100}%`;
+      localStorage.setItem("eh-theme", theme);
+      localStorage.setItem("eh-density", density);
+      setMsg("个性化设置已保存");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function chooseAvatar(file?: File) {
+    if (!file) return;
+    if (!file.type.startsWith("image/") || file.size > 1_500_000) {
+      onError("请选择小于 1.5MB 的图片作为头像");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setAvatarDataUrl(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  }
 
   useEffect(() => {
     if (!canManageModelSettings && settingsTab === "model") {
@@ -138,6 +192,25 @@ export function SettingsWorkspace({
       </select>
     </div>
   );
+  const personalizationPanel = profile ? (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <h2 className="text-sm font-semibold text-slate-900">个性化与账号资料</h2>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="text-sm font-medium text-slate-700">头像</label>
+          <div className="mt-2 flex items-center gap-3">
+            <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full bg-slate-100 text-lg font-bold">{avatarDataUrl ? <img src={avatarDataUrl} alt="教师头像" className="h-full w-full object-cover" /> : profile.display_name?.slice(0, 1)}</div>
+            <label className="cursor-pointer rounded-md border border-slate-300 px-3 py-2 text-sm">上传图片<input type="file" accept="image/*" className="hidden" onChange={(event) => chooseAvatar(event.target.files?.[0])} /></label>
+          </div>
+        </div>
+        <label className="text-sm font-medium text-slate-700">界面皮肤<select value={theme} onChange={(event) => setTheme(event.target.value)} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"><option value="classic">经典明亮</option><option value="ocean">海洋蓝</option><option value="forest">森林绿</option><option value="warm">暖阳橙</option><option value="night">深色夜间</option></select></label>
+        <label className="text-sm font-medium text-slate-700">界面密度<select value={density} onChange={(event) => setDensity(event.target.value)} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"><option value="comfortable">舒适</option><option value="compact">紧凑</option></select></label>
+        <label className="text-sm font-medium text-slate-700">字号比例<input type="range" min="0.85" max="1.2" step="0.05" value={fontScale} onChange={(event) => setFontScale(Number(event.target.value))} className="mt-3 w-full" /><span className="text-xs text-slate-500">{Math.round(fontScale * 100)}%</span></label>
+      </div>
+      {userRole === "teacher" ? <label className="mt-4 block text-sm font-medium text-slate-700">我的学科（可设置多个，用顿号或逗号分隔）<textarea value={subjectsText} onChange={(event) => setSubjectsText(event.target.value)} className="mt-2 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="例如：数学、物理" /></label> : null}
+      <button type="button" disabled={saving} onClick={() => void savePersonalization()} className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">保存个性化设置</button>
+    </div>
+  ) : null;
 
   return (
     <div className="h-full overflow-auto p-6">
@@ -186,6 +259,7 @@ export function SettingsWorkspace({
           ) : (
             <div className="space-y-4">
               {languagePanel}
+              {personalizationPanel}
 
               {data ? (
                 data.persist_scope === "global" ? (
@@ -259,6 +333,7 @@ export function SettingsWorkspace({
       ) : (
         <div className="mx-auto mt-6 max-w-2xl space-y-4">
           {languagePanel}
+          {personalizationPanel}
         </div>
       )}
 

@@ -22,6 +22,13 @@
       "section": "入门与理念"
     },
     {
+      "id": "platform-guide",
+      "title": "EducationHelper 完整使用指南",
+      "path": "user/platform-guide.md",
+      "audience": "user",
+      "section": "入门与理念"
+    },
+    {
       "id": "tutorial-index",
       "title": "组卷流程与导出说明",
       "path": "tutorial/README.md",
@@ -90,13 +97,6 @@
       "path": "user/teaching-assistant.md",
       "audience": "user",
       "section": "智能辅助"
-    },
-    {
-      "id": "legal-and-contact",
-      "title": "版权声明与联系作者",
-      "path": "introduction/legal-and-contact.md",
-      "audience": "user",
-      "section": "其它"
     }
   ]
 }

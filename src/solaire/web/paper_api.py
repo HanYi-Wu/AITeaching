@@ -32,6 +32,7 @@ from solaire.web.paper_service import (
     analyze_paper,
     get_attempt_scan_image,
     get_teacher_student_profile,
+    complete_paper_attempt_grading,
     grade_paper_answer,
     ingest_offline_submission,
     list_paper_publications,
@@ -55,7 +56,7 @@ OFFLINE_SCAN_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".t
 OFFLINE_SCAN_MAX_FILES = 20
 OFFLINE_SCAN_MAX_FILE_BYTES = 15 * 1024 * 1024
 OFFLINE_SCAN_MAX_TOTAL_BYTES = 100 * 1024 * 1024
-OFFLINE_UPLOADER_EXE = Path(__file__).resolve().parent / "assets" / "tools" / "SolEdu-Offline-Answer-Uploader.exe"
+OFFLINE_UPLOADER_EXE = Path(__file__).resolve().parent / "assets" / "tools" / "EducationHelper-Offline-Answer-Uploader.exe"
 
 
 def _normalize_offline_scan(name: str, content: bytes) -> tuple[str, str, bytes]:
@@ -104,6 +105,7 @@ class PaperPublishBody(BaseModel):
     submission_mode: Literal["online", "image_manual", "image_ai"] = "online"
     max_screen_switches: int = Field(default=0, ge=0, le=999)
     time_limit_minutes: int | None = Field(default=None, ge=0, le=1440)
+    subject: str | None = Field(default=None, max_length=100)
 
 
 class PaperPublicationUpdateBody(BaseModel):
@@ -178,8 +180,14 @@ def download_offline_answer_uploader(
     return FileResponse(
         OFFLINE_UPLOADER_EXE,
         media_type="application/vnd.microsoft.portable-executable",
-        filename="SolEdu-Offline-Answer-Uploader.exe",
-        headers={"X-SolEdu-SHA256": checksum, "X-SolEdu-Code-Signed": "false"},
+        filename="EducationHelper-Offline-Answer-Uploader.exe",
+        headers={
+            "X-EH-SHA256": checksum,
+            "X-EH-Code-Signed": "false",
+            # Legacy collector clients may still read the previous header names.
+            "X-SolEdu-SHA256": checksum,
+            "X-SolEdu-Code-Signed": "false",
+        },
     )
 
 
@@ -458,6 +466,27 @@ def papers_attempt_answer_grade(
     return {"answer": answer}
 
 
+@router.post("/papers/{paper_id}/attempts/{attempt_id}/complete-grading")
+def papers_attempt_complete_grading(
+    paper_id: str,
+    attempt_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    root = require_platform_root()
+    project_root = require_content_project_root()
+    try:
+        attempt = complete_paper_attempt_grading(
+            root,
+            project_root,
+            paper_id=paper_id,
+            attempt_id=attempt_id,
+            user=user,
+        )
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    return {"attempt": attempt}
+
+
 @router.patch("/papers/{paper_id}/publications/{publication_id}")
 def papers_publications_update(
     paper_id: str,
@@ -527,6 +556,8 @@ def teacher_student_profile(
     class_id: str,
     student_id: str,
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ) -> dict[str, Any]:
     root = require_platform_root()
     try:
@@ -535,6 +566,8 @@ def teacher_student_profile(
             class_id=class_id,
             student_id=student_id,
             user=user,
+            date_from=date_from,
+            date_to=date_to,
         )
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
@@ -617,6 +650,7 @@ def papers_publish(
             submission_mode=body.submission_mode,
             max_screen_switches=body.max_screen_switches,
             time_limit_minutes=body.time_limit_minutes,
+            subject=body.subject,
         )
     except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)

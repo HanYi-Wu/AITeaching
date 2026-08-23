@@ -27,6 +27,7 @@ from solaire.web.school_service import (
     get_school,
     import_classes,
     import_students,
+    import_teacher_class_assignments,
     import_teachers,
     list_classes,
     list_students,
@@ -139,7 +140,8 @@ SCHOOL_AI_CAPABILITIES: tuple[dict[str, str], ...] = (
     {"id": "classes.manage", "label": "管理班级", "description": "创建、导入、编辑、删除班级并查看人数。"},
     {"id": "students.import", "label": "导入学生", "description": "指导学生 JSON/Excel 导入、班级绑定和初始账号导出。"},
     {"id": "students.manage", "label": "管理学生", "description": "说明学生账号、初始密码、状态、重置密码和导出。"},
-    {"id": "assignments.manage", "label": "分配班级", "description": "将教师分配到一个或多个班级，供教师发布试卷。"},
+    {"id": "assignments.manage", "label": "分配班级", "description": "将教师分配到一个或多个班级，支持 JSON/Excel 批量导入。"},
+    {"id": "school.import_all", "label": "整校导入", "description": "通过一个 JSON 或多工作表 Excel 一次导入班级、教师、学生和教师班级分配。"},
     {"id": "ai.toggle", "label": "学校 AI 开关", "description": "在管理员配置 API 后，学校可开启或关闭学校和教师 AI 功能。"},
 )
 
@@ -331,7 +333,7 @@ def _local_school_ai_reply(message: str, context: dict[str, Any]) -> str:
 
 
 def _local_import_review(kind: str, rows: list[dict[str, Any]]) -> str:
-    labels = {"teachers": "教师", "classes": "班级", "students": "学生"}
+    labels = {"teachers": "教师", "classes": "班级", "students": "学生", "assignments": "教师班级分配", "all": "整校"}
     fields = sorted({str(key) for row in rows for key in row.keys()})
     preview = rows[:3]
     return (
@@ -377,6 +379,19 @@ def _raise_api_error(exc: Exception) -> None:
     raise exc
 
 
+def _worksheet_rows(ws) -> list[dict[str, Any]]:
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return []
+    headers = [str(value or "").strip() for value in rows[0]]
+    result: list[dict[str, Any]] = []
+    for values in rows[1:]:
+        item = {key: value for key, value in zip(headers, values) if key}
+        if any(value not in (None, "") for value in item.values()):
+            result.append(item)
+    return result
+
+
 def _rows_from_upload(file: UploadFile, *, expected: str) -> list[dict[str, Any]]:
     raw = file.file.read()
     name = (file.filename or "").lower()
@@ -393,20 +408,69 @@ def _rows_from_upload(file: UploadFile, *, expected: str) -> list[dict[str, Any]
     if not name.endswith(".xlsx"):
         raise ValueError("import file must be .json or .xlsx")
     wb = load_workbook(BytesIO(raw), data_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
-        return []
-    headers = [str(value or "").strip() for value in rows[0]]
-    result: list[dict[str, Any]] = []
-    for values in rows[1:]:
-        item: dict[str, Any] = {}
-        for key, value in zip(headers, values):
-            if key:
-                item[key] = value
-        if any(value not in (None, "") for value in item.values()):
-            result.append(item)
-    return result
+    return _worksheet_rows(wb.active)
+
+
+def _school_bundle_from_upload(file: UploadFile) -> dict[str, list[dict[str, Any]]]:
+    kinds = ("classes", "teachers", "students", "assignments")
+    raw = file.file.read()
+    name = (file.filename or "").lower()
+    if name.endswith(".json"):
+        try:
+            parsed = json.loads(raw.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid json import file") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("complete school json must be an object")
+        bundle: dict[str, list[dict[str, Any]]] = {}
+        for kind in kinds:
+            values = parsed.get(kind) or []
+            if not isinstance(values, list):
+                raise ValueError(f"{kind} must be a list")
+            bundle[kind] = [dict(item) for item in values if isinstance(item, dict)]
+        return bundle
+    if not name.endswith(".xlsx"):
+        raise ValueError("import file must be .json or .xlsx")
+    wb = load_workbook(BytesIO(raw), data_only=True)
+    sheets = {name.strip().lower(): ws for name, ws in ((ws.title, ws) for ws in wb.worksheets)}
+    return {kind: _worksheet_rows(sheets[kind]) if kind in sheets else [] for kind in kinds}
+
+
+def _flatten_school_bundle(bundle: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [{"data_kind": kind, **row} for kind in ("classes", "teachers", "students", "assignments") for row in bundle[kind]]
+
+
+def _import_school_bundle(root, school_id: str, bundle: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    results = {
+        "classes": import_classes(root, school_id=school_id, classes=bundle["classes"]),
+        "teachers": import_teachers(root, school_id=school_id, teachers=bundle["teachers"]),
+        "students": import_students(root, school_id=school_id, students=bundle["students"]),
+        "assignments": import_teacher_class_assignments(
+            root, school_id=school_id, assignments=bundle["assignments"]
+        ),
+    }
+    return {
+        "imported": sum(int(result.get("imported") or 0) for result in results.values()),
+        **results,
+    }
+
+
+def _complete_school_template_workbook() -> bytes:
+    wb = Workbook()
+    specs = (
+        ("classes", ("name", "grade"), ("高一1班", "高一")),
+        ("teachers", ("username", "password", "display_name", "email", "subjects"), ("teacher_zhang", "teacher123", "张老师", "teacher@example.com", "数学")),
+        ("students", ("student_no", "display_name", "email", "class_name"), ("S001", "学生一", "", "高一1班")),
+        ("assignments", ("teacher_username", "class_name", "subject"), ("teacher_zhang", "高一1班", "数学")),
+    )
+    for index, (title, headers, example) in enumerate(specs):
+        ws = wb.active if index == 0 else wb.create_sheet()
+        ws.title = title
+        ws.append(headers)
+        ws.append(example)
+    stream = BytesIO()
+    wb.save(stream)
+    return stream.getvalue()
 
 
 def _students_export_workbook(students: list[dict[str, Any]]) -> bytes:
@@ -606,10 +670,14 @@ async def school_ai_import_review(
     root = require_platform_root()
     payload = _require_school_ai_enabled(root, school_id)
     clean_kind = kind.strip()
-    if clean_kind not in {"teachers", "classes", "students"}:
+    if clean_kind not in {"teachers", "classes", "students", "assignments", "all"}:
         raise HTTPException(status_code=400, detail="invalid import kind")
     try:
-        rows = _rows_from_upload(file, expected=clean_kind)
+        if clean_kind == "all":
+            bundle = _school_bundle_from_upload(file)
+            rows = _flatten_school_bundle(bundle)
+        else:
+            rows = _rows_from_upload(file, expected=clean_kind)
         review = await _review_school_import_with_ai(clean_kind, rows)
     except (ValueError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
@@ -635,17 +703,22 @@ async def school_ai_import_file(
     root = require_platform_root()
     payload = _require_school_ai_enabled(root, school_id)
     clean_kind = kind.strip()
-    if clean_kind not in {"teachers", "classes", "students"}:
+    if clean_kind not in {"teachers", "classes", "students", "assignments", "all"}:
         raise HTTPException(status_code=400, detail="invalid import kind")
     try:
-        rows = _rows_from_upload(file, expected=clean_kind)
+        bundle = _school_bundle_from_upload(file) if clean_kind == "all" else None
+        rows = _flatten_school_bundle(bundle) if bundle is not None else _rows_from_upload(file, expected=clean_kind)
         review = await _review_school_import_with_ai(clean_kind, rows)
         if clean_kind == "teachers":
             result = import_teachers(root, school_id=school_id, teachers=rows)
         elif clean_kind == "classes":
             result = import_classes(root, school_id=school_id, classes=rows)
-        else:
+        elif clean_kind == "students":
             result = import_students(root, school_id=school_id, students=rows, class_id=class_id)
+        elif clean_kind == "assignments":
+            result = import_teacher_class_assignments(root, school_id=school_id, assignments=rows)
+        else:
+            result = _import_school_bundle(root, school_id, bundle or {})
     except (ValueError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {
@@ -1001,6 +1074,41 @@ def school_students_export(
     root = require_platform_root()
     data = _students_export_workbook(list_students(root, school_id=school_id))
     return _workbook_response(data, "student_accounts.xlsx")
+
+
+@router.get("/school/all/template.xlsx")
+def school_complete_import_template(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> StreamingResponse:
+    _require_school(user)
+    return _workbook_response(_complete_school_template_workbook(), "school_complete_import_template.xlsx")
+
+
+@router.get("/school/teacher-class-assignments/template.xlsx")
+def school_teacher_class_assignments_template(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> StreamingResponse:
+    _require_school(user)
+    data = _template_workbook(
+        ("teacher_username", "class_name", "subject"),
+        [("teacher_zhang", "高一1班", "数学")],
+        "assignments",
+    )
+    return _workbook_response(data, "teacher_class_assignments_import_template.xlsx")
+
+
+@router.post("/school/teacher-class-assignments/import-file")
+async def school_teacher_class_assignments_import_file(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    try:
+        rows = _rows_from_upload(file, expected="assignments")
+        return import_teacher_class_assignments(root, school_id=school_id, assignments=rows)
+    except (ValueError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
 
 
 @router.get("/school/teacher-class-assignments")

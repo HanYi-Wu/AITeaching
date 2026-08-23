@@ -1,4 +1,4 @@
-"""Per-user SolEdu app state directory (not bound to a course project)."""
+"""EH user state, retaining the legacy SolEdu directory so upgrades keep data."""
 
 from __future__ import annotations
 

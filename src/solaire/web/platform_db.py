@@ -8,7 +8,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   must_change_password INTEGER NOT NULL DEFAULT 0,
+  avatar_data_url TEXT,
+  preferences_json TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -101,6 +103,7 @@ CREATE TABLE IF NOT EXISTS exam_publications (
   teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   description TEXT,
+  subject TEXT,
   start_at TEXT,
   end_at TEXT,
   show_results_immediately INTEGER NOT NULL DEFAULT 0,
@@ -150,6 +153,9 @@ CREATE TABLE IF NOT EXISTS student_attempts (
   question_payload_json TEXT,
   answer_key_json TEXT,
   practice_metadata_json TEXT,
+  question_payload_version INTEGER NOT NULL DEFAULT 1,
+  grading_completed_at TEXT,
+  grading_completed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   UNIQUE(publication_id, student_id)
 );
 
@@ -242,6 +248,8 @@ def init_platform_db(root: Path) -> None:
     with connect(root) as con:
         con.executescript(SCHEMA_SQL)
         _ensure_column(con, "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(con, "users", "avatar_data_url", "TEXT")
+        _ensure_column(con, "users", "preferences_json", "TEXT")
         _ensure_column(con, "students", "user_id", "TEXT REFERENCES users(id) ON DELETE SET NULL")
         _ensure_column(con, "students", "initial_password", "TEXT")
         _ensure_column(con, "exam_publications", "submission_mode", "TEXT NOT NULL DEFAULT 'online'")
@@ -249,6 +257,7 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "exam_publications", "time_limit_minutes", "INTEGER")
         _ensure_column(con, "exam_publications", "practice_kind", "TEXT")
         _ensure_column(con, "exam_publications", "source_publication_ids_json", "TEXT")
+        _ensure_column(con, "exam_publications", "subject", "TEXT")
         _ensure_column(con, "student_answers", "grading_status", "TEXT NOT NULL DEFAULT 'pending'")
         _ensure_column(con, "student_answers", "feedback", "TEXT")
         _ensure_column(con, "student_answers", "ai_suggested_score", "REAL")
@@ -259,6 +268,12 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "student_attempts", "question_payload_json", "TEXT")
         _ensure_column(con, "student_attempts", "answer_key_json", "TEXT")
         _ensure_column(con, "student_attempts", "practice_metadata_json", "TEXT")
+        _ensure_column(con, "student_attempts", "question_payload_version", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(con, "student_attempts", "grading_completed_at", "TEXT")
+        _ensure_column(con, "student_attempts", "grading_completed_by", "TEXT REFERENCES users(id) ON DELETE SET NULL")
+        # Keep legacy records readable after the subject model became mandatory.
+        con.execute("UPDATE paper_records SET subject = '通用' WHERE subject IS NULL OR TRIM(subject) = '' OR subject = '未分科'")
+        con.execute("UPDATE exam_publications SET subject = (SELECT subject FROM paper_records WHERE id = exam_publications.paper_id) WHERE subject IS NULL OR TRIM(subject) = '' OR subject = '未分科'")
         _dedupe_active_publication_classes(con)
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 

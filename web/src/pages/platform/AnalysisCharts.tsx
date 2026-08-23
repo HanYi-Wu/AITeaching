@@ -23,7 +23,7 @@ const RADAR_LABELS: Record<string, string> = {
   completion: "完成率",
   score: "得分率",
   time_efficiency: "时间效率",
-  proctoring: "监考诚信",
+  proctoring: "考试行为稳定度",
   module_mastery: "模块掌握度",
 };
 
@@ -314,7 +314,7 @@ function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; c
             <th className="px-3 py-2 text-left font-medium">得分表现</th>
             <th className="px-3 py-2 text-right font-medium">用时</th>
             <th className="px-3 py-2 text-right font-medium">切屏</th>
-            <th className="px-3 py-2 text-right font-medium">诚信风险</th>
+            <th className="px-3 py-2 text-right font-medium">需关注行为</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -483,7 +483,7 @@ export function PlatformPaperAnalysisCharts({
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h4 className="text-sm font-semibold text-slate-900">学生个人分析表</h4>
-          <span className="text-xs text-slate-500">含得分、耗时、切屏与可解释诚信风险（需人工复核）</span>
+          <span className="text-xs text-slate-500">含得分、耗时、切屏与考试行为稳定度（仅供教师复核，不自动判定作弊）</span>
         </div>
         {analysis.students.length === 0 ? (
           <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">暂无学生作答数据</p>

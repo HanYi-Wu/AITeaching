@@ -1,4 +1,4 @@
-# Jinja 卷面主模板 — 实现约定（SolEdu）
+# Jinja 卷面主模板 — 实现约定（EducationHelper）
 
 ## 定界符（必须与引擎一致）
 

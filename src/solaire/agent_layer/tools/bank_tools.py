@@ -8,7 +8,7 @@ from typing import Any
 from solaire.agent_layer.models import InvocationContext, ToolResult
 from solaire.exam_compiler.facade import QuestionItem
 from solaire.exam_compiler.pipeline.math_fragment_check import analyze_math_static_for_record
-from solaire.web.bank_service import get_question_detail, list_bank_entries, save_question
+from solaire.web.bank_service import create_question_selection_export, get_question_detail, list_bank_entries, save_question
 
 
 def _root(ctx: InvocationContext) -> Any:
@@ -79,6 +79,25 @@ def tool_bank_search_items(ctx: InvocationContext, args: dict[str, Any]) -> Tool
     return ToolResult(
         status="succeeded",
         data={"hits": out, "count": len(out), "truncated": len(out) >= max_hits},
+    )
+
+
+def tool_bank_export_items(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    qualified_ids = [str(item).strip() for item in (args.get("qualified_ids") or []) if str(item).strip()]
+    if not qualified_ids:
+        return ToolResult(status="failed", error_code="invalid_args", error_message="请先检索并提供需要整理导出的题目标识")
+    try:
+        result = create_question_selection_export(
+            _root(ctx),
+            qualified_ids,
+            title=str(args.get("title") or "AI 梳理题目").strip(),
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        return ToolResult(status="failed", error_code="export_failed", error_message=str(exc))
+    return ToolResult(
+        status="succeeded",
+        data=result,
+        summary_for_llm=f"已梳理并导出 {result['question_count']} 道题，界面已提供下载按钮。",
     )
 
 
@@ -197,17 +216,18 @@ def tool_bank_update_item(ctx: InvocationContext, args: dict[str, Any]) -> ToolR
 
 
 def tool_bank_create_item(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
-    ns = str(args.get("collection_namespace") or "").strip()
+    subject = str(args.get("subject") or "通用").strip() or "通用"
+    ns = f"{subject}/默认"
     qid = str(args.get("question_id") or "").strip()
     qtype = str(args.get("question_type") or "").strip()
     content = str(args.get("content") or "")
     answer = str(args.get("answer") or "")
     analysis = str(args.get("analysis") or "")
-    if not ns or not qid or not qtype:
+    if not qid or not qtype:
         return ToolResult(
             status="failed",
             error_code="invalid_args",
-            error_message="collection_namespace、question_id、question_type 均为必填",
+            error_message="question_id、question_type 均为必填",
         )
     allowed_types = ("single_choice", "multiple_choice", "choice", "fill", "judge", "short_answer", "reasoning", "essay")
     if qtype not in allowed_types:
@@ -216,13 +236,6 @@ def tool_bank_create_item(ctx: InvocationContext, args: dict[str, Any]) -> ToolR
             error_code="invalid_args",
             error_message=f"question_type 须为之一：{', '.join(allowed_types)}",
         )
-    if "/" not in ns:
-        return ToolResult(
-            status="failed",
-            error_code="invalid_ns",
-            error_message="题集须为「科目/题集」形式，例如 math/unit1",
-        )
-
     options = None
     if "options" in args and args["options"] is not None:
         opts = args["options"]
@@ -238,6 +251,10 @@ def tool_bank_create_item(ctx: InvocationContext, args: dict[str, Any]) -> ToolR
             meta = json.loads(m) if m.strip() else {}
         elif isinstance(m, dict):
             meta = m
+    source_kind = str(args.get("source_kind") or "AI生成").strip()
+    if source_kind not in {"AI生成", "AI辅助导入"}:
+        source_kind = "AI生成"
+    meta.setdefault("source", source_kind)
 
     try:
         item = QuestionItem(

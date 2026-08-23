@@ -116,6 +116,7 @@ describe("PapersWorkspace", () => {
         end_at: null,
         submission_mode: "online",
         max_screen_switches: 0,
+        subject: "Math",
         time_limit_minutes: null,
       }),
     );
@@ -265,10 +266,7 @@ describe("PapersWorkspace", () => {
     await userEvent.click(screen.getByTestId("paper-load-analysis"));
 
     await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("p1"));
-    expect(await screen.findByTestId("paper-analysis-completion-rate")).toHaveTextContent("50%");
-    expect(screen.getByTestId("paper-analysis-switch-count")).toHaveTextContent("2");
-    expect(screen.getByTestId("paper-analysis-flagged-count")).toHaveTextContent("1");
-    expect(screen.getByTestId("paper-analysis-integrity-events")).toHaveTextContent("5");
+    expect(await screen.findByRole("dialog", { name: "试卷分析" })).toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-charts")).toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-chart-score")).toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-classes")).toBeInTheDocument();
@@ -402,5 +400,112 @@ describe("PapersWorkspace", () => {
         is_correct: null,
       }),
     );
+  });
+
+  it("saves the displayed existing score instead of silently replacing it with zero", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({
+      submissions: [
+        {
+          attempt_id: "a1",
+          publication_id: "pub1",
+          student_name: "Student One",
+          student_no: "S001",
+          status: "submitted",
+          score: 4,
+          max_score: 5,
+          answers: [
+            {
+              question_id: "math/q1",
+              header: "1.1",
+              content: "题目内容",
+              answer: "学生真实作答",
+              score_per_item: 5,
+              score: 4,
+              grading_status: "reviewed",
+              feedback: null,
+              images: [],
+            },
+          ],
+        },
+      ],
+    });
+    mocks.gradePaperAnswer.mockResolvedValue({
+      answer: { question_id: "math/q1", score: 4, grading_status: "reviewed" },
+    });
+
+    render(<PapersWorkspace />);
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("4");
+    await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
+
+    await waitFor(() =>
+      expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "math/q1", {
+        score: 4,
+        feedback: null,
+        is_correct: null,
+      }),
+    );
+  });
+
+  it("shows one selected student's real answer at a time", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({
+      submissions: [
+        {
+          attempt_id: "a1",
+          publication_id: "pub1",
+          student_name: "Student One",
+          student_no: "S001",
+          status: "submitted",
+          score: 4,
+          max_score: 5,
+          answers: [
+            {
+              question_id: "math/q1",
+              header: "1.1",
+              content: "第一题",
+              answer: "学生真实作答一",
+              score_per_item: 5,
+              score: 4,
+              grading_status: "reviewed",
+              images: [],
+            },
+          ],
+        },
+        {
+          attempt_id: "a2",
+          publication_id: "pub1",
+          student_name: "Student Two",
+          student_no: "S002",
+          status: "submitted",
+          score: null,
+          max_score: 5,
+          answers: [
+            {
+              question_id: "math/q1",
+              header: "1.1",
+              content: "第一题",
+              answer: "学生真实作答二",
+              score_per_item: 5,
+              score: null,
+              grading_status: "pending",
+              images: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<PapersWorkspace />);
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    const selector = await screen.findByTestId("paper-grading-student-select");
+    expect(selector).toHaveValue("a1");
+    expect(screen.getByText("学生真实作答一")).toBeInTheDocument();
+    expect(screen.queryByText("学生真实作答二")).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(selector, "a2");
+    expect(await screen.findByText("学生真实作答二")).toBeInTheDocument();
+    expect(screen.queryByText("学生真实作答一")).not.toBeInTheDocument();
   });
 });

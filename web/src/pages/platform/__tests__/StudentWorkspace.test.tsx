@@ -188,7 +188,7 @@ describe("StudentWorkspace", () => {
           section_id: "Choice",
           score_per_item: 5,
           type: "fill",
-          content: "2+2=?",
+          content: "计算 $2+2$",
           options: null,
         },
         {
@@ -232,6 +232,7 @@ describe("StudentWorkspace", () => {
     expect(await screen.findByText("Online Midterm")).toBeInTheDocument();
     await userEvent.click(screen.getByTestId("student-start-pub1"));
     expect(await screen.findByText("1+1=?")).toBeInTheDocument();
+    expect(document.querySelector(".katex")).not.toBeNull();
     expect(screen.getByText("30:00")).toBeInTheDocument();
     expect(screen.queryByText("返回待答")).not.toBeInTheDocument();
     expect(screen.queryByText("退出登录")).not.toBeInTheDocument();
@@ -249,9 +250,9 @@ describe("StudentWorkspace", () => {
         expect.objectContaining({
           time_spent_seconds: expect.any(Number),
           answers: [
-            { question_id: "math/q1", answer: "A" },
-            { question_id: "math/q2", answer: "4" },
-            { question_id: "math/q3", answer: "AC" },
+            { question_id: "math/q1", answer: "A", images: [] },
+            { question_id: "math/q2", answer: "4", images: [] },
+            { question_id: "math/q3", answer: "AC", images: [] },
           ],
         }),
       ),
@@ -355,6 +356,7 @@ describe("StudentWorkspace", () => {
             answers: [
               {
                 question_id: "math/q1",
+                answer: "",
                 images: [{ name: "answer.png", mime_type: "image/png", data_url: "data:image/png;base64,ZmFrZQ==" }],
               },
             ],
@@ -428,8 +430,8 @@ describe("StudentWorkspace", () => {
       expect(keepaliveCall).toBeDefined();
       expect(JSON.parse(String(keepaliveCall?.[1]?.body))).toEqual({
         answers: [
-          { question_id: "math/q1", answer: "A" },
-          { question_id: "math/q2", answer: "" },
+          { question_id: "math/q1", answer: "A", images: [] },
+          { question_id: "math/q2", answer: "", images: [] },
         ],
       });
     });
@@ -494,7 +496,7 @@ describe("StudentWorkspace", () => {
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(mocks.submitStudentAttempt).toHaveBeenCalledWith(
       "attempt1",
-      expect.objectContaining({ answers: [{ question_id: "math/q1", answer: "" }] }),
+      expect.objectContaining({ answers: [{ question_id: "math/q1", answer: "", images: [] }] }),
     );
     confirmSpy.mockRestore();
   });

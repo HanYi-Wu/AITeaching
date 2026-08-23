@@ -14,6 +14,7 @@ from solaire.exam_compiler.models import QuestionGroupRecord, QuestionItem
 from solaire.web.auth_service import utc_now
 from solaire.web.exam_service import _load_exam_config
 from solaire.web.exam_workspace_service import workspace_dir
+from solaire.web.library_discovery import discover_question_library_refs
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import _flatten_questions
 
@@ -186,13 +187,19 @@ def _load_exam_question_payloads(project_root: Path, exam_id: str) -> tuple[list
     exam = _load_exam_config(exam_yaml)
     flattened = _flatten_questions(exam)
     loaded = None
-    if exam.question_libraries:
-        refs = [(ref.namespace, ref.path) for ref in exam.question_libraries]
+    refs = [(ref.namespace, ref.path) for ref in exam.question_libraries]
+    if not refs:
+        refs = [
+            (str(ref["namespace"]), str(ref["path"]))
+            for ref in discover_question_library_refs(project_root)
+        ]
+    if refs:
         refs = _normalize_exam_question_refs(project_root, exam_yaml, refs)
         loaded = load_all_questions(exam_yaml, refs)
 
     questions: list[dict[str, Any]] = []
     answer_keys: dict[str, str] = {}
+    unresolved: list[str] = []
     for item in flattened:
         qid = item.question_id
         record = loaded.by_qualified.get(qid) if loaded is not None else None
@@ -216,13 +223,27 @@ def _load_exam_question_payloads(project_root: Path, exam_id: str) -> tuple[list
             answer_keys[qid] = record.answer
         elif isinstance(record, QuestionGroupRecord):
             payload.update({"type": "group", "content": record.material, "options": None})
+        else:
+            unresolved.append(qid)
         questions.append(payload)
+    if unresolved:
+        preview = "、".join(unresolved[:3])
+        suffix = " 等" if len(unresolved) > 3 else ""
+        raise ValueError(f"题目内容未找到：{preview}{suffix}。请检查题库后重新发布试卷")
     return questions, answer_keys
+
+
+def _is_placeholder_question(payload: dict[str, Any]) -> bool:
+    question_id = str(payload.get("question_id") or "").strip()
+    content = str(payload.get("content") or "").strip()
+    return not content or content == question_id or str(payload.get("type") or "").strip() in {"", "unknown"}
 
 
 def _load_attempt_question_payloads(
     project_root: Path,
     attempt: dict[str, Any],
+    *,
+    root: Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     raw_questions = attempt.get("question_payload_json")
     raw_answers = attempt.get("answer_key_json")
@@ -236,7 +257,69 @@ def _load_attempt_question_payloads(
             raise ValueError("Personalized question payload is invalid")
         if not isinstance(answer_keys, dict):
             raise ValueError("Personalized answer key is invalid")
-        return questions, {str(key): str(value) for key, value in answer_keys.items()}
+        normalized_answers = {str(key): str(value) for key, value in answer_keys.items()}
+        has_placeholder = any(_is_placeholder_question(item) for item in questions)
+        practice_metadata = str(attempt.get("practice_metadata_json") or "").strip()
+        is_personalized = practice_metadata not in {"", "null", "{}"}
+        payload_version = int(attempt.get("question_payload_version") or 1)
+        needs_legacy_score_repair = not is_personalized and payload_version < 2
+        if has_placeholder or needs_legacy_score_repair:
+            try:
+                source_questions, source_answers = _load_exam_question_payloads(
+                    project_root,
+                    str(attempt["exam_id"]),
+                )
+            except (FileNotFoundError, ValueError):
+                if has_placeholder:
+                    raise
+                return questions, normalized_answers
+            source_by_id = {str(item.get("question_id")): item for item in source_questions}
+            repaired_questions: list[dict[str, Any]] = []
+            repaired_answers = dict(normalized_answers)
+            for item in questions:
+                question_id = str(item.get("question_id") or "")
+                source = source_by_id.get(question_id)
+                if _is_placeholder_question(item):
+                    if source is None:
+                        raise ValueError(f"题目内容未找到：{question_id}")
+                    repaired = dict(source)
+                    for frozen_key in ("header", "section_id"):
+                        if item.get(frozen_key) is not None:
+                            repaired[frozen_key] = item[frozen_key]
+                else:
+                    repaired = dict(item)
+                    if source is not None and needs_legacy_score_repair:
+                        repaired["score_per_item"] = source.get("score_per_item", item.get("score_per_item"))
+                repaired_questions.append(repaired)
+                if question_id in source_answers and (has_placeholder or question_id not in repaired_answers):
+                    repaired_answers[question_id] = source_answers[question_id]
+            repaired_json = json.dumps(repaired_questions, ensure_ascii=False)
+            answers_json = json.dumps(repaired_answers, ensure_ascii=False)
+            canonical_max = round(
+                sum(float(item.get("score_per_item") or 0.0) for item in repaired_questions),
+                2,
+            )
+            current_max = float(attempt.get("max_score") or 0.0)
+            needs_update = (
+                repaired_questions != questions
+                or repaired_answers != normalized_answers
+                or (attempt.get("status") == "submitted" and current_max != canonical_max)
+                or payload_version < 2
+            )
+            if root is not None and attempt.get("id") and needs_update:
+                with connect(root) as con:
+                    con.execute(
+                        """
+                        UPDATE student_attempts
+                        SET question_payload_json = ?, answer_key_json = ?,
+                            max_score = CASE WHEN status = 'submitted' THEN ? ELSE max_score END,
+                            question_payload_version = 2
+                        WHERE id = ? AND question_payload_json = ?
+                        """,
+                        (repaired_json, answers_json, canonical_max, str(attempt["id"]), str(raw_questions)),
+                    )
+            return repaired_questions, repaired_answers
+        return questions, normalized_answers
     return _load_exam_question_payloads(project_root, str(attempt["exam_id"]))
 
 
@@ -267,7 +350,7 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
     with connect(root) as con:
         publication = con.execute(
             """
-            SELECT ep.*, pr.exam_id, pr.title AS paper_title, pr.subject, pr.id AS paper_id
+            SELECT ep.*, pr.exam_id, pr.title AS paper_title, COALESCE(ep.subject, pr.subject) AS subject, pr.id AS paper_id
             FROM exam_publications ep
             JOIN paper_records pr ON pr.id = ep.paper_id
             JOIN publication_classes pc ON pc.publication_id = ep.id
@@ -298,7 +381,7 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
                    ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
-                   pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
+                   pr.exam_id, COALESCE(ep.subject, pr.subject) AS subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count
             FROM student_attempts sa
             JOIN exam_publications ep ON ep.id = sa.publication_id
@@ -324,7 +407,7 @@ def _attempt_for_student_in_connection(con: Any, attempt_id: str, student_id: st
         """
         SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
                ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
-               pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
+               pr.exam_id, COALESCE(ep.subject, pr.subject) AS subject, pr.id AS paper_id, pr.title AS paper_title,
                COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count
         FROM student_attempts sa
         JOIN exam_publications ep ON ep.id = sa.publication_id
@@ -340,6 +423,7 @@ def _attempt_for_student_in_connection(con: Any, attempt_id: str, student_id: st
 
 
 def _attempt_payload(row: dict[str, Any]) -> dict[str, Any]:
+    results_released = bool(row.get("grading_completed_at"))
     payload = {
         "id": row["id"],
         "publication_id": row["publication_id"],
@@ -350,11 +434,15 @@ def _attempt_payload(row: dict[str, Any]) -> dict[str, Any]:
         "status": row.get("status"),
         "started_at": row.get("started_at"),
         "submitted_at": row.get("submitted_at"),
-        "score": row.get("score"),
-        "max_score": row.get("max_score"),
-        "score_percent": _score_percent(row.get("score"), row.get("max_score")),
+        "score": row.get("score") if results_released else None,
+        "max_score": row.get("max_score") if results_released else None,
+        "score_percent": _score_percent(row.get("score"), row.get("max_score")) if results_released else None,
         "time_spent_seconds": int(row.get("time_spent_seconds") or 0),
-        "show_results": bool(row.get("show_results_immediately")) or str(row.get("publication_status")) == "closed",
+        # A stored/AI score is only a draft until a teacher explicitly finishes
+        # the whole submission.  Publication timing must never expose it early.
+        "show_results": results_released,
+        "results_released": results_released,
+        "grading_completed_at": row.get("grading_completed_at"),
         "submission_mode": row.get("submission_mode") or "online",
         "publication_status": row.get("publication_status"),
         "start_at": row.get("start_at"),
@@ -401,7 +489,7 @@ def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) ->
         attempt = _ensure_assigned_attempt(root, str(row["id"]), student_id)
         payload = _attempt_payload(attempt)
         try:
-            questions, _answers = _load_attempt_question_payloads(project_root, attempt)
+            questions, _answers = _load_attempt_question_payloads(project_root, attempt, root=root)
             question_count = len(questions)
         except Exception:
             question_count = 0
@@ -440,7 +528,7 @@ def start_student_publication(
                 (now, attempt["id"]),
             )
         attempt = _attempt_for_student(root, str(attempt["id"]), str(student["id"]))
-    questions, _answers = _load_attempt_question_payloads(project_root, attempt)
+    questions, _answers = _load_attempt_question_payloads(project_root, attempt, root=root)
     return {
         "attempt": _attempt_payload(attempt),
         "questions": questions,
@@ -458,7 +546,7 @@ def save_student_answers(
 ) -> dict[str, Any]:
     student = _student_for_user(root, user)
     initial_attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
-    questions, _answer_keys = _load_attempt_question_payloads(project_root, initial_attempt)
+    questions, _answer_keys = _load_attempt_question_payloads(project_root, initial_attempt, root=root)
     _validate_answer_batch(answers, {str(item.get("question_id")) for item in questions})
     now = utc_now()
     rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers, now)
@@ -667,7 +755,7 @@ def submit_student_attempt(
     # An expired timer blocks further answer edits, but the client must still be
     # able to finalize the saved answers when its countdown reaches zero.
     _ensure_attempt_can_submit(attempt)
-    questions, answer_keys = _load_attempt_question_payloads(project_root, attempt)
+    questions, answer_keys = _load_attempt_question_payloads(project_root, attempt, root=root)
     if answers is not None:
         _validate_answer_batch(answers, {str(item.get("question_id")) for item in questions})
     qtype_by_id = {str(q["question_id"]): str(q.get("type") or "") for q in questions}
@@ -744,7 +832,7 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
                    ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
-                   pr.exam_id, pr.subject, pr.id AS paper_id, pr.title AS paper_title,
+                   pr.exam_id, COALESCE(ep.subject, pr.subject) AS subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count,
                    COALESCE((SELECT SUM(duration_ms) FROM proctor_events pe WHERE pe.attempt_id = sa.id), 0) AS screen_switch_duration_ms
             FROM student_attempts sa
@@ -762,9 +850,11 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
         payload = _attempt_payload(attempt)
         show_results = bool(payload["show_results"])
         question_order: list[str] = []
+        question_by_id: dict[str, dict[str, Any]] = {}
         try:
-            questions, _answer_keys = _load_attempt_question_payloads(project_root, attempt)
+            questions, _answer_keys = _load_attempt_question_payloads(project_root, attempt, root=root)
             question_order = [str(q["question_id"]) for q in questions]
+            question_by_id = {str(q["question_id"]): q for q in questions}
         except Exception:
             pass
         with connect(root) as con:
@@ -790,10 +880,25 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
             item = {
                 "question_id": answer.get("question_id"),
                 "answer": answer_payload.get("answer"),
+                "images": answer_payload.get("images") if isinstance(answer_payload.get("images"), list) else [],
                 "score": answer.get("score") if show_results else None,
                 "is_correct": is_correct if show_results else None,
+                "feedback": answer.get("feedback") if show_results else None,
                 "responded_at": answer.get("responded_at"),
             }
+            question = question_by_id.get(str(answer.get("question_id") or ""), {})
+            if show_results:
+                item.update(
+                    {
+                        "header": question.get("header"),
+                        "content": question.get("content"),
+                        "type": question.get("type"),
+                        "options": question.get("options"),
+                        "section_id": question.get("section_id"),
+                        "score_per_item": question.get("score_per_item"),
+                        "tags": question.get("tags") or [],
+                    }
+                )
             answers.append(item)
         order_index = {qid: index for index, qid in enumerate(question_order)}
         answers.sort(key=lambda item: order_index.get(str(item.get("question_id")), 999999))
@@ -806,6 +911,11 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
                     "correct_count": correct_count if show_results else None,
                     "wrong_count": wrong_count if show_results else None,
                     "answered_count": len(answer_rows),
+                    "average_time_per_question_seconds": (
+                        round(int(attempt.get("time_spent_seconds") or 0) / max(1, len(question_order)), 1)
+                        if show_results and question_order
+                        else None
+                    ),
                 },
             }
         )

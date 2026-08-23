@@ -224,7 +224,7 @@ $bat = @'
 cd /d "%~dp0"
 "%~dp0pythonw.exe" -m solaire.desktop_entry --port 8000
 '@
-Set-Content -Path (Join-Path $runtimeRoot "SolEdu-LocalServer.bat") -Value $bat -Encoding ASCII
+Set-Content -Path (Join-Path $runtimeRoot "EducationHelper-LocalServer.bat") -Value $bat -Encoding ASCII
 
 Sync-SampleProject -RepoRoot $repoRoot
 

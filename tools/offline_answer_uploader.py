@@ -1,4 +1,4 @@
-"""SolEdu offline answer scanner uploader (stdlib-only Tk application)."""
+"""EducationHelper offline answer scanner uploader (stdlib-only Tk application)."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ class ApiClient:
         return self.request(path, method="POST", data=data, content_type="application/json")
 
     def upload(self, path: str, fields: dict[str, str], files: list[Path]):
-        boundary = f"----SolEdu{uuid.uuid4().hex}"
+        boundary = f"----EducationHelper{uuid.uuid4().hex}"
         chunks: list[bytes] = []
         for key, value in fields.items():
             chunks.extend(
@@ -87,7 +87,7 @@ class ApiClient:
 class UploaderApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("SolEdu 线下答卷采集器")
+        self.title("EducationHelper（EH）线下答卷采集器")
         self.geometry("820x620")
         self.minsize(760, 560)
         self.client = ApiClient()

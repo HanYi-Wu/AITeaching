@@ -18,7 +18,7 @@ def _pick_ephemeral_port() -> int:
 def main() -> None:
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="SolEdu 本地服务")
+    parser = argparse.ArgumentParser(description="EducationHelper 本地服务")
     parser.add_argument(
         "--port",
         type=int,

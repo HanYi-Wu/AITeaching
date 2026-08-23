@@ -27,7 +27,7 @@ describe("PlatformPaperAnalysisCharts", () => {
     expect(screen.getByText("查看未开始、答题中和已完成人数，及时提醒未完成学生。")).toBeInTheDocument();
     expect(screen.queryByText(/PublicQ/)).not.toBeInTheDocument();
     expect(screen.getAllByText("时间效率").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("监考诚信").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("考试行为稳定度").length).toBeGreaterThan(0);
     expect(screen.getAllByText("模块掌握度").length).toBeGreaterThan(0);
     expect(screen.queryByText("Time Efficiency")).not.toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-radar")).toHaveClass("min-w-0", "overflow-hidden");

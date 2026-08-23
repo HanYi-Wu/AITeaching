@@ -51,7 +51,7 @@ async def run_subagent(
         {
             "role": "system",
             "content": (
-                "你是 SolEdu 子任务分析助手。在尽量少轮次内完成目标，"
+                "你是 EducationHelper 子任务分析助手。在尽量少轮次内完成目标，"
                 "仅输出最终结论，过程性说明保持简短。使用提供的工具获取事实数据。"
             ),
         },

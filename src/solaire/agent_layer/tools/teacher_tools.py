@@ -36,6 +36,7 @@ from solaire.web.exam_workspace_service import (
 )
 from solaire.web.paper_service import (
     analyze_paper,
+    complete_paper_attempt_grading,
     find_paper_submissions,
     get_teacher_student_profile,
     grade_paper_answer,
@@ -473,6 +474,8 @@ def tool_teacher_student_profile(ctx: InvocationContext, args: dict[str, Any]) -
                         user=_actor(ctx),
                         student_id=str(args.get("student_id") or "") or None,
                         student_query=str(args.get("student_query") or "") or None,
+                        date_from=str(args.get("date_from") or "") or None,
+                        date_to=str(args.get("date_to") or "") or None,
                     )
                 except ValueError:
                     continue
@@ -490,6 +493,8 @@ def tool_teacher_student_profile(ctx: InvocationContext, args: dict[str, Any]) -
             user=_actor(ctx),
             student_id=str(args.get("student_id") or "") or None,
             student_query=str(args.get("student_query") or "") or None,
+            date_from=str(args.get("date_from") or "") or None,
+            date_to=str(args.get("date_to") or "") or None,
         )
 
     return _run(invoke)
@@ -566,5 +571,17 @@ def tool_paper_manual_grade(ctx: InvocationContext, args: dict[str, Any]) -> Too
             score=float(args.get("score")),
             feedback=str(args.get("feedback") or "") or None,
             is_correct=args.get("is_correct") if isinstance(args.get("is_correct"), bool) else None,
+        )
+    )
+
+
+def tool_paper_complete_grading(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(
+        lambda: complete_paper_attempt_grading(
+            default_platform_root(),
+            ctx.project_root,
+            paper_id=_required(args, "paper_id"),
+            attempt_id=_required(args, "attempt_id"),
+            user=_actor(ctx),
         )
     )
