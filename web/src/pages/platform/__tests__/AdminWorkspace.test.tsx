@@ -77,4 +77,18 @@ describe("AdminWorkspace", () => {
     expect(screen.queryByRole("button", { name: "教师端" })).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.apiAgentLlmSettingsGet).toHaveBeenCalled());
   });
+
+  it("guides a first-time administrator to create a school and its account", async () => {
+    render(
+      <AdminWorkspace
+        user={{ id: "admin1", role: "admin", username: "admin", display_name: "Admin", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "首次使用清单" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建第一所学校" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建学校端账号" })).toBeInTheDocument();
+  });
 });

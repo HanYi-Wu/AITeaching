@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Bot, Plus, RefreshCw, School, UserPlus } from "lucide-react";
 import { apiAgentLlmSettingsGet, type AgentLlmSettingsResponse } from "../../api/client";
 import { ExtensionsPanel } from "../../components/ExtensionsPanel";
@@ -11,6 +11,7 @@ import {
   type SchoolRecord,
 } from "../../platform/auth";
 import { PlatformShell } from "./PlatformShell";
+import { GettingStartedChecklist } from "./GettingStartedChecklist";
 
 type Props = {
   user: PlatformUser;
@@ -51,6 +52,8 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
   const [llmSettings, setLlmSettings] = useState<AgentLlmSettingsResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [aiLoading, setAiLoading] = useState(true);
+  const schoolFormRef = useRef<HTMLFormElement | null>(null);
+  const schoolAccountFormRef = useRef<HTMLFormElement | null>(null);
 
   async function refresh() {
     onError(null);
@@ -105,6 +108,7 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
       setSchoolUsername("");
       setSchoolPassword("");
       setSchoolDisplayName("");
+      await refresh();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -132,6 +136,25 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
       actions={actions}
       onLogout={onLogout}
     >
+      <div className="mb-6">
+        <GettingStartedChecklist
+          description="先创建学校，再为该学校创建可登录的学校端账号"
+          steps={[
+            {
+              label: "创建学校",
+              complete: schoolMeta.total > 0,
+              actionLabel: "创建第一所学校",
+              onAction: () => schoolFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+            },
+            {
+              label: "创建学校端账号",
+              complete: schools.some((school) => Number(school.school_user_count || 0) > 0),
+              actionLabel: "创建学校端账号",
+              onAction: () => schoolAccountFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+            },
+          ]}
+        />
+      </div>
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_440px]">
         <section>
           <div className="mb-3 flex items-center gap-2">
@@ -214,7 +237,7 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
             />
           </section>
 
-          <form onSubmit={(event) => void submitSchool(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <form ref={schoolFormRef} onSubmit={(event) => void submitSchool(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">创建学校</h2>
             <input
               value={schoolName}
@@ -233,7 +256,7 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
             </button>
           </form>
 
-          <form onSubmit={(event) => void submitSchoolUser(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <form ref={schoolAccountFormRef} onSubmit={(event) => void submitSchoolUser(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">创建学校端账号</h2>
             <select
               value={selectedSchoolId}

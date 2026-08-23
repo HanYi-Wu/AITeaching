@@ -43,9 +43,13 @@ import {
   type TeacherClassRecord,
 } from "../../platform/auth";
 import { PlatformPaperAnalysisCharts } from "./AnalysisCharts";
+import { GettingStartedChecklist } from "./GettingStartedChecklist";
 
 type Props = {
   onOpenAnalysis?: (examId: string) => void;
+  onOpenBank?: () => void;
+  onOpenTemplates?: () => void;
+  onOpenCompose?: () => void;
   onError?: (message: string | null) => void;
 };
 
@@ -128,7 +132,7 @@ function formatStudentAnswer(value: unknown): string {
   }
 }
 
-export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
+export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError }: Props) {
   const [papers, setPapers] = useState<PlatformPaperRecord[]>([]);
   const [paperMeta, setPaperMeta] = useState<PageMeta>({ total: 0, page: 1, pageSize: 10, totalPages: 1 });
   const [paperQuery, setPaperQuery] = useState<PaperQuery>({
@@ -1475,8 +1479,20 @@ export function PapersWorkspace({ onOpenAnalysis, onError }: Props) {
               ) : null}
             </div>
           ) : (
-            <div className="flex h-full items-center justify-center text-sm text-slate-500">
-              {loading ? "正在加载试卷..." : "暂无试卷"}
+            <div className="flex h-full items-start justify-center overflow-auto p-6">
+              {loading ? <p className="py-16 text-sm text-slate-500">正在加载试卷...</p> : (
+                <div className="w-full max-w-5xl space-y-4">
+                  <GettingStartedChecklist
+                    description="准备题目和模板后即可组卷、预览并发布到班级"
+                    steps={[
+                      { label: "准备题目", complete: false, actionLabel: "去创建题目", onAction: onOpenBank },
+                      { label: "准备试卷模板", complete: false, actionLabel: "去创建模板", onAction: onOpenTemplates },
+                      { label: "生成第一份试卷", complete: false, actionLabel: "开始组卷", onAction: onOpenCompose },
+                    ]}
+                  />
+                  <p className="text-center text-sm text-slate-500">当前还没有试卷，可从上面的任一步开始。</p>
+                </div>
+              )}
             </div>
           )}
         </main>

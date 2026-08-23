@@ -113,6 +113,19 @@ describe("StudentWorkspace", () => {
     );
   });
 
+  it("shows a student getting-started checklist derived from real progress", async () => {
+    render(
+      <StudentWorkspace
+        user={{ id: "s1", role: "student", username: "stu_abcd", display_name: "Student", status: "active" }}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "首次使用清单" })).toBeInTheDocument();
+    expect(screen.getByText("完成改密、查看待答试卷并提交第一份答卷")).toBeInTheDocument();
+    expect(screen.getAllByText("已完成").length).toBeGreaterThanOrEqual(2);
+  });
+
   it("forces first-login students to change password before entering papers", async () => {
     mocks.updateStudentAccount.mockResolvedValue({
       user: {

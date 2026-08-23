@@ -32,6 +32,7 @@ import {
   type StudentResultRecord,
 } from "../../platform/auth";
 import { PlatformShell } from "./PlatformShell";
+import { GettingStartedChecklist } from "./GettingStartedChecklist";
 
 type Props = {
   user: PlatformUser;
@@ -613,6 +614,15 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         ) : null}
 
         {activeView === "home" && !mustChangePassword ? (
+          <>
+          <GettingStartedChecklist
+            description="完成改密、查看待答试卷并提交第一份答卷"
+            steps={[
+              { label: "完成首次改密", complete: !mustChangePassword, actionLabel: "前往设置", onAction: () => setActiveView("account") },
+              { label: "查看待答试卷", complete: papers.length > 0, actionLabel: "查看试卷", onAction: () => setActiveView("papers") },
+              { label: "提交第一份答卷", complete: results.length > 0, actionLabel: "开始答题", onAction: () => setActiveView("papers") },
+            ]}
+          />
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
@@ -652,6 +662,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
               </button>
             </div>
           </section>
+          </>
         ) : null}
 
         {activeView === "papers" && !mustChangePassword ? (

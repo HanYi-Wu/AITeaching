@@ -113,7 +113,14 @@ def create_school(root: Path, *, name: str) -> dict[str, Any]:
 def list_schools(root: Path) -> list[dict[str, Any]]:
     init_platform_db(root)
     with connect(root) as con:
-        rows = con.execute("SELECT * FROM schools ORDER BY created_at DESC").fetchall()
+        rows = con.execute(
+            """
+            SELECT s.*,
+                   (SELECT COUNT(*) FROM users u WHERE u.school_id = s.id AND u.role = 'school') AS school_user_count
+            FROM schools s
+            ORDER BY s.created_at DESC
+            """
+        ).fetchall()
     return [row_to_dict(row) or {} for row in rows]
 
 

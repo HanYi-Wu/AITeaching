@@ -400,6 +400,9 @@ function AppShell() {
                   )}
                   {page === "papers" && (
                     <PapersWorkspace
+                      onOpenBank={() => setPage("bank")}
+                      onOpenTemplates={() => setPage("template")}
+                      onOpenCompose={() => setPage("compose")}
                       onOpenAnalysis={() => {
                         setPage("analysis");
                       }}

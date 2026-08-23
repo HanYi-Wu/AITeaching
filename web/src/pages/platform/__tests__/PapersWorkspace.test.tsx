@@ -402,6 +402,29 @@ describe("PapersWorkspace", () => {
     );
   });
 
+  it("turns the empty paper page into a teacher getting-started entry", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [] });
+    const onOpenBank = vi.fn();
+    const onOpenTemplates = vi.fn();
+    const onOpenCompose = vi.fn();
+
+    render(
+      <PapersWorkspace
+        onOpenBank={onOpenBank}
+        onOpenTemplates={onOpenTemplates}
+        onOpenCompose={onOpenCompose}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "首次使用清单" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "去创建题目" }));
+    await userEvent.click(screen.getByRole("button", { name: "去创建模板" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始组卷" }));
+    expect(onOpenBank).toHaveBeenCalledOnce();
+    expect(onOpenTemplates).toHaveBeenCalledOnce();
+    expect(onOpenCompose).toHaveBeenCalledOnce();
+  });
+
   it("saves the displayed existing score instead of silently replacing it with zero", async () => {
     mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
     mocks.listPaperSubmissions.mockResolvedValue({

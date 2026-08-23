@@ -237,6 +237,21 @@ describe("SchoolWorkspace", () => {
     expect(await screen.findByText(/已确认并写入 1 行数据/)).toBeInTheDocument();
   });
 
+  it("shows the school setup order and opens the unfinished assignment step", async () => {
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "首次使用清单" })).toBeInTheDocument();
+    expect(screen.getByText("按顺序完成教师、班级、学生和任课分配")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "分配任课教师" }));
+    expect(screen.getByTestId("assign-teacher-class")).toBeInTheDocument();
+  });
+
   it("reviews and imports all school data in one AI operation", async () => {
     mocks.getSchoolAiSettings.mockResolvedValue({
       ai_available: true,

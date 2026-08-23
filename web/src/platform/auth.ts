@@ -37,6 +37,7 @@ export type SchoolRecord = {
   ai_enabled: number;
   created_at: string;
   updated_at: string;
+  school_user_count?: number;
 };
 
 export type SchoolAiSettings = {

@@ -73,6 +73,7 @@ def test_admin_creates_school_and_school_account(web_client: TestClient) -> None
     listed = web_client.get("/api/schools", headers=headers)
     assert listed.status_code == 200
     assert listed.json()["schools"][0]["name"] == "No.1 School"
+    assert listed.json()["schools"][0]["school_user_count"] == 1
 
 
 def test_admin_school_list_supports_pagination(web_client: TestClient) -> None:
