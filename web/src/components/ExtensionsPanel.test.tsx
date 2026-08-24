@@ -89,4 +89,20 @@ describe("ExtensionsPanel", () => {
     await waitFor(() => expect(mocks.confirm).toHaveBeenCalled());
     expect(mocks.install).toHaveBeenCalledWith("pandoc");
   });
+
+  it("explains how to enable Windows installation when winget is missing", async () => {
+    mocks.list.mockResolvedValue({
+      extensions: [extension({
+        platform: "win32",
+        winget_on_path: false,
+        can_auto_install: false,
+        install_mode: "manual",
+      })],
+    });
+
+    render(<TestI18nProvider><ExtensionsPanel onError={vi.fn()} /></TestI18nProvider>);
+
+    expect(await screen.findByText(/未检测到 Windows 系统安装器/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "获取 Windows 系统安装器" })).toBeInTheDocument();
+  });
 });

@@ -235,6 +235,9 @@ export function ExtensionsPanel({ onError }: Props) {
   const [installDetail, setInstallDetail] = useState("");
   const [installOk, setInstallOk] = useState(false);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const windowsInstallerMissing = Boolean(
+    extensions?.some((extension) => extension.platform === "win32" && extension.winget_on_path === false),
+  );
 
   const load = useCallback(async () => {
     onError(null);
@@ -381,6 +384,22 @@ export function ExtensionsPanel({ onError }: Props) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-600">{t("ext.intro")}</p>
+      {windowsInstallerMissing ? (
+        <div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-semibold">{t("ext.windowsInstallerMissingTitle")}</p>
+            <p className="mt-1 text-xs leading-5 text-amber-900">{t("ext.windowsInstallerMissingHint")}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void openExternalUrl("https://apps.microsoft.com/detail/9nblggh4nns1")}
+            className="inline-flex shrink-0 items-center justify-center gap-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-950 hover:bg-amber-100"
+          >
+            <Download className="h-3.5 w-3.5" />
+            {t("ext.getWindowsInstaller")}
+          </button>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
