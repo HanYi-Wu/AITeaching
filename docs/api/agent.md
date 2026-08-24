@@ -22,6 +22,7 @@
 | GET | `/config` | 是否已配置密钥、当前 `provider`、模型名、`reasoning_effort`（`high` / `max`）等 |
 | GET | `/llm-settings` | 当前生效的模型参数预览（访问密钥脱敏）；合并顺序为环境变量 → 本机用户目录 `agent/llm_overrides.json` → 当前项目 `.solaire/agent/llm_overrides.json`（后者优先）。响应含 `persist_scope`：`global` 表示未打开项目、`project` 表示已打开；`has_user_api_key_override` / `has_project_api_key_override` 标明密钥来源；`provider` 为当前服务类型；`provider_options` 为可选服务类型列表（仅 `id`，界面文案由客户端翻译）；`reasoning_effort` 为 `high` 或 `max`（思考强度，默认 `high`） |
 | PUT | `/llm-settings` | 未打开项目时写入本机 `agent/llm_overrides.json`；已打开项目时写入项目内同名文件（项目层覆盖本机与环境中的同名项）。可写字段含 `provider`（`openai` / `anthropic` / `openai_compat` / `deepseek`）、`main_model`、`fast_model`、`base_url`、`api_key`、`max_tokens`、`reasoning_effort`（`high` / `max`，无效值返回 400）等 |
+| POST | `/llm-settings/test` | 使用服务端当前生效的快速模型发送最小测试请求；成功返回 `provider`、`model`、`latency_ms`，未配置密钥返回 400，连接或供应商错误返回 502 且不会回传密钥或原始异常文本。公网模式下仅平台管理员可调用 |
 | GET | `/safety-mode` | 当前护栏模式与可选列表（`moderato` / `allegro` / `vivace` / `prestissimo`），合并顺序与 `llm_overrides` 类似（本机可被项目覆盖） |
 | PUT | `/safety-mode` | 未打开项目时写入本机；已打开项目时写入项目 `.solaire/agent/safety_mode.json` |
 | GET | `/skills` | 内置快捷协助列表（`id` / `label` / `description` / `suggested_user_input`） |
