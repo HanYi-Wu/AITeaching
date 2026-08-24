@@ -1,8 +1,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, Save, Trash2 } from "lucide-react";
+import { CircleCheck, Loader2, PlugZap, Save, Trash2 } from "lucide-react";
 import {
   apiAgentLlmSettingsPut,
+  apiAgentLlmSettingsTest,
   type AgentLlmProvider,
   type AgentLlmReasoningEffort,
   type AgentLlmSettingsResponse,
@@ -95,6 +96,8 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
   const [reasoningEffort, setReasoningEffort] = useState<AgentLlmReasoningEffort>("high");
   const [msg, setMsg] = useState<string | null>(null);
   const [savingLocal, setSavingLocal] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionResult, setConnectionResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -131,7 +134,7 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
     setFastModel(pr.fast);
   }, [provider]);
 
-  const busy = saving || savingLocal;
+  const busy = saving || savingLocal || testingConnection;
 
   const card =
     variant === "welcome"
@@ -228,6 +231,26 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setSavingLocal(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    setConnectionResult(null);
+    onError(null);
+    try {
+      const result = await apiAgentLlmSettingsTest();
+      setConnectionResult(
+        t("settings:connectionSuccess", {
+          provider: result.provider,
+          model: result.model,
+          latency: result.latency_ms,
+        }),
+      );
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTestingConnection(false);
     }
   };
 
@@ -387,6 +410,20 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
         <p className={variant === "welcome" ? "text-sm text-emerald-300" : "text-sm text-emerald-700"}>{msg}</p>
       ) : null}
 
+      {connectionResult ? (
+        <div
+          role="status"
+          className={
+            variant === "welcome"
+              ? "flex items-start gap-2 rounded-md border border-emerald-700/60 bg-emerald-950/30 p-3 text-sm text-emerald-200"
+              : "flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"
+          }
+        >
+          <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{connectionResult}</span>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
@@ -400,6 +437,19 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
           {data?.persist_scope === "project" ? t("settings:saveToProject") : t("settings:saveToProfile")}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void handleTestConnection()}
+          className={
+            variant === "welcome"
+              ? "inline-flex items-center gap-2 rounded-md border border-slate-500 bg-slate-900/50 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+              : "inline-flex items-center gap-2 rounded-md border border-violet-200 bg-white px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+          }
+        >
+          {testingConnection ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
+          {testingConnection ? t("settings:testingConnection") : t("settings:testConnection")}
         </button>
         {data?.persist_scope === "project" && data.has_project_api_key_override && (
           <button

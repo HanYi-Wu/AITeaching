@@ -963,6 +963,17 @@ export async function apiAgentLlmSettingsPut(body: {
   return apiPut<{ ok: boolean }>("/api/agent/llm-settings", body);
 }
 
+export type AgentLlmConnectionTestResponse = {
+  ok: true;
+  provider: AgentLlmProvider;
+  model: string;
+  latency_ms: number;
+};
+
+export async function apiAgentLlmSettingsTest(): Promise<AgentLlmConnectionTestResponse> {
+  return apiPost<AgentLlmConnectionTestResponse>("/api/agent/llm-settings/test", {});
+}
+
 export type AgentSafetyModeOption = {
   id: string;
   label: string;

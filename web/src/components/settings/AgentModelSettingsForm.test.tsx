@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { createRef, useState } from "react";
 import { describe, expect, it, vi, beforeAll, beforeEach } from "vitest";
 
-import { apiAgentLlmSettingsPut, type AgentLlmSettingsResponse } from "../../api/client";
+import { apiAgentLlmSettingsPut, apiAgentLlmSettingsTest, type AgentLlmSettingsResponse } from "../../api/client";
 import { AgentModelSettingsForm, type AgentModelSettingsFormHandle } from "./AgentModelSettingsForm";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
 
@@ -12,6 +12,7 @@ vi.mock("../../api/client", async () => {
   return {
     ...actual,
     apiAgentLlmSettingsPut: vi.fn(),
+    apiAgentLlmSettingsTest: vi.fn(),
   };
 });
 
@@ -73,6 +74,7 @@ describe("AgentModelSettingsForm", () => {
 
   beforeEach(() => {
     vi.mocked(apiAgentLlmSettingsPut).mockClear();
+    vi.mocked(apiAgentLlmSettingsTest).mockReset();
   });
 
   it("switching provider updates preset model names and save sends provider", async () => {
@@ -116,5 +118,22 @@ describe("AgentModelSettingsForm", () => {
       expect(put).toHaveBeenCalled();
     });
     expect(put.mock.calls[0][0].reasoning_effort).toBe("max");
+  });
+
+  it("tests the effective saved connection and shows the verified model", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiAgentLlmSettingsTest).mockResolvedValue({
+      ok: true,
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      latency_ms: 321,
+    });
+
+    render(<Wrapper initial={{ ...baseResponse(), llm_configured: true }} />);
+    await user.click(screen.getByRole("button", { name: "测试当前连接" }));
+
+    await waitFor(() => expect(apiAgentLlmSettingsTest).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/deepseek-v4-flash/)).toBeInTheDocument();
+    expect(screen.getByText(/321/)).toBeInTheDocument();
   });
 });

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from solaire.agent_layer.llm.llm_overrides import overrides_file
+from solaire.agent_layer.llm.router import LLMSettings
 
 
 def test_llm_settings_get_includes_provider_and_options(web_client: TestClient) -> None:
@@ -85,3 +88,73 @@ def test_agent_config_includes_provider(web_client: TestClient) -> None:
     body = r.json()
     assert body.get("provider") == "openai"
     assert body.get("reasoning_effort") == "max"
+
+
+def test_llm_settings_connection_test_reports_effective_model(
+    web_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = LLMSettings(
+        api_key="sk-test-secret",
+        base_url="https://provider.example/v1",
+        provider="openai_compat",
+        main_model="main-model",
+        fast_model="fast-model",
+    )
+
+    class FakeAdapter:
+        async def chat(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(content="ok")
+
+    monkeypatch.setattr("solaire.web.agent_api.load_llm_settings", lambda _root: settings)
+    monkeypatch.setattr("solaire.agent_layer.llm.router.ModelRouter.fast", lambda _self: FakeAdapter())
+
+    response = web_client.post("/api/agent/llm-settings/test")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["provider"] == "openai_compat"
+    assert response.json()["model"] == "fast-model"
+    assert response.json()["latency_ms"] >= 0
+
+
+def test_llm_settings_connection_test_rejects_missing_key(
+    web_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = LLMSettings(
+        api_key=None,
+        base_url=None,
+        provider="openai",
+        main_model="main-model",
+        fast_model="fast-model",
+    )
+    monkeypatch.setattr("solaire.web.agent_api.load_llm_settings", lambda _root: settings)
+
+    response = web_client.post("/api/agent/llm-settings/test")
+
+    assert response.status_code == 400
+    assert "API 密钥" in response.json()["detail"]
+
+
+def test_llm_settings_connection_test_sanitizes_provider_failure(
+    web_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = LLMSettings(
+        api_key="sk-do-not-leak",
+        base_url="https://provider.example/v1",
+        provider="deepseek",
+        main_model="main-model",
+        fast_model="fast-model",
+    )
+
+    class FailingAdapter:
+        async def chat(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("401 invalid sk-do-not-leak")
+
+    monkeypatch.setattr("solaire.web.agent_api.load_llm_settings", lambda _root: settings)
+    monkeypatch.setattr("solaire.agent_layer.llm.router.ModelRouter.fast", lambda _self: FailingAdapter())
+
+    response = web_client.post("/api/agent/llm-settings/test")
+
+    assert response.status_code == 502
+    assert "密钥" in response.json()["detail"]
+    assert "sk-do-not-leak" not in response.text
