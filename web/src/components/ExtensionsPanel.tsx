@@ -4,6 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   AlertCircle,
   CheckCircle2,
+  ClipboardCopy,
   Download,
   ExternalLink,
   File,
@@ -24,6 +25,7 @@ import {
 } from "../api/client";
 import { pickHostPath } from "../lib/pickExtensionPath";
 import { openExternalUrl } from "../lib/openExternalUrl";
+import { confirmDialog } from "../lib/confirmDialog";
 import { cn } from "../lib/utils";
 
 function extensionDisplayReady(ext: SystemExtensionStatus): boolean {
@@ -36,6 +38,7 @@ function extensionDisplayReady(ext: SystemExtensionStatus): boolean {
 function ExtensionCard({
   ext,
   onInstallClick,
+  onCopyCommand,
   onPickPath,
   onClearManual,
   installBusyId,
@@ -44,6 +47,7 @@ function ExtensionCard({
 }: {
   ext: SystemExtensionStatus;
   onInstallClick: (id: string) => void;
+  onCopyCommand: (command: string) => void;
   onPickPath: (id: string, locationKind: "dir" | "file") => void;
   onClearManual: (id: string) => void;
   installBusyId: string | null;
@@ -144,6 +148,17 @@ function ExtensionCard({
             {installBusy ? t("ext.installing") : t("ext.startInstall")}
           </button>
         ) : null}
+        {ext.install_mode === "command" && ext.install_command ? (
+          <button
+            type="button"
+            disabled={pathBusy || recheckBusy}
+            onClick={() => onCopyCommand(ext.install_command as string)}
+            className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1.5 text-xs font-medium text-violet-900 hover:bg-violet-100 disabled:opacity-50"
+          >
+            <ClipboardCopy className="h-3.5 w-3.5" />
+            {t("ext.copyInstallCommand")}
+          </button>
+        ) : null}
         {ext.id === "latex" ? (
           <>
             <button
@@ -219,6 +234,7 @@ export function ExtensionsPanel({ onError }: Props) {
   const [installTitle, setInstallTitle] = useState("");
   const [installDetail, setInstallDetail] = useState("");
   const [installOk, setInstallOk] = useState(false);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     onError(null);
@@ -319,8 +335,38 @@ export function ExtensionsPanel({ onError }: Props) {
     }
   };
 
-  const handleInstallClick = (extId: string) => {
-    void runInstall(extId);
+  const handleInstallClick = async (extId: string) => {
+    const extension = extensions?.find((item) => item.id === extId);
+    if (
+      extension?.requires_confirmation &&
+      !(await confirmDialog(t("ext.confirmSystemInstall", { name: extension.name }), t("ext.installDialogTitle")))
+    ) {
+      return;
+    }
+    await runInstall(extId);
+  };
+
+  const handleCopyCommand = async (command: string) => {
+    setCopyNotice(null);
+    onError(null);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = command;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        if (!document.execCommand("copy")) throw new Error(t("ext.copyFailed"));
+        textarea.remove();
+      }
+      setCopyNotice(t("ext.commandCopied"));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   if (loading && !extensions) {
@@ -346,6 +392,7 @@ export function ExtensionsPanel({ onError }: Props) {
           {t("ext.recheck")}
         </button>
       </div>
+      {copyNotice ? <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{copyNotice}</p> : null}
 
       <div className="space-y-3">
         {(extensions ?? []).map((ext) => (
@@ -353,6 +400,7 @@ export function ExtensionsPanel({ onError }: Props) {
             key={ext.id}
             ext={ext}
             onInstallClick={handleInstallClick}
+            onCopyCommand={(command) => void handleCopyCommand(command)}
             onPickPath={handlePickPath}
             onClearManual={handleClearManual}
             installBusyId={installBusyId}

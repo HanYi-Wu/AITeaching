@@ -37,6 +37,8 @@ def test_extensions_list_returns_items() -> None:
         assert isinstance(ext["executables"], list)
         assert "has_manual_paths" in ext
         assert "manual_paths" in ext
+        assert ext["install_mode"] in {"winget", "command", "manual"}
+        assert "requires_confirmation" in ext
         for exe in ext["executables"]:
             assert "resolved_from" in exe
 
@@ -89,6 +91,48 @@ def test_extension_install_unknown_id() -> None:
     assert r.status_code == 200
     body = r.json()
     assert body.get("ok") is False
+
+
+def test_linux_extension_returns_copyable_install_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/apt-get" if name == "apt-get" else None
+
+    monkeypatch.setattr("solaire.web.extension_registry.sys.platform", "linux")
+    monkeypatch.setattr("solaire.web.extension_registry.shutil.which", fake_which)
+
+    client = TestClient(app)
+    listed = client.get("/api/system/extensions").json()["extensions"]
+    latex = next(ext for ext in listed if ext["id"] == "latex")
+    assert latex["install_mode"] == "command"
+    assert "sudo apt-get install" in latex["install_command"]
+    assert "texlive-xetex" in latex["install_command"]
+    assert latex["can_auto_install"] is False
+
+    response = client.post("/api/system/extensions/pandoc/install")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["action"] == "command"
+    assert "sudo apt-get install -y pandoc" in response.json()["command"]
+
+
+def test_windows_extension_advertises_confirmation_before_winget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("solaire.web.extension_registry.sys.platform", "win32")
+    monkeypatch.setattr(
+        "solaire.web.extension_registry.shutil.which",
+        lambda name: r"C:\Windows\winget.exe" if name == "winget" else None,
+    )
+
+    client = TestClient(app)
+    pandoc = next(
+        ext for ext in client.get("/api/system/extensions").json()["extensions"] if ext["id"] == "pandoc"
+    )
+    assert pandoc["install_mode"] == "winget"
+    assert pandoc["can_auto_install"] is True
+    assert pandoc["requires_confirmation"] is True
 
 
 

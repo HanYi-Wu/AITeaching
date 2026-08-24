@@ -863,6 +863,9 @@ export type SystemExtensionStatus = {
   executables: SystemExtensionExecutable[];
   ready: boolean;
   can_auto_install: boolean;
+  install_mode?: "winget" | "command" | "manual";
+  install_command?: string | null;
+  requires_confirmation?: boolean;
   platform: string;
   winget_on_path: boolean | null;
   python_ocr_ready?: boolean;
@@ -883,8 +886,8 @@ export async function apiSystemExtensions(): Promise<SystemExtensionsResponse> {
 
 export async function apiSystemExtensionInstall(
   extId: string,
-): Promise<{ ok: boolean; message: string }> {
-  return apiPost<{ ok: boolean; message: string }>(
+): Promise<{ ok: boolean; message: string; action?: "launched" | "command"; command?: string }> {
+  return apiPost<{ ok: boolean; message: string; action?: "launched" | "command"; command?: string }>(
     `/api/system/extensions/${encodeURIComponent(extId)}/install`,
     {},
   );

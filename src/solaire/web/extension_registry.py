@@ -58,6 +58,29 @@ EXTENSIONS: list[ExtensionDef] = [
 
 _VERSION_TIMEOUT_SEC = 5.0
 
+_LINUX_PACKAGES: dict[str, dict[str, list[str]]] = {
+    "apt-get": {
+        "latex": ["latexmk", "texlive-xetex", "texlive-lang-chinese", "fonts-noto-cjk"],
+        "pandoc": ["pandoc"],
+        "tesseract": ["tesseract-ocr", "tesseract-ocr-chi-sim"],
+    },
+    "dnf": {
+        "latex": ["latexmk", "texlive-xetex", "texlive-collection-langchinese", "google-noto-sans-cjk-fonts"],
+        "pandoc": ["pandoc"],
+        "tesseract": ["tesseract", "tesseract-langpack-chi_sim"],
+    },
+    "yum": {
+        "latex": ["latexmk", "texlive-xetex", "texlive-collection-langchinese"],
+        "pandoc": ["pandoc"],
+        "tesseract": ["tesseract", "tesseract-langpack-chi_sim"],
+    },
+    "pacman": {
+        "latex": ["latexmk", "texlive-xetex", "texlive-langchinese", "noto-fonts-cjk"],
+        "pandoc": ["pandoc-cli"],
+        "tesseract": ["tesseract", "tesseract-data-chi_sim"],
+    },
+}
+
 # Regex per executable name (applied to stdout+stderr, first match wins)
 _VERSION_PATTERNS: dict[str, re.Pattern[str]] = {
     "latexmk": re.compile(r"Latexmk.*?(\d[\d.]+)", re.IGNORECASE | re.DOTALL),
@@ -98,6 +121,23 @@ def _run_version(exe_path: str, name: str) -> str | None:
 
 def _winget_available() -> bool:
     return sys.platform == "win32" and shutil.which("winget") is not None
+
+
+def _linux_install_command(ext_id: str) -> str | None:
+    if not sys.platform.startswith("linux"):
+        return None
+    manager = next((name for name in _LINUX_PACKAGES if shutil.which(name)), None)
+    if manager is None:
+        return None
+    packages = _LINUX_PACKAGES[manager].get(ext_id)
+    if not packages:
+        return None
+    joined = " ".join(packages)
+    if manager == "apt-get":
+        return f"sudo apt-get update && sudo apt-get install -y {joined}"
+    if manager in {"dnf", "yum"}:
+        return f"sudo {manager} install -y {joined}"
+    return f"sudo pacman -S --needed {joined}"
 
 
 def _pytesseract_available() -> bool:
@@ -230,6 +270,8 @@ def detect_extension(ext: ExtensionDef) -> dict[str, Any]:
     ready = all(e["on_path"] for e in exes)
     winget_id = ext.get("winget_id")
     can_auto = _winget_available() and bool(winget_id)
+    install_command = _linux_install_command(ext["id"])
+    install_mode = "winget" if can_auto else "command" if install_command else "manual"
 
     out: dict[str, Any] = {
         "id": ext["id"],
@@ -240,6 +282,9 @@ def detect_extension(ext: ExtensionDef) -> dict[str, Any]:
         "executables": exes,
         "ready": ready,
         "can_auto_install": can_auto,
+        "install_mode": install_mode,
+        "install_command": install_command,
+        "requires_confirmation": install_mode == "winget",
         "platform": sys.platform,
         "winget_on_path": shutil.which("winget") is not None if sys.platform == "win32" else None,
         "has_manual_paths": bool(manual),
@@ -428,8 +473,19 @@ def install_extension(ext_id: str) -> dict[str, Any]:
     ext = next((e for e in EXTENSIONS if e["id"] == ext_id), None)
     if ext is None:
         return {"ok": False, "message": "未知的扩展标识。"}
+    install_command = _linux_install_command(ext_id)
+    if install_command:
+        return {
+            "ok": True,
+            "action": "command",
+            "command": install_command,
+            "message": "请复制命令到 Linux 终端执行；完成后回到本页点击“重新检测”。",
+        }
     winget_id = ext.get("winget_id")
     if not winget_id:
         hint = ext.get("install_hint") or "请使用「手动下载」或官方文档完成安装。"
         return {"ok": False, "message": hint}
-    return install_via_winget(winget_id, display_label=ext["name"])
+    result = install_via_winget(winget_id, display_label=ext["name"])
+    if result.get("ok"):
+        result["action"] = "launched"
+    return result
