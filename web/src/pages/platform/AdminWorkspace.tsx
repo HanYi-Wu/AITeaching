@@ -20,6 +20,7 @@ type Props = {
 };
 
 type PageMeta = { total: number; page: number; pageSize: number; totalPages: number };
+type AdminSection = "schools" | "ai" | "extensions";
 
 const DEFAULT_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
 
@@ -52,8 +53,17 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
   const [llmSettings, setLlmSettings] = useState<AgentLlmSettingsResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [aiLoading, setAiLoading] = useState(true);
+  const [activeSection, setActiveSection] = useState<AdminSection>("schools");
   const schoolFormRef = useRef<HTMLFormElement | null>(null);
   const schoolAccountFormRef = useRef<HTMLFormElement | null>(null);
+
+  function openSchoolForm(target: "school" | "account") {
+    setActiveSection("schools");
+    window.setTimeout(() => {
+      const ref = target === "school" ? schoolFormRef : schoolAccountFormRef;
+      ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
+  }
 
   async function refresh() {
     onError(null);
@@ -144,18 +154,46 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
               label: "创建学校",
               complete: schoolMeta.total > 0,
               actionLabel: "创建第一所学校",
-              onAction: () => schoolFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+              onAction: () => openSchoolForm("school"),
             },
             {
               label: "创建学校端账号",
               complete: schools.some((school) => Number(school.school_user_count || 0) > 0),
               actionLabel: "创建学校端账号",
-              onAction: () => schoolAccountFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+              onAction: () => openSchoolForm("account"),
             },
           ]}
         />
       </div>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_440px]">
+      <div
+        role="tablist"
+        aria-label="管理员工作区"
+        className="mb-6 flex w-full gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm"
+      >
+        {([
+          ["schools", "学校与账号"],
+          ["ai", "平台 AI"],
+          ["extensions", "扩展组件"],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={activeSection === id}
+            onClick={() => setActiveSection(id)}
+            className={`min-w-max flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
+              activeSection === id
+                ? "bg-slate-900 text-white shadow-sm"
+                : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div data-testid="admin-workspace-content" className="min-w-0">
+        {activeSection === "schools" ? (
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <section>
           <div className="mb-3 flex items-center gap-2">
             <School className="h-5 w-5 text-slate-600" />
@@ -221,23 +259,8 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
           </div>
         </section>
 
-        <aside className="space-y-4">
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-3 flex items-center gap-2">
-              <Bot className="h-5 w-5 text-slate-600" />
-              <h2 className="text-sm font-semibold">平台 AI 配置</h2>
-            </div>
-            <AgentModelSettingsForm
-              variant="settings"
-              data={llmSettings}
-              loading={aiLoading}
-              saving={busy}
-              onError={onError}
-              onReload={refresh}
-            />
-          </section>
-
-          <form ref={schoolFormRef} onSubmit={(event) => void submitSchool(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="space-y-4">
+          <form ref={schoolFormRef} onSubmit={(event) => void submitSchool(event)} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">创建学校</h2>
             <input
               value={schoolName}
@@ -256,7 +279,7 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
             </button>
           </form>
 
-          <form ref={schoolAccountFormRef} onSubmit={(event) => void submitSchoolUser(event)} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <form ref={schoolAccountFormRef} onSubmit={(event) => void submitSchoolUser(event)} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">创建学校端账号</h2>
             <select
               value={selectedSchoolId}
@@ -303,12 +326,37 @@ export function AdminWorkspace({ user, onLogout, onError }: Props) {
               创建账号
             </button>
           </form>
+        </div>
+        </div>
+        ) : null}
 
+        {activeSection === "ai" ? (
+          <div className="mx-auto w-full max-w-5xl">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <Bot className="h-5 w-5 text-slate-600" />
+              <h2 className="text-sm font-semibold">平台 AI 配置</h2>
+            </div>
+            <AgentModelSettingsForm
+              variant="settings"
+              data={llmSettings}
+              loading={aiLoading}
+              saving={busy}
+              onError={onError}
+              onReload={refresh}
+            />
+          </section>
+          </div>
+        ) : null}
+
+        {activeSection === "extensions" ? (
+          <div className="mx-auto w-full max-w-6xl">
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold">扩展组件</h2>
             <ExtensionsPanel onError={onError} />
           </section>
-        </aside>
+          </div>
+        ) : null}
       </div>
     </PlatformShell>
   );
