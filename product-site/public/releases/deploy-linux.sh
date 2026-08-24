@@ -9,6 +9,7 @@
 set -Eeuo pipefail
 
 VERSION="1.5.0"
+PIXI_MIN_VERSION="0.75.0"
 ARCHIVE_URL="https://educationhelper-downloads.btxmnr988y.chatgpt.site/releases/EducationHelper-1.5.0-linux-source.tar.gz"
 ARCHIVE_SHA256="bb2164713c66bdeb188fb25046fc0015a5bf4bad8919d004c4e8ff4f058bd2ba"
 APP_BASE="/opt/educationhelper"
@@ -22,6 +23,17 @@ RUNTIME_PROXY_URL="${EH_RUNTIME_PROXY_URL:-}"
 
 log() { printf '[EducationHelper] %s\n' "$*"; }
 fail() { printf '[EducationHelper] ERROR: %s\n' "$*" >&2; exit 1; }
+
+version_ge() {
+  local current_major current_minor current_patch required_major required_minor required_patch
+  IFS=. read -r current_major current_minor current_patch <<<"$1"
+  IFS=. read -r required_major required_minor required_patch <<<"$2"
+  current_major="${current_major:-0}"; current_minor="${current_minor:-0}"; current_patch="${current_patch:-0}"
+  required_major="${required_major:-0}"; required_minor="${required_minor:-0}"; required_patch="${required_patch:-0}"
+  (( current_major > required_major \
+    || (current_major == required_major && current_minor > required_minor) \
+    || (current_major == required_major && current_minor == required_minor && current_patch >= required_patch) ))
+}
 
 fetch_to() {
   local destination="$1"
@@ -111,17 +123,27 @@ sudo mv -- "$staged" "$RELEASE_DIR"
 sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$RELEASE_DIR" "$DATA_DIR"
 sudo ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
 
-if [[ ! -x "$PIXI_BIN" ]]; then
-  log "Installing the pinned Pixi runtime for $SERVICE_USER"
+pixi_needs_install=1
+if [[ -x "$PIXI_BIN" ]]; then
+  installed_pixi_version="$("$PIXI_BIN" --version 2>/dev/null | awk '{print $2}')"
+  if [[ -n "$installed_pixi_version" ]] && version_ge "$installed_pixi_version" "$PIXI_MIN_VERSION"; then
+    pixi_needs_install=0
+  else
+    log "Updating Pixi ${installed_pixi_version:-unknown} for lock-file version 7 support"
+  fi
+fi
+
+if (( pixi_needs_install )); then
+  log "Installing Pixi $PIXI_MIN_VERSION for $SERVICE_USER"
   pixi_installer="$tmp_dir/install-pixi.sh"
   fetch_to "$pixi_installer" https://pixi.sh/install.sh
   chmod 700 "$pixi_installer"
   if [[ -n "$INSTALL_PROXY_URL" ]]; then
-    sudo -u "$SERVICE_USER" env HOME="$SERVICE_HOME" PIXI_VERSION=v0.62.2 \
+    sudo -u "$SERVICE_USER" env HOME="$SERVICE_HOME" PIXI_VERSION="v$PIXI_MIN_VERSION" \
       HTTP_PROXY="$INSTALL_PROXY_URL" HTTPS_PROXY="$INSTALL_PROXY_URL" \
       bash "$pixi_installer"
   else
-    sudo -u "$SERVICE_USER" env HOME="$SERVICE_HOME" PIXI_VERSION=v0.62.2 \
+    sudo -u "$SERVICE_USER" env HOME="$SERVICE_HOME" PIXI_VERSION="v$PIXI_MIN_VERSION" \
       bash "$pixi_installer"
   fi
 fi
