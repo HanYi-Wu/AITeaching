@@ -9,6 +9,12 @@ grep -q '^fetch_to()' "$installer" || { echo 'missing fetch_to downloader abstra
 grep -q 'command -v curl' "$installer" || { echo 'curl fallback missing' >&2; exit 1; }
 grep -q 'command -v wget' "$installer" || { echo 'wget fallback missing' >&2; exit 1; }
 grep -q 'command -v python3' "$installer" || { echo 'python3 fallback missing' >&2; exit 1; }
+wget_line="$(grep -n 'command -v wget' "$installer" | head -n 1 | cut -d: -f1)"
+curl_line="$(grep -n 'command -v curl' "$installer" | head -n 1 | cut -d: -f1)"
+if (( wget_line >= curl_line )); then
+  echo 'wget must be preferred over sandboxed curl implementations' >&2
+  exit 1
+fi
 if grep -q 'command -v curl.*fail "curl is required"' "$installer"; then
   echo 'installer still hard-requires curl' >&2
   exit 1

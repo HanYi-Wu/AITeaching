@@ -38,12 +38,12 @@ version_ge() {
 fetch_to() {
   local destination="$1"
   local url="$2"
-  if command -v curl >/dev/null 2>&1; then
-    "${download_env[@]}" curl --fail --location --retry 3 --connect-timeout 20 \
-      --output "$destination" "$url"
-  elif command -v wget >/dev/null 2>&1; then
+  if command -v wget >/dev/null 2>&1; then
     "${download_env[@]}" wget --quiet --tries=3 --timeout=20 \
       --output-document="$destination" "$url"
+  elif command -v curl >/dev/null 2>&1; then
+    "${download_env[@]}" curl --fail --location --retry 3 --connect-timeout 20 \
+      --output "$destination" "$url"
   elif command -v python3 >/dev/null 2>&1; then
     "${download_env[@]}" python3 - "$url" "$destination" <<'PY'
 import sys
