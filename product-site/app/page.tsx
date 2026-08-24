@@ -62,9 +62,9 @@ export default function Home() {
             <a className="button primary download" href="/releases/EducationHelper-1.5.0-linux-source.tar.gz" download>下载 Linux 包 <span>↓</span></a>
           </article>
           <article className="download-card">
-            <div><span className="platform">COMPLETE SOURCE</span><h3>完整源码归档</h3><p>保留 Web、Windows 桌面端、测试与开发工具，由 GitHub 按清理后的固定提交生成。</p></div>
-            <dl><div><dt>格式</dt><dd>zip</dd></div><div><dt>版本</dt><dd>1.5.0</dd></div><div><dt>来源</dt><dd>GitHub</dd></div></dl>
-            <a className="button dark download" href="https://github.com/HanYi-Wu/AITeaching/archive/b4899d717ba21d02ab466c3ec1bb7370489b734e.zip">下载完整源码 <span>↗</span></a>
+            <div><span className="platform">COMPLETE SOURCE</span><h3>完整源码归档</h3><p>保留 Web、Windows 桌面端源码、测试与开发工具；仅排除可重新构建的 Windows 可执行文件。</p></div>
+            <dl><div><dt>格式</dt><dd>zip</dd></div><div><dt>大小</dt><dd>7.64 MB</dd></div><div><dt>文件</dt><dd>929</dd></div></dl>
+            <a className="button dark download" href="/releases/EducationHelper-1.5.0-source.zip" download>下载完整源码 <span>↓</span></a>
           </article>
         </div>
         <div className="terminal-card"><div className="terminal-bar"><span /><span /><span /><b>远程终端下载</b></div><DownloadCommand /></div>

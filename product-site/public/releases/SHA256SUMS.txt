@@ -1,1 +1,2 @@
 bb2164713c66bdeb188fb25046fc0015a5bf4bad8919d004c4e8ff4f058bd2ba  EducationHelper-1.5.0-linux-source.tar.gz
+11aee1519927c31626af0a742d1e1afce4a519de5d0f6424f11d0782a9aa9e2e  EducationHelper-1.5.0-source.zip
