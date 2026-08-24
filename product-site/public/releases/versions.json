@@ -1,0 +1,14 @@
+{
+  "product": "EducationHelper",
+  "latest": "1.5.0",
+  "versions": [{
+    "version": "1.5.0",
+    "source_commit": "b4899d7",
+    "released_at": "2026-08-24",
+    "downloads": {
+      "linux_source": "/releases/EducationHelper-1.5.0-linux-source.tar.gz",
+      "full_source": "https://github.com/HanYi-Wu/AITeaching/archive/b4899d717ba21d02ab466c3ec1bb7370489b734e.zip",
+      "checksums": "/releases/SHA256SUMS.txt"
+    }
+  }]
+}
