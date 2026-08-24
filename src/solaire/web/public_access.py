@@ -51,6 +51,14 @@ _HOST_CONTROL_PREFIXES = (
     "/api/analysis/jobs/script",
     "/api/analysis/tools",
 )
+_ADMIN_CONFIGURATION_EXACT = frozenset(
+    {
+        "/api/agent/llm-settings",
+        "/api/agent/llm-settings/test",
+        "/api/agent/safety-mode",
+        "/api/agent/prompt-overrides",
+    }
+)
 _STUDENT_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout", "/api/auth/profile", "/api/auth/account"})
 _STUDENT_RESOURCE_EXTENSIONS = frozenset({".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
 _SCHOOL_ALLOWED_EXACT = frozenset({"/api/auth/me", "/api/auth/logout", "/api/auth/profile", "/api/auth/account"})
@@ -108,17 +116,15 @@ def _is_host_control(path: str, method: str) -> bool:
         return True
     if any(path.startswith(prefix) for prefix in _HOST_CONTROL_PREFIXES):
         return True
-    if path.startswith("/api/system/extensions") and method != "GET":
-        return True
     if path.startswith("/api/exams/") and path.endswith(("/open-pdf", "/open-docx")):
         return True
-    if path in {
-        "/api/agent/llm-settings",
-        "/api/agent/safety-mode",
-        "/api/agent/prompt-overrides",
-    } and method != "GET":
-        return True
     return False
+
+
+def _is_admin_configuration(path: str, method: str) -> bool:
+    if method == "GET":
+        return False
+    return path in _ADMIN_CONFIGURATION_EXACT or path.startswith("/api/system/extensions")
 
 
 def student_request_allowed(path: str, method: str) -> bool:
@@ -225,6 +231,9 @@ async def enforce_public_access(request: Request) -> JSONResponse | None:
         return _json_error(403, "School role cannot access this endpoint")
     if role not in {"admin", "teacher", "school", "student"}:
         return _json_error(403, "Unsupported platform role")
+
+    if _is_admin_configuration(path, request.method) and role != "admin":
+        return _json_error(403, "Administrator role required")
 
     if _is_host_control(path, request.method):
         if user.get("role") != "admin":

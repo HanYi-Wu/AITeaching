@@ -88,6 +88,58 @@ def test_public_mode_host_control_requires_admin_token(
     assert allowed.status_code == 200
 
 
+def test_public_mode_admin_configuration_uses_admin_session_without_host_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from solaire.web import state
+
+    client = _public_client(tmp_path, monkeypatch)
+    token = _bootstrap_admin(client)
+    monkeypatch.setattr(state, "get_root", lambda: tmp_path / "project")
+
+    ai_settings = client.put(
+        "/api/agent/llm-settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"provider": "openai", "main_model": "gpt-4.1"},
+    )
+    assert ai_settings.status_code == 200
+
+    extension_preferences = client.delete(
+        "/api/system/extensions/not-a-real-id/manual-path",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert extension_preferences.status_code == 400
+    assert "Local control token required" not in extension_preferences.text
+
+
+@pytest.mark.parametrize(
+    ("path", "method"),
+    [
+        ("/api/agent/llm-settings", "PUT"),
+        ("/api/agent/safety-mode", "PUT"),
+        ("/api/system/extensions/latex/manual-path", "DELETE"),
+    ],
+)
+def test_public_mode_teacher_cannot_change_admin_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    method: str,
+) -> None:
+    from solaire.web import public_access
+
+    client = _public_client(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        public_access,
+        "_authenticated_user",
+        lambda _request: {"id": "teacher-1", "role": "teacher"},
+    )
+
+    response = client.request(method, path)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Administrator role required"
+
+
 def test_public_login_is_rate_limited(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
