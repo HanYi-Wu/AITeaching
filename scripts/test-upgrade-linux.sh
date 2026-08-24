@@ -8,6 +8,8 @@ bash -n "$upgrader"
 grep -q 'sha256sum --check --status' "$upgrader" || { echo 'archive checksum verification missing' >&2; exit 1; }
 grep -q 'restoring the previous release' "$upgrader" || { echo 'health-check rollback missing' >&2; exit 1; }
 grep -q 'DATA_DIR="${EH_DATA_DIR:-/var/lib/educationhelper}"' "$upgrader" || { echo 'persistent data boundary missing' >&2; exit 1; }
+grep -q 'No complete installation found; starting a clean deployment' "$upgrader" || { echo 'clean-deployment fallback missing' >&2; exit 1; }
+grep -q 'deploy-linux.sh' "$upgrader" || { echo 'deployment bootstrap URL missing' >&2; exit 1; }
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)

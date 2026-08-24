@@ -44,6 +44,23 @@ PY
 if [[ -n "$INSTALL_PROXY_URL" && ! "$INSTALL_PROXY_URL" =~ ^https?://[A-Za-z0-9._:-]+$ ]]; then
   fail "EH_INSTALL_PROXY_URL must look like http://host:port"
 fi
+
+download_env=()
+if [[ -n "$INSTALL_PROXY_URL" ]]; then
+  download_env=(env "HTTP_PROXY=$INSTALL_PROXY_URL" "HTTPS_PROXY=$INSTALL_PROXY_URL" "http_proxy=$INSTALL_PROXY_URL" "https_proxy=$INSTALL_PROXY_URL")
+fi
+
+if [[ ! -L "$CURRENT_LINK" ]]; then
+  log "No complete installation found; starting a clean deployment"
+  bootstrap_script="$(mktemp)"
+  trap 'rm -f -- "$bootstrap_script"' EXIT
+  fetch_to "$bootstrap_script" "$RELEASE_BASE_URL/deploy-linux.sh"
+  chmod 700 "$bootstrap_script"
+  EH_INSTALL_PROXY_URL="$INSTALL_PROXY_URL" EH_PORT="$WEB_PORT" bash "$bootstrap_script"
+  log "Initial deployment complete"
+  exit 0
+fi
+
 if command -v python3 >/dev/null 2>&1; then
   json_python="python3"
 elif command -v python >/dev/null 2>&1; then
@@ -53,7 +70,6 @@ else
 fi
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required"
-[[ -L "$CURRENT_LINK" ]] || fail "No existing installation found at $CURRENT_LINK; run deploy-linux.sh first"
 
 old_release="$(readlink -f "$CURRENT_LINK")"
 [[ -d "$old_release" ]] || fail "Current release target is missing: $old_release"
@@ -84,11 +100,6 @@ cleanup_and_rollback() {
   exit "$status"
 }
 trap cleanup_and_rollback EXIT
-
-download_env=()
-if [[ -n "$INSTALL_PROXY_URL" ]]; then
-  download_env=(env "HTTP_PROXY=$INSTALL_PROXY_URL" "HTTPS_PROXY=$INSTALL_PROXY_URL" "http_proxy=$INSTALL_PROXY_URL" "https_proxy=$INSTALL_PROXY_URL")
-fi
 
 manifest="$tmp_dir/latest-linux.json"
 if [[ -n "${EH_MANIFEST_FILE:-}" ]]; then
