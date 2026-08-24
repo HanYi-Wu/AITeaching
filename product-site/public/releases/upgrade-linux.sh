@@ -155,7 +155,7 @@ tar -xzf "$archive" --strip-components=1 -C "$staged"
 [[ -f "$staged/pixi.toml" && -f "$staged/web/package.json" ]] \
   || fail "Release archive is incomplete"
 
-service_user="${EH_SERVICE_USER:-$(stat -c %U "$old_release")}" 
+service_user="${EH_SERVICE_USER:-$(stat -c %U "$old_release")}"
 id "$service_user" >/dev/null 2>&1 || fail "Service user does not exist: $service_user"
 service_home="$(getent passwd "$service_user" | cut -d: -f6)"
 [[ -n "$service_home" ]] || fail "Could not determine the service user's home directory"
