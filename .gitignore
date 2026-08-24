@@ -9,6 +9,10 @@ node_modules/
 /test/test/.solaire/
 /.idea/
 
+# 本机工具链与仅供早期参考的外部工程不进入产品仓库
+/.dotnet/
+/publicq-main/
+
 # Python
 .cache/
 __pycache__/
