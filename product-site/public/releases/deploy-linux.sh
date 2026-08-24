@@ -23,6 +23,29 @@ RUNTIME_PROXY_URL="${EH_RUNTIME_PROXY_URL:-}"
 log() { printf '[EducationHelper] %s\n' "$*"; }
 fail() { printf '[EducationHelper] ERROR: %s\n' "$*" >&2; exit 1; }
 
+fetch_to() {
+  local destination="$1"
+  local url="$2"
+  if command -v curl >/dev/null 2>&1; then
+    "${download_env[@]}" curl --fail --location --retry 3 --connect-timeout 20 \
+      --output "$destination" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    "${download_env[@]}" wget --quiet --tries=3 --timeout=20 \
+      --output-document="$destination" "$url"
+  elif command -v python3 >/dev/null 2>&1; then
+    "${download_env[@]}" python3 - "$url" "$destination" <<'PY'
+import sys
+import urllib.request
+
+url, destination = sys.argv[1:]
+with urllib.request.urlopen(url, timeout=30) as response, open(destination, "wb") as output:
+    output.write(response.read())
+PY
+  else
+    fail "curl, wget, or python3 is required to download release files"
+  fi
+}
+
 [[ "$WEB_PORT" =~ ^[0-9]+$ ]] && (( WEB_PORT >= 1024 && WEB_PORT <= 65535 )) \
   || fail "EH_PORT must be an unprivileged TCP port between 1024 and 65535"
 
@@ -44,7 +67,6 @@ SERVICE_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
 PIXI_BIN="$SERVICE_HOME/.pixi/bin/pixi"
 
 command -v sudo >/dev/null 2>&1 || fail "sudo is required"
-command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required"
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
@@ -67,8 +89,7 @@ if [[ -n "$INSTALL_PROXY_URL" ]]; then
 fi
 
 log "Downloading the signed release archive"
-"${download_env[@]}" curl --fail --location --retry 3 --connect-timeout 20 \
-  --output "$archive" "$ARCHIVE_URL"
+fetch_to "$archive" "$ARCHIVE_URL"
 printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | sha256sum --check --status \
   || fail "Release archive checksum mismatch"
 
@@ -93,8 +114,7 @@ sudo ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
 if [[ ! -x "$PIXI_BIN" ]]; then
   log "Installing the pinned Pixi runtime for $SERVICE_USER"
   pixi_installer="$tmp_dir/install-pixi.sh"
-  "${download_env[@]}" curl --fail --location --retry 3 --connect-timeout 20 \
-    --output "$pixi_installer" https://pixi.sh/install.sh
+  fetch_to "$pixi_installer" https://pixi.sh/install.sh
   chmod 700 "$pixi_installer"
   if [[ -n "$INSTALL_PROXY_URL" ]]; then
     sudo -u "$SERVICE_USER" env HOME="$SERVICE_HOME" PIXI_VERSION=v0.62.2 \
@@ -226,4 +246,3 @@ printf '\nEducationHelper %s is running.\n' "$VERSION"
 printf 'LAN address: http://%s:%s\n' "$lan_ip" "$WEB_PORT"
 printf 'Health check: OK\n'
 printf 'Services: educationhelper-backend.service, educationhelper-web.service\n'
-
