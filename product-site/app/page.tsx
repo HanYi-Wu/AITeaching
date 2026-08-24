@@ -8,7 +8,8 @@ const capabilities = [
 ];
 
 const versions = [
-  { version: "1.5.0", date: "2026-08-24", label: "当前稳定版", notes: ["新增各角色首次使用引导与清晰的下一步入口", "完善交卷确认、批改统计和成绩发布后的逐题复盘", "题目与模板默认使用简单模式，AI 助手状态更清楚"] },
+  { version: "1.5.1", date: "2026-08-25", label: "当前稳定版", notes: ["修复管理员平台 AI 配置保存与真实连接测试", "重排管理员工作台并完善跨平台扩展安装引导", "新增校验、健康检查和失败回滚的一键 Linux 升级"] },
+  { version: "1.5.0", date: "2026-08-24", label: "体验优化", notes: ["新增各角色首次使用引导与清晰的下一步入口", "完善交卷确认、批改统计和成绩发布后的逐题复盘", "题目与模板默认使用简单模式，AI 助手状态更清楚"] },
   { version: "1.4.8", date: "2026-08", label: "工作流整合", notes: ["升级 EducationHelper 品牌并兼容旧数据", "贯通作答、图片答案、逐题批改与学生错题分析", "统一教师题库并补充个性化设置"] },
   { version: "1.4.7", date: "2026-08", label: "线上线下统一", notes: ["统一线上与线下历史考试入口", "线下答卷支持按学生上传多张照片", "新增学生详细画像与对应 AI 工具"] },
   { version: "1.4.6", date: "2026-08", label: "答题与批改", notes: ["完善断线恢复、限时自动提交与考试行为事件", "教师可按学生查看答卷并进行人工或 AI 预批改"] },
@@ -30,13 +31,13 @@ export default function Home() {
 
       <section className="hero" id="top">
         <div className="hero-copy">
-          <p className="eyebrow">AI-ASSISTED TEACHING SYSTEM · 1.5.0</p>
+          <p className="eyebrow">AI-ASSISTED TEACHING SYSTEM · 1.5.1</p>
           <h1>把教学工作<br />连成一条线。</h1>
           <p className="hero-intro">EducationHelper 面向学校、教师与学生，把备课、组卷、作答、批改和学情分析放进同一个可追溯的教学闭环。</p>
           <div className="hero-actions"><a className="button primary" href="#releases">下载当前版本</a><a className="button quiet" href="#versions">查看更新路径</a></div>
         </div>
-        <div className="release-stamp" aria-label="当前版本 1.5.0">
-          <span className="stamp-kicker">CURRENT RELEASE</span><strong>1.5</strong><span className="stamp-zero">.0</span>
+        <div className="release-stamp" aria-label="当前版本 1.5.1">
+          <span className="stamp-kicker">CURRENT RELEASE</span><strong>1.5</strong><span className="stamp-zero">.1</span>
           <div className="stamp-meta"><span>稳定版</span><span>2026.08</span></div>
         </div>
       </section>
@@ -54,21 +55,21 @@ export default function Home() {
       </section>
 
       <section className="releases section" id="releases">
-        <div className="release-title"><div><p className="eyebrow">RELEASE CENTER</p><h2>获取 EducationHelper</h2></div><div className="release-badge"><span className="status-dot" />1.5.0 稳定版</div></div>
+        <div className="release-title"><div><p className="eyebrow">RELEASE CENTER</p><h2>获取 EducationHelper</h2></div><div className="release-badge"><span className="status-dot" />1.5.1 稳定版</div></div>
         <div className="download-grid">
           <article className="download-card featured">
             <div><span className="platform">LINUX SERVER</span><h3>Linux 精简源码包</h3><p>用于后续远程部署。已排除 Windows 桌面壳、测试集、缓存、数据库、密钥和本地内容。</p></div>
-            <dl><div><dt>格式</dt><dd>tar.gz</dd></div><div><dt>大小</dt><dd>1.66 MB</dd></div><div><dt>文件</dt><dd>569</dd></div></dl>
-            <a className="button primary download" href="/releases/EducationHelper-1.5.0-linux-source.tar.gz" download>下载 Linux 包 <span>↓</span></a>
+            <dl><div><dt>格式</dt><dd>tar.gz</dd></div><div><dt>大小</dt><dd>1.58 MB</dd></div><div><dt>文件</dt><dd>569</dd></div></dl>
+            <a className="button primary download" href="/releases/EducationHelper-1.5.1-linux-source.tar.gz" download>下载 Linux 包 <span>↓</span></a>
           </article>
           <article className="download-card">
             <div><span className="platform">COMPLETE SOURCE</span><h3>完整源码归档</h3><p>保留 Web、Windows 桌面端源码、测试与开发工具；仅排除可重新构建的 Windows 可执行文件。</p></div>
-            <dl><div><dt>格式</dt><dd>zip</dd></div><div><dt>大小</dt><dd>7.64 MB</dd></div><div><dt>文件</dt><dd>929</dd></div></dl>
-            <a className="button dark download" href="/releases/EducationHelper-1.5.0-source.zip" download>下载完整源码 <span>↓</span></a>
+            <dl><div><dt>格式</dt><dd>zip</dd></div><div><dt>大小</dt><dd>9.47 MB</dd></div><div><dt>文件</dt><dd>956</dd></div></dl>
+            <a className="button dark download" href="/releases/EducationHelper-1.5.1-source.zip" download>下载完整源码 <span>↓</span></a>
           </article>
         </div>
-        <div className="terminal-card"><div className="terminal-bar"><span /><span /><span /><b>远程终端下载</b></div><DownloadCommand /></div>
-        <div className="integrity-row"><div><span>SHA-256 · Linux</span><code>bb2164713c66bdeb188fb25046fc0015a5bf4bad8919d004c4e8ff4f058bd2ba</code></div><a href="/releases/SHA256SUMS.txt" download>下载校验清单 ↓</a></div>
+        <div className="terminal-card"><div className="terminal-bar"><span /><span /><span /><b>Linux 一键安装或升级</b></div><DownloadCommand /></div>
+        <div className="integrity-row"><div><span>SHA-256 · Linux</span><code>c90ff835f6ced05c71282b6523c376d34475d142873c5551cb5b305add3137f3</code></div><a href="/releases/SHA256SUMS.txt" download>下载校验清单 ↓</a></div>
       </section>
 
       <section className="versions section" id="versions">

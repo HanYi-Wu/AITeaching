@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EducationHelper 1.5.0 production-style LAN deployment for systemd Linux hosts.
+# EducationHelper 1.5.1 production-style LAN deployment for systemd Linux hosts.
 # Optional environment variables:
 #   EH_PORT=5173
 #   EH_INSTALL_PROXY_URL=http://proxy-host:7890  (installation only)
@@ -8,10 +8,10 @@
 
 set -Eeuo pipefail
 
-VERSION="1.5.0"
+VERSION="1.5.1"
 PIXI_MIN_VERSION="0.75.0"
-ARCHIVE_URL="https://educationhelper-downloads.btxmnr988y.chatgpt.site/releases/EducationHelper-1.5.0-linux-source.tar.gz"
-ARCHIVE_SHA256="bb2164713c66bdeb188fb25046fc0015a5bf4bad8919d004c4e8ff4f058bd2ba"
+ARCHIVE_URL="https://educationhelper-downloads.btxmnr988y.chatgpt.site/releases/EducationHelper-1.5.1-linux-source.tar.gz"
+ARCHIVE_SHA256="c90ff835f6ced05c71282b6523c376d34475d142873c5551cb5b305add3137f3"
 APP_BASE="/opt/educationhelper"
 RELEASE_DIR="$APP_BASE/releases/$VERSION"
 CURRENT_LINK="$APP_BASE/current"

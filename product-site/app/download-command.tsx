@@ -6,6 +6,6 @@ const subscribe = () => () => undefined;
 
 export default function DownloadCommand() {
   const origin = useSyncExternalStore(subscribe, () => window.location.origin, () => "https://<站点域名>");
-  const url = `${origin}/releases/EducationHelper-1.5.0-linux-source.tar.gz`;
-  return <code><span>$</span> wget &quot;{url}&quot;</code>;
+  const url = `${origin}/releases/upgrade-linux.sh`;
+  return <code><span>$</span> wget -qO- &quot;{url}&quot; | bash</code>;
 }
