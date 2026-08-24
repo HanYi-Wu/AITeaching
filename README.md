@@ -70,7 +70,7 @@
 
 ### 下载安装包
 
-前往 [GitHub Releases](https://github.com/zijian-optics/SolaireEPDA/releases) 下载最新版本：
+前往 [EducationHelper GitHub Releases](https://github.com/HanYi-Wu/AITeaching/releases) 下载最新版本：
 
 
 
@@ -105,8 +105,8 @@
 ### 1\. 克隆并初始化
 
 ```powershell
-git clone https://github.com/zijian-optics/SolaireEPDA
-cd SolaireEPDA
+git clone https://github.com/HanYi-Wu/AITeaching.git
+cd AITeaching
 pixi install
 pixi run bootstrap
 ```
@@ -177,7 +177,7 @@ pixi run build-desktop
 
 ### 提交 Issue
 
-如果你发现了 Bug 或有功能建议，请 [提交 Issue](https://github.com/zijian-optics/SolaireEPDA/issues/new)。提交时请包含：
+如果你发现了 Bug 或有功能建议，请 [提交 Issue](https://github.com/HanYi-Wu/AITeaching/issues/new)。提交时请包含：
 
 * 问题描述与复现步骤
 * 运行环境信息（操作系统、Python 版本等）
