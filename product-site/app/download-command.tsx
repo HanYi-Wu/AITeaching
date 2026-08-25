@@ -7,5 +7,5 @@ const subscribe = () => () => undefined;
 export default function DownloadCommand() {
   const origin = useSyncExternalStore(subscribe, () => window.location.origin, () => "https://<站点域名>");
   const url = `${origin}/releases/upgrade-linux.sh`;
-  return <code><span>$</span> wget -qO- &quot;{url}&quot; | bash</code>;
+  return <code><span>$</span> set -o pipefail; wget -O- &quot;{url}&quot; | bash</code>;
 }
