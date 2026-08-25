@@ -10,6 +10,10 @@ grep -q 'restoring the previous release' "$upgrader" || { echo 'health-check rol
 grep -q 'DATA_DIR="${EH_DATA_DIR:-/var/lib/educationhelper}"' "$upgrader" || { echo 'persistent data boundary missing' >&2; exit 1; }
 grep -q 'No complete installation found; starting a clean deployment' "$upgrader" || { echo 'clean-deployment fallback missing' >&2; exit 1; }
 grep -q 'deploy-linux.sh' "$upgrader" || { echo 'deployment bootstrap URL missing' >&2; exit 1; }
+grep -q 'ProxyHandler({})' "$upgrader" || { echo 'health checks still inherit external proxies' >&2; exit 1; }
+grep -q '^except Exception:$' "$upgrader" || { echo 'health-check retries still print Python tracebacks' >&2; exit 1; }
+grep -q 'NO_PROXY=127\.0\.0\.1,localhost,::1' "$upgrader" || { echo 'existing service proxy bypass repair missing' >&2; exit 1; }
+grep -q 'EH_RUNTIME_PROXY_URL' "$upgrader" || { echo 'runtime proxy upgrade option missing' >&2; exit 1; }
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)

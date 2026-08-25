@@ -24,6 +24,14 @@ grep -q 'PIXI_MIN_VERSION="0.75.0"' "$installer" || {
   exit 1
 }
 grep -q '^version_ge()' "$installer" || { echo 'Pixi version compatibility check missing' >&2; exit 1; }
+grep -q '^NO_PROXY=127\.0\.0\.1,localhost,::1$' "$installer" || {
+  echo 'service localhost proxy bypass missing' >&2
+  exit 1
+}
+grep -q '^no_proxy=127\.0\.0\.1,localhost,::1$' "$installer" || {
+  echo 'lowercase service localhost proxy bypass missing' >&2
+  exit 1
+}
 if grep -q 'v0\.62\.2' "$installer"; then
   echo 'obsolete Pixi pin remains' >&2
   exit 1

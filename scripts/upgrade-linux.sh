@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Upgrade an existing EducationHelper systemd installation to the latest release.
-# Public options: EH_INSTALL_PROXY_URL, EH_PORT, EH_SERVICE_USER.
+# Public options: EH_INSTALL_PROXY_URL, EH_RUNTIME_PROXY_URL, EH_PORT, EH_SERVICE_USER.
 
 set -Eeuo pipefail
 
@@ -12,6 +12,7 @@ DATA_DIR="${EH_DATA_DIR:-/var/lib/educationhelper}"
 CONFIG_DIR="${EH_CONFIG_DIR:-/etc/educationhelper}"
 WEB_PORT="${EH_PORT:-5173}"
 INSTALL_PROXY_URL="${EH_INSTALL_PROXY_URL:-}"
+RUNTIME_PROXY_URL="${EH_RUNTIME_PROXY_URL:-}"
 TEST_MODE="${EH_TEST_MODE:-0}"
 SKIP_BUILD="${EH_SKIP_BUILD:-0}"
 
@@ -41,9 +42,11 @@ PY
 
 [[ "$WEB_PORT" =~ ^[0-9]+$ ]] && (( WEB_PORT >= 1024 && WEB_PORT <= 65535 )) \
   || fail "EH_PORT must be an unprivileged TCP port between 1024 and 65535"
-if [[ -n "$INSTALL_PROXY_URL" && ! "$INSTALL_PROXY_URL" =~ ^https?://[A-Za-z0-9._:-]+$ ]]; then
-  fail "EH_INSTALL_PROXY_URL must look like http://host:port"
-fi
+for proxy_value in "$INSTALL_PROXY_URL" "$RUNTIME_PROXY_URL"; do
+  if [[ -n "$proxy_value" && ! "$proxy_value" =~ ^https?://[A-Za-z0-9._:-]+$ ]]; then
+    fail "Proxy URLs must look like http://host:port"
+  fi
+done
 
 download_env=()
 if [[ -n "$INSTALL_PROXY_URL" ]]; then
@@ -56,7 +59,8 @@ if [[ ! -L "$CURRENT_LINK" ]]; then
   trap 'rm -f -- "$bootstrap_script"' EXIT
   fetch_to "$bootstrap_script" "$RELEASE_BASE_URL/deploy-linux.sh"
   chmod 700 "$bootstrap_script"
-  EH_INSTALL_PROXY_URL="$INSTALL_PROXY_URL" EH_PORT="$WEB_PORT" bash "$bootstrap_script"
+  EH_INSTALL_PROXY_URL="$INSTALL_PROXY_URL" EH_RUNTIME_PROXY_URL="$RUNTIME_PROXY_URL" \
+    EH_PORT="$WEB_PORT" bash "$bootstrap_script"
   log "Initial deployment complete"
   exit 0
 fi
@@ -82,6 +86,24 @@ if [[ "$TEST_MODE" != "1" ]]; then
     sudo -v
   fi
   sudo_cmd=(sudo)
+fi
+
+runtime_env_file="$CONFIG_DIR/educationhelper.env"
+config_repaired=0
+if [[ -f "$runtime_env_file" ]]; then
+  if [[ -n "$RUNTIME_PROXY_URL" ]]; then
+    "${sudo_cmd[@]}" sed -i \
+      -e '/^HTTP_PROXY=/d' -e '/^HTTPS_PROXY=/d' -e '/^http_proxy=/d' -e '/^https_proxy=/d' \
+      "$runtime_env_file"
+    printf 'HTTP_PROXY=%s\nHTTPS_PROXY=%s\nhttp_proxy=%s\nhttps_proxy=%s\n' \
+      "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" \
+      | "${sudo_cmd[@]}" tee -a "$runtime_env_file" >/dev/null
+  fi
+  "${sudo_cmd[@]}" sed -i -e '/^NO_PROXY=/d' -e '/^no_proxy=/d' "$runtime_env_file"
+  printf 'NO_PROXY=127.0.0.1,localhost,::1\nno_proxy=127.0.0.1,localhost,::1\n' \
+    | "${sudo_cmd[@]}" tee -a "$runtime_env_file" >/dev/null
+  config_repaired=1
+  log "Ensured local services bypass the external proxy"
 fi
 
 tmp_dir="$(mktemp -d)"
@@ -134,6 +156,9 @@ fi
 
 new_release="$APP_BASE/releases/$version"
 if [[ "$old_release" == "$(readlink -m "$new_release")" ]]; then
+  if (( config_repaired == 1 )) && [[ "$TEST_MODE" != "1" ]]; then
+    "${sudo_cmd[@]}" systemctl restart educationhelper-backend.service educationhelper-web.service
+  fi
   log "EducationHelper $version is already installed"
   switched=0
   exit 0
@@ -174,7 +199,7 @@ fi
 
 if [[ "$SKIP_BUILD" != "1" ]]; then
   [[ -x "$pixi_bin" ]] || fail "Pixi is missing at $pixi_bin; rerun deploy-linux.sh to repair the host"
-  runtime_env=(HOME="$service_home")
+  runtime_env=(HOME="$service_home" NO_PROXY="127.0.0.1,localhost,::1" no_proxy="127.0.0.1,localhost,::1")
   if [[ -n "$INSTALL_PROXY_URL" ]]; then
     runtime_env+=(HTTP_PROXY="$INSTALL_PROXY_URL" HTTPS_PROXY="$INSTALL_PROXY_URL" http_proxy="$INSTALL_PROXY_URL" https_proxy="$INSTALL_PROXY_URL")
   fi
@@ -207,10 +232,14 @@ import sys
 import urllib.request
 
 port = sys.argv[1]
-for url in ("http://127.0.0.1:8000/api/health", f"http://127.0.0.1:{port}/"):
-    with urllib.request.urlopen(url, timeout=3) as response:
-        if response.status >= 400:
-            raise SystemExit(1)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    for url in ("http://127.0.0.1:8000/api/health", f"http://127.0.0.1:{port}/"):
+        with opener.open(url, timeout=3) as response:
+            if response.status >= 400:
+                raise SystemExit(1)
+except Exception:
+    raise SystemExit(1)
 PY
     then
       health_ok=1

@@ -149,7 +149,7 @@ if (( pixi_needs_install )); then
 fi
 [[ -x "$PIXI_BIN" ]] || fail "Pixi installation did not produce $PIXI_BIN"
 
-runtime_env=(HOME="$SERVICE_HOME")
+runtime_env=(HOME="$SERVICE_HOME" NO_PROXY="127.0.0.1,localhost,::1" no_proxy="127.0.0.1,localhost,::1")
 if [[ -n "$INSTALL_PROXY_URL" ]]; then
   runtime_env+=(HTTP_PROXY="$INSTALL_PROXY_URL" HTTPS_PROXY="$INSTALL_PROXY_URL" http_proxy="$INSTALL_PROXY_URL" https_proxy="$INSTALL_PROXY_URL")
 fi
@@ -180,6 +180,8 @@ SOLAIRE_PUBLIC_MODE=1
 SOLAIRE_PROJECT_ROOT=$DATA_DIR/workspace
 SOLAIRE_BIND_PROJECT_FROM_ENV=1
 SOLAIRE_CONTROL_TOKEN=$control_token
+NO_PROXY=127.0.0.1,localhost,::1
+no_proxy=127.0.0.1,localhost,::1
 $proxy_lines
 EOF
 sudo install -m 600 -o root -g root "$env_file" "$CONFIG_DIR/educationhelper.env"
@@ -251,15 +253,15 @@ fi
 
 log "Waiting for health checks"
 for _ in $(seq 1 30); do
-  if curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null \
-    && curl --fail --silent "http://127.0.0.1:$WEB_PORT/" >/dev/null; then
+  if curl --noproxy '*' --fail --silent http://127.0.0.1:8000/api/health >/dev/null \
+    && curl --noproxy '*' --fail --silent "http://127.0.0.1:$WEB_PORT/" >/dev/null; then
     break
   fi
   sleep 1
 done
-curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null \
+curl --noproxy '*' --fail --silent http://127.0.0.1:8000/api/health >/dev/null \
   || { sudo journalctl -u educationhelper-backend.service -n 40 --no-pager; fail "Backend health check failed"; }
-curl --fail --silent "http://127.0.0.1:$WEB_PORT/" >/dev/null \
+curl --noproxy '*' --fail --silent "http://127.0.0.1:$WEB_PORT/" >/dev/null \
   || { sudo journalctl -u educationhelper-web.service -n 40 --no-pager; fail "Web health check failed"; }
 
 lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
