@@ -14,7 +14,9 @@
 - [x] Remove inherited process-wide proxy dependency; add explicit optional proxy routing for external AI requests and migrate Linux env safely. Test with unavailable proxy.
 - [x] Add Ubuntu OCR installer (Tesseract + simplified Chinese/English data), validate actual engine/languages and connect automatic attachment extraction.
 - [x] Additional request: batch question tool, cancellation safety, recoverable authorized deletion and deduplicated tool prompt descriptions.
-- [ ] Align version 1.5.2, document behavior and limits, test/build, package and publish checked releases, provide upgrade and OCR script URLs.
+- [x] Align version 1.5.2, document behavior and limits, test/build, package and publish checked releases, provide upgrade and OCR script URLs.
+
+Release verification: 42 targeted Python tests and 16 frontend tests passed; web/site builds passed. Real installed Tesseract recognized generated printed text. Sites published revision 12 after registry URL correction; live manifest is 1.5.2 and downloaded upgrader, OCR script and Linux archive exactly match local SHA-256. Remote Ubuntu execution remains user-side.
 
 ## Acceptance
 
