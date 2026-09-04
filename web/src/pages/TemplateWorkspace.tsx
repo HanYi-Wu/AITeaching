@@ -325,7 +325,15 @@ export function applyTemplatePreset(draft: Draft, preset: TemplatePresetId): Dra
     unit: { layout: "single_column" as const, margin_cm: 1.8, body_font_size_pt: 11, show_binding_line: false, show_name_column: true },
     major: { layout: "double_column" as const, margin_cm: 1.6, body_font_size_pt: 10.5, show_binding_line: true, show_name_column: true },
   }[preset];
-  return { ...draft, layout: settings.layout, metadata_defaults: { ...draft.metadata_defaults, ...settings } };
+  const { layout, ...metadata } = settings;
+  const hasQuestions = draft.sections.some(section => section.type !== 'text' && section.required_count > 0);
+  const defaults = standardSections();
+  const counts = preset === 'practice' ? [5, 2, 1] : preset === 'unit' ? [8, 3, 2] : [10, 5, 3];
+  const sections = hasQuestions ? draft.sections : [
+    ...draft.sections.filter(section => section.type === 'text'),
+    ...defaults.map((section, index) => ({ ...section, required_count: counts[index] })),
+  ];
+  return { ...draft, sections, layout, metadata_defaults: { ...draft.metadata_defaults, ...metadata } };
 }
 
 /** 与后端 `safe_filename_component` 一致，用于由模板编号生成文件名 */
@@ -929,7 +937,11 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         ) : (
           <div className="mx-auto max-w-3xl space-y-6">
             <section className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-slate-900">常用版式</h2><p className="mt-1 text-xs text-slate-600">选择预设后仍可继续调整题型结构和分值。</p></div><div className="flex flex-wrap gap-2">{([['practice', '随堂练习'], ['unit', '单元测验'], ['major', '期中 / 期末']] as const).map(([id, label]) => <button key={id} type="button" onClick={() => setDraft((current) => applyTemplatePreset(current, id))} className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">{label}</button>)}</div></div>
+              <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-slate-900">常用版式</h2><p className="mt-1 text-xs text-slate-600">空模板自动添加题型；已有题型和分值保留。应用后请保存。</p></div><div className="flex flex-wrap gap-2">{([['practice', '随堂练习'], ['unit', '单元测验'], ['major', '期中 / 期末']] as const).map(([id, label]) => <button key={id} type="button" disabled={busy} onClick={() => {
+                const next = applyTemplatePreset(draft, id);
+                setDraft(next);
+                setMsg(`已应用「${label}」：${next.layout === 'double_column' ? '双栏' : '单栏'}，${next.metadata_defaults.margin_cm}cm 边距，${next.metadata_defaults.body_font_size_pt}pt 字号；${next.sections.reduce((sum, section) => sum + section.required_count, 0)} 题。请保存模板。`);
+              }} className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50">{label}</button>)}</div></div>
             </section>
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-sm font-semibold text-slate-800">{t("basicInfo")}</h2>
