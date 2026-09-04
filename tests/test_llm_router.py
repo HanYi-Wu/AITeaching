@@ -15,6 +15,18 @@ from solaire.agent_layer.llm.router import LLMSettings, ModelRouter, load_llm_se
 from solaire.agent_layer.llm.user_llm_overrides import save_user_overrides_raw
 
 
+@pytest.mark.parametrize("adapter_type", [OpenAICompatAdapter, OpenAIResponsesAdapter, AnthropicMessagesAdapter])
+def test_model_clients_have_bounded_wait_and_no_hidden_paid_retries(adapter_type):
+    import asyncio
+    adapter = adapter_type(api_key="test-only", base_url="https://provider.example", model="test")
+    try:
+        assert adapter._client.max_retries == 0
+        assert adapter._client.timeout.connect == 10
+        assert adapter._client.timeout.read == 180
+    finally:
+        asyncio.run(adapter._client.close())
+
+
 def test_load_llm_settings_provider_project_over_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOLAIRE_USER_CONFIG_DIR", str(tmp_path / "u"))
     save_user_overrides_raw({"provider": "openai_compat"})

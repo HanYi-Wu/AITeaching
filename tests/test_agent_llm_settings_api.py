@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from solaire.agent_layer.llm.llm_overrides import overrides_file
 from solaire.agent_layer.llm.router import LLMSettings
+from solaire.agent_layer.llm.adapter import ChatChunk
 
 
 def test_llm_settings_get_includes_provider_and_options(web_client: TestClient) -> None:
@@ -102,8 +102,9 @@ def test_llm_settings_connection_test_reports_effective_model(
     )
 
     class FakeAdapter:
-        async def chat(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
-            return SimpleNamespace(content="ok")
+        async def chat_stream(self, *_args: object, **_kwargs: object):
+            yield ChatChunk(delta_reasoning="thinking")
+            raise AssertionError("Connection test must stop after the first model response")
 
     monkeypatch.setattr("solaire.web.agent_api.load_llm_settings", lambda _root: settings)
     monkeypatch.setattr("solaire.agent_layer.llm.router.ModelRouter.fast", lambda _self: FakeAdapter())
@@ -147,8 +148,9 @@ def test_llm_settings_connection_test_sanitizes_provider_failure(
     )
 
     class FailingAdapter:
-        async def chat(self, *_args: object, **_kwargs: object) -> None:
+        async def chat_stream(self, *_args: object, **_kwargs: object):
             raise RuntimeError("401 invalid sk-do-not-leak")
+            yield  # pragma: no cover
 
     monkeypatch.setattr("solaire.web.agent_api.load_llm_settings", lambda _root: settings)
     monkeypatch.setattr("solaire.agent_layer.llm.router.ModelRouter.fast", lambda _self: FailingAdapter())
@@ -158,3 +160,37 @@ def test_llm_settings_connection_test_sanitizes_provider_failure(
     assert response.status_code == 502
     assert "密钥" in response.json()["detail"]
     assert "sk-do-not-leak" not in response.text
+
+
+def test_connection_timeout_has_actionable_safe_message():
+    from solaire.web.agent_api import _llm_connection_error_message
+    message = _llm_connection_error_message(TimeoutError())
+    assert "超时" in message
+    assert "服务器" in message
+
+
+def test_connection_probe_closes_stream_and_client(monkeypatch):
+    import asyncio
+    from solaire.web import agent_api
+
+    closed = []
+
+    class Client:
+        async def close(self):
+            closed.append("client")
+
+    class Adapter:
+        _client = Client()
+
+        async def chat_stream(self, *args, **kwargs):
+            try:
+                yield ChatChunk(delta_content="OK")
+                await asyncio.sleep(60)
+            finally:
+                closed.append("stream")
+
+    monkeypatch.setattr(agent_api.ModelRouter, "fast", lambda self: Adapter())
+    monkeypatch.setattr(agent_api, "load_llm_settings", lambda root: LLMSettings(
+        api_key="test-only", base_url=None, provider="deepseek", main_model="m", fast_model="f"))
+    asyncio.run(agent_api.agent_llm_settings_test())
+    assert closed == ["stream", "client"]

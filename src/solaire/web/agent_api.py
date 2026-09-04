@@ -6,6 +6,7 @@ import asyncio
 import re
 import time
 import uuid
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from solaire.agent_layer.llm.llm_overrides import load_overrides_raw, mask_api_k
 from solaire.agent_layer.llm.user_llm_overrides import load_user_overrides_raw, save_user_overrides_raw
 from solaire.agent_layer.llm.providers import VALID_PROVIDERS, list_provider_options_for_api
 from solaire.agent_layer.llm.router import ModelRouter, load_llm_settings
+from solaire.agent_layer.llm.errors import llm_error_message as _llm_connection_error_message
 from solaire.agent_layer.memory import list_topic_filenames, read_index, read_topic, write_index, write_topic
 from solaire.agent_layer.cancel_signal import clear_cancel, request_cancel
 from solaire.agent_layer.orchestrator import iter_agent_turn_sse
@@ -244,38 +246,37 @@ def agent_llm_settings_put(body: LLMSettingsPutBody) -> dict[str, Any]:
     return {"ok": True}
 
 
-def _llm_connection_error_message(exc: Exception) -> str:
-    marker = f"{type(exc).__name__} {exc}".casefold()
-    if any(value in marker for value in ("401", "403", "authentication", "unauthorized", "api key")):
-        return "连接失败：API 密钥无效或服务拒绝访问"
-    if any(value in marker for value in ("404", "model_not_found", "not found")):
-        return "连接失败：模型不存在或当前账号无权使用"
-    if "429" in marker or "rate limit" in marker:
-        return "连接失败：服务请求过于频繁或额度不足"
-    if any(value in marker for value in ("timeout", "timed out", "connection", "network", "dns")):
-        return "连接失败：无法访问模型服务，请检查地址、网络和代理设置"
-    return "连接失败：模型服务返回错误，请检查供应商、地址和模型名称"
-
-
 @router.post("/llm-settings/test")
 async def agent_llm_settings_test() -> dict[str, Any]:
+    """Check first model output (including reasoning) within 45s, not full generation."""
     settings = load_llm_settings(state.get_root())
     if not settings.api_key:
         raise HTTPException(status_code=400, detail="尚未配置 API 密钥，请先保存配置")
 
     started = time.perf_counter()
+    adapter = None
+    stream = None
     try:
         adapter = ModelRouter(settings).fast()
-        await asyncio.wait_for(
-            adapter.chat(
-                [{"role": "user", "content": "只回复 OK"}],
-                temperature=0,
-                max_tokens=8,
-            ),
-            timeout=20,
+        stream = adapter.chat_stream(
+            [{"role": "user", "content": "只回复 OK"}],
+            temperature=0,
+            max_tokens=256,
         )
+        async with asyncio.timeout(45):
+            async for chunk in stream:
+                if chunk.delta_content or chunk.delta_reasoning or chunk.finish_reason:
+                    break
+            else:
+                raise ValueError("Model returned an empty stream")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=_llm_connection_error_message(exc)) from exc
+    finally:
+        if stream is not None:
+            await stream.aclose()
+        client = getattr(adapter, "_client", None)
+        if client is not None:
+            await client.close()
 
     return {
         "ok": True,
@@ -560,7 +561,7 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
         import json as _json
 
         yield f"event: session\ndata: {_json.dumps({'session_id': s.session_id}, ensure_ascii=False)}\n\n"
-        async for chunk in iter_agent_turn_sse(
+        async with aclosing(iter_agent_turn_sse(
             root,
             s,
             user_message=user_msg,
@@ -568,7 +569,11 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
             mode=body.mode,
             confirm_action_id=body.confirm_action_id,
             confirm_accepted=body.confirm_accepted,
-        ):
-            yield chunk
+        )) as events:
+            async for chunk in events:
+                yield chunk
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+    })

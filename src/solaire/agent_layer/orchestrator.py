@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from contextlib import suppress
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from solaire.agent_layer.compactor import summarize_tool_result
 from solaire.agent_layer.context import ContextManager, tool_result_to_content
 from solaire.agent_layer.guardrails import load_safety_mode, register_approval
 from solaire.agent_layer.llm.adapter import LLMAdapter
+from solaire.agent_layer.llm.errors import llm_error_message
 from solaire.agent_layer.llm.deepseek_tokenizer import (
     context_limit_for_provider,
     estimate_context_prompt_tokens,
@@ -204,8 +206,11 @@ async def _llm_round_call(
             if chunk.finish_reason is not None:
                 tool_calls = list(chunk.raw_tool_calls or [])
                 finish_reason = chunk.finish_reason
-    except Exception:
-        logger.warning("LLM streaming failed, falling back to non-streaming chat", exc_info=True)
+    except NotImplementedError:
+        # Only adapters that explicitly lack streaming may fall back. Network
+        # errors must not silently repeat a paid request (or duplicate partial text).
+        if full_content or full_reasoning:
+            raise
         resp = await adapter.chat(
             api_messages, tools=tools_payload, temperature=temperature, max_tokens=max_tokens
         )
@@ -604,7 +609,7 @@ async def run_agent_turn(
                 max_tokens=max_tokens,
             )
         except Exception as e:
-            await emit("error", {"code": "llm_error", "message": str(e)})
+            await emit("error", {"code": "llm_error", "message": llm_error_message(e)})
             save_session(project_root, session)
             await emit("done", _pack_done_event(settings, usage_acc, peak_context_est))
             return
@@ -822,6 +827,9 @@ async def run_agent_turn(
     save_session(project_root, session)
 
 
+SSE_HEARTBEAT_SECONDS = 10
+
+
 async def iter_agent_turn_sse(
     project_root: Path,
     session: SessionState,
@@ -849,10 +857,21 @@ async def iter_agent_turn_sse(
             await queue.put(None)
 
     task = asyncio.create_task(runner())
-    while True:
-        item = await queue.get()
-        if item is None:
-            break
-        ev, data = item
-        yield f"event: {ev}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
-    await task
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+            except TimeoutError:
+                # SSE comments keep proxies alive without adding chat text/tokens.
+                yield ": keepalive\n\n"
+                continue
+            if item is None:
+                break
+            ev, data = item
+            yield f"event: {ev}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
+        await task
+    finally:
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task

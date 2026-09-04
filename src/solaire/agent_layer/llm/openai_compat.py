@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
-from solaire.common.network import ai_http_options
+from solaire.common.network import ai_http_options, ai_sdk_options
 
 from solaire.agent_layer.llm.adapter import ChatChunk, ChatResponse
 from solaire.agent_layer.llm.providers import ReasoningEffort
@@ -109,7 +109,7 @@ class OpenAICompatAdapter:
         effective_url = base_url or os.environ.get('OPENAI_BASE_URL') or 'https://api.openai.com/v1'
         kwargs['base_url'] = effective_url
         kwargs['http_client'] = DefaultAsyncHttpxClient(**ai_http_options(effective_url))
-        self._client = AsyncOpenAI(**kwargs)
+        self._client = AsyncOpenAI(**kwargs, **ai_sdk_options())
 
     def _apply_deepseek_openai_extensions(self, req: dict[str, Any]) -> None:
         """DeepSeek：思考模式 + 含工具调用的助手轮次须原样回传 `reasoning_content`。
