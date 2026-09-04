@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EducationHelper 1.5.1 production-style LAN deployment for systemd Linux hosts.
+# EducationHelper 1.5.2 production-style LAN deployment for systemd Linux hosts.
 # Optional environment variables:
 #   EH_PORT=5173
 #   EH_INSTALL_PROXY_URL=http://proxy-host:7890  (installation only)
@@ -8,10 +8,10 @@
 
 set -Eeuo pipefail
 
-VERSION="1.5.1"
+VERSION="1.5.2"
 PIXI_MIN_VERSION="0.75.0"
-ARCHIVE_URL="https://educationhelper-downloads.btxmnr988y.chatgpt.site/releases/EducationHelper-1.5.1-linux-source.tar.gz"
-ARCHIVE_SHA256="c90ff835f6ced05c71282b6523c376d34475d142873c5551cb5b305add3137f3"
+ARCHIVE_URL="https://educationhelper-downloads.btxmnr988y.chatgpt.site/releases/EducationHelper-1.5.2-linux-source.tar.gz"
+ARCHIVE_SHA256="48f89f072c4685dbb2d637e87140a09bde8cdfea4db2ed28229bf50f2d6dbaab"
 APP_BASE="/opt/educationhelper"
 RELEASE_DIR="$APP_BASE/releases/$VERSION"
 CURRENT_LINK="$APP_BASE/current"
@@ -166,8 +166,7 @@ sudo -u "$SERVICE_USER" env "${runtime_env[@]}" \
 control_token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 proxy_lines=""
 if [[ -n "$RUNTIME_PROXY_URL" ]]; then
-  proxy_lines=$(printf 'HTTP_PROXY=%s\nHTTPS_PROXY=%s\nhttp_proxy=%s\nhttps_proxy=%s\n' \
-    "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL")
+  proxy_lines=$(printf 'EH_EXTERNAL_PROXY_URL=%s\n' "$RUNTIME_PROXY_URL")
 fi
 
 env_file="$tmp_dir/educationhelper.env"

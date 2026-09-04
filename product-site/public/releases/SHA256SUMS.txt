@@ -1,3 +1,5 @@
+48f89f072c4685dbb2d637e87140a09bde8cdfea4db2ed28229bf50f2d6dbaab  EducationHelper-1.5.2-linux-source.tar.gz
+fbfec80e5210d95d09e14745c9e1ddde4b1a4dd9396812d2737ad1350429f053  EducationHelper-1.5.2-source.zip
 c90ff835f6ced05c71282b6523c376d34475d142873c5551cb5b305add3137f3  EducationHelper-1.5.1-linux-source.tar.gz
 32ad7fcdc46fa246a8844c0e4221bec3d01211e0ca244839ce0ae6a9083b9e89  EducationHelper-1.5.1-source.zip
 bb2164713c66bdeb188fb25046fc0015a5bf4bad8919d004c4e8ff4f058bd2ba  EducationHelper-1.5.0-linux-source.tar.gz

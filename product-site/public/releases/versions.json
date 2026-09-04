@@ -1,7 +1,20 @@
 {
   "product": "EducationHelper",
-  "latest": "1.5.1",
+  "latest": "1.5.2",
   "versions": [{
+    "version": "1.5.2",
+    "source_commit": "3cfeca7d466b8e7a96e1356f0056d565bbb9c98d",
+    "full_source_commit": "453cfe1ad8067d6a86ced1dd2f774a58633d20bb",
+    "released_at": "2026-09-04",
+    "downloads": {
+      "linux_source": "/releases/EducationHelper-1.5.2-linux-source.tar.gz",
+      "full_source": "/releases/EducationHelper-1.5.2-source.zip",
+      "installer": "/releases/deploy-linux.sh",
+      "upgrader": "/releases/upgrade-linux.sh",
+      "ocr_installer": "/releases/install-ocr-ubuntu.sh",
+      "checksums": "/releases/SHA256SUMS.txt"
+    }
+  }, {
     "version": "1.5.1",
     "source_commit": "32d3e70",
     "released_at": "2026-08-25",
