@@ -1224,6 +1224,40 @@ def bank_items() -> dict[str, Any]:
     return {"items": list_bank_entries(root)}
 
 
+def _bank_folder_owner(request: Request) -> str:
+    user = getattr(request.state, 'platform_user', None)
+    token = extract_session_token(authorization=request.headers.get('authorization'),
+                                  x_solaire_session=request.headers.get('x-solaire-session'))
+    if user is None and token:
+        user = get_session_user(require_platform_root(), token)
+    if user and user.get('role') not in {'teacher', 'admin'}:
+        raise HTTPException(status_code=403, detail='仅教师或管理员可以整理题库目录')
+    return str(user['id']) if user else ''
+
+
+@app.get("/api/bank/folders")
+def bank_folders_get(request: Request) -> dict[str, Any]:
+    from solaire.web.bank_folders import read
+    return read(_require_root(), owner_id=_bank_folder_owner(request))
+
+
+class BankFolderActionBody(BaseModel):
+    action: Literal['create', 'rename', 'move', 'remove']
+    path: str = Field(default='', max_length=240)
+    target: str = Field(default='', max_length=240)
+    qualified_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+@app.post("/api/bank/folders/actions")
+def bank_folders_action(body: BankFolderActionBody, request: Request) -> dict[str, Any]:
+    from solaire.web.bank_folders import act
+    try:
+        return act(_require_root(), body.action, path=body.path,
+                   target=body.target, qualified_ids=body.qualified_ids, owner_id=_bank_folder_owner(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/bank/items/{qualified_id:path}")
 def bank_item_get(qualified_id: str) -> dict[str, Any]:
     root = _require_root()

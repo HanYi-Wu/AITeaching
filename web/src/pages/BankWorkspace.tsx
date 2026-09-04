@@ -19,6 +19,7 @@ import {
 } from "../components/BankQuestionEditorPanel";
 import type { EmbedKind } from "../lib/bankEditorEmbedKinds";
 import { ContentWithPrimeBrush } from "../components/ContentWithPrimeBrush";
+import { BankFolderExplorer, type BankFolders } from "../components/BankFolderExplorer";
 import { KatexPlainPreview } from "../components/KatexText";
 import { MathInsertOverlay } from "../components/MathInsertOverlay";
 import { MermaidEditorModal } from "../components/MermaidEditorModal";
@@ -32,7 +33,7 @@ import i18n from "../i18n/i18n";
 import { confirmDialog } from "../lib/confirmDialog";
 import { localeCompareStrings } from "../lib/locale";
 import { SOLAIRE_SAVE_EVENT } from "../lib/saveEvents";
-import { notifyContentLibraryChanged } from "../lib/contentEvents";
+import { notifyContentLibraryChanged, useContentLibraryChanged } from "../lib/contentEvents";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../lib/ime";
 import { cn } from "../lib/utils";
 import { downloadPlatformBlob } from "../platform/auth";
@@ -102,6 +103,7 @@ export function BankWorkspace({
 }) {
   const { t } = useTranslation(["bank", "lib", "common"]);
   const [items, setItems] = useState<BankListItem[]>([]);
+  const [folders, setFolders] = useState<BankFolders>({ folders: [], assignments: {} });
   const [collections, setCollections] = useState<BankCollectionRow[]>([]);
   const [subjects, setSubjects] = useState<string[]>([]);
   const [filterSubject, setFilterSubject] = useState<string>("__all__");
@@ -379,12 +381,13 @@ export function BankWorkspace({
 
   const loadList = useCallback(async () => {
     onError(null);
-    const [c, it, sub] = await Promise.all([
+    const [c, it, sub, folderData] = await Promise.all([
       apiGet<{
         collections: { id: string; label: string; subject?: string; collection?: string }[];
       }>("/api/bank/collections"),
       apiGet<{ items: BankListItem[] }>("/api/bank/items"),
       apiGet<{ subjects: string[] }>("/api/bank/subjects"),
+      apiGet<BankFolders>("/api/bank/folders"),
     ]);
     setCollections(
       c.collections.map((x) => {
@@ -396,6 +399,7 @@ export function BankWorkspace({
       }),
     );
     setItems(it.items);
+    setFolders(folderData);
     setSubjects(sub.subjects);
     try {
       const idx = await apiGraphQuestionBindingsIndex();
@@ -408,6 +412,7 @@ export function BankWorkspace({
   useEffect(() => {
     void loadList().catch((e: Error) => onError(e.message));
   }, [loadList, onError]);
+  useContentLibraryChanged(kind => { if (kind === 'question') void loadList().catch((e: Error) => onError(e.message)); });
 
   useEffect(() => {
     if (!bankManageOpen) return;
@@ -1670,19 +1675,8 @@ export function BankWorkspace({
         <div className="border-b border-slate-100 p-3">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("title")}</h2>
         </div>
-        <ul className="min-h-0 flex-1 overflow-auto p-2">
-          {items.length === 0 ? (
-            <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
-              <p className="font-medium text-slate-800">{t("emptyList")}</p>
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">{t("emptyListHint")}</p>
-            </li>
-          ) : filtered.length === 0 ? (
-            <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
-              <p className="font-medium text-slate-800">{t("emptyFilter")}</p>
-              <p className="mt-2 text-xs text-slate-500">{t("emptyFilterHint")}</p>
-            </li>
-          ) : (
-            filtered.map((it) => {
+        <BankFolderExplorer data={folders} items={filtered} selectedIds={selectedExportIds}
+          onChange={setFolders} onError={onError} renderItem={(it) => {
               const graphNodes = graphLinkIndex[it.qualified_id] ?? [];
               return (
                 <li
@@ -1760,9 +1754,7 @@ export function BankWorkspace({
                   </button>
                 </li>
               );
-            })
-          )}
-        </ul>
+          }} />
       </section>
 
       {/* 中：多标签 + 字段 / 浏览 / 源文件 */}

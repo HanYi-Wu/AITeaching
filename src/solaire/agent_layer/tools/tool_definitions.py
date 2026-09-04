@@ -407,6 +407,17 @@ _RAW_TOOLS: list[RegisteredTool] = [
         ui_label="正在保存题目修改…",
     ),
     _fn(
+        "bank.organize",
+        "管理题库逻辑文件夹：list 列目录与题目归属，create 新建（支持父/子路径），rename 重命名，move 将最多500题移动到已有目录（空path移出目录），remove 删除目录并把题目移到父目录，不删除题目。先检索真实题目ID。",
+        {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "create", "rename", "move", "remove"]},
+            "path": {"type": "string"}, "target": {"type": "string"},
+            "qualified_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 500}
+        }, "required": ["action"], "additionalProperties": False},
+        bank_tools.tool_bank_organize,
+        ui_label="正在整理题目目录…",
+    ),
+    _fn(
         "bank.create_items",
         "批量创建1至50道题目，一次确认整批。生成或导入多题时优先使用，禁止逐题要求确认。每题返回成功/失败；只重试失败项。metadata.category 用于分类。",
         {"type": "object", "properties": {

@@ -25,6 +25,7 @@ import {
   Download,
 } from "lucide-react";
 import { downloadPlatformBlob } from "../platform/auth";
+import { notifyAgentContentChanged } from '../lib/contentEvents';
 import {
   apiAgentChatStream,
   apiAgentConfig,
@@ -388,6 +389,7 @@ export function AgentChatPanel({
             assistantSegmentClosedRef.current = true;
             setThinkingText(null);
             const tool_name = String(data.tool_name ?? "");
+            notifyAgentContentChanged(tool_name, String(data.status ?? ''));
             const summary = String(data.summary ?? data.status ?? "");
             const subagent = Boolean(data.subagent);
             setLines((prev) => {

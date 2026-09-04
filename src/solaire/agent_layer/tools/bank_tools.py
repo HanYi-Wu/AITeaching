@@ -15,6 +15,24 @@ def _root(ctx: InvocationContext) -> Any:
     return ctx.project_root
 
 
+def tool_bank_organize(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    from solaire.web.bank_folders import act, read
+    try:
+        actor = ctx.platform_user
+        if actor and actor.get('role') not in {'teacher', 'admin'}:
+            raise ValueError('仅教师或管理员可以整理题库目录')
+        if ctx.public_mode and not actor:
+            raise ValueError('请先登录')
+        owner_id = str(actor['id']) if actor else ''
+        action = str(args.get('action') or 'list')
+        result = read(_root(ctx), owner_id=owner_id) if action == 'list' else act(
+            _root(ctx), action, path=str(args.get('path') or ''),
+            target=str(args.get('target') or ''), qualified_ids=args.get('qualified_ids'), owner_id=owner_id)
+        return ToolResult(status='succeeded', data=result)
+    except (ValueError, TypeError) as exc:
+        return ToolResult(status='failed', error_code='bank_folder', error_message=str(exc))
+
+
 def _format_check_payload(qualified_id: str, item: QuestionItem) -> dict[str, Any]:
     warnings = analyze_math_static_for_record(qualified_id, item)
     return {

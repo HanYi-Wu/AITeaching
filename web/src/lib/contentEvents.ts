@@ -7,6 +7,10 @@ export function notifyContentLibraryChanged(kind: ContentLibraryKind) {
   window.dispatchEvent(new CustomEvent(CONTENT_LIBRARY_CHANGED_EVENT, { detail: { kind } }));
 }
 
+export function notifyAgentContentChanged(toolName: string, status: string) {
+  if (toolName === 'bank.organize' && status === 'succeeded') notifyContentLibraryChanged('question');
+}
+
 export function useContentLibraryChanged(callback: (kind: ContentLibraryKind) => void) {
   const callbackRef = useRef(callback);
   callbackRef.current = callback;
