@@ -107,6 +107,7 @@ export function BankWorkspace({
   const [filterSubject, setFilterSubject] = useState<string>("__all__");
   const [filterCollection, setFilterCollection] = useState<string>("__all__");
   const [filterType, setFilterType] = useState<string>("__all__");
+  const [filterCategory, setFilterCategory] = useState("__all__");
   const [metadataFilters, setMetadataFilters] = useState<MetadataFilters>({});
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -481,13 +482,14 @@ export function BankWorkspace({
     const q = deferredSearch.trim().toLowerCase();
     return metadataScopeSearchItems
       .filter(({ item, searchText }) => {
+        if (filterCategory !== "__all__" && String(item.metadata?.category || "未分类") !== filterCategory) return false;
         if (activeMetadataFilters && !matchesMetadataFilters(item.metadata, activeMetadataFilters)) {
           return false;
         }
         return !q || searchText.includes(q);
       })
       .map(({ item }) => item);
-  }, [activeMetadataFilters, metadataScopeSearchItems, deferredSearch]);
+  }, [activeMetadataFilters, metadataScopeSearchItems, deferredSearch, filterCategory]);
   const bankFilterSummary = useMemo(() => {
     const all = t("bank:filterAllLabel");
     const sub = filterSubject === "__all__" ? all : filterSubject;
@@ -1228,6 +1230,12 @@ export function BankWorkspace({
                   filters={metadataFilters}
                   onChange={setMetadataFilters}
                 />
+                <label className="block text-xs">分类
+                  <select aria-label="题目分类筛选" className="mt-1 w-full rounded border p-2" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+                    <option value="__all__">全部分类</option>
+                    {[...new Set(["未分类", ...items.map(it => String(it.metadata?.category || "未分类"))])].sort().map(category => <option key={category}>{category}</option>)}
+                  </select>
+                </label>
               </div>
             </div>
           ) : null}
@@ -1514,6 +1522,7 @@ export function BankWorkspace({
     bankFilterSummary,
     filterSubject,
     filterType,
+    filterCategory,
     searchInput,
     search,
     commitSearch,

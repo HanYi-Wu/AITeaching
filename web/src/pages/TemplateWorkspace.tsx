@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import yaml from "js-yaml";
+import { standardSections } from "../lib/manualPaperShortcuts";
 import { ChevronDown, ChevronUp, Plus, Save, Trash2 } from "lucide-react";
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import { TabPanel, type TabItem } from "../components/layout/TabPanel";
@@ -751,19 +752,22 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
 
   function addSection(type: string) {
     const label = t(`sectionKind.${type}`);
-    setDraft((d) => ({
+    setDraft((d) => {
+      let ordinal = 1;
+      while (d.sections.some(section => section.section_id === `${label} ${ordinal}`)) ordinal += 1;
+      return ({
       ...d,
       sections: [
         ...d.sections,
         {
-          section_id: t("newSection", { label }),
+          section_id: `${label} ${ordinal}`,
           type,
           required_count: type === "text" ? 0 : 1,
           score_per_item: type === "text" ? 0 : 5,
           describe: "",
         },
       ],
-    }));
+    }); });
   }
 
   const tabItems: TabItem[] = useMemo(
@@ -1306,6 +1310,10 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold text-slate-800">{t("structureTitle")}</h2>
+                <button type="button" className="rounded-md border px-2 py-1 text-sm" onClick={() => {
+                  if (draft.sections.length && !window.confirm('替换当前模板结构为100分常用模板？未保存的结构将被替换。')) return;
+                  setDraft(d => ({ ...d, sections: standardSections() }));
+                }}>一键100分模板</button>
                 <select
                   className="rounded-md border border-slate-300 px-2 py-1 text-sm"
                   defaultValue=""

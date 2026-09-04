@@ -1,3 +1,4 @@
+import { fillSectionGaps } from "../lib/manualPaperShortcuts";
 import {
   useCallback,
   useDeferredValue,
@@ -2250,6 +2251,13 @@ export function ComposeWorkspace({
         </section>
 
         <div className="flex w-11 shrink-0 flex-col items-center justify-center gap-3 border-y border-slate-200 bg-slate-100/90 py-4 lg:border-x lg:border-y-0">
+          <button type="button" disabled={!selectedTpl} className="rounded border bg-white p-1 text-xs" title="按当前筛选题目补齐各大题空缺；保留已选题目，不重复添加" onClick={() => {
+            if (!selectedTpl) return;
+            const next = fillSectionGaps(selectedTpl.sections, bySection, filteredQuestions, questionTypeMatchesSection);
+            const added = Object.values(next).flat().length - Object.values(bySection).flat().length;
+            setBySection(next);
+            setMsg(`已补入 ${added} 题；不足时请放宽左侧筛选条件。`);
+          }}>补齐空缺</button>
           <button
             type="button"
             title={t("compose:addToSection")}
