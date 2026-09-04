@@ -59,6 +59,10 @@ _SUBTASK_PIPELINE: tuple[str, ...] = ("agent.run_subtask", "agent.run_tool_pipel
 _FILE_RO: tuple[str, ...] = ("file.read", "file.list", "file.search")
 
 _GENERAL_DOMAIN: tuple[str, ...] = (
+    "bank.create_items",
+    "exam.workspace_list",
+    "exam.workspace_delete",
+    "paper.update_publication",
     "analysis.list_datasets",
     "analysis.list_builtins",
     "analysis.run_builtin",
@@ -256,15 +260,8 @@ def openai_tools_payload(tools: list[RegisteredTool] | None = None) -> list[dict
 
 def tool_descriptions_for_prompt(tools: list[RegisteredTool] | None = None) -> str:
     tlist = tools or all_registered_tools()
-    lines = []
-    for t in tlist:
-        req = t.parameters_schema.get("required")
-        if isinstance(req, list) and req:
-            req_str = "、".join(req)
-            lines.append(f"- `{t.name}`: {t.description}（必须提供: {req_str}）")
-        else:
-            lines.append(f"- `{t.name}`: {t.description}")
-    return "\n".join(lines)
+    # Descriptions and argument schemas already travel in the tools field.
+    return "工具参数与说明见 tools 定义。多题创建优先 bank.create_items，一次确认整批；不要重复读取无变化数据。\n" + ", ".join(t.name for t in tlist)
 
 
 def invoke_registered_tool(name: str, args: dict[str, Any], ctx: InvocationContext) -> ToolResult:

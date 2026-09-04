@@ -215,6 +215,25 @@ def tool_bank_update_item(ctx: InvocationContext, args: dict[str, Any]) -> ToolR
     )
 
 
+def tool_bank_create_items(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    """One bounded proposal/confirmation, with explicit per-question outcomes."""
+    questions = args.get('questions')
+    if not isinstance(questions, list) or not 1 <= len(questions) <= 50 or not all(isinstance(q, dict) for q in questions):
+        return ToolResult(status='failed', error_code='invalid_args', error_message='questions 必须包含 1 至 50 道题目')
+    results = []
+    for question in questions:
+        try:
+            result = tool_bank_create_item(ctx, {**question, 'subject': question.get('subject') or args.get('subject')})
+        except Exception as exc:
+            result = ToolResult(status='failed', error_code='invalid_question', error_message=str(exc))
+        results.append({'question_id': question.get('question_id'), 'status': result.status,
+                        'data': result.data, 'error': result.error_message})
+    created = sum(item['status'] == 'succeeded' for item in results)
+    return ToolResult(status='succeeded' if created == len(results) else 'failed',
+                      data={'created': created, 'failed': len(results) - created, 'results': results},
+                      error_message=None if created == len(results) else '部分题目未创建；已创建的保留，请只重试失败项。')
+
+
 def tool_bank_create_item(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     subject = str(args.get("subject") or "通用").strip() or "通用"
     ns = f"{subject}/默认"
@@ -275,7 +294,7 @@ def tool_bank_create_item(ctx: InvocationContext, args: dict[str, Any]) -> ToolR
 
     qualified_id = f"{ns}/{qid}"
     try:
-        save_question(_root(ctx), qualified_id, item)
+        save_question(_root(ctx), qualified_id, item, create_only=True)
     except FileExistsError:
         return ToolResult(
             status="failed",

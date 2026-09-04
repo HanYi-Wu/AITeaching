@@ -364,7 +364,7 @@ def _dump_record_yaml(rec: BankRecord) -> dict[str, Any]:
     return question_item_to_author_dict(rec)
 
 
-def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord) -> dict[str, str]:
+def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *, create_only: bool = False) -> dict[str, str]:
     ns, qid = split_qualified_id(qualified_id)
     if body.id != qid:
         raise ValueError("Resource id in body must match URL")
@@ -378,6 +378,8 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord) ->
             if rec.id != qid:
                 continue
             data = _dump_record_yaml(body)
+            if create_only:
+                raise FileExistsError(qualified_id)
             with ypath.open("w", encoding="utf-8") as f:
                 yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
             return {"storage_path": _rel_to_resource(project_root, ypath)}
@@ -386,13 +388,13 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord) ->
     if path.exists():
         raise FileExistsError(str(path))
     data = _dump_record_yaml(body)
-    with path.open("w", encoding="utf-8") as f:
+    with path.open("x" if create_only else "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
     return {"storage_path": _rel_to_resource(project_root, path)}
 
 
-def save_question(project_root: Path, qualified_id: str, item: QuestionItem) -> dict[str, str]:
-    return save_bank_record(project_root, qualified_id, strip_hydrate_fields(item))
+def save_question(project_root: Path, qualified_id: str, item: QuestionItem, *, create_only: bool = False) -> dict[str, str]:
+    return save_bank_record(project_root, qualified_id, strip_hydrate_fields(item), create_only=create_only)
 
 
 def delete_question(project_root: Path, qualified_id: str, storage_path: str | None = None) -> None:

@@ -407,6 +407,25 @@ _RAW_TOOLS: list[RegisteredTool] = [
         ui_label="正在保存题目修改…",
     ),
     _fn(
+        "bank.create_items",
+        "批量创建1至50道题目，一次确认整批。生成或导入多题时优先使用，禁止逐题要求确认。每题返回成功/失败；只重试失败项。metadata.category 用于分类。",
+        {"type": "object", "properties": {
+            "subject": {"type": "string"},
+            "questions": {"type": "array", "minItems": 1, "maxItems": 50, "items": {
+                "type": "object", "properties": {
+                    "question_id": {"type": "string"}, "question_type": {"type": "string"},
+                    "content": {"type": "string"}, "answer": {"type": "string"}, "analysis": {"type": "string"},
+                    "options": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                    "source_kind": {"type": "string", "enum": ["AI生成", "AI辅助导入"]}},
+                "required": ["question_id", "question_type", "content", "answer"], "additionalProperties": False}}},
+         "required": ["questions"], "additionalProperties": False},
+        bank_tools.tool_bank_create_items,
+        ui_label="正在创建整批题目…",
+        requires_confirmation_override=True,
+        action_label="创建整批题目（一次确认全部）",
+    ),
+    _fn(
         "bank.create_item",
         "在教师个人题库中新建一道题目。由模型原创时 source_kind=AI生成；依据教师文件整理导入时必须用 AI辅助导入。",
         {
@@ -1129,7 +1148,7 @@ _RAW_TOOLS.extend(
         _fn("exam.workspace_list", "列出组卷工作区草稿。", _teacher_schema(), teacher_tools.tool_exam_workspace_list, risk=ToolRisk.READ),
         _fn("exam.workspace_get", "读取一份组卷工作区草稿。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_get, risk=ToolRisk.READ),
         _fn("exam.workspace_save", "创建或更新组卷工作区草稿。", _teacher_schema({"exam_id": _S, "name": _S, "subject": _S, "export_label": _S, "template_ref": _S, "template_path": _S, "selected_items": {"type": "array", "items": {"type": "object"}}}, ["subject", "export_label", "template_path", "selected_items"]), teacher_tools.tool_exam_workspace_save),
-        _fn("exam.workspace_delete", "删除组卷工作区草稿。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_delete, risk=ToolRisk.DESTRUCTIVE),
+        _fn("exam.workspace_delete", "删除试卷/组卷草稿文件（移至回收站），必须先 workspace_list 核对 exam_id，再由用户确认。已有发布记录不能删除源卷，改用 paper.update_publication 撤销发布。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_delete, risk=ToolRisk.DESTRUCTIVE, requires_confirmation_override=True),
         _fn("exam.workspace_copy", "从现有试卷复制一份新的组卷工作区。", _teacher_schema({"source_exam_id": _S, "export_label": _S}, ["source_exam_id", "export_label"]), teacher_tools.tool_exam_workspace_copy),
         _fn("paper.list", "按关键字、学科、状态和交付模式查询当前教师的试卷。", _teacher_schema({"q": _S, "delivery_mode": _S, "status": _S, "subject": _S, "page": {"type": "integer"}, "page_size": {"type": "integer"}}), teacher_tools.tool_paper_list, risk=ToolRisk.READ),
         _fn("paper.analyze", "分析试卷提交、成绩、用时和监考事件；本工具不提供可用于批改的 attempt_id，需要答卷标识时必须再调用 paper.find_submissions。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_analyze, risk=ToolRisk.READ),

@@ -213,6 +213,8 @@ def _compact_list(items: list[Any], *, max_chars: int) -> tuple[list[Any], bool]
 
 def summarize_tool_result(tool_name: str, data: dict[str, Any]) -> str:
     """One-line summary for SSE cards."""
+    if tool_name == 'bank.create_items':
+        return f"整批创建 → 成功 {data.get('created', 0)} 题，失败 {data.get('failed', 0)} 题"
     if tool_name == "graph.list_nodes":
         nodes = data.get("nodes")
         if isinstance(nodes, list):

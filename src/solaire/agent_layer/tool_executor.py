@@ -304,7 +304,7 @@ async def _execute_single_tool(
 
     # --- Stage 6: Execute ---
     tr = invoke_registered_tool(name, args, ctx)
-    payload = tr.data if tr.status == "succeeded" else {"error": tr.error_message, "error_code": tr.error_code}
+    payload = tr.data if tr.status == "succeeded" else {**tr.data, "error": tr.error_message, "error_code": tr.error_code}
     result = _build_tool_result_dict(tid, name, payload)
     session.draft_tool_results.append(result)
     await _post_tool_events(
@@ -371,7 +371,7 @@ async def run_draft_tool_loop(
 
             parts = await asyncio.gather(*[_invoke_read(i) for i in read_batch])
             for _i, name, tid, tr in sorted(parts, key=lambda x: x[0]):
-                payload = tr.data if tr.status == "succeeded" else {"error": tr.error_message, "error_code": tr.error_code}
+                payload = tr.data if tr.status == "succeeded" else {**tr.data, "error": tr.error_message, "error_code": tr.error_code}
                 result = _build_tool_result_dict(tid, name, payload)
                 session.draft_tool_results.append(result)
                 await _post_tool_events(

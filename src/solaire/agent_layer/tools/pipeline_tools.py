@@ -63,7 +63,7 @@ def tool_run_tool_pipeline(ctx: InvocationContext, args: dict[str, Any]) -> Tool
                 "index": i,
                 "tool": name,
                 "status": tr.status,
-                "data": tr.data if tr.status == "succeeded" else {"error": tr.error_message, "error_code": tr.error_code},
+                "data": tr.data if tr.status == "succeeded" else {**tr.data, "error": tr.error_message, "error_code": tr.error_code},
             }
         )
     return ToolResult(status="succeeded", data={"completed": len(out), "steps": out})

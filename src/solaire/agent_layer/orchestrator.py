@@ -321,8 +321,7 @@ async def _handle_confirmation_resume(
     emit: EmitFn,
 ) -> str | None:
     """Handle confirmation resume. Returns user_message override (or None on early exit)."""
-    if confirm_accepted is None:
-        confirm_accepted = True
+    confirm_accepted = confirm_accepted is True
     pending = session.pending_confirmations.pop(confirm_action_id, None)
     if pending is None:
         await emit("error", {"code": "unknown_action", "message": "无效或已过期的确认项"})
@@ -369,7 +368,7 @@ async def _handle_confirmation_resume(
             )
     if ran_ok:
         tr = invoke_registered_tool(pending.tool_name, pending.arguments, ctx)
-        payload = tr.data if tr.status == "succeeded" else {"error": tr.error_message, "error_code": tr.error_code}
+        payload = tr.data if tr.status == "succeeded" else {**tr.data, "error": tr.error_message, "error_code": tr.error_code}
         session.draft_tool_results.append(
             {
                 "tool_call_id": pending.tool_call_id,
@@ -484,7 +483,7 @@ async def run_agent_turn(
             session=session,
             ctx=ctx,
             confirm_action_id=confirm_action_id,
-            confirm_accepted=confirm_accepted or True,
+            confirm_accepted=confirm_accepted is True,
             emit=emit,
         )
         if user_message is None:

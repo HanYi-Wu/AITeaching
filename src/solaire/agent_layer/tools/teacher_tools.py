@@ -326,7 +326,36 @@ def tool_exam_workspace_save(ctx: InvocationContext, args: dict[str, Any]) -> To
 
 
 def tool_exam_workspace_delete(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
-    return _run(lambda: (delete_exam_workspace(ctx.project_root, _required(args, "exam_id")), {"ok": True})[1])
+    def action() -> dict[str, Any]:
+        from solaire.web.exam_workspace_service import workspace_dir, _safe_exam_id
+        from solaire.web.platform_db import connect, init_platform_db
+        from solaire.web.paper_service import _ensure_paper_access
+        from solaire.common.security import assert_within_project
+        import shutil
+        exam_id = _safe_exam_id(_required(args, 'exam_id'))
+        source = workspace_dir(ctx.project_root, exam_id)
+        assert_within_project(ctx.project_root, source)
+        if not source.is_dir():
+            raise FileNotFoundError('试卷不存在，请先用 exam.workspace_list 核对 exam_id。')
+        if ctx.platform_user or ctx.public_mode:
+            actor = _actor(ctx)
+            root = default_platform_root()
+            init_platform_db(root)
+            with connect(root) as con:
+                paper = con.execute('SELECT * FROM paper_records WHERE exam_id = ?', (exam_id,)).fetchone()
+                if actor.get('role') != 'admin' and (not paper or paper['owner_teacher_id'] != actor['id']):
+                    raise PermissionError('无法确认该草稿归属于当前教师；请由管理员核实归属，不能越权删除。')
+                if paper:
+                    _ensure_paper_access(dict(paper), actor)
+                    if con.execute('SELECT 1 FROM exam_publications WHERE paper_id = ? LIMIT 1', (paper['id'],)).fetchone():
+                        raise ValueError('该试卷已有发布记录，为保留学生答卷和成绩不能删除源文件。请用 paper.update_publication 撤销发布，或复制为新草稿后修改。')
+        target = ctx.project_root / '.solaire' / 'trash' / 'exams' / uuid.uuid4().hex
+        assert_within_project(ctx.project_root, target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        return {'ok': True, 'exam_id': exam_id, 'recovery_path': target.relative_to(ctx.project_root).as_posix(),
+                'message': '试卷草稿已移至回收站，可由管理员恢复到原 exams 路径。'}
+    return _run(action)
 
 
 def tool_exam_workspace_copy(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:

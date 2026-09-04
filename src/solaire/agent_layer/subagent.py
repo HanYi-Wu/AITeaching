@@ -136,7 +136,7 @@ async def run_subagent(
                         )
                         continue
                 tr = invoke_registered_tool(name, args, inner_ctx)
-                payload = tr.data if tr.status == "succeeded" else {"error": tr.error_message}
+                payload = tr.data if tr.status == "succeeded" else {**tr.data, "error": tr.error_message}
                 messages.append(
                     {
                         "role": "tool",

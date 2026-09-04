@@ -216,6 +216,10 @@ def check_tool_call(
 
 
 def human_confirmation_message(tool_name: str, args: dict) -> str:
+    if tool_name == 'bank.create_items':
+        questions = args.get('questions') or []
+        ids = '、'.join(str(q.get('question_id', '')) for q in questions[:12] if isinstance(q, dict))
+        return f'确认一次创建这批 {len(questions)} 道题目？题号：{ids}。成功项保留，失败项会单独列出，不覆盖已有题目。'
     rt = tool_registry.get_registered_tool(tool_name)
     label = (rt.action_label if rt and rt.action_label else None) or "一项可能影响数据的操作"
     return f"助手请求执行：{label}。请确认是否继续。"
