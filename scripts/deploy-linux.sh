@@ -166,8 +166,7 @@ sudo -u "$SERVICE_USER" env "${runtime_env[@]}" \
 control_token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 proxy_lines=""
 if [[ -n "$RUNTIME_PROXY_URL" ]]; then
-  proxy_lines=$(printf 'HTTP_PROXY=%s\nHTTPS_PROXY=%s\nhttp_proxy=%s\nhttps_proxy=%s\n' \
-    "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL")
+  proxy_lines=$(printf 'EH_EXTERNAL_PROXY_URL=%s\n' "$RUNTIME_PROXY_URL")
 fi
 
 env_file="$tmp_dir/educationhelper.env"

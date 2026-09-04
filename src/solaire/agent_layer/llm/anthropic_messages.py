@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
+from solaire.common.network import ai_http_options
 
 from solaire.agent_layer.llm.adapter import ChatChunk, ChatResponse
 
@@ -159,8 +161,9 @@ class AnthropicMessagesAdapter:
         kwargs: dict[str, Any] = {}
         if api_key:
             kwargs["api_key"] = api_key
-        if base_url:
-            kwargs["base_url"] = base_url
+        effective_url = base_url or os.environ.get('ANTHROPIC_BASE_URL') or 'https://api.anthropic.com'
+        kwargs['base_url'] = effective_url
+        kwargs['http_client'] = DefaultAsyncHttpxClient(**ai_http_options(effective_url))
         self._client = AsyncAnthropic(**kwargs)
 
     async def chat(

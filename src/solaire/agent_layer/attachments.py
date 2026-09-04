@@ -261,12 +261,15 @@ def extract_attachment(path: Path, *, max_chars: int = 40_000) -> AttachmentExtr
             suggestion=capability.suggestion,
         )
     if capability.strategy == "ocr":
-        return AttachmentExtraction(
-            capability.kind,
-            error_code="ocr_required",
-            error="图片需要文字识别后才能作为文本交给 AI。",
-            suggestion=capability.suggestion,
-        )
+        from solaire.agent_layer.ocr import extract_image_text, INSTALL_HINT
+        try:
+            content, truncated = _bounded(extract_image_text(path), max_chars)
+            return AttachmentExtraction(capability.kind, content=content, truncated=truncated,
+                                        metadata={"engine": "tesseract", "lang": "chi_sim+eng"})
+        except Exception as exc:
+            return AttachmentExtraction(capability.kind,
+                error_code="ocr_required" if isinstance(exc, FileNotFoundError) else "ocr_failed",
+                error=str(exc), suggestion=INSTALL_HINT)
 
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".docx", ".pptx"}:

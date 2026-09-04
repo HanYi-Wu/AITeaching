@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import copy
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+from solaire.common.network import ai_http_options
 
 from solaire.agent_layer.llm.adapter import ChatChunk, ChatResponse
 from solaire.agent_layer.llm.providers import ReasoningEffort
@@ -104,8 +106,9 @@ class OpenAICompatAdapter:
         kwargs: dict[str, Any] = {}
         if api_key:
             kwargs["api_key"] = api_key
-        if base_url:
-            kwargs["base_url"] = base_url
+        effective_url = base_url or os.environ.get('OPENAI_BASE_URL') or 'https://api.openai.com/v1'
+        kwargs['base_url'] = effective_url
+        kwargs['http_client'] = DefaultAsyncHttpxClient(**ai_http_options(effective_url))
         self._client = AsyncOpenAI(**kwargs)
 
     def _apply_deepseek_openai_extensions(self, req: dict[str, Any]) -> None:

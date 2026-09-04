@@ -91,19 +91,22 @@ fi
 runtime_env_file="$CONFIG_DIR/educationhelper.env"
 config_repaired=0
 if [[ -f "$runtime_env_file" ]]; then
+  "${sudo_cmd[@]}" cp -p "$runtime_env_file" "$runtime_env_file.before-network-migration"
+  "${sudo_cmd[@]}" sed -i \
+    -e '/^HTTP_PROXY=/d' -e '/^HTTPS_PROXY=/d' -e '/^http_proxy=/d' -e '/^https_proxy=/d' \
+    -e '/^ALL_PROXY=/d' -e '/^all_proxy=/d' "$runtime_env_file"
   if [[ -n "$RUNTIME_PROXY_URL" ]]; then
     "${sudo_cmd[@]}" sed -i \
-      -e '/^HTTP_PROXY=/d' -e '/^HTTPS_PROXY=/d' -e '/^http_proxy=/d' -e '/^https_proxy=/d' \
+      -e '/^EH_EXTERNAL_PROXY_URL=/d' \
       "$runtime_env_file"
-    printf 'HTTP_PROXY=%s\nHTTPS_PROXY=%s\nhttp_proxy=%s\nhttps_proxy=%s\n' \
-      "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" "$RUNTIME_PROXY_URL" \
+    printf 'EH_EXTERNAL_PROXY_URL=%s\n' "$RUNTIME_PROXY_URL" \
       | "${sudo_cmd[@]}" tee -a "$runtime_env_file" >/dev/null
   fi
   "${sudo_cmd[@]}" sed -i -e '/^NO_PROXY=/d' -e '/^no_proxy=/d' "$runtime_env_file"
   printf 'NO_PROXY=127.0.0.1,localhost,::1\nno_proxy=127.0.0.1,localhost,::1\n' \
     | "${sudo_cmd[@]}" tee -a "$runtime_env_file" >/dev/null
   config_repaired=1
-  log "Ensured local services bypass the external proxy"
+  log "Removed global proxies. Runtime is direct; opt-in hosts use EH_PROXY_HOSTS + EH_EXTERNAL_PROXY_URL."
 fi
 
 tmp_dir="$(mktemp -d)"

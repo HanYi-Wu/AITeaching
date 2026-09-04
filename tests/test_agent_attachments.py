@@ -106,7 +106,8 @@ def test_modern_office_extractors_return_visible_content(tmp_path: Path) -> None
     assert "Quadratic function lesson" in extract_attachment(pptx_path).content
 
 
-def test_converter_and_image_formats_return_specific_guidance(tmp_path: Path) -> None:
+def test_converter_and_image_formats_return_specific_guidance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr('solaire.agent_layer.ocr.resolve_exe', lambda *args: None)
     legacy = tmp_path / "lesson.doc"
     legacy.write_bytes(b"legacy")
     legacy_result = extract_attachment(legacy)
