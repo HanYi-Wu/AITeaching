@@ -12,6 +12,11 @@ const mocks = vi.hoisted(() => ({
   submitStudentAttempt: vi.fn(),
   listStudentResults: vi.fn(),
   recordStudentProctorEvent: vi.fn(),
+  apiGetBlob: vi.fn(),
+}));
+
+vi.mock('../../../api/client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../api/client')>(), apiGetBlob: mocks.apiGetBlob,
 }));
 
 vi.mock("../../../platform/auth", async (importOriginal) => {
@@ -200,6 +205,9 @@ describe("StudentWorkspace", () => {
   });
 
   it("lets a student answer an online paper and see result analysis", async () => {
+    mocks.apiGetBlob.mockResolvedValue(new Blob(['image'], { type: 'image/png' }));
+    URL.createObjectURL = vi.fn(() => 'blob:student-question');
+    URL.revokeObjectURL = vi.fn();
     mocks.startStudentPaper.mockResolvedValue({
       attempt: {
         id: "attempt1",
@@ -221,7 +229,7 @@ describe("StudentWorkspace", () => {
           section_id: "Choice",
           score_per_item: 5,
           type: "single_choice",
-          content: "1+1=?",
+          content: "1+1=?\n:::EMBED_IMG:数学/默认/image/9dd960026799698df.png:::",
           options: { A: "2", B: "3" },
         },
         {
@@ -277,6 +285,8 @@ describe("StudentWorkspace", () => {
     expect(screen.getByText(/截止/)).toBeInTheDocument();
     await userEvent.click(screen.getByTestId("student-start-pub1"));
     expect(await screen.findByText("1+1=?")).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: '题目图片' })).toHaveAttribute('src', 'blob:student-question');
+    expect(screen.queryByText(/:::EMBED_IMG/)).not.toBeInTheDocument();
     expect(document.querySelector(".katex")).not.toBeNull();
     expect(screen.getByText("30:00")).toBeInTheDocument();
     expect(screen.queryByText("返回待答")).not.toBeInTheDocument();

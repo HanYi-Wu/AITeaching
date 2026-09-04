@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ResourceImage } from './ResourceImage';
 import { ContentWithPrimeBrush } from './ContentWithPrimeBrush';
@@ -20,7 +20,14 @@ test('embedded question image renders an image rather than raw marker', async ()
   vi.mocked(apiGetBlob).mockResolvedValue(new Blob(['image']));
   URL.createObjectURL = vi.fn(() => 'blob:question');
   URL.revokeObjectURL = vi.fn();
-  render(<ContentWithPrimeBrush text={'题目\n:::EMBED_IMG:math/photo.png:::'} />);
+  render(<ContentWithPrimeBrush text={'123\n:::EMBED_IMG:数学/默认/image/9dd960026799698df.png:::'} />);
   await waitFor(() => expect(screen.getByRole('img').getAttribute('src')).toBe('blob:question'));
   expect(screen.queryByText(/:::EMBED_IMG/)).toBeNull();
+});
+test('failed image download can be retried without reloading answers', async () => {
+  vi.mocked(apiGetBlob).mockRejectedValueOnce(new Error('offline')).mockResolvedValue(new Blob(['image']));
+  URL.createObjectURL = vi.fn(() => 'blob:retry');
+  render(<ResourceImage path="数学/默认/image/a.png" />);
+  fireEvent.click(await screen.findByRole('button', { name: '重试图片' }));
+  expect(await screen.findByRole('img')).toHaveAttribute('src', 'blob:retry');
 });

@@ -10,18 +10,21 @@ def test_student_sees_assigned_images_but_not_other_resources(web_client, tmp_pa
     source = tmp_path / 'resource/math/q1.yaml'
     import yaml
     question = yaml.safe_load(source.read_text(encoding='utf-8'))
-    question['content'] += ' :::EMBED_IMG:math/page.png:::'
+    question['content'] += ' :::EMBED_IMG:数学/默认/image/page.png:::'
     source.write_text(yaml.safe_dump(question), encoding='utf-8')
     from PIL import Image
+    image_dir = tmp_path / 'resource/数学/默认/image'
+    image_dir.mkdir(parents=True)
     for name in ('page.png', 'private.png'):
-        Image.new('RGB', (10, 10)).save(tmp_path / 'resource/math' / name)
+        Image.new('RGB', (10, 10)).save(image_dir / name)
     teacher = _teacher_headers(web_client)
     paper = web_client.get('/api/papers', headers=teacher).json()['papers'][0]
     published = web_client.post(f"/api/papers/{paper['paper_id']}/publish", json={'class_ids':[class_id], 'title':'Images'}, headers=teacher)
     assert published.status_code == 200
     headers = _headers(web_client.post('/api/auth/login', json=account).json()['token'])
     publication = published.json()['publication']['id']
+    assert web_client.get('/api/resource/数学/默认/image/page.png', headers=headers).status_code == 403
     assert web_client.post(f'/api/student/publications/{publication}/start', headers=headers).status_code == 200
-    assert web_client.get('/api/resource/math/page.png', headers=headers).status_code == 200
-    assert web_client.get('/api/resource/math/page.png').status_code == 401
-    assert web_client.get('/api/resource/math/private.png', headers=headers).status_code == 403
+    assert web_client.get('/api/resource/数学/默认/image/page.png', headers=headers).status_code == 200
+    assert web_client.get('/api/resource/数学/默认/image/page.png').status_code == 401
+    assert web_client.get('/api/resource/数学/默认/image/private.png', headers=headers).status_code == 403
