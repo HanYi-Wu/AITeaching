@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -326,6 +327,35 @@ def _load_attempt_question_payloads(
             return repaired_questions, repaired_answers
         return questions, normalized_answers
     return _load_exam_question_payloads(project_root, str(attempt["exam_id"]))
+
+
+def ensure_student_resource_access(root: Path, project_root: Path, user: dict[str, Any], target: Path) -> None:
+    """Only images in this student's opened papers or released analysis are readable."""
+    student = _student_for_user(root, user)
+    with connect(root) as con:
+        rows = con.execute(
+            "SELECT sa.*, pr.exam_id FROM student_attempts sa "
+            "JOIN exam_publications ep ON ep.id = sa.publication_id "
+            "JOIN paper_records pr ON pr.id = ep.paper_id "
+            "WHERE sa.student_id = ? AND sa.status <> 'not_started' "
+            "AND EXISTS (SELECT 1 FROM publication_classes pc JOIN class_students cs ON cs.class_id = pc.class_id "
+            "WHERE pc.publication_id = ep.id AND cs.student_id = sa.student_id)", (student['id'],),
+        ).fetchall()
+    for row in rows:
+        attempt = dict(row)
+        try:
+            questions, _ = _load_attempt_question_payloads(project_root, attempt)
+        except (ValueError, FileNotFoundError):
+            continue
+        for question in questions:
+            texts = [str(question.get('content') or ''), *[str(v) for v in (question.get('options') or {}).values()]]
+            if attempt.get('grading_completed_at'):
+                texts.append(str(question.get('analysis') or ''))
+            for text in texts:
+                for rel in re.findall(r':::[A-Z_]*IMG:([^:]+):::', text):
+                    if (project_root / 'resource' / rel.strip().replace('\\', '/')).resolve() == target:
+                        return
+    raise PermissionError('该图片不属于当前学生可查看的试卷')
 
 
 def _saved_answer_payloads(root: Path, attempt_id: str) -> list[dict[str, Any]]:

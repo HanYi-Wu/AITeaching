@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import secrets
-import string
 import uuid
 from pathlib import Path
 from typing import Any
@@ -20,14 +19,14 @@ def _new_id() -> str:
 
 
 def _new_student_password() -> str:
-    alphabet = string.ascii_letters + string.digits
+    alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
     return "".join(secrets.choice(alphabet) for _ in range(10))
 
 
 def _new_student_username(con, school_id: str) -> str:
     """Generate a platform login username, not an exam taker number."""
     for _ in range(20):
-        candidate = f"stu_{uuid.uuid4().hex[:10]}"
+        candidate = f"s{secrets.randbelow(90_000_000) + 10_000_000}"
         row = con.execute("SELECT 1 FROM users WHERE username = ?", (candidate,)).fetchone()
         if row is None:
             return candidate

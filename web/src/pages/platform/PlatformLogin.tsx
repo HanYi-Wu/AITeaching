@@ -112,6 +112,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
           <span className="mb-1 block text-sm font-medium text-slate-700">用户名</span>
           <input
             value={username}
+            placeholder={isBootstrap ? "设置管理员用户名" : "用户名 / 学号（不重号时可用）"}
             onChange={(event) => {
               setUsername(event.target.value);
               clearError();

@@ -14,7 +14,7 @@ import {
   UserCog,
 } from "lucide-react";
 import { resolveApiUrl } from "../../api/client";
-import { KatexText } from "../../components/KatexText";
+import { ContentWithPrimeBrush as KatexText } from "../../components/ContentWithPrimeBrush";
 import { compressImageFileToDataUrl } from "../../lib/imageCompression";
 import { formatLocaleDateTime } from "../../lib/locale";
 import {

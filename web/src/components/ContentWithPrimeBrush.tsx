@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import mermaid from "mermaid";
 
-import { resourceApiUrl } from "../api/client";
+import { ResourceImage } from "./ResourceImage";
 import { tokenizeContent } from "../lib/contentTokenizer";
 import { initMermaid } from "../lib/mermaidInit";
 import { renderMathToHtmlSimple } from "../lib/katexRender";
@@ -180,11 +180,10 @@ export function ContentWithPrimeBrush({ text, className }: { text: string; class
       case "image": {
         const rel = token.path.trim();
         nodes.push(
-          <img
+          <ResourceImage
             key={key++}
             className="my-2 max-h-72 max-w-full object-contain"
-            src={resourceApiUrl(rel)}
-            alt=""
+            path={rel}
           />,
         );
         break;

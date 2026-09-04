@@ -164,6 +164,14 @@ def authenticate_user(root: Path, username: str, password: str) -> dict[str, obj
     clean_username = username.strip()
     with connect(root) as con:
         row = con.execute("SELECT * FROM users WHERE username = ?", (clean_username,)).fetchone()
+        if row is None:
+            matches = con.execute(
+                "SELECT u.* FROM users u JOIN students s ON s.user_id = u.id "
+                "WHERE s.student_no = ? AND u.role = 'student' LIMIT 2", (clean_username,),
+            ).fetchall()
+            # Never guess a school or choose an account based on its password.
+            if len(matches) == 1:
+                row = matches[0]
     user = row_to_dict(row)
     if user is None or user.get("status") != "active":
         return None

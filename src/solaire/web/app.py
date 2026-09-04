@@ -206,7 +206,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="EducationHelper API", version="1.5.1", lifespan=_lifespan)
+app = FastAPI(title="EducationHelper API", version="1.5.2", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
@@ -616,7 +616,7 @@ def api_help_asset(rel_path: str) -> FileResponse:
 
 
 @app.get("/api/resource/{rel_path:path}")
-def serve_resource_file(rel_path: str) -> FileResponse:
+def serve_resource_file(rel_path: str, request: Request) -> FileResponse:
     """Serve files under project resource/ (e.g. PrimeBrush SVG under …/image/)."""
     root = _require_root()
     resource = (root / "resource").resolve()
@@ -627,6 +627,14 @@ def serve_resource_file(rel_path: str) -> FileResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail="Path must stay under resource/") from e
     assert_within_project(root, target)
+    user = getattr(request.state, 'platform_user', None)
+    if user and user.get('role') == 'student':
+        from solaire.web.student_service import ensure_student_resource_access
+        from solaire.web.platform_db import default_platform_root
+        try:
+            ensure_student_resource_access(default_platform_root(), root, user, target)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     is_svg = target.suffix.lower() == ".svg"
