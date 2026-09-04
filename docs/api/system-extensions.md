@@ -1,5 +1,7 @@
 # 扩展组件 API
 
+Ubuntu/Debian OCR 一键安装：`bash /opt/educationhelper/current/scripts/install-ocr-ubuntu.sh`（先升级至1.5.2）。安装引擎和中英语言包后，`file.read` 与 `doc.ocr_image` 均可使用；详见 [安装与限制](../release-1.5.2.md)。
+
 管理员页面使用这些接口检测和配置 PDF 排版、文档转换与 OCR 组件。公网模式下读取接口需要登录，变更接口仅允许平台管理员；扩展变更不要求浏览器提供本机控制令牌。
 
 | 方法 | 路径 | 说明 |

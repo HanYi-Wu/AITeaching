@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 
 
 def test_product_versions_are_aligned() -> None:
@@ -30,7 +30,7 @@ def test_release_notes_include_adaptive_practice_versions() -> None:
         ROOT / "src" / "solaire" / "web" / "assets" / "help_docs" / "changelog.md"
     ).read_text(encoding="utf-8")
 
-    assert changelog.index("## version 1.5.1") < changelog.index("## version 1.5.0")
+    assert changelog.index("## version 1.5.2") < changelog.index("## version 1.5.1") < changelog.index("## version 1.5.0")
     assert "专项复习试卷" in changelog
     assert "历史错题试卷" in changelog
     assert "AI 工具" in changelog

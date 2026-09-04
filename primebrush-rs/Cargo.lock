@@ -76,7 +76,7 @@ checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "primebrush-core"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -85,14 +85,14 @@ dependencies = [
 
 [[package]]
 name = "primebrush-pyo3"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "pyo3",
 ]
 
 [[package]]
 name = "primebrush-wasm"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "wasm-bindgen",
 ]
