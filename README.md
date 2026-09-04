@@ -1,6 +1,6 @@
 # EducationHelper（EH）
 
-Linux 升级、Ubuntu OCR 安装与1.5.2兼容说明见 [升级说明](docs/release-1.5.2.md)。
+1.5.3 本地文件升级与 AI 超时排障见 [升级说明](docs/release-1.5.3.md)。Ubuntu OCR 安装见 [1.5.2 说明](docs/release-1.5.2.md)。
 
 **AI 驱动的 K12 教育自动化平台**  
 组卷 · 题库 · 知识图谱 · 学情分析 · 智能助手

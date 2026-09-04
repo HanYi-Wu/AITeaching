@@ -54,6 +54,9 @@ if [[ -n "$INSTALL_PROXY_URL" ]]; then
 fi
 
 if [[ ! -L "$CURRENT_LINK" ]]; then
+  if [[ -n "${EH_ARCHIVE_FILE:-}${EH_MANIFEST_FILE:-}" ]]; then
+    fail "Local upgrade requires an existing installation at $CURRENT_LINK; check EH_APP_BASE"
+  fi
   log "No complete installation found; starting a clean deployment"
   bootstrap_script="$(mktemp)"
   trap 'rm -f -- "$bootstrap_script"' EXIT
