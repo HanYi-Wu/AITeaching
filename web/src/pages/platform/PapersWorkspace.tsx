@@ -1145,81 +1145,37 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                   </Panel>
 
                   <Panel title="发布记录" icon={<History className="h-5 w-5 text-slate-600" />}>
-                    <div className="overflow-x-auto">
-                      <table className="min-w-[860px] w-full text-left text-sm">
-                        <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
-                          <tr>
-                            <th className="px-3 py-2">标题</th>
-                            <th className="px-3 py-2">班级</th>
-                            <th className="px-3 py-2">进度</th>
-                            <th className="px-3 py-2">允许切屏</th>
-                            <th className="px-3 py-2">时间</th>
-                            <th className="px-3 py-2">状态</th>
-                            <th className="px-3 py-2 text-right">操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {publications.map((publication) => (
-                            <tr key={publication.id} className="border-t border-slate-100">
-                              <td className="px-3 py-2 font-medium">{publication.title}</td>
-                              <td className="px-3 py-2 text-slate-600">
-                                {(publication.class_names || []).join("、") || "-"}
-                              </td>
-                              <td className="px-3 py-2 text-slate-600">
-                                {publication.submitted_count ?? 0}/{publication.attempt_count ?? 0}
-                              </td>
-                              <td className="px-3 py-2 text-slate-600">{publication.max_screen_switches ?? 0} 次</td>
-                              <td className="px-3 py-2 text-xs text-slate-600">
-                                <div>{publication.start_at || "未设置"} - {publication.end_at || "未设置"}</div>
-                                <div>限时 {publication.time_limit_minutes ? `${publication.time_limit_minutes} 分钟` : "不限"}</div>
-                              </td>
-                              <td className="px-3 py-2">
-                                <span
-                                  className={`rounded-full px-2 py-0.5 text-xs ${
-                                    publication.status === "published"
-                                      ? "bg-emerald-100 text-emerald-700"
-                                      : publication.status === "revoked"
-                                        ? "bg-slate-100 text-slate-600"
-                                        : "bg-amber-100 text-amber-700"
-                                  }`}
-                                >
-                                  {publicationStatusLabel(publication.status)}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                <button
-                                  type="button"
-                                  title={publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
-                                  aria-label={publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
-                                  disabled={
-                                    busy === `pause:${publication.id}` ||
-                                    publication.status === "revoked" ||
-                                    publication.status === "closed"
-                                  }
-                                  onClick={() => void togglePublicationPause(publication)}
-                                  className="mr-2 inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-                                >
-                                  {publication.status === "paused" ? (
-                                    <PlayCircle className="h-4 w-4" />
-                                  ) : (
-                                    <PauseCircle className="h-4 w-4" />
-                                  )}
-                                </button>
-                                <button
-                                  type="button"
-                                  title="撤回发布"
-                                  aria-label="撤回发布"
-                                  disabled={busy === `revoke:${publication.id}` || publication.status === "revoked"}
-                                  onClick={() => void revokePublication(publication)}
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="space-y-3">
+                      {publications.map(publication => (
+                        <article key={publication.id} className="min-w-0 rounded-lg border border-slate-200 p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <h3 className="min-w-0 break-all text-sm font-semibold">{publication.title}</h3>
+                            <span className="rounded bg-slate-100 px-2 py-1 text-xs">{publicationStatusLabel(publication.status)}</span>
+                          </div>
+                          <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                            <div className="break-all">班级：{(publication.class_names || []).join("、") || "-"}</div>
+                            <div>提交进度：<span>{publication.submitted_count ?? 0}/{publication.attempt_count ?? 0}</span></div>
+                            <div>允许切屏：{publication.max_screen_switches ?? 0} 次</div>
+                            <div>限时 {publication.time_limit_minutes ? `${publication.time_limit_minutes} 分钟` : "不限"}</div>
+                            <div className="break-all sm:col-span-2">{publication.start_at || "未设置"} - {publication.end_at || "未设置"}</div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                            <button type="button" aria-label={publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
+                              disabled={busy === `pause:${publication.id}` || publication.status === "revoked" || publication.status === "closed"}
+                              onClick={() => void togglePublicationPause(publication)}
+                              className="inline-flex min-h-10 items-center gap-1 rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50">
+                              {publication.status === "paused" ? <PlayCircle className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
+                              {publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
+                            </button>
+                            <button type="button" aria-label="撤回发布"
+                              disabled={busy === `revoke:${publication.id}` || publication.status === "revoked"}
+                              onClick={() => void revokePublication(publication)}
+                              className="inline-flex min-h-10 items-center gap-1 rounded border border-red-200 px-3 py-2 text-xs text-red-700 disabled:opacity-50">
+                              <Trash2 className="h-4 w-4" />取消发布
+                            </button>
+                          </div>
+                        </article>
+                      ))}
                     </div>
                     {publications.length === 0 ? (
                       <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">

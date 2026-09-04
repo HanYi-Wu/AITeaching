@@ -174,6 +174,8 @@ describe("PapersWorkspace", () => {
     await waitFor(() =>
       expect(mocks.updatePlatformPaperPublication).toHaveBeenCalledWith("p1", "pub1", { status: "paused" }),
     );
+    expect(screen.getByRole("button", { name: "撤回发布" })).toHaveTextContent('取消发布');
+    expect(screen.getByRole("button", { name: "撤回发布" }).closest('table')).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "撤回发布" }));
 
     await waitFor(() => expect(mocks.revokePlatformPaperPublication).toHaveBeenCalledWith("p1", "pub1"));
