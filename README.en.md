@@ -1,58 +1,41 @@
-# SolEdu
+# EducationHelper (EH)
 
-SolEdu is an AI-assisted K12 education automation platform for question banks, exam composition and export, knowledge graphs, learning analytics, remediation, and role-based school workflows. It provides a FastAPI backend, a React/Vite web interface, and a Tauri desktop application for Windows.
+EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.5.3**.
 
-**Languages:** English | [简体中文](README.md)
+See the [Chinese README](README.md) for the maintained setup guide and [release notes](src/solaire/web/assets/help_docs/changelog.md) for version history.
 
-## Main capabilities
+## Capabilities
 
-- Compose exams from YAML question banks and templates, then export student/teacher PDF or Word files.
-- Maintain question banks, educational diagrams, templates, and knowledge graphs.
-- Import scores and generate class, student, and knowledge-point analysis and remediation drafts.
-- Run administrator, school, teacher, and student workflows with an integrated AI assistant.
+School and account administration, question editing/import, exam composition, online assignments, student answers and image uploads, teacher grading, offline scan collection, remedial practice, reports, and AI-assisted workflows.
 
-## Local development
+Teachers must review OCR and AI grading suggestions. Browser activity events assist review and cannot establish that cheating did or did not occur. In 1.5.3, folder organization is teacher-specific but question files are still shared; folder separation is not question authorization.
 
-Prerequisites: [Pixi](https://pixi.sh/latest/), Git, Visual Studio Build Tools on Windows, and a TeX distribution for PDF export.
+## Development
 
-```powershell
-pixi install
-pixi run bootstrap
-pixi run dev
+Use Python 3.12 and Node.js 20. From the repository root, install the Python package with `python -m pip install -e ".[dev,primebrush-pdf]"`; run `npm ci` in `web`.
+
+Start the backend from the repository root:
+
+```bash
+python -m uvicorn solaire.web.app:app --app-dir src --host 127.0.0.1 --port 8000
 ```
 
-Focused commands:
+In another terminal, from `web`:
 
-```powershell
-pixi run dev-backend
-cd web
-npm run build
-npm run preview -- --host 0.0.0.0 --port 5173 --strictPort
-pixi run test
-pixi run test-web
-pixi run typecheck
+```bash
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-## Public/FRP testing
+Open `http://127.0.0.1:5173` and initialize an administrator. No universal account password is supplied. LaTeX PDF generation requires a TeX installation; OCR requires Tesseract and language data.
 
-Expose only Vite's `5173` port through FRP. Keep FastAPI on `127.0.0.1:8000` and let Vite proxy same-origin `/api` requests. Enable the public boundary before launching the backend:
+Run `python -m pytest tests`, then `npm test` and `npm run build` in `web`. Rust tests run with `cargo test --workspace` in `primebrush-rs`.
 
-```powershell
-$env:SOLAIRE_PUBLIC_MODE = "1"
-$env:SOLAIRE_PROJECT_ROOT = "G:\path\to\content"
-$env:SOLAIRE_BIND_PROJECT_FROM_ENV = "1"
-$env:SOLAIRE_CONTROL_TOKEN = "a-long-random-local-secret"
-$env:SOLAIRE_PUBLIC_HOSTS = "your-exact-host.frp-van.com"
-pixi run dev-backend
-cd web
-npm run build
-npm run preview -- --host 0.0.0.0 --port 5173 --strictPort
-```
+## Deployment
 
-Remote users must sign in. Use the built preview server for public tests instead of exposing Vite's source-serving/HMR development server. `SOLAIRE_PUBLIC_HOSTS` must contain the exact FRP host; do not trust an entire shared domain. Host-control operations such as selecting local directories, installing system tools, running local analysis scripts, or opening files on the host additionally require an administrator session and the control token. Never embed that token in browser assets or forward port `8000` publicly.
+See [Linux update instructions](docs/release-1.5.3.md). Existing deployments keep data and configuration outside the release directory. Windows and Linux AI credentials are configured separately. AI traffic is direct unless its exact hostname is opted into the configured proxy.
+
+The historical online installer may target an older published archive; consult its manifest instead of assuming it matches the current branch. Verify the GitHub Actions run for the exact commit you deploy.
 
 ## License
 
-This repository uses the [custom noncommercial license](LICENSE), not a standard open-source license. Noncommercial viewing, study, copying, modification, and use are permitted subject to attribution. Commercial use, deployment, or distribution requires prior written permission from the author.
-
-Security reports: [hectorzhang4253@gmail.com](mailto:hectorzhang4253@gmail.com).
+Custom non-commercial license. Retain author attribution and project origin; commercial use requires written authorization. See [LICENSE](LICENSE).
