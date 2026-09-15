@@ -120,35 +120,20 @@ def test_doc_ocr_image_uses_saved_tesseract_path(tmp_path: Path, monkeypatch) ->
     img_rel = "images/sample.png"
     img_path = tmp_path / img_rel
     img_path.parent.mkdir(parents=True, exist_ok=True)
-    img_path.write_bytes(b"fake-image")
+    from PIL import Image
+    Image.new("RGB", (20, 20), "white").save(img_path)
     exe_path = tmp_path / "tools" / "tesseract.exe"
     exe_path.parent.mkdir(parents=True, exist_ok=True)
     exe_path.write_bytes(b"")
 
-    pil_module = types.ModuleType("PIL")
-
-    class _ImageModule:
-        @staticmethod
-        def open(path: str) -> str:
-            return path
-
-    pil_module.Image = _ImageModule
-
-    fake_inner = types.SimpleNamespace(tesseract_cmd=None)
     called: dict[str, object] = {}
-    pytesseract_module = types.ModuleType("pytesseract")
-    pytesseract_module.pytesseract = fake_inner
-
-    def _image_to_string(img: object, lang: str) -> str:
-        called["img"] = img
-        called["lang"] = lang
-        called["tesseract_cmd"] = fake_inner.tesseract_cmd
-        return "识别结果"
-
-    pytesseract_module.image_to_string = _image_to_string
-
-    monkeypatch.setitem(sys.modules, "PIL", pil_module)
-    monkeypatch.setitem(sys.modules, "pytesseract", pytesseract_module)
+    def run_ocr(args, **kwargs):
+        called["lang"] = args[-1]
+        called["tesseract_cmd"] = args[0]
+        assert Path(args[1]).is_file()
+        assert kwargs["timeout"] == 60
+        return types.SimpleNamespace(returncode=0, stdout="识别结果", stderr="")
+    monkeypatch.setattr("solaire.agent_layer.ocr.subprocess.run", run_ocr)
     monkeypatch.setattr(
         "solaire.web.extension_preferences.get_extension_prefs",
         lambda ext_id: {"path": str(exe_path)} if ext_id == "tesseract" else None,

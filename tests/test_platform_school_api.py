@@ -293,7 +293,8 @@ def test_school_imports_teachers_classes_and_students_from_json(web_client: Test
     assert body["imported"] == 1
     student = body["students"][0]
     assert student["student_no"] == "S001"
-    assert student["account_username"].startswith("stu_")
+    assert student["account_username"].startswith("s")
+    assert len(student["account_username"]) == 9
     assert len(student["initial_password"]) >= 8
 
     login = web_client.post(
@@ -331,7 +332,8 @@ def test_school_imports_teachers_classes_and_students_from_excel(web_client: Tes
         headers=school_headers,
     )
     assert students.status_code == 200
-    assert students.json()["students"][0]["account_username"].startswith("stu_")
+    assert students.json()["students"][0]["account_username"].startswith("s")
+    assert len(students.json()["students"][0]["account_username"]) == 9
     assert students.json()["students"][0]["email"] is None
 
 
@@ -567,7 +569,7 @@ def test_school_management_paginates_bulk_updates_resets_and_removes_assignments
     students_page = web_client.get("/api/school/students?page=1&page_size=1&q=Paged", headers=school_headers)
     assert students_page.status_code == 200
     assert students_page.json()["total"] == 1
-    assert students_page.json()["students"][0]["account_username"].startswith("stu_")
+    assert students_page.json()["students"][0]["account_username"] == student["account_username"]
 
     disabled_teacher = web_client.post(
         "/api/school/teachers/bulk-status",

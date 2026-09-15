@@ -207,8 +207,9 @@ def test_student_cannot_download_question_yaml(
     assert "SECRET_ANSWER" not in denied.text
 
     svg = client.get("/api/resource/math/image.svg")
-    assert svg.status_code == 200
-    assert "sandbox" in svg.headers["content-security-policy"]
+    # An image outside this student's assigned papers must remain inaccessible.
+    # Assigned image access is covered by test_student_resource_access.py.
+    assert svg.status_code == 403
 
 
 def test_school_public_allowlist_is_separate_from_teacher_workspace() -> None:
