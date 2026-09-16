@@ -35,7 +35,8 @@ describe("apiGetBlob", () => {
 
   it("uses the current platform bearer token for protected PDF previews", async () => {
     localStorage.setItem(PLATFORM_SESSION_STORAGE_KEY, "teacher-token");
-    const pdf = new Blob(["pdf"], { type: "application/pdf" });
+    // Node's Response cannot consume jsdom's partial Blob implementation.
+    const pdf = new TextEncoder().encode("pdf");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(pdf, { status: 200, headers: { "Content-Type": "application/pdf" } }),
     );
@@ -44,6 +45,7 @@ describe("apiGetBlob", () => {
     const result = await apiGetBlob("/api/exam/preview-pdf/preview-id/file?variant=student");
 
     expect(result.type).toBe("application/pdf");
+    expect(await result.text()).toBe("pdf");
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(new Headers(init.headers).get("Authorization")).toBe("Bearer teacher-token");
   });
