@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from solaire.agent_layer.models import InvocationContext, ToolResult
-from solaire.common.security import assert_within_project
 from solaire.web.extension_registry import resolve_exe
 
 

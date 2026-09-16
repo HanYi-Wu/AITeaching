@@ -45,6 +45,8 @@ def _write_table(ws, headers: list[str], rows: list[list[Any]]) -> None:
                 cell.data_type = "s"  # User-controlled names must never become Excel formulas.
     header_fill = PatternFill("solid", fgColor="E2E8F0")
     for cell in ws[1]:
+        if isinstance(cell.value, str):
+            cell.data_type = "s"
         cell.font = Font(bold=True)
         cell.fill = header_fill
         cell.alignment = Alignment(vertical="center")

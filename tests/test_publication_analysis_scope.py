@@ -23,13 +23,16 @@ def test_republished_paper_analysis_selects_one_batch(web_client, tmp_path):
         for publication, score in [(first, 5), (second, 9)]:
             attempt = con.execute('SELECT id FROM student_attempts WHERE publication_id=?', (publication['id'],)).fetchone()
             con.execute("INSERT INTO student_answers (id, attempt_id, question_id, answer_payload, is_correct, score, grading_status, responded_at) VALUES (?, ?, 'math/q1', '{}', 0, ?, 'manual', '2026-09-16')", (publication['id'], attempt['id'], score))
+    (tmp_path / 'resource' / 'math' / 'q1.yaml').write_text('id: q1\ntype: short_answer\ncontent: SOURCE CHANGED\nanswer: 2\n', encoding='utf-8')
     current = web_client.get(base+'/analysis', headers=headers).json()['analysis']
     assert current['publication_id'] == second['id']
     assert current['summary']['total_students'] == 1
     assert len(current['publications']) == 2
     assert current['summary']['average_score'] == 90
+    assert current['questions'][0]['content'] == '1+1=?'
     older = web_client.get(base+'/analysis', params={'publication_id':first['id']}, headers=headers).json()['analysis']
     assert older['publication_id'] == first['id']
     assert older['summary']['total_students'] == 1
     assert older['summary']['average_score'] == 50
+    assert older['questions'][0]['content'] == '1+1=?'
     assert web_client.get(base+'/analysis?publication_id=not-owned', headers=headers).status_code == 400
