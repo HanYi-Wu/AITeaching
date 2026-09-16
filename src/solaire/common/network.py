@@ -6,10 +6,10 @@ from urllib.parse import urlsplit
 import httpx
 
 
-def ai_sdk_options() -> dict:
+def ai_sdk_options(timeout_type=httpx.Timeout) -> dict:
     # Read timeout is inactivity between chunks, not total time spent thinking.
     # Leave retry decisions to the teacher; SDK retries can duplicate paid calls.
-    return {"timeout": httpx.Timeout(180, connect=10, write=30, pool=10), "max_retries": 0}
+    return {"timeout": timeout_type(180, connect=10, write=30, pool=10), "max_retries": 0}
 
 
 def ai_http_options(url: str) -> dict:

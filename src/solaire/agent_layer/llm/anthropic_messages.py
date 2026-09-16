@@ -7,7 +7,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
+from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient, Timeout
 from solaire.common.network import ai_http_options, ai_sdk_options
 
 from solaire.agent_layer.llm.adapter import ChatChunk, ChatResponse
@@ -164,7 +164,8 @@ class AnthropicMessagesAdapter:
         effective_url = base_url or os.environ.get('ANTHROPIC_BASE_URL') or 'https://api.anthropic.com'
         kwargs['base_url'] = effective_url
         kwargs['http_client'] = DefaultAsyncHttpxClient(**ai_http_options(effective_url))
-        self._client = AsyncAnthropic(**kwargs, **ai_sdk_options())
+        # Use the provider's native type: newer SDKs use httpx2, not httpx.
+        self._client = AsyncAnthropic(**kwargs, **ai_sdk_options(Timeout))
 
     async def chat(
         self,

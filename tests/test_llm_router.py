@@ -27,6 +27,21 @@ def test_model_clients_have_bounded_wait_and_no_hidden_paid_retries(adapter_type
         asyncio.run(adapter._client.close())
 
 
+def test_anthropic_timeout_uses_sdk_native_type(monkeypatch):
+    from solaire.agent_layer.llm import anthropic_messages
+    captured = {}
+    class NativeTimeout:
+        def __init__(self, value, **options):
+            self.value, self.options = value, options
+    monkeypatch.setattr(anthropic_messages, 'Timeout', NativeTimeout)
+    monkeypatch.setattr(anthropic_messages, 'DefaultAsyncHttpxClient', lambda **kw: object())
+    monkeypatch.setattr(anthropic_messages, 'AsyncAnthropic', lambda **kw: captured.update(kw))
+    AnthropicMessagesAdapter(api_key='test-only', base_url='https://provider.example', model='test')
+    assert isinstance(captured['timeout'], NativeTimeout)
+    assert captured['timeout'].options == {'connect': 10, 'write': 30, 'pool': 10}
+    assert captured['max_retries'] == 0
+
+
 def test_load_llm_settings_provider_project_over_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOLAIRE_USER_CONFIG_DIR", str(tmp_path / "u"))
     save_user_overrides_raw({"provider": "openai_compat"})
