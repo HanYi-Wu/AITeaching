@@ -76,3 +76,4 @@ src-tauri/runtime/python/*
 /.cursor/
 /.claude/
 web_sample_project
+/web/public/pdfjs/

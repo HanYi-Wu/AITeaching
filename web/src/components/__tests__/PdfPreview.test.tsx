@@ -83,5 +83,8 @@ describe("PdfPreview", () => {
 
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:broken-pdf");
     expect(screen.getByRole("alert")).toHaveTextContent("broken PDF");
+    fireEvent.click(screen.getByRole("button", { name: "重新加载预览" }));
+    await waitFor(() => expect(apiGetBlob).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId("pdf-document")).toBeInTheDocument());
   });
 });

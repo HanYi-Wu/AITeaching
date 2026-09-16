@@ -17,12 +17,19 @@ type Props = {
 
 const ZOOM_MIN = 0.35;
 const ZOOM_MAX = 3;
+const PDF_OPTIONS = {
+  cMapUrl: `${import.meta.env.BASE_URL}pdfjs/cmaps/`,
+  cMapPacked: true,
+  standardFontDataUrl: `${import.meta.env.BASE_URL}pdfjs/standard_fonts/`,
+  wasmUrl: `${import.meta.env.BASE_URL}pdfjs/wasm/`,
+};
 
 export function PdfPreview({ apiPath, className }: Props) {
   const { t } = useTranslation(["compose", "common"]);
   const [fileUrl, setFileUrl] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [numPages, setNumPages] = useState(0);
+  const [retry, setRetry] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [boxWidth, setBoxWidth] = useState(() =>
     typeof window !== "undefined" ? Math.min(900, Math.max(280, window.innerWidth - 120)) : 800,
@@ -56,7 +63,7 @@ export function PdfPreview({ apiPath, className }: Props) {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [apiPath]);
+  }, [apiPath, retry]);
 
   useEffect(() => {
     if (!fileUrl) return;
@@ -93,6 +100,7 @@ export function PdfPreview({ apiPath, className }: Props) {
         <p className="text-sm text-red-600" role="alert">
           {loadError}
         </p>
+        <button type="button" onClick={() => setRetry((n) => n + 1)} className="mt-2 rounded border px-3 py-1 text-sm">重新加载预览</button>
       </div>
     );
   }
@@ -108,9 +116,18 @@ export function PdfPreview({ apiPath, className }: Props) {
   const pageWidth = Math.round(boxWidth * zoom);
 
   return (
-    <div ref={wrapRef} className={cn("w-full max-w-full", className)}>
+    <div ref={wrapRef} className={cn("w-full min-w-0 max-w-full overflow-auto", className)}>
+      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 bg-white p-2 text-sm">
+        <button type="button" onClick={() => setZoom((z) => clampZoom(z / 1.2))} className="rounded border px-2 py-1" aria-label="缩小预览">−</button>
+        <span>{Math.round(zoom * 100)}%</span>
+        <button type="button" onClick={() => setZoom((z) => clampZoom(z * 1.2))} className="rounded border px-2 py-1" aria-label="放大预览">＋</button>
+        <button type="button" onClick={() => setZoom(1)} className="rounded border px-2 py-1">适应宽度</button>
+        <span>{numPages} 页</span>
+        <a href={fileUrl} download="试卷预览.pdf" className="ml-auto underline">下载预览</a>
+      </div>
       <Document
         file={fileUrl}
+        options={PDF_OPTIONS}
         loading={<p className="text-sm text-slate-500">{t("common:processing")}</p>}
         onLoadSuccess={({ numPages: n }) => setNumPages(n)}
         onLoadError={(err) => {
