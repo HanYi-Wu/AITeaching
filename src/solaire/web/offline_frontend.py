@@ -4,11 +4,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+import anyio
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
-from starlette.background import BackgroundTask
 
 ROOT = Path(os.environ.get('EH_WEB_ROOT', 'web/dist')).resolve()
 BACKEND = os.environ.get('EH_BACKEND_URL', 'http://127.0.0.1:8000')
@@ -40,8 +40,15 @@ async def proxy(request: Request):
         result = await request.app.state.client.send(upstream, stream=True)
     except httpx.HTTPError:
         return JSONResponse({'detail': '服务正在重启，请稍后重试'}, status_code=503)
-    response = StreamingResponse(result.aiter_raw(), status_code=result.status_code,
-                                 background=BackgroundTask(result.aclose))
+    async def body():
+        try:
+            async for chunk in result.aiter_raw():
+                yield chunk
+        finally:
+            # Disconnects and upstream timeouts must release the pooled connection.
+            with anyio.CancelScope(shield=True):
+                await result.aclose()
+    response = StreamingResponse(body(), status_code=result.status_code)
     dynamic = {h.strip().lower() for h in result.headers.get('connection', '').split(',')}
     response.raw_headers = [(k, v) for k, v in result.headers.raw
                             if k.decode().lower() not in HOP | dynamic]

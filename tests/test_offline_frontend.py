@@ -50,3 +50,25 @@ def test_unavailable_backend_has_retryable_service_response():
         frontend.app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
         assert client.get('/api/health').status_code == 503
         frontend.app.state.client = original
+
+
+def test_failed_upstream_stream_is_closed_even_after_headers_sent():
+    closed = []
+    class Broken(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'partial'
+            raise httpx.ReadError('upstream interrupted')
+        async def aclose(self):
+            closed.append(True)
+    async def handle(request):
+        return httpx.Response(200, stream=Broken())
+    import pytest
+    with TestClient(frontend.app) as client:
+        original = frontend.app.state.client
+        frontend.app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        try:
+            with pytest.raises(httpx.ReadError):
+                client.get('/api/stream')
+            assert closed == [True]
+        finally:
+            frontend.app.state.client = original
