@@ -25,9 +25,10 @@ async def lifespan(app):
 
 async def proxy(request: Request):
     connection_headers = {h.strip().lower() for h in request.headers.get('connection', '').split(',')}
-    excluded = HOP | connection_headers | {'host'}
+    excluded = HOP | connection_headers | {'host', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto'}
     headers = [(k, v) for k, v in request.headers.raw if k.decode().lower() not in excluded]
     headers.extend([(b'x-forwarded-host', request.headers.get('host', '').encode()),
+                    (b'x-forwarded-for', (request.client.host if request.client else '127.0.0.1').encode()),
                     (b'x-forwarded-proto', request.url.scheme.encode())])
     path = request.scope.get('raw_path', request.url.path.encode())
     url = BACKEND.rstrip('/').encode() + path

@@ -54,6 +54,8 @@ def verify(package, manifest):
         raise ValueError('需要 glibc 2.35+，例如 Ubuntu 22.04/24.04，不支持 Alpine')
     if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', manifest.get('version', '')):
         raise ValueError('版本号无效')
+    if not re.fullmatch(r'[0-9a-f]{40}', manifest.get('commit', '')) or type(manifest.get('unpacked_bytes')) is not int or manifest['unpacked_bytes'] <= 0:
+        raise ValueError('提交或磁盘元数据无效')
     for name in ['app.tar.gz', 'runtime.tar.gz']:
         digest = hashlib.sha256()
         with (package / name).open('rb') as source:
@@ -212,7 +214,10 @@ def install(args):
     old = current.resolve() if current.is_symlink() else None
     if old and not old.is_dir():
         raise ValueError('旧版本链接目标缺失，拒绝自动修复')
+    app_created = not app.exists()
     app.mkdir(parents=True, exist_ok=True)
+    if app_created:
+        app.chmod(0o755)
     with (app / '.offline-install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         os.umask(0o077)
@@ -225,7 +230,10 @@ def _install_locked(args, app, data, config, current, old):
     verify(package, manifest)
     release_id = manifest['version'] + '-' + manifest['commit'][:10] + '-' + secrets.token_hex(4)
     release = app / 'releases' / release_id
+    releases_created = not release.parent.exists()
     release.parent.mkdir(parents=True, exist_ok=True)
+    if releases_created:
+        release.parent.chmod(0o755)
     available = shutil.disk_usage(app).free
     if available < manifest['unpacked_bytes'] * 2 + 512 * 1024 * 1024:
         raise ValueError('磁盘空间不足：需新版本空间、数据库备份空间及至少512MB余量')
@@ -283,12 +291,18 @@ def _install_locked(args, app, data, config, current, old):
     if not (release / 'web/dist/index.html').is_file():
         raise ValueError('前端成品缺失')
     with tempfile.TemporaryDirectory(prefix='eh-preflight-') as probe:
-        os.chmod(probe, 0o755)
+        os.chown(probe, account.pw_uid, account.pw_gid)
+        os.chmod(probe, 0o700)
         env = {**os.environ, 'PYTHONPATH': str(release / 'src'), 'PYTHONNOUSERSITE': '1',
                'LD_LIBRARY_PATH': str(release / 'runtime/lib'),
                'XDG_DATA_HOME': probe, 'XDG_CONFIG_HOME': probe, 'SOLAIRE_PROJECT_ROOT': probe}
+        def as_service_user():
+            os.setgroups([])
+            os.setgid(account.pw_gid)
+            os.setuid(account.pw_uid)
         run(release / 'runtime/bin/python', '-c',
-            "import solaire.web.app, solaire.web.offline_frontend, rdkit, cairosvg; print('Runtime imports: OK')", env=env)
+            "import solaire.web.app, solaire.web.offline_frontend, rdkit, cairosvg; print('Runtime imports: OK')", env=env,
+            preexec_fn=as_service_user)
     stamp = time.strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(3)
     backup = app / 'backups' / stamp
     backup.mkdir(parents=True)
