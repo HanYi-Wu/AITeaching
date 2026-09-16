@@ -234,7 +234,7 @@ async def _graph_platform_context(request: Request, call_next):
         return rejection
     token = None
     user: dict[str, Any] | None = None
-    if request.url.path.startswith("/api/graph"):
+    if request.url.path.startswith("/api/"):
         token = extract_session_token(
             authorization=request.headers.get("authorization"),
             x_solaire_session=request.headers.get("x-solaire-session"),
@@ -244,10 +244,13 @@ async def _graph_platform_context(request: Request, call_next):
                 user = get_session_user(require_platform_root(), token)
             except Exception:
                 user = None
-    ctx_token = _graph_request_user.set(user)
+    ctx_token = _graph_request_user.set(user if request.url.path.startswith('/api/graph') else None)
+    from solaire.common.actor_context import actor
+    actor_token = actor.set(user or getattr(request.state, 'platform_user', None))
     try:
         return await call_next(request)
     finally:
+        actor.reset(actor_token)
         _graph_request_user.reset(ctx_token)
 
 
@@ -621,6 +624,9 @@ def serve_resource_file(rel_path: str, request: Request) -> FileResponse:
     root = _require_root()
     resource = (root / "resource").resolve()
     rel = rel_path.strip().replace("\\", "/").lstrip("/")
+    if not rel.startswith('__teachers/'):
+        from solaire.web.teacher_bank import bank_resource_root
+        resource = bank_resource_root(root)
     target = (resource / rel).resolve()
     try:
         target.relative_to(resource)
@@ -1339,6 +1345,9 @@ def bank_put_raw_file(body: BankRawFileBody) -> dict[str, Any]:
     root = _require_root()
     rel = body.path.strip().replace("\\", "/").lstrip("/")
     resource = (root / "resource").resolve()
+    if not rel.startswith('__teachers/'):
+        from solaire.web.teacher_bank import bank_resource_root
+        resource = bank_resource_root(root)
     target = (resource / rel).resolve()
     try:
         target.relative_to(resource)

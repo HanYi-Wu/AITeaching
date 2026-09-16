@@ -12,9 +12,8 @@ from solaire.web.extension_registry import resolve_exe
 
 
 def _resolve(ctx: InvocationContext, rel: str) -> Path:
-    p = (ctx.project_root / rel).resolve()
-    assert_within_project(ctx.project_root, p)
-    return p
+    from solaire.agent_layer.tools.file_tools import _resolve as resolve_file
+    return resolve_file(ctx, rel)
 
 
 def _configured_tesseract_cmd() -> str | None:

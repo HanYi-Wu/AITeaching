@@ -50,6 +50,13 @@ def _plan_mode_write_path_ok(ctx: InvocationContext, rel: str) -> bool:
 def _resolve(ctx: InvocationContext, rel: str) -> Path:
     p = (ctx.project_root / rel).resolve()
     assert_within_project(ctx.project_root, p)
+    from solaire.common.actor_context import teacher_key
+    if teacher_key():
+        parts = p.relative_to(ctx.project_root.resolve()).parts
+        if parts and parts[0] == 'resource' and (len(parts) == 1 or parts[1] != '__teachers'):
+            from solaire.web.teacher_bank import bank_resource_root
+            p = bank_resource_root(ctx.project_root).joinpath(*parts[1:])
+            assert_within_project(ctx.project_root, p)
     return p
 
 
@@ -244,6 +251,12 @@ def tool_file_search(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult
             if len(files_to_search) > 5000:
                 break
     for fp in files_to_search:
+        try:
+            assert_within_project(ctx.project_root, fp)
+            if _resolve(ctx, fp.relative_to(ctx.project_root).as_posix()) != fp.resolve():
+                continue
+        except (ValueError, PermissionError):
+            continue
         if len(matches) >= max_matches:
             break
         try:

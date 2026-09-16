@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+from solaire.web.teacher_bank import bank_resource_root
 
 
 def discover_question_library_refs(project_root: Path) -> list[dict[str, str]]:
@@ -13,13 +15,13 @@ def discover_question_library_refs(project_root: Path) -> list[dict[str, str]]:
 
     若尚无题集或尚无题目文件，返回空列表（空项目合法）。
     """
-    resource = project_root / "resource"
+    resource = bank_resource_root(project_root)
     refs: list[dict[str, str]] = []
     if not resource.is_dir():
         return []
 
     for subject_dir in sorted(resource.iterdir()):
-        if not subject_dir.is_dir():
+        if not subject_dir.is_dir() or subject_dir.name == '__teachers' or subject_dir.name.startswith('.'):
             continue
         subject = subject_dir.name
         for coll_dir in sorted(subject_dir.iterdir()):
@@ -28,18 +30,20 @@ def discover_question_library_refs(project_root: Path) -> list[dict[str, str]]:
             if any(coll_dir.rglob("*.yaml")):
                 ns = f"{subject}/{coll_dir.name}"
                 if not any(r["namespace"] == ns for r in refs):
-                    refs.append({"namespace": ns, "path": f"../resource/{subject}/{coll_dir.name}"})
+                    refs.append({"namespace": ns, "path": os.path.relpath(coll_dir, project_root / '.solaire').replace('\\', '/')})
 
     return refs
 
 
 def library_root_for_namespace(project_root: Path, namespace: str) -> Path:
     """Absolute directory for one library（namespace = 科目/题集；``main`` 表示 ``resource/`` 根）。"""
-    resource = (project_root / "resource").resolve()
+    resource = bank_resource_root(project_root)
     clean = namespace.strip().replace("\\", "/")
     if clean == "main":
         return resource
     parts = clean.split("/")
+    if parts[0] == '__teachers' or parts[0].startswith('.'):
+        raise ValueError('保留的题库目录名称')
     if any(not part or part in {".", ".."} or ":" in part for part in parts):
         raise ValueError(f"Invalid namespace: {namespace!r}")
     if len(parts) == 2:

@@ -130,6 +130,7 @@ def export_bank_exchange_zip(project_root: Path, namespace: str) -> tuple[bytes,
         if ".." in rel or rel.startswith(("/", "\\")):
             raise ValueError(f"非法的 EMBED 路径: {rel}")
         abs_path = (project_root / "resource" / rel).resolve()
+        assert_within_project(project_root, abs_path)
         try:
             abs_path.relative_to(resource_root)
         except ValueError as e:

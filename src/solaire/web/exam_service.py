@@ -157,7 +157,10 @@ def exam_export_error_detail_short(exc: Exception, *, max_len: int = 160) -> str
 
 
 def _exam_yaml_in_solaire(project_root: Path) -> Path:
-    return project_root / ".solaire" / LIST_PROBE_NAME
+    from solaire.common.actor_context import teacher_key
+    key = teacher_key()
+    name = f'bank-probe-{key}.yaml' if key else LIST_PROBE_NAME
+    return project_root / ".solaire" / name
 
 
 def ensure_probe_list_yaml(project_root: Path) -> Path:

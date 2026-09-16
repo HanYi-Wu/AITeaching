@@ -40,6 +40,8 @@ def assert_within_project(project_root: Path, path: Path) -> Path:
     """
     try:
         return _assert_within_project(project_root, path)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
     except PathEscapesProjectRoot as e:
         raise HTTPException(status_code=400, detail="Path escapes project root") from e
 

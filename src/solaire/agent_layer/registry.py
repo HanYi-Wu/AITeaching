@@ -286,4 +286,11 @@ def invoke_registered_tool(name: str, args: dict[str, Any], ctx: InvocationConte
             error_code="unknown_tool",
             error_message=f"未知工具: {name}。{hint}请检查工具名拼写（注意使用点号 . 而非下划线 _ 分隔）。",
         )
-    return rt.handler(ctx, args)
+    from solaire.common.actor_context import actor
+    token = actor.set(ctx.platform_user)
+    try:
+        return rt.handler(ctx, args)
+    except PermissionError as exc:
+        return ToolResult(status="failed", error_code="permission_denied", error_message=str(exc))
+    finally:
+        actor.reset(token)

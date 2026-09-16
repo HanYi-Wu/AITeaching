@@ -29,6 +29,7 @@ from solaire.exam_compiler.facade import (
 from solaire.web.exam_service import ensure_probe_list_yaml
 from solaire.web.library_discovery import discover_question_library_refs, library_root_for_namespace, split_qualified_id
 from solaire.web.security import assert_within_project, safe_filename_component
+from solaire.web.teacher_bank import bank_resource_root, bank_export_root
 
 
 def _rel_to_resource(project_root: Path, path: Path) -> str:
@@ -128,7 +129,7 @@ def create_question_selection_export(
         "question_count": len(questions),
         "questions": questions,
     }
-    export_dir = (project_root / ".solaire" / "exports").resolve()
+    export_dir = bank_export_root(project_root).resolve()
     export_dir.mkdir(parents=True, exist_ok=True)
     filename = f"EH-questions-{uuid.uuid4().hex[:12]}.yaml"
     target = export_dir / filename
@@ -142,7 +143,7 @@ def question_selection_export_path(project_root: Path, filename: str) -> Path:
     safe = safe_filename_component(str(filename or ""))
     if safe != filename or not safe.endswith(".yaml"):
         raise FileNotFoundError("导出文件不存在")
-    target = (project_root / ".solaire" / "exports" / safe).resolve()
+    target = (bank_export_root(project_root) / safe).resolve()
     assert_within_project(project_root, target)
     if not target.is_file():
         raise FileNotFoundError("导出文件不存在或已清理")
@@ -527,8 +528,7 @@ def rename_question_collection(
     coll = safe_filename_component(new_collection)
     if not subj.strip() or not coll.strip():
         raise ValueError("科目与题集名称不能为空")
-    resource = (project_root / "resource").resolve()
-    new_root = (resource / subj / coll).resolve()
+    new_root = library_root_for_namespace(project_root, f'{subj}/{coll}')
     assert_within_project(project_root, new_root)
     if new_root == old_root:
         return {"namespace": ns, "changed": False}
@@ -556,7 +556,7 @@ def delete_question_collection(project_root: Path, namespace: str) -> None:
 
 def list_subjects(project_root: Path) -> list[str]:
     """resource 下含 YAML 题集的科目目录名。"""
-    resource = project_root / "resource"
+    resource = bank_resource_root(project_root)
     if not resource.is_dir():
         return []
     subs: set[str] = set()

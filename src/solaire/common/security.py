@@ -29,6 +29,8 @@ def assert_within_project(project_root: Path, path: Path) -> Path:
         raise PathEscapesProjectRoot(
             f"Path {resolved!r} escapes project root {root!r}"
         ) from e
+    from solaire.common.actor_context import assert_private_bank_path
+    assert_private_bank_path(root, resolved)
     return resolved
 
 
