@@ -1,4 +1,4 @@
-# 题目目录与界面修复（本地待发布）
+# 题目目录与界面修复
 
 ## 使用
 
@@ -14,7 +14,7 @@
 
 目录使用 SQLite 事务，独立于题库原文件。已有题目默认出现在根目录。平台登录用户的目录存储于内容根目录下 `.solaire/bank_organization/<用户ID的SHA256>/bank-folders.sqlite3`；未登录本地开发模式使用 `.solaire/bank-folders.sqlite3`。备份整个 `.solaire` 即可保留目录。
 
-现有题库本身是共享内容目录；本次只隔离每个教师的整理视图，不改造题库所有权。
+1.5.3 最初仅隔离整理视图；1.5.4 已增加题目文件、图片和新导出的教师私有存储。迁移政策与历史兼容边界见 [1.5.4 说明](release-1.5.4.md)。
 
 - `GET /api/bank/folders`：返回 `{"folders": ["数学", "数学/函数"], "assignments": {"math/default/q1": "数学/函数"}}`。
 - `POST /api/bank/folders/actions`：JSON 字段 `action`（create / rename / move / remove）、`path`（目录路径）、`target`（重命名的完整目标路径）、`qualified_ids`（移动的 ID 数组）。返回更新后的同结构快照。
