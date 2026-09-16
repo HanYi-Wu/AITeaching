@@ -40,6 +40,8 @@ Pixi 用户可执行 `pixi install --frozen`、`pixi run bootstrap`，再分别�
 
 ## Linux 部署与更新
 
+- 新的完整 Linux 离线安装／更新包包含运行环境和前端成品，目标机无需下载 Python 依赖或运行 npm；原配置与业务资料保留，准备后短暂停服切换，失败回滚代码。见 [离线安装说明](docs/linux-offline-install.md)。Windows exe 暂不制作。
+
 - 已有 systemd 部署的 1.5.3 更新方式见 [升级说明](docs/release-1.5.3.md)。交付包本地上传后执行 `update.sh`，代码校验及构建成功后切换版本。
 - 应用目录默认为 `/opt/educationhelper/current`，数据目录 `/var/lib/educationhelper`，配置目录 `/etc/educationhelper`；更新保留数据，但仍应自行备份。
 - `scripts/deploy-linux.sh` 是历史在线安装入口，其下载版本取决于脚本和公共站点，不能用它推断已经部署了当前 Git 版本。

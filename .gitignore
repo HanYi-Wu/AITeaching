@@ -77,3 +77,4 @@ src-tauri/runtime/python/*
 /.claude/
 web_sample_project
 /web/public/pdfjs/
+/dist-offline/
