@@ -53,7 +53,7 @@ def _resolve(ctx: InvocationContext, rel: str) -> Path:
     from solaire.common.actor_context import teacher_key
     if teacher_key():
         parts = p.relative_to(ctx.project_root.resolve()).parts
-        if parts and parts[0] == 'resource' and (len(parts) == 1 or parts[1] != '__teachers'):
+        if parts and parts[0].casefold() == 'resource' and (len(parts) == 1 or parts[1].casefold() != '__teachers'):
             from solaire.web.teacher_bank import bank_resource_root
             p = bank_resource_root(ctx.project_root).joinpath(*parts[1:])
             assert_within_project(ctx.project_root, p)

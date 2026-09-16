@@ -64,6 +64,14 @@ def test_legacy_snapshot_is_independent_and_new_teachers_start_empty(web_client,
     with as_teacher(first_id):
         assert get_question_detail(tmp_path,qid)['question']['content']=='legacy'
         save_question(tmp_path,qid,QuestionItem(id='old',type='short_answer',content='changed',answer='new'))
+        from solaire.agent_layer.tools.file_tools import _resolve
+        from solaire.agent_layer.models import InvocationContext
+        import os
+        ctx = InvocationContext(project_root=tmp_path, session_id='case-check')
+        relative = 'RESOURCE/math/default/old.yaml' if os.name == 'nt' else 'resource/math/default/old.yaml'
+        resolved = _resolve(ctx, relative)
+        assert bank_resource_root(tmp_path) in resolved.parents
+        assert 'changed' in resolved.read_text('utf-8')
     assert get_question_detail(tmp_path,qid)['question']['content']=='legacy'
     with as_teacher('teacher-created-after-migration'):
         assert list_bank_entries(tmp_path)==[]
