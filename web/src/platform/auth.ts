@@ -336,6 +336,8 @@ export type TeacherClassAssignmentRecord = {
 };
 
 export type PlatformPaperAnalysis = {
+  publication_id?: string | null;
+  publications?: Array<{ id: string; title: string; created_at: string; status: string }>;
   paper: {
     paper_id: string;
     exam_id: string;
@@ -1158,12 +1160,12 @@ export function revokePlatformPaperPublication(
   );
 }
 
-export function analyzePlatformPaper(paperId: string): Promise<{ analysis: PlatformPaperAnalysis }> {
-  return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/analysis`);
+export function analyzePlatformPaper(paperId: string, publicationId?: string): Promise<{ analysis: PlatformPaperAnalysis }> {
+  return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/analysis${publicationId ? `?publication_id=${encodeURIComponent(publicationId)}` : ""}`);
 }
 
-export function downloadPaperAnalysisReport(paperId: string, format: "xlsx" | "pdf"): Promise<Blob> {
-  return downloadAuthorizedBlob(`/api/papers/${encodeURIComponent(paperId)}/analysis.${format}`);
+export function downloadPaperAnalysisReport(paperId: string, format: "xlsx" | "pdf", publicationId?: string): Promise<Blob> {
+  return downloadAuthorizedBlob(`/api/papers/${encodeURIComponent(paperId)}/analysis.${format}${publicationId ? `?publication_id=${encodeURIComponent(publicationId)}` : ""}`);
 }
 
 export function listPaperSubmissions(paperId: string): Promise<{ submissions: PaperSubmissionRecord[] }> {

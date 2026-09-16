@@ -411,12 +411,12 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
     }
   }
 
-  async function loadSelectedAnalysis() {
+  async function loadSelectedAnalysis(publicationId?: string) {
     if (!selectedPaper) return;
     setBusy(`analysis:${selectedPaper.paper_id}`);
     setMessage(null);
     try {
-      const result = await analyzePlatformPaper(selectedPaper.paper_id);
+      const result = await (publicationId ? analyzePlatformPaper(selectedPaper.paper_id, publicationId) : analyzePlatformPaper(selectedPaper.paper_id));
       setAnalysis(result.analysis);
     } catch (e) {
       reportError(e);
@@ -430,7 +430,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
     setBusy(`report:${format}:${selectedPaper.paper_id}`);
     setMessage(null);
     try {
-      const blob = await downloadPaperAnalysisReport(selectedPaper.paper_id, format);
+      const blob = await (analysis?.publication_id ? downloadPaperAnalysisReport(selectedPaper.paper_id, format, analysis.publication_id) : downloadPaperAnalysisReport(selectedPaper.paper_id, format));
       downloadBlob(blob, `${selectedPaper.title || selectedPaper.exam_id}-analysis-report.${format}`);
     } catch (e) {
       reportError(e);
@@ -1483,6 +1483,12 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                 <button type="button" data-testid="paper-export-report-xlsx" onClick={downloadAnalysisReport} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium">导出 Excel</button>
                 <button type="button" data-testid="paper-export-report-pdf" onClick={() => void printAnalysisReport()} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium">导出 PDF</button>
               </div>
+              {(analysis.publications?.length ?? 0) > 0 && <label className="block text-sm">发布批次
+                <select aria-label="分析发布批次" disabled={busy !== null} value={analysis.publication_id ?? ""} className="ml-3 max-w-full rounded border p-2"
+                  onChange={(e) => void loadSelectedAnalysis(e.target.value)}>
+                  {analysis.publications?.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.created_at} · {item.id.slice(0, 8)}</option>)}
+                </select>
+              </label>}
               <PlatformPaperAnalysisCharts analysis={analysis} />
             </div>
           </section>

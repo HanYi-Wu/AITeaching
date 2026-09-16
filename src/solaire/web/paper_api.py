@@ -252,11 +252,12 @@ def papers_update(
 def papers_analysis(
     paper_id: str,
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    publication_id: str | None = None,
 ) -> dict[str, Any]:
     root = require_platform_root()
     project_root = require_content_project_root()
     try:
-        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root)
+        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root, publication_id=publication_id)
     except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"analysis": analysis}
@@ -266,11 +267,12 @@ def papers_analysis(
 def papers_analysis_xlsx(
     paper_id: str,
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    publication_id: str | None = None,
 ) -> StreamingResponse:
     root = require_platform_root()
     project_root = require_content_project_root()
     try:
-        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root)
+        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root, publication_id=publication_id)
         data = build_paper_analysis_workbook(analysis)
     except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
@@ -286,11 +288,12 @@ def papers_analysis_xlsx(
 def papers_analysis_pdf(
     paper_id: str,
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    publication_id: str | None = None,
 ) -> StreamingResponse:
     root = require_platform_root()
     project_root = require_content_project_root()
     try:
-        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root)
+        analysis = analyze_paper(root, paper_id=paper_id, user=user, project_root=project_root, publication_id=publication_id)
         data = build_paper_analysis_pdf(analysis)
     except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)

@@ -528,6 +528,30 @@ def _attempt_status_group(attempt: dict[str, Any]) -> str:
     return "not_started"
 
 
+def _analysis_question_maps(root: Path, project_root: Path, paper: dict[str, Any], user: dict[str, Any], publication_id: str | None):
+    # Published snapshots, not the editable source, define historical exam content.
+    clause, params = _analysis_attempt_clause(user, publication_id)
+    with connect(root) as con:
+        rows = con.execute(
+            f"SELECT sa.question_payload_json FROM student_attempts sa "
+            f"JOIN exam_publications ep ON ep.id=sa.publication_id WHERE ep.paper_id=? AND {clause} ORDER BY sa.rowid",
+            (paper['id'], *params),
+        ).fetchall()
+    by_id = {}
+    for row in rows:
+        try:
+            payload = json.loads(row['question_payload_json'] or '[]')
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, list):
+            for question in payload:
+                if isinstance(question, dict) and question.get('question_id'):
+                    by_id.setdefault(str(question['question_id']), question)
+    if by_id:
+        return list(by_id.values()), by_id, {qid: float(q.get('score_per_item') or 0) for qid, q in by_id.items()}
+    return _question_maps(project_root, paper)
+
+
 def _build_module_report(
     root: Path,
     *,
@@ -537,11 +561,12 @@ def _build_module_report(
     students: list[dict[str, Any]],
     average_score: float | None,
     user: dict[str, Any],
+    publication_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
-        questions, _by_id, score_by_id = _question_maps(project_root, paper)
+        questions, _by_id, score_by_id = _analysis_question_maps(root, project_root, paper, user, publication_id)
     except (FileNotFoundError, ValueError):
         return []
     modules: dict[str, dict[str, Any]] = {}
@@ -574,7 +599,7 @@ def _build_module_report(
     if not modules:
         return []
 
-    access_clause, access_params = _attempt_access_clause(user)
+    access_clause, access_params = _analysis_attempt_clause(user, publication_id)
     with connect(root) as con:
         rows = con.execute(
             f"""
@@ -633,11 +658,12 @@ def _build_question_report(
     project_root: Path | None,
     paper: dict[str, Any],
     user: dict[str, Any],
+    publication_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
-        questions, _by_id, score_by_id = _question_maps(project_root, paper)
+        questions, _by_id, score_by_id = _analysis_question_maps(root, project_root, paper, user, publication_id)
     except (FileNotFoundError, ValueError):
         return []
     reports: dict[str, dict[str, Any]] = {}
@@ -663,7 +689,7 @@ def _build_question_report(
     if not reports:
         return []
 
-    access_clause, access_params = _attempt_access_clause(user)
+    access_clause, access_params = _analysis_attempt_clause(user, publication_id)
     with connect(root) as con:
         rows = con.execute(
             f"""
@@ -717,8 +743,8 @@ def _build_question_report(
     return out
 
 
-def _build_class_report(root: Path, *, paper_id: str, user: dict[str, Any]) -> list[dict[str, Any]]:
-    access_clause, access_params = _attempt_access_clause(user)
+def _build_class_report(root: Path, *, paper_id: str, user: dict[str, Any], publication_id: str | None = None) -> list[dict[str, Any]]:
+    access_clause, access_params = _analysis_attempt_clause(user, publication_id)
     with connect(root) as con:
         rows = con.execute(
             f"""
@@ -832,12 +858,21 @@ def _build_radar(
     return [{"id": axis_id, "label": label, "value": round(max(0.0, min(100.0, float(value))), 2)} for axis_id, label, value in axes]
 
 
+def _analysis_attempt_clause(user: dict[str, Any], publication_id: str | None, *, attempt_alias: str = "sa") -> tuple[str, list[str]]:
+    clause, params = _attempt_access_clause(user, attempt_alias=attempt_alias)
+    if publication_id:
+        clause = f"({clause}) AND {attempt_alias}.publication_id = ?"
+        params = [*params, publication_id]
+    return clause, params
+
+
 def analyze_paper(
     root: Path,
     *,
     paper_id: str,
     user: dict[str, Any],
     project_root: Path | None = None,
+    publication_id: str | None = None,
 ) -> dict[str, Any]:
     init_platform_db(root)
     paper = get_paper(root, paper_id)
@@ -850,13 +885,19 @@ def analyze_paper(
         raise PermissionError("Only admin, school, and teacher users can analyze papers")
 
     publication_access, publication_params = _publication_access_clause(user)
-    attempt_access, attempt_params = _attempt_access_clause(user)
-    event_access, event_params = _attempt_access_clause(user, attempt_alias="pe")
     with connect(root) as con:
         publication_rows = con.execute(
-            f"SELECT * FROM exam_publications ep WHERE paper_id = ? AND {publication_access} ORDER BY created_at DESC",
+            f"SELECT * FROM exam_publications ep WHERE paper_id = ? AND {publication_access} ORDER BY created_at DESC, ep.rowid DESC",
             (paper_id, *publication_params),
         ).fetchall()
+        available_publications = [row_to_dict(row) or {} for row in publication_rows]
+        if publication_id is None and publication_rows:
+            publication_id = str(next((row for row in publication_rows if row["status"] != "revoked"), publication_rows[0])["id"])
+        if publication_id and publication_id not in {str(row["id"]) for row in publication_rows}:
+            raise FileNotFoundError("发布记录不存在或无权访问")
+        publication_rows = [row for row in publication_rows if str(row["id"]) == publication_id]
+        attempt_access, attempt_params = _analysis_attempt_clause(user, publication_id)
+        event_access, event_params = _analysis_attempt_clause(user, publication_id, attempt_alias="pe")
         attempt_rows = con.execute(
             f"""
             SELECT
@@ -894,12 +935,20 @@ def analyze_paper(
             """,
             (paper_id, *event_params),
         ).fetchall()
+        answer_rows = con.execute(
+            f"SELECT ans.attempt_id, ans.question_id, ans.score FROM student_answers ans "
+            f"JOIN student_attempts sa ON sa.id=ans.attempt_id JOIN exam_publications ep ON ep.id=sa.publication_id "
+            f"WHERE ep.paper_id=? AND {attempt_access}", (paper_id, *attempt_params)
+        ).fetchall()
 
     allowed_publication_ids = {str(row["id"]) for row in publication_rows}
     attempt_rows = [row for row in attempt_rows if str(row["publication_id"]) in allowed_publication_ids]
     event_rows = [row for row in event_rows if str(row["publication_id"]) in allowed_publication_ids]
 
     events_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    scores_by_attempt: dict[str, dict[str, float | None]] = {}
+    for answer in answer_rows:
+        scores_by_attempt.setdefault(str(answer['attempt_id']), {})[str(answer['question_id'])] = answer['score']
     for row in event_rows:
         event = row_to_dict(row) or {}
         events_by_attempt.setdefault(str(event.get("attempt_id")), []).append(event)
@@ -963,6 +1012,7 @@ def analyze_paper(
                 "account_username": attempt.get("account_username"),
                 "publication_id": attempt.get("publication_id"),
                 "publication_title": attempt.get("publication_title"),
+                "question_scores": scores_by_attempt.get(str(attempt.get("id")), {}) if score_percent is not None else {},
                 "class_names": [part for part in str(attempt.get("class_names") or "").split(",") if part],
                 "status": status_group,
                 "score": attempt.get("score"),
@@ -1009,9 +1059,10 @@ def analyze_paper(
         students=students,
         average_score=average_score,
         user=user,
+        publication_id=publication_id,
     )
-    questions = _build_question_report(root, paper_id=paper_id, project_root=project_root, paper=paper, user=user)
-    classes = _build_class_report(root, paper_id=paper_id, user=user)
+    questions = _build_question_report(root, paper_id=paper_id, project_root=project_root, paper=paper, user=user, publication_id=publication_id)
+    classes = _build_class_report(root, paper_id=paper_id, user=user, publication_id=publication_id)
     radar = _build_radar(
         completion_rate=completion_rate,
         average_score=average_score,
@@ -1022,6 +1073,8 @@ def analyze_paper(
     )
 
     return {
+        "publication_id": publication_id,
+        "publications": [{"id": row["id"], "title": row["title"], "created_at": row["created_at"], "status": row["status"]} for row in available_publications],
         "paper": {
             "paper_id": paper["id"],
             "exam_id": paper["exam_id"],

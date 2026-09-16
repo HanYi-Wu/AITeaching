@@ -387,7 +387,8 @@ def tool_paper_list(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
 def tool_paper_analyze(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     return _run(
         lambda: analyze_paper(
-            default_platform_root(), paper_id=_required(args, "paper_id"), user=_actor(ctx), project_root=ctx.project_root
+            default_platform_root(), paper_id=_required(args, "paper_id"), user=_actor(ctx), project_root=ctx.project_root,
+            publication_id=str(args.get("publication_id") or "").strip() or None,
         )
     )
 
