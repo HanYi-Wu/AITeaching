@@ -40,12 +40,16 @@ def _write_table(ws, headers: list[str], rows: list[list[Any]]) -> None:
     ws.append(headers)
     for row in rows:
         ws.append([_excel_value(value) for value in row])
+        for cell in ws[ws.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"  # User-controlled names must never become Excel formulas.
     header_fill = PatternFill("solid", fgColor="E2E8F0")
     for cell in ws[1]:
         cell.font = Font(bold=True)
         cell.fill = header_fill
         cell.alignment = Alignment(vertical="center")
     ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
     for index, header in enumerate(headers, start=1):
         width = max(12, min(42, len(header) + 4))
         for cell in ws.iter_cols(min_col=index, max_col=index, min_row=2):
@@ -90,7 +94,30 @@ def build_paper_analysis_workbook(analysis: dict[str, Any]) -> bytes:
     proctoring = analysis.get("proctoring") or {}
     paper = analysis.get("paper") or {}
 
-    ws = wb.active
+    publication = next((p for p in analysis.get('publications', []) if p['id'] == analysis.get('publication_id')), {})
+    students = list(analysis.get('students') or [])
+    ranked = sorted((s for s in students if s.get('score_percent') is not None), key=lambda s: -float(s['score_percent']))
+    ranks = {}
+    for position, student in enumerate(ranked, start=1):
+        ranks.setdefault(float(student['score_percent']), position)
+    status_names = {'completed': '已提交待批改', 'in_progress': '答题中', 'not_started': '未开始'}
+    report = wb.create_sheet('成绩单', 0)
+    _write_table(report, ['排名', '学号', '姓名', '班级', '批改状态', '得分', '卷面满分', '得分率（%）', '答题用时（秒）', '切屏次数', '发布批次', '批次编号'], [
+        [ranks.get(float(s['score_percent'])) if s.get('score_percent') is not None else None,
+         s.get('student_no'), s.get('display_name'), s.get('class_names'),
+         '已批改' if s.get('score_percent') is not None else status_names.get(s.get('status'), s.get('status')),
+         s.get('score') if s.get('score_percent') is not None else None, s.get('max_score'), s.get('score_percent'),
+         s.get('time_spent_seconds'), s.get('screen_switch_count'), publication.get('title'), analysis.get('publication_id')]
+        for s in sorted(students, key=lambda s: (s.get('score_percent') is None, -float(s.get('score_percent') or 0), str(s.get('student_no') or '')))
+    ])
+    questions = analysis.get('questions') or []
+    _write_table(wb.create_sheet('逐题成绩', 1), ['学号', '姓名', '批改状态', *[f"{q.get('header') or q['question_id']}（满分{q.get('score_per_item', '-')}）" for q in questions]], [
+        [s.get('student_no'), s.get('display_name'), '已批改' if s.get('score_percent') is not None else '未完成批改',
+         *[(s.get('question_scores') or {}).get(q['question_id']) for q in questions]] for s in students
+    ])
+    wb.active = 0
+
+    ws = wb['Sheet']
     ws.title = "summary"
     summary_rows = [
         ["title", paper.get("title") or paper.get("exam_id")],
