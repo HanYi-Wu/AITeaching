@@ -2,6 +2,7 @@ import { tokenizeContent } from "../lib/contentTokenizer";
 import { fixUnbalancedInlineMathDelimiters, stripVisualEmbeds } from "../lib/stripVisualEmbeds";
 import { renderMathToHtmlSimple } from "../lib/katexRender";
 import { cn } from "../lib/utils";
+import { formatAnswerLogic } from '../lib/answerLogic';
 
 function escapeHtml(s: string): string {
   return s
@@ -53,6 +54,7 @@ export function buildKatexHtml(text: string): string {
 
 /** Renders plain text with `$...$` and `$$...$$` math via KaTeX. */
 export function KatexText({ text, className }: { text: string; className?: string }) {
+  text = formatAnswerLogic(text);
   return (
     <div
       className={className}

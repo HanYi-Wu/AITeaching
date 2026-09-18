@@ -418,6 +418,15 @@ _RAW_TOOLS: list[RegisteredTool] = [
         ui_label="正在整理题目目录…",
     ),
     _fn(
+        'bank.adapt_answers',
+        '仅通过教师助手AI适配多答案和旧答案关系。先用bank.get_item读取原答案，结合题意解释或/或者/且/而且/和，不得机械替换自然语言。保留原答案并批量保存，一次确认最多50题。logic为JSON树：{op:value,value:答案}或{op:and/or,items:[子树,子树]}；且优先于或，可任意嵌套。多个可接受答案用or；同时要求用and；不要编造或丢失条件。不会修改历史已发布的快照。',
+        {'type': 'object', 'properties': {'questions': {'type': 'array', 'minItems': 1, 'maxItems': 50,
+          'items': {'type': 'object', 'properties': {'qualified_id': {'type': 'string'}, 'logic': {'type': 'string'}},
+          'required': ['qualified_id', 'logic'], 'additionalProperties': False}}}, 'required': ['questions'], 'additionalProperties': False},
+        bank_tools.tool_bank_adapt_answers,
+        ui_label='正在适配答案关系…',
+    ),
+    _fn(
         "bank.create_items",
         "批量创建1至50道题目，一次确认整批。生成或导入多题时优先使用，禁止逐题要求确认。每题返回成功/失败；只重试失败项。metadata.category 用于分类。",
         {"type": "object", "properties": {

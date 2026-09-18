@@ -135,8 +135,9 @@ def expand_hydrated_for_latex(hydrated: HydratedExam, loaded: LoadedQuestions) -
                 q.content, mode="latex", project_root=pr, primebrush_pdf=primebrush_pdf
             )
             q.content = expand_tables_for_latex(q.content)
+            from solaire.common.answer_logic import display as display_answer
             q.answer, pi, mi = expand_diagram_fences_in_text(
-                q.answer,
+                display_answer(q.answer),
                 image_dir=image_dir,
                 mode="latex",
                 primebrush_start=pi,

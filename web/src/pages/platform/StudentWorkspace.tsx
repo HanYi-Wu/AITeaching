@@ -36,6 +36,8 @@ import {
 } from "../../platform/auth";
 import { PlatformShell } from "./PlatformShell";
 import { GettingStartedChecklist } from "./GettingStartedChecklist";
+import { AnswerRelationEditor } from '../../components/AnswerRelationEditor';
+import { ANSWER_LOGIC_PREFIX } from '../../lib/answerLogic';
 
 type Props = {
   user: PlatformUser;
@@ -136,6 +138,18 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (activeView === 'exam') return;
+    let disposed = false;
+    let pending = false;
+    const timer = window.setInterval(() => {
+      if (document.hidden || pending) return;
+      pending = true;
+      void listStudentPapers().then(result => { if (!disposed) setPapers(result.papers); }).catch(() => {}).finally(() => { pending = false; });
+    }, 15000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [activeView]);
 
   useEffect(() => {
     if (mustChangePassword) {
@@ -1106,13 +1120,14 @@ function QuestionAnswer({
         </div>
       ) : (
         <div className="mt-3 space-y-3">
-          <textarea
+          <AnswerRelationEditor value={value} onChange={onChange} />
+          {!value.startsWith(ANSWER_LOGIC_PREFIX) ? <textarea
             data-testid={`student-answer-${question.question_id}`}
             className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             value={value}
             onChange={(event) => onChange(event.target.value)}
             placeholder="可输入文字、公式说明，也可以在下方上传手写过程图片"
-          />
+          /> : null}
           <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-3">
             <p className="mb-2 text-xs font-medium text-slate-600">上传答题图片（可多张）</p>
             <input

@@ -18,6 +18,7 @@ from solaire.web.exam_workspace_service import workspace_dir
 from solaire.web.library_discovery import discover_question_library_refs
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import _flatten_questions
+from solaire.common.answer_logic import PREFIX as ANSWER_LOGIC_PREFIX, matches as matches_answer_logic, decode as decode_answer_logic
 
 
 PROCTOR_EVENT_TYPES = {
@@ -848,6 +849,10 @@ def submit_student_attempt(
                 payload = {}
             answers[str(row["question_id"])] = payload.get("answer")
 
+        for raw_answer in answers.values():
+            if isinstance(raw_answer, str) and raw_answer.startswith(ANSWER_LOGIC_PREFIX):
+                decode_answer_logic(raw_answer)
+
         if auto_release:
             # Unanswered choices count as zero, including an entirely blank paper.
             for qid in qtype_by_id:
@@ -865,7 +870,10 @@ def submit_student_attempt(
                 is_correct = 0 if auto_release else None
                 score = 0.0 if auto_release else None
             else:
-                is_correct_bool = _normalise_answer(raw_answer, qtype) == _normalise_answer(expected, qtype)
+                if str(expected).startswith(ANSWER_LOGIC_PREFIX) or str(raw_answer).startswith(ANSWER_LOGIC_PREFIX):
+                    is_correct_bool = matches_answer_logic(raw_answer, expected)
+                else:
+                    is_correct_bool = _normalise_answer(raw_answer, qtype) == _normalise_answer(expected, qtype)
                 is_correct = 1 if is_correct_bool else 0
                 score = score_by_id.get(qid, 0.0) if is_correct_bool else 0.0
                 total += float(score)

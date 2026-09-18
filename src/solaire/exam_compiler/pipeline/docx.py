@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from solaire.common.answer_logic import display as display_answer
 import re
 import shutil
 import subprocess
@@ -330,7 +331,7 @@ def _append_teacher_solution(
 ) -> None:
     if not show_answers:
         return
-    answer = _render_text(hq.item.answer, hq, loaded, media_dir)
+    answer = _render_text(display_answer(hq.item.answer), hq, loaded, media_dir)
     analysis = _render_text(hq.item.analysis or "", hq, loaded, media_dir)
     if answer:
         lines.append(f"**【答案】** {answer}")

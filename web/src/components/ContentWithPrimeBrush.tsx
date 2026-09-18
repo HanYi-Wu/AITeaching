@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { ResourceImage } from "./ResourceImage";
+import { formatAnswerLogic } from '../lib/answerLogic';
 import { tokenizeContent } from "../lib/contentTokenizer";
 import { initMermaid } from "../lib/mermaidInit";
 import { renderMathToHtmlSimple } from "../lib/katexRender";
@@ -120,6 +121,7 @@ function SolaireTablePreview({ source }: { source: string }) {
  *   - 图片占位 → `<img>` 元素
  */
 export function ContentWithPrimeBrush({ text, className }: { text: string; className?: string }) {
+  text = formatAnswerLogic(text);
   const tokens = tokenizeContent(text);
   const nodes: ReactNode[] = [];
   let key = 0;

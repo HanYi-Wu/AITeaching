@@ -15,6 +15,36 @@ def _root(ctx: InvocationContext) -> Any:
     return ctx.project_root
 
 
+def tool_bank_adapt_answers(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    """The assistant interprets semantics; this tool only validates and persists its AST."""
+    from solaire.common.answer_logic import encode, display
+    try:
+        if not ctx.platform_user or ctx.platform_user.get('role') not in {'teacher', 'admin'}:
+            raise PermissionError('仅教师或管理员助手可适配答案关系')
+        changes = args.get('questions')
+        if not isinstance(changes, list) or not 1 <= len(changes) <= 50:
+            raise ValueError('一次适配1至50题')
+        prepared = []
+        for change in changes:
+            qid = str(change['qualified_id'])
+            detail = get_question_detail(_root(ctx), qid)
+            if not detail.get('question'):
+                raise ValueError('请使用独立题目的真实ID')
+            item = QuestionItem.model_validate(detail['question'])
+            node = json.loads(change['logic'])
+            answer = encode(node)
+            metadata = {**item.metadata, 'answer_logic_version': 1,
+                        'original_answer': item.metadata.get('original_answer', item.answer)}
+            prepared.append((qid, item.model_copy(update={'answer': answer, 'metadata': metadata})))
+        results = []
+        for qid, item in prepared:
+            save_question(_root(ctx), qid, item)
+            results.append({'qualified_id': qid, 'answer': display(item.answer)})
+        return ToolResult(status='succeeded', data={'questions': results}, summary_for_llm='答案关系已保存；原始答案已保留在metadata.original_answer。历史已发布试卷快照不变。')
+    except (ValueError, KeyError, TypeError, FileNotFoundError, PermissionError) as error:
+        return ToolResult(status='failed', error_code='answer_logic', error_message=str(error))
+
+
 def tool_bank_organize(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     from solaire.web.bank_folders import act, read
     try:
