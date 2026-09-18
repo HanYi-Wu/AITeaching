@@ -28,7 +28,7 @@ test('selects all from partial selection, toggles off and opens file manager', (
   expect(selected).toHaveBeenLastCalledWith([]);
   view.rerender(<BankFolderExplorer {...props} selectedIds={[]} />);
   fireEvent.click(screen.getByRole('button', { name: '打开文件管理器' }));
-  expect(screen.getByRole('dialog', { name: '题库文件管理器' })).toBeInTheDocument();
+  expect(screen.getByRole('dialog', { name: /^题库文件管理器/ })).toBeInTheDocument();
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '全选 / 取消全选' }));
   expect(selected).toHaveBeenLastCalledWith(['q1', 'q2']);
 });

@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { DesktopTitleBar } from "./components/DesktopTitleBar";
+import { WorkspaceLoadBoundary } from './components/WorkspaceLoadBoundary';
 import { ToolBar } from "./components/layout/ToolBar";
 import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
 import { ToolBarProvider, useToolBar } from "./contexts/ToolBarContext";
@@ -363,6 +364,7 @@ function AppShell() {
                 className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
               >
                 <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                  <WorkspaceLoadBoundary resetKey={page}>
                   <Suspense fallback={<AppLoadingFallback />}>
                   {info?.bound && (page === 'compose' || Boolean(composeOwner && composeOwner === currentUser?.id)) && (
                     <div
@@ -430,10 +432,13 @@ function AppShell() {
                     />
                   )}
                   </Suspense>
+                  </WorkspaceLoadBoundary>
                 </main>
+                <WorkspaceLoadBoundary>
                 <Suspense fallback={null}>
                   <AgentSidebar projectBound mode="overlay" overlayHost={assistantOverlayHost} />
                 </Suspense>
+                </WorkspaceLoadBoundary>
               </div>
             </div>
           </TeacherWorkspace>
