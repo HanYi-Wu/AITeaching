@@ -96,3 +96,21 @@ def test_old_shared_copies_are_quarantined_but_edits_survive(tmp_path):
         assert (bank / 'new.yaml').exists()
         assert bank_resource_root(tmp_path) == bank
     assert (tmp_path / '.solaire' / 'bank_quarantine' / key / 'unchanged.yaml').read_text() == 'content: legacy\n'
+
+
+def test_owned_exam_sources_are_filtered_and_protected_from_other_teachers(web_client, tmp_path):
+    from tests.test_platform_paper_api import _write_exam, _teacher_token
+    from solaire.web.exam_workspace_service import list_exam_workspaces, exam_yaml_path
+    admin = _bootstrap_admin(web_client)
+    _, first_id, _ = _create_school_teacher_class(web_client, admin)
+    _write_exam(tmp_path)
+    papers = web_client.get('/api/papers', headers=_headers(_teacher_token(web_client))).json()['papers']
+    exam_id = papers[0]['exam_id']
+    with as_teacher(first_id):
+        assert len(list_exam_workspaces(tmp_path)) == 1
+        source = exam_yaml_path(tmp_path, exam_id)
+    with as_teacher('other-teacher'):
+        assert list_exam_workspaces(tmp_path) == []
+        from solaire.common.security import assert_within_project
+        with pytest.raises(PermissionError):
+            assert_within_project(tmp_path, source)

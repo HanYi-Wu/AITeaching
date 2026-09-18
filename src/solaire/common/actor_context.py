@@ -20,6 +20,16 @@ def assert_private_bank_path(project_root, path):
         return
     # Windows paths are case-insensitive; alternate casing must not bypass ACLs.
     relative = tuple(part.casefold() for part in path.resolve().relative_to(project_root.resolve()).parts)
+    if len(relative) >= 3 and relative[0] == 'exams':
+        from solaire.web.platform_db import connect, default_platform_root, platform_db_path
+        platform = default_platform_root()
+        if platform_db_path(platform).is_file():
+            actual = path.resolve().relative_to(project_root.resolve()).parts
+            exam_id = '/'.join(actual[1:3])
+            with connect(platform) as con:
+                record = con.execute('SELECT owner_teacher_id FROM paper_records WHERE exam_id = ? COLLATE NOCASE', (exam_id,)).fetchone()
+            if record and record['owner_teacher_id'] and str(record['owner_teacher_id']) != str(actor.get()['id']):
+                raise PermissionError('无权访问其他教师的试卷')
     if len(relative) >= 2 and relative[:2] == ('resource', '__teachers'):
         if len(relative) < 3 or relative[2] != key:
             raise PermissionError('无权访问其他教师的题库')

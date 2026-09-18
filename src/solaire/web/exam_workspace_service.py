@@ -294,6 +294,15 @@ def label_subject_taken(
 
 def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
     """Newest ``updated_at`` first."""
+    from solaire.common.actor_context import actor
+    from solaire.web.platform_db import connect, default_platform_root, platform_db_path
+    user = actor.get()
+    hidden = set()
+    platform = default_platform_root()
+    if user and user.get('role') == 'teacher' and platform_db_path(platform).is_file():
+        with connect(platform) as con:
+            hidden = {str(row['exam_id']).casefold() for row in con.execute(
+                'SELECT exam_id FROM paper_records WHERE owner_teacher_id IS NOT NULL AND owner_teacher_id != ?', (str(user['id']),))}
     root = _exams_root(project_root)
     if not root.is_dir():
         return []
@@ -305,6 +314,8 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
             if not subj_dir.is_dir():
                 continue
             eid = f"{label_dir.name}/{subj_dir.name}"
+            if eid.casefold() in hidden:
+                continue
             cfg = _read_config(project_root, eid)
             yp = exam_yaml_path(project_root, eid)
             if not yp.is_file():
