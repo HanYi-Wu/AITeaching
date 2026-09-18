@@ -17,6 +17,7 @@ from solaire.web.auth_service import utc_now
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import list_exam_results
 from solaire.web.student_service import _load_attempt_question_payloads, _load_exam_question_payloads
+from solaire.web.student_service import _publication_datetime
 
 DELIVERY_MODES = {"offline", "online"}
 PUBLICATION_STATUSES = {"draft", "published", "paused", "closed", "revoked"}
@@ -35,6 +36,13 @@ def _clean_subject(value: object) -> str:
 
 def _clean_title(value: object, fallback: str) -> str:
     return str(value or "").strip() or fallback
+
+
+def _normalized_schedule(start_at, end_at):
+    start, end = _publication_datetime(start_at), _publication_datetime(end_at)
+    if start and end and end <= start:
+        raise ValueError('结束时间必须晚于开始时间')
+    return start.isoformat() if start else None, end.isoformat() if end else None
 
 
 def _page(items: list[dict[str, Any]], *, page: int = 1, page_size: int = 10) -> dict[str, Any]:
@@ -439,10 +447,10 @@ def update_paper_publication(
         params.append(description.strip() or None)
     if start_at is not None:
         updates.append("start_at = ?")
-        params.append(start_at.strip() or None)
+        params.append(_normalized_schedule(start_at, None)[0])
     if end_at is not None:
         updates.append("end_at = ?")
-        params.append(end_at.strip() or None)
+        params.append(_normalized_schedule(None, end_at)[1])
     if time_limit_minutes is not None:
         updates.append("time_limit_minutes = ?")
         params.append(max(0, int(time_limit_minutes)) or None)
@@ -458,13 +466,15 @@ def update_paper_publication(
     params.extend([publication_id, paper_id])
     with connect(root) as con:
         publication = con.execute(
-            "SELECT teacher_id FROM exam_publications WHERE id = ? AND paper_id = ?",
+            "SELECT teacher_id, start_at, end_at FROM exam_publications WHERE id = ? AND paper_id = ?",
             (publication_id, paper_id),
         ).fetchone()
         if publication is None:
             raise ValueError("publication not found")
         if user.get("role") == "teacher" and str(publication["teacher_id"]) != str(user.get("id")):
             raise PermissionError("Teacher can only manage own publications")
+        _normalized_schedule(start_at if start_at is not None else publication['start_at'],
+                             end_at if end_at is not None else publication['end_at'])
         con.execute(
             f"UPDATE exam_publications SET {', '.join(updates)} WHERE id = ? AND paper_id = ?",
             tuple(params),
@@ -1486,6 +1496,7 @@ async def _ai_grade_answer(
         "question_header": question.get("header"),
         "question_type": question.get("type"),
         "question_content": question.get("content"),
+        "trusted_reference_answer": question.get('correct_answer'),
         "max_score": max_score,
         "student_answer_text": answer_text,
         "ocr_text": ocr_text,
@@ -1536,6 +1547,7 @@ def publish_online_paper(
     time_limit_minutes: int | None = None,
     subject: str | None = None,
 ) -> dict[str, Any]:
+    start_at, end_at = _normalized_schedule(start_at, end_at)
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("Only teachers and admins can publish papers")

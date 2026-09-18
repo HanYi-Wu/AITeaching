@@ -123,6 +123,13 @@ function publicationStatusLabel(status: string): string {
   return "草稿";
 }
 
+function publicationWindowLabel(publication: PaperPublicationRecord, now: number) {
+  if (publication.status !== 'published') return publicationStatusLabel(publication.status);
+  const time = (value?: string | null) => value ? new Date(/[zZ]|[+-]\d\d:\d\d$/.test(value) ? value : value + '+08:00').getTime() : null;
+  const start = time(publication.start_at), end = time(publication.end_at);
+  return end !== null && now >= end ? '已结束' : start !== null && now < start ? '未开始' : '进行中';
+}
+
 function submissionStatusLabel(status?: string | null): string {
   return ({ not_started: "未开始", in_progress: "答题中", submitted: "已提交", completed: "已完成" } as Record<string, string>)[status || ""] ?? status ?? "未知状态";
 }
@@ -142,6 +149,8 @@ function formatStudentAnswer(value: unknown): string {
 }
 
 export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError }: Props) {
+  const [clock, setClock] = useState(Date.now());
+  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   const [papers, setPapers] = useState<PlatformPaperRecord[]>([]);
   const [paperMeta, setPaperMeta] = useState<PageMeta>({ total: 0, page: 1, pageSize: 10, totalPages: 1 });
   const [paperQuery, setPaperQuery] = useState<PaperQuery>({
@@ -1150,7 +1159,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                         <article key={publication.id} className="min-w-0 rounded-lg border border-slate-200 p-3">
                           <div className="flex flex-wrap items-start justify-between gap-2">
                             <h3 className="min-w-0 break-all text-sm font-semibold">{publication.title}</h3>
-                            <span className="rounded bg-slate-100 px-2 py-1 text-xs">{publicationStatusLabel(publication.status)}</span>
+                            <span className="rounded bg-slate-100 px-2 py-1 text-xs">{publicationWindowLabel(publication, clock)}</span>
                           </div>
                           <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
                             <div className="break-all">班级：{(publication.class_names || []).join("、") || "-"}</div>
