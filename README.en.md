@@ -1,6 +1,6 @@
 # EducationHelper (EH)
 
-EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.5.4**.
+EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.5.5**.
 
 See the [Chinese README](README.md) for the maintained setup guide and [release notes](src/solaire/web/assets/help_docs/changelog.md) for version history.
 
@@ -8,7 +8,7 @@ See the [Chinese README](README.md) for the maintained setup guide and [release 
 
 School and account administration, question editing/import, exam composition, online assignments, student answers and image uploads, teacher grading, offline scan collection, remedial practice, reports, and AI-assisted workflows.
 
-Teachers must review OCR and AI grading suggestions. Browser activity events assist review and cannot establish that cheating did or did not occur. Question files, images and new question exports are teacher-specific, including AI file access. Existing teachers receive independent copies of the unowned legacy shared bank; newly created teachers start empty. Original files remain for historical exams. Back up before updating; see [migration notes](docs/release-1.5.4.md).
+Teachers must review OCR and AI grading suggestions. Fully objective online exams release results automatically; mixed exams require teacher review. Browser activity events cannot prove or disprove cheating. New banks and exports are teacher-specific, including AI file access. Version 1.5.5 quarantines unchanged, unattributed legacy copies without deleting originals, newly authored questions or teacher edits. Administrators must verify ownership before restoring quarantined questions. See [migration notes](docs/release-1.5.5.md).
 
 ## Development
 
