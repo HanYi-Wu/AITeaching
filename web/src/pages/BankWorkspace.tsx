@@ -20,6 +20,7 @@ import {
 import type { EmbedKind } from "../lib/bankEditorEmbedKinds";
 import { ContentWithPrimeBrush } from "../components/ContentWithPrimeBrush";
 import { BankFolderExplorer, type BankFolders } from "../components/BankFolderExplorer";
+import { QuestionHoverDetails } from '../components/QuestionHoverDetails';
 import { KatexPlainPreview } from "../components/KatexText";
 import { MathInsertOverlay } from "../components/MathInsertOverlay";
 import { MermaidEditorModal } from "../components/MermaidEditorModal";
@@ -1711,10 +1712,12 @@ export function BankWorkspace({
                       </span>
                     </div>
                     <div className="mt-0.5 block w-full min-w-0">
+                      <QuestionHoverDetails id={it.qualified_id}>
                       <KatexPlainPreview
                         text={it.content_preview}
                         className="line-clamp-3 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
                       />
+                      </QuestionHoverDetails>
                     </div>
                     {Object.keys(it.metadata ?? {}).length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">

@@ -1,4 +1,5 @@
 import { fillSectionGaps } from "../lib/manualPaperShortcuts";
+import { QuestionHoverDetails } from '../components/QuestionHoverDetails';
 import {
   useCallback,
   useDeferredValue,
@@ -2230,10 +2231,10 @@ export function ComposeWorkspace({
                         </span>
                       ) : null}
                       <span className="ml-1 font-mono text-[11px] text-slate-800">{q.qualified_id}</span>
-                      <KatexPlainPreview
+                      <QuestionHoverDetails id={q.qualified_id}><KatexPlainPreview
                         text={q.content_preview}
                         className="mt-1 line-clamp-3 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
-                      />
+                      /></QuestionHoverDetails>
                       {Object.keys(q.metadata ?? {}).length > 0 && (
                         <div className="mt-1 flex flex-wrap gap-1">
                           {Object.entries(q.metadata ?? {}).map(([k, v]) => (
@@ -2506,10 +2507,10 @@ export function ComposeWorkspace({
                                   )}
                                 >
                                   <span className="font-mono text-xs text-slate-800">{qid}</span>
-                                  <KatexPlainPreview
+                                  <QuestionHoverDetails id={qid}><KatexPlainPreview
                                     text={questionMap.get(qid)?.content_preview ?? ""}
                                     className="line-clamp-2 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
-                                  />
+                                  /></QuestionHoverDetails>
                                   {perQuestionMode[s.section_id] ? (
                                     <div
                                       className="mt-1 flex items-center gap-1 border-t border-slate-100 pt-1"
@@ -2584,10 +2585,10 @@ export function ComposeWorkspace({
                                   <span className="font-mono text-[11px] text-slate-800">{slot.rep.group_id}</span>
                                 </div>
                                 <p className="mt-0.5 font-mono text-[10px] leading-tight text-slate-500">{slot.qids.join(" · ")}</p>
-                                <KatexPlainPreview
+                                <QuestionHoverDetails id={headQid}><KatexPlainPreview
                                   text={prevText ?? ""}
                                   className="line-clamp-2 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
-                                />
+                                /></QuestionHoverDetails>
                                 {perQuestionMode[s.section_id] ? (
                                   <div
                                     className="mt-1 flex items-center gap-1 border-t border-slate-100 pt-1"
