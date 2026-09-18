@@ -2141,6 +2141,10 @@ def get_teacher_student_profile(
       AND (? IS NULL OR date(COALESCE(sa.submitted_at, sa.started_at, ep.created_at)) <= date(?))
     """
     date_params = (clean_date_from, clean_date_from, clean_date_to, clean_date_to)
+    # Class membership is not ownership: different teachers can share a class.
+    if user.get('role') == 'teacher':
+        date_clause += ' AND ep.teacher_id = ?'
+        date_params += (str(user['id']),)
     with connect(root) as con:
         attempt_rows = con.execute(
             f"""
