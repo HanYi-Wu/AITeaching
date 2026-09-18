@@ -222,6 +222,17 @@ def _publish_exam_for_student(
     school_headers, _ = _school_headers(client, admin_token)
     class_id, student_account = _create_teacher_class_student(client, school_headers)
     teacher_headers = _teacher_headers(client)
+    # Fixtures are authored by this teacher, not unattributed shared legacy files.
+    from solaire.common.actor_context import actor
+    from solaire.web.teacher_bank import bank_resource_root
+    import shutil
+    with connect(default_platform_root()) as con:
+        teacher_id = con.execute("SELECT id FROM users WHERE username='teacher_li'").fetchone()['id']
+    token = actor.set({'id': teacher_id, 'role': 'teacher'})
+    try:
+        shutil.copytree(tmp_path / 'resource' / 'math', bank_resource_root(tmp_path) / 'math', dirs_exist_ok=True)
+    finally:
+        actor.reset(token)
     paper = next(
         item for item in client.get("/api/papers", headers=teacher_headers).json()["papers"] if item["exam_id"] == exam_id
     )
@@ -391,13 +402,14 @@ def test_student_answers_online_paper_and_views_result_analysis(web_client: Test
     )
     assert submitted.status_code == 200
     assert submitted.json()["attempt"]["status"] == "submitted"
-    assert submitted.json()["attempt"]["score"] is None
-    assert submitted.json()["attempt"]["max_score"] is None
+    assert submitted.json()["attempt"]["score"] == 5.0
+    assert submitted.json()["attempt"]["max_score"] == 10.0
+    assert submitted.json()["attempt"]["grading_completed_at"]
 
-    hidden_results = web_client.get("/api/student/results", headers=student_headers)
-    assert hidden_results.status_code == 200
-    assert hidden_results.json()["results"][0]["score"] is None
-    assert hidden_results.json()["results"][0]["answers"] == []
+    immediate_results = web_client.get("/api/student/results", headers=student_headers)
+    assert immediate_results.status_code == 200
+    assert immediate_results.json()["results"][0]["score"] == 5.0
+    assert len(immediate_results.json()["results"][0]["answers"]) == 2
 
     completed = web_client.post(
         f"/api/papers/{paper['paper_id']}/attempts/{attempt_id}/complete-grading",
@@ -593,8 +605,8 @@ def test_student_resumes_saved_answers_and_personalized_questions_are_scored(
         headers=student_headers,
     )
     assert submitted.status_code == 200
-    assert submitted.json()["attempt"]["score"] is None
-    assert submitted.json()["attempt"]["max_score"] is None
+    assert submitted.json()["attempt"]["score"] == 6.0
+    assert submitted.json()["attempt"]["max_score"] == 6.0
     assert submitted.json()["attempt"]["time_spent_seconds"] == 60
 
     late_save = web_client.post(
@@ -604,7 +616,7 @@ def test_student_resumes_saved_answers_and_personalized_questions_are_scored(
     )
     assert late_save.status_code == 400
     result = web_client.get("/api/student/results", headers=student_headers).json()["results"][0]
-    assert result["score"] is None
+    assert result["score"] == 6.0
 
 
 def test_proctor_events_are_validated_deduplicated_and_only_visibility_counts_as_switch(

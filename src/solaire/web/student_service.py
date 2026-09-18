@@ -6,7 +6,7 @@ import json
 import os
 import re
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,13 +61,26 @@ def _publication_availability(row: dict[str, Any]) -> tuple[bool, str | None]:
     if status != "published":
         return False, "Publication is not open"
     now = datetime.now(UTC)
-    start_at = _parse_datetime(row.get("start_at"))
+    start_at = _publication_datetime(row.get("start_at"))
     if start_at is not None and now < start_at:
         return False, "Publication has not started"
-    end_at = _parse_datetime(row.get("end_at"))
-    if end_at is not None and now > end_at:
+    end_at = _publication_datetime(row.get("end_at"))
+    if end_at is not None and now >= end_at:
         return False, "Publication has ended"
     return True, None
+
+
+def _publication_datetime(value: object) -> datetime | None:
+    """Legacy datetime-local values are Chinese wall time, not UTC."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except ValueError:
+        raise ValueError('考试时间格式无效') from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
+    return parsed.astimezone(UTC)
 
 
 def _time_limit_exceeded(row: dict[str, Any]) -> bool:
@@ -807,6 +820,11 @@ def submit_student_attempt(
     qtype_by_id = {str(q["question_id"]): str(q.get("type") or "") for q in questions}
     score_by_id = {str(q["question_id"]): float(q.get("score_per_item") or 0) for q in questions}
     max_score = round(sum(score_by_id.values()), 2)
+    auto_release = bool(questions) and str(attempt.get('submission_mode')) == 'online' and all(
+        qtype_by_id[qid] in {'single_choice', 'multiple_choice', 'choice'}
+        and bool(str(answer_keys.get(qid) or '').strip())
+        for qid in qtype_by_id
+    )
 
     now = utc_now()
     submitted_rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers or [], now)
@@ -830,14 +848,22 @@ def submit_student_attempt(
                 payload = {}
             answers[str(row["question_id"])] = payload.get("answer")
 
+        if auto_release:
+            # Unanswered choices count as zero, including an entirely blank paper.
+            for qid in qtype_by_id:
+                if qid not in answers:
+                    con.execute('INSERT INTO student_answers (id, attempt_id, question_id, answer_payload, grading_status, responded_at) VALUES (?, ?, ?, ?, ?, ?)',
+                                (_new_id(), attempt_id, qid, '{}', 'pending', now))
+                    answers[qid] = None
+
         scored_any = False
         total = 0.0
         for qid, raw_answer in answers.items():
             expected = answer_keys.get(qid)
             qtype = qtype_by_id.get(qid)
             if expected is None or raw_answer is None or str(raw_answer).strip() == "":
-                is_correct = None
-                score = None
+                is_correct = 0 if auto_release else None
+                score = 0.0 if auto_release else None
             else:
                 is_correct_bool = _normalise_answer(raw_answer, qtype) == _normalise_answer(expected, qtype)
                 is_correct = 1 if is_correct_bool else 0
@@ -857,7 +883,7 @@ def submit_student_attempt(
             time_limit_seconds = max(0, int(attempt.get("time_limit_minutes") or 0)) * 60
             if time_limit_seconds:
                 authoritative_time_spent = min(authoritative_time_spent, time_limit_seconds)
-        final_score: float | None = round(total, 2) if scored_any else None
+        final_score: float | None = round(total, 2) if scored_any or auto_release else None
         if not attempt.get("started_at"):
             con.execute("UPDATE student_attempts SET started_at = ? WHERE id = ?", (now, attempt_id))
         con.execute(
@@ -868,6 +894,9 @@ def submit_student_attempt(
             """,
             (now, final_score, max_score, authoritative_time_spent, attempt_id),
         )
+        if auto_release:
+            con.execute('UPDATE student_attempts SET grading_completed_at = ?, grading_completed_by = ? WHERE id = ?',
+                        (now, None, attempt_id))
     return _attempt_payload(_attempt_for_student(root, attempt_id, str(student["id"])))
 
 
