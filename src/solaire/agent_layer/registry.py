@@ -59,6 +59,8 @@ _SUBTASK_PIPELINE: tuple[str, ...] = ("agent.run_subtask", "agent.run_tool_pipel
 _FILE_RO: tuple[str, ...] = ("file.read", "file.list", "file.search")
 
 _GENERAL_DOMAIN: tuple[str, ...] = (
+    "bank.legacy_answer_candidates",
+    "bank.adapt_answers",
     "bank.organize",
     "bank.create_items",
     "exam.workspace_list",

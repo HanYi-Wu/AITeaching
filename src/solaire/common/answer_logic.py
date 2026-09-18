@@ -55,11 +55,38 @@ def encode(node):
     return text
 
 
-def matches(actual, expected):
+def _answer_branches(text, choice=False):
+    result = branches(decode(text))
+    if choice:
+        return {frozenset(char for answer in alternative for char in answer if char.isalnum()) for alternative in result}
+    return result
+
+
+def matches(actual, expected, *, choice=False):
     """Any permitted alternative is sufficient; all asserted alternatives must be valid."""
     try:
-        submitted, allowed = branches(decode(actual)), branches(decode(expected))
+        submitted, allowed = _answer_branches(actual, choice), _answer_branches(expected, choice)
         return bool(submitted) and submitted <= allowed
+    except (ValueError, RecursionError):
+        return False
+
+
+def valid_choice_key(text, options, multiple=False):
+    try:
+        alternatives = branches(decode(text)) if str(text).startswith(PREFIX) else {frozenset([str(text).strip().casefold()])}
+        keys = {str(key).casefold() for key in (options or {})}
+        if not keys:
+            return False
+        for alternative in alternatives:
+            selected = set()
+            for answer in alternative:
+                chars = {char for char in answer if char.isalnum()}
+                if not chars or not chars <= keys:
+                    return False
+                selected |= chars
+            if not multiple and len(selected) != 1:
+                return False
+        return True
     except (ValueError, RecursionError):
         return False
 

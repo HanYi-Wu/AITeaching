@@ -18,7 +18,7 @@ from solaire.web.exam_workspace_service import workspace_dir
 from solaire.web.library_discovery import discover_question_library_refs
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.result_service import _flatten_questions
-from solaire.common.answer_logic import PREFIX as ANSWER_LOGIC_PREFIX, matches as matches_answer_logic, decode as decode_answer_logic
+from solaire.common.answer_logic import PREFIX as ANSWER_LOGIC_PREFIX, matches as matches_answer_logic, decode as decode_answer_logic, valid_choice_key
 
 
 PROCTOR_EVENT_TYPES = {
@@ -822,9 +822,9 @@ def submit_student_attempt(
     score_by_id = {str(q["question_id"]): float(q.get("score_per_item") or 0) for q in questions}
     max_score = round(sum(score_by_id.values()), 2)
     auto_release = bool(questions) and str(attempt.get('submission_mode')) == 'online' and all(
-        qtype_by_id[qid] in {'single_choice', 'multiple_choice', 'choice'}
-        and bool(str(answer_keys.get(qid) or '').strip())
-        for qid in qtype_by_id
+        str(question.get('type')) in {'single_choice', 'multiple_choice', 'choice'}
+        and valid_choice_key(answer_keys.get(str(question['question_id'])), question.get('options'), str(question.get('type')) == 'multiple_choice')
+        for question in questions
     )
 
     now = utc_now()
@@ -871,7 +871,7 @@ def submit_student_attempt(
                 score = 0.0 if auto_release else None
             else:
                 if str(expected).startswith(ANSWER_LOGIC_PREFIX) or str(raw_answer).startswith(ANSWER_LOGIC_PREFIX):
-                    is_correct_bool = matches_answer_logic(raw_answer, expected)
+                    is_correct_bool = matches_answer_logic(raw_answer, expected, choice=qtype in {'single_choice', 'multiple_choice', 'choice'})
                 else:
                     is_correct_bool = _normalise_answer(raw_answer, qtype) == _normalise_answer(expected, qtype)
                 is_correct = 1 if is_correct_bool else 0

@@ -68,11 +68,13 @@ def list_bank_entries(project_root: Path) -> list[dict[str, Any]]:
                 continue
             rel = _rel_to_resource(project_root, ypath)
             for rec in records:
+                answer_relation_needs_review = False
                 if isinstance(rec, QuestionItem):
                     q = strip_hydrate_fields(rec)
                     preview = _preview(q.content)
                     typ = q.type
                     meta = dict(q.metadata) if q.metadata else {}
+                    answer_relation_needs_review = not q.answer.startswith(':::ANSWER_LOGIC:') and bool(re.search(r'或者|而且|或|且|和', q.answer))
                 else:
                     assert isinstance(rec, QuestionGroupRecord)
                     preview = _preview(rec.material)
@@ -89,6 +91,7 @@ def list_bank_entries(project_root: Path) -> list[dict[str, Any]]:
                         "id": rec.id,
                         "type": typ,
                         "content_preview": preview,
+                        "answer_relation_needs_review": answer_relation_needs_review,
                         "metadata": meta,
                         "storage_path": rel,
                         "storage_kind": "single",

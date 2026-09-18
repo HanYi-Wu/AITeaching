@@ -426,6 +426,10 @@ _RAW_TOOLS: list[RegisteredTool] = [
         bank_tools.tool_bank_adapt_answers,
         ui_label='正在适配答案关系…',
     ),
+    _fn('bank.legacy_answer_candidates',
+        '自动检索本人题库尚未适配、包含或者/而且/或/且/和的旧答案候选。仅检测不改写，不能把自然语言误当逻辑。读取完整题意后通过bank.adapt_answers分批确认适配。每页最多50题，next_offset非空时继续。',
+        {'type':'object','properties':{'offset':{'type':'integer','minimum':0}},'additionalProperties':False},
+        bank_tools.tool_bank_legacy_answer_candidates, risk=ToolRisk.READ, ui_label='正在检查旧答案关系…'),
     _fn(
         "bank.create_items",
         "批量创建1至50道题目，一次确认整批。生成或导入多题时优先使用，禁止逐题要求确认。每题返回成功/失败；只重试失败项。metadata.category 用于分类。",
@@ -1276,6 +1280,7 @@ _RAW_TOOLS.extend(
 )
 
 _CONFIRM_LABELS: dict[str, str] = {
+    "bank.adapt_answers": "批量适配答案且/或关系（保留原答案）",
     "paper.ai_grade_pending": "批量生成 AI 预批改建议",
     "paper.complete_grading": "确认完成批改并向学生发布成绩",
     "paper.publish_wrong_question_practice": "发布个性化历史错题卷",

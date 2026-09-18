@@ -80,6 +80,7 @@ type BankListItem = {
   collection_name?: string;
   type: string;
   content_preview: string;
+  answer_relation_needs_review?: boolean;
   metadata: Record<string, unknown>;
   storage_path: string;
   storage_kind: string;
@@ -1719,6 +1720,7 @@ export function BankWorkspace({
                       />
                       </QuestionHoverDetails>
                     </div>
+                    {it.answer_relation_needs_review ? <p className="mt-1 text-xs text-amber-700">旧答案可能含且/或关系，请让助手AI检查并适配。</p> : null}
                     {Object.keys(it.metadata ?? {}).length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
                         {Object.entries(it.metadata).map(([k, v]) => (

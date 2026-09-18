@@ -15,6 +15,20 @@ def _root(ctx: InvocationContext) -> Any:
     return ctx.project_root
 
 
+def tool_bank_legacy_answer_candidates(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    try:
+        if not ctx.platform_user or ctx.platform_user.get('role') not in {'teacher', 'admin'}:
+            raise PermissionError('仅教师或管理员助手可检查旧答案')
+        candidates = [entry for entry in list_bank_entries(_root(ctx)) if entry.get('answer_relation_needs_review')]
+        offset = max(0, int(args.get('offset') or 0))
+        selected = candidates[offset:offset+50]
+        return ToolResult(status='succeeded', data={'total':len(candidates), 'next_offset': offset+50 if offset+50 < len(candidates) else None,
+          'questions':[{'qualified_id':entry['qualified_id'],'content_preview':entry['content_preview']} for entry in selected],
+          'next_action':'逐题读取bank.get_item结合完整题意判断；仅关系答案用bank.adapt_answers批量适配，自然语言中的“和”等保持不变。'})
+    except (ValueError, PermissionError) as error:
+        return ToolResult(status='failed', error_code='answer_candidates', error_message=str(error))
+
+
 def tool_bank_adapt_answers(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     """The assistant interprets semantics; this tool only validates and persists its AST."""
     from solaire.common.answer_logic import encode, display
@@ -35,7 +49,7 @@ def tool_bank_adapt_answers(ctx: InvocationContext, args: dict[str, Any]) -> Too
             answer = encode(node)
             metadata = {**item.metadata, 'answer_logic_version': 1,
                         'original_answer': item.metadata.get('original_answer', item.answer)}
-            prepared.append((qid, item.model_copy(update={'answer': answer, 'metadata': metadata})))
+            prepared.append((qid, QuestionItem.model_validate({**item.model_dump(), 'answer': answer, 'metadata': metadata})))
         results = []
         for qid, item in prepared:
             save_question(_root(ctx), qid, item)
