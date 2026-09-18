@@ -62,7 +62,7 @@ def test_legacy_snapshot_is_independent_and_new_teachers_start_empty(web_client,
     qid='math/default/old'
     save_question(tmp_path,qid,QuestionItem(id='old',type='short_answer',content='legacy',answer='old'))
     with as_teacher(first_id):
-        assert get_question_detail(tmp_path,qid)['question']['content']=='legacy'
+        assert list_bank_entries(tmp_path)==[]
         save_question(tmp_path,qid,QuestionItem(id='old',type='short_answer',content='changed',answer='new'))
         from solaire.agent_layer.tools.file_tools import _resolve
         from solaire.agent_layer.models import InvocationContext
@@ -75,3 +75,24 @@ def test_legacy_snapshot_is_independent_and_new_teachers_start_empty(web_client,
     assert get_question_detail(tmp_path,qid)['question']['content']=='legacy'
     with as_teacher('teacher-created-after-migration'):
         assert list_bank_entries(tmp_path)==[]
+
+
+def test_old_shared_copies_are_quarantined_but_edits_survive(tmp_path):
+    key = hashlib.sha256(b'teacher-old').hexdigest()
+    bank = tmp_path / 'resource' / '__teachers' / key
+    snapshot = tmp_path / '.solaire' / 'legacy_bank_snapshot'
+    snapshot.mkdir(parents=True)
+    bank.mkdir(parents=True)
+    (bank / '.initialized').write_text('1')
+    for name in ('unchanged.yaml', 'edited.yaml'):
+        (snapshot / name).write_text('content: legacy\n', encoding='utf-8')
+        (bank / name).write_text('content: legacy\n', encoding='utf-8')
+    (bank / 'edited.yaml').write_text('content: teacher edit\n', encoding='utf-8')
+    (bank / 'new.yaml').write_text('content: new\n', encoding='utf-8')
+    with as_teacher('teacher-old'):
+        assert bank_resource_root(tmp_path) == bank
+        assert not (bank / 'unchanged.yaml').exists()
+        assert (bank / 'edited.yaml').exists()
+        assert (bank / 'new.yaml').exists()
+        assert bank_resource_root(tmp_path) == bank
+    assert (tmp_path / '.solaire' / 'bank_quarantine' / key / 'unchanged.yaml').read_text() == 'content: legacy\n'

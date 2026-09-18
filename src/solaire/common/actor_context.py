@@ -26,5 +26,5 @@ def assert_private_bank_path(project_root, path):
     if len(relative) >= 2 and relative[:2] == ('.solaire', 'bank_exports'):
         if len(relative) < 3 or relative[2] != key:
             raise PermissionError('无权访问其他教师的导出文件')
-    if len(relative) >= 2 and relative[:2] == ('.solaire', 'legacy_bank_snapshot'):
+    if len(relative) >= 2 and relative[0] == '.solaire' and relative[1] in ('legacy_bank_snapshot', 'bank_quarantine'):
         raise PermissionError('历史题库备份仅管理员可访问')

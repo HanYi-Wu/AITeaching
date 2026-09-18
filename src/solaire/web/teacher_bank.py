@@ -1,4 +1,4 @@
-"""Private physical banks, with a one-time copy of the formerly shared bank."""
+"""Private banks. Unattributed legacy copies are quarantined, never assigned to everyone."""
 import json
 from pathlib import Path
 import shutil
@@ -10,6 +10,31 @@ from solaire.common.actor_context import actor, teacher_key
 _migration_lock = threading.RLock()
 
 
+def _quarantine_inherited(project_root: Path, target: Path, key: str) -> None:
+    """Keep edited/new files; remove only exact, unchanged legacy YAML copies."""
+    marker = target / '.ownership-v2'
+    if marker.exists():
+        return
+    import re
+    snapshot = project_root / '.solaire' / 'legacy_bank_snapshot'
+    quarantine = project_root / '.solaire' / 'bank_quarantine' / key
+    for original in snapshot.rglob('*.yaml') if snapshot.is_dir() else []:
+        relative = original.relative_to(snapshot)
+        candidate = target / relative
+        if not candidate.is_file() or candidate.is_symlink() or original.is_symlink():
+            continue
+        inherited = re.sub(r':::EMBED_(IMG|SVG|PDF):(?!(?:__teachers/))',
+                           rf':::EMBED_\1:__teachers/{key}/', original.read_text('utf-8'))
+        if candidate.read_text('utf-8') != inherited:
+            continue
+        destination = quarantine / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            destination = destination.with_name(destination.name + '.' + uuid.uuid4().hex)
+        shutil.move(str(candidate), str(destination))
+    marker.write_text('Unowned legacy copies preserved in .solaire/bank_quarantine', encoding='utf-8')
+
+
 def bank_resource_root(project_root: Path) -> Path:
     resource = (project_root / 'resource').resolve()
     key = teacher_key()
@@ -19,9 +44,12 @@ def bank_resource_root(project_root: Path) -> Path:
     from solaire.common.security import assert_within_project
     assert_within_project(project_root, target)
     if (target / '.initialized').is_file():
+        with _migration_lock:
+            _quarantine_inherited(project_root, target, key)
         return target
     with _migration_lock:
         if (target / '.initialized').is_file():
+            _quarantine_inherited(project_root, target, key)
             return target
         from solaire.web.platform_db import connect, default_platform_root, init_platform_db
         platform = default_platform_root()
@@ -42,19 +70,10 @@ def bank_resource_root(project_root: Path) -> Path:
                     elif entry.is_file():
                         shutil.copy2(entry, destination)
             migration.write_text(json.dumps({'existing_teacher_ids': ids, 'policy': 'private copies of previously shared files'}, ensure_ascii=False), encoding='utf-8')
-        eligible = json.loads(migration.read_text('utf-8'))['existing_teacher_ids']
         staging = resource / '__teachers' / f'.staging-{uuid.uuid4().hex}'
         staging.mkdir(parents=True)
-        if str(actor.get()['id']) in eligible:
-            shutil.copytree(snapshot, staging, dirs_exist_ok=True)
-            # Imported legacy images now resolve to the teacher's own copy.
-            import re
-            for file in staging.rglob('*.yaml'):
-                original = file.read_text('utf-8')
-                updated = re.sub(r':::EMBED_(IMG|SVG|PDF):(?!(?:__teachers/))', rf':::EMBED_\1:__teachers/{key}/', original)
-                if updated != original:
-                    file.write_text(updated, encoding='utf-8')
         (staging / '.initialized').write_text('1', encoding='ascii')
+        (staging / '.ownership-v2').write_text('1', encoding='ascii')
         if target.exists():
             # An incomplete prior migration is retained rather than overwritten.
             target.rename(target.with_name(f'{key}.incomplete-{uuid.uuid4().hex[:8]}'))
