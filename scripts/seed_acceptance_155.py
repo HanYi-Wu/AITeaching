@@ -3,6 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import yaml
+import shutil
 
 from seed_demo_data import (upsert_user, get_or_create_school, get_or_create_class,
                             ensure_student, ensure_teacher_links, new_id)
@@ -27,11 +28,28 @@ def main():
         raise SystemExit('Refusing to overwrite a non-acceptance data directory')
     root.mkdir(parents=True, exist_ok=True)
     marker.write_text('Isolated synthetic acceptance data, not real student records', encoding='utf-8')
+    from solaire.agent_layer.llm.user_llm_overrides import load_user_overrides_raw, save_user_overrides_raw, user_overrides_path
+    existing_ai = load_user_overrides_raw()
+    os.environ['SOLAIRE_USER_CONFIG_DIR'] = str(root / 'config')
+    if existing_ai and not user_overrides_path().exists():
+        save_user_overrides_raw(existing_ai)
     os.environ['EH_DATA_ROOT'] = str(root)
     platform = root / 'platform'
     project = root / 'workspace'
     init_platform_db(platform)
     ensure_project_layout(project)
+    template_source = Path(__file__).resolve().parents[1] / 'src' / 'solaire' / 'web' / 'bundled_project_templates' / 'math' / 'templates'
+    for source in template_source.iterdir():
+        destination = project / 'templates' / source.name
+        if source.is_file() and not destination.exists():
+            shutil.copy2(source, destination)
+    for mode, second_type in [('choice', 'multiple_choice'), ('mixed', 'short_answer')]:
+        template = {'template_id':f'acceptance-{mode}', 'layout':'single_column', 'latex_base':'exam-zh-base.tex.j2',
+                    'sections':[{'section_id':'单选题','type':'single_choice','required_count':1,'score_per_item':50},
+                                {'section_id':'综合题','type':second_type,'required_count':1,'score_per_item':50}], 'metadata_defaults':{}}
+        destination = project / 'templates' / f'acceptance-{mode}.yaml'
+        if not destination.exists():
+            destination.write_text(yaml.safe_dump(template, allow_unicode=True), encoding='utf-8')
     school = get_or_create_school(platform)
     school_id = str(school['id'])
     klass = get_or_create_class(platform, school_id)
@@ -78,7 +96,7 @@ def main():
                 exam_id = f'acceptance-teacher{index}-{mode}/Math'
                 directory = workspace_dir(project, exam_id)
                 directory.mkdir(parents=True, exist_ok=True)
-                exam = ExamConfig(exam_id=exam_id, template_ref='default', template_path='templates/test.yaml', metadata={'title':f'验收教师{index}·{mode}','subject':'Math','export_label':f'acceptance-teacher{index}-{mode}'}, question_libraries=[], selected_items=[SelectedSection(section_id='验收题', question_ids=[f'math/default/{qid}' for qid in selected], score_per_item=50)])
+                exam = ExamConfig(exam_id=exam_id, template_ref=f'acceptance-{mode}', template_path=f'templates/acceptance-{mode}.yaml', metadata={'title':f'验收教师{index}·{mode}','subject':'Math','export_label':f'acceptance-teacher{index}-{mode}'}, question_libraries=[], selected_items=[SelectedSection(section_id='单选题', question_ids=[f'math/default/{selected[0]}'], score_per_item=50), SelectedSection(section_id='综合题', question_ids=[f'math/default/{selected[1]}'], score_per_item=50)])
                 (directory / 'exam.yaml').write_text(yaml.safe_dump(exam.model_dump(mode='json'), allow_unicode=True, sort_keys=False), encoding='utf-8')
                 paper = sync_paper_for_exam(project, platform, teacher, exam_id=exam_id)
                 with connect(platform) as con:
