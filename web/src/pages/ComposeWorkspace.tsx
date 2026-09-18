@@ -2213,6 +2213,7 @@ export function ComposeWorkspace({
                     <button
                       type="button"
                       onClick={(e) => handleLeftBankClick(q, index, e)}
+                      title={`${q.qualified_id}\n${q.content_preview}`}
                       className={cn(
                         "mb-1 w-full rounded-lg border px-2 py-2 text-left text-sm transition-colors",
                         selectedLeftIdsSet.has(q.qualified_id)

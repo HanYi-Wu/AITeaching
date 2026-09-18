@@ -1676,6 +1676,7 @@ export function BankWorkspace({
           <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("title")}</h2>
         </div>
         <BankFolderExplorer data={folders} items={filtered} selectedIds={selectedExportIds}
+          onSelectIds={setSelectedExportIds}
           onChange={setFolders} onError={onError} renderItem={(it) => {
               const graphNodes = graphLinkIndex[it.qualified_id] ?? [];
               return (
@@ -1698,6 +1699,7 @@ export function BankWorkspace({
                   <button
                     type="button"
                     className="w-full min-w-0 pr-5 text-left text-sm"
+                    title={`${it.qualified_id}\n${it.content_preview}`}
                     onClick={() => openOrFocusTab(it.qualified_id)}
                   >
                     <div className="flex w-full min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
