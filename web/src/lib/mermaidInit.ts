@@ -1,10 +1,9 @@
-import mermaid from "mermaid";
+let loader: Promise<typeof import('mermaid')['default']> | undefined;
 
-let mermaidInited = false;
-
-export function initMermaid(): void {
-  if (!mermaidInited) {
-    mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
-    mermaidInited = true;
-  }
+export function initMermaid() {
+  loader ??= import('mermaid').then(({ default: mermaid }) => {
+    mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict' });
+    return mermaid;
+  }).catch(error => { loader = undefined; throw error; });
+  return loader;
 }

@@ -12,7 +12,6 @@ import {
 import { MathfieldElement } from "mathlive";
 import "mathlive";
 import "mathlive/fonts.css";
-import mermaid from "mermaid";
 import { Shapes, Table2 } from "lucide-react";
 
 import { resourceApiUrl } from "../api/client";
@@ -47,7 +46,7 @@ function renderMathHtml(latex: string, displayMode = false): string {
 
 async function renderMermaidToElement(source: string, container: HTMLElement) {
   try {
-    initMermaid();
+    const mermaid = await initMermaid();
     const id = `lrt-mmd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const { svg } = await mermaid.render(id, source.trim());
     container.innerHTML = svg;

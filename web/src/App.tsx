@@ -358,6 +358,7 @@ function AppShell() {
                 className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
               >
                 <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                  <Suspense fallback={<AppLoadingFallback />}>
                   {info?.bound && (
                     <div
                       className={cn(
@@ -422,8 +423,11 @@ function AppShell() {
                       }}
                     />
                   )}
+                  </Suspense>
                 </main>
-                <AgentSidebar projectBound mode="overlay" overlayHost={assistantOverlayHost} />
+                <Suspense fallback={null}>
+                  <AgentSidebar projectBound mode="overlay" overlayHost={assistantOverlayHost} />
+                </Suspense>
               </div>
             </div>
           </TeacherWorkspace>

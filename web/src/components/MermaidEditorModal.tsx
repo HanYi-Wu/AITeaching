@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import mermaid from "mermaid";
 import {
   Background,
   Controls,
@@ -71,11 +70,11 @@ function MermaidFlowInner({ onClose, onConfirm }: Pick<MermaidEditorModalProps, 
   }, [source, setNodes, setEdges]);
 
   useEffect(() => {
-    initMermaid();
     const id = `mmd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let cancelled = false;
     void (async () => {
       try {
+        const mermaid = await initMermaid();
         const { svg } = await mermaid.render(id, source);
         if (!cancelled && previewRef.current) {
           previewRef.current.innerHTML = svg;

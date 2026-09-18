@@ -1,5 +1,4 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import mermaid from "mermaid";
 
 import { ResourceImage } from "./ResourceImage";
 import { tokenizeContent } from "../lib/contentTokenizer";
@@ -18,11 +17,11 @@ function escapeHtml(s: string): string {
 function MermaidFencePreview({ body }: { body: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    initMermaid();
     const id = `mmd-prev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let cancelled = false;
     void (async () => {
       try {
+        const mermaid = await initMermaid();
         const { svg } = await mermaid.render(id, body.trim());
         if (!cancelled && ref.current) {
           ref.current.innerHTML = svg;

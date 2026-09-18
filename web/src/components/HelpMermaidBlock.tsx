@@ -1,18 +1,5 @@
 import { useEffect, useId, useRef } from "react";
-import mermaid from "mermaid";
-
-let mermaidInit = false;
-
-function ensureMermaidInit() {
-  if (mermaidInit) return;
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: "strict",
-    theme: "neutral",
-    fontFamily: "ui-sans-serif, system-ui, sans-serif",
-  });
-  mermaidInit = true;
-}
+import { initMermaid } from '../lib/mermaidInit';
 
 /** Renders a Mermaid diagram from fenced ```mermaid source (help manual only). */
 export function HelpMermaidBlock({ source }: { source: string }) {
@@ -20,12 +7,11 @@ export function HelpMermaidBlock({ source }: { source: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    ensureMermaidInit();
     const el = hostRef.current;
     if (!el) return;
     const id = `help-mmd-${uid}-${Math.random().toString(36).slice(2, 9)}`;
     let cancelled = false;
-    void mermaid.render(id, source.trim()).then(
+    void initMermaid().then(mermaid => mermaid.render(id, source.trim())).then(
       ({ svg }) => {
         if (!cancelled && hostRef.current) {
           hostRef.current.innerHTML = svg;
