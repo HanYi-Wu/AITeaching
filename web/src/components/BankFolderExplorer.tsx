@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Folder } from 'lucide-react';
+import * as Dialog from '@radix-ui/react-dialog';
 import { apiPost } from '../api/client';
 import { confirmDialog } from '../lib/confirmDialog';
 import { notifyContentLibraryChanged } from '../lib/contentEvents';
@@ -101,9 +102,9 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
       {branch('')}
       {!items.length ? <p className="p-3 text-xs text-slate-500">暂无匹配题目；可调整搜索与筛选，或新建题目。</p> : null}
     </nav>
-    {exploring ? <div role="dialog" aria-modal="true" aria-label="题库文件管理器" className="fixed inset-[5%] z-50 flex flex-col rounded-xl border bg-white p-4 shadow-2xl" onKeyDown={event => { if (event.key === 'Escape') setExploring(false); }}>
+    {exploring ? <Dialog.Root open={exploring} onOpenChange={setExploring}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-black/30" /><Dialog.Content aria-label="题库文件管理器" aria-describedby={undefined} className="fixed inset-[5%] z-50 flex flex-col rounded-xl border bg-white p-4 shadow-2xl">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <h2 className="mr-auto font-semibold">题库文件管理器 · {selectedFolder || '根目录'}</h2>
+        <Dialog.Title asChild><h2 className="mr-auto font-semibold">题库文件管理器 · {selectedFolder || '根目录'}</h2></Dialog.Title>
         <button className={buttonClass} onClick={() => { setSelectedFolder(''); setName(''); }}>返回根目录</button>
         <button className={buttonClass} onClick={() => toggleAll(selectedFolder)}>全选 / 取消全选</button>
         <select aria-label="文件管理器移动目标" value={destination} onChange={event => setDestination(event.target.value)} className="max-w-48 rounded border p-1"><option value="">根目录</option>{data.folders.map(path => <option key={path}>{path}</option>)}</select>
@@ -134,6 +135,6 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
         </div>
       </div>
       {rectangle ? <div className="pointer-events-none fixed z-[51] border border-blue-500 bg-blue-200/30" style={{ left: rectangle.x, top: rectangle.y, width: rectangle.right - rectangle.x, height: rectangle.bottom - rectangle.y }} /> : null}
-    </div> : null}
+    </Dialog.Content></Dialog.Portal></Dialog.Root> : null}
   </div>;
 }

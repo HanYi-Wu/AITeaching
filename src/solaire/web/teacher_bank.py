@@ -18,16 +18,22 @@ def _quarantine_inherited(project_root: Path, target: Path, key: str) -> None:
     import re
     snapshot = project_root / '.solaire' / 'legacy_bank_snapshot'
     quarantine = project_root / '.solaire' / 'bank_quarantine' / key
+    if not quarantine.resolve().is_relative_to(project_root.resolve()):
+        raise PermissionError('旧题隔离目录不能位于项目之外')
     for original in snapshot.rglob('*.yaml') if snapshot.is_dir() else []:
         relative = original.relative_to(snapshot)
         candidate = target / relative
-        if not candidate.is_file() or candidate.is_symlink() or original.is_symlink():
+        if (not candidate.is_file() or candidate.is_symlink() or original.is_symlink()
+                or not candidate.resolve().is_relative_to(target.resolve())
+                or not original.resolve().is_relative_to(snapshot.resolve())):
             continue
         inherited = re.sub(r':::EMBED_(IMG|SVG|PDF):(?!(?:__teachers/))',
                            rf':::EMBED_\1:__teachers/{key}/', original.read_text('utf-8'))
         if candidate.read_text('utf-8') != inherited:
             continue
         destination = quarantine / relative
+        if not destination.resolve().is_relative_to(quarantine.resolve()):
+            raise PermissionError('旧题隔离目标路径无效')
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             destination = destination.with_name(destination.name + '.' + uuid.uuid4().hex)

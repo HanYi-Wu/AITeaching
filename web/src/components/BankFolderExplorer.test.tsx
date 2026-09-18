@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { test, expect, vi } from 'vitest';
 import { BankFolderExplorer } from './BankFolderExplorer';
 import { apiPost } from '../api/client';
@@ -15,4 +15,20 @@ test('renders nested folders and questions, and moves the selected batch', async
   fireEvent.change(screen.getByLabelText('移动到目录'), { target: { value: '数学/函数' } });
   fireEvent.click(screen.getByRole('button', { name: '移动已选 1 题' }));
   expect(apiPost).toHaveBeenCalledWith('/api/bank/folders/actions', { action: 'move', path: '数学/函数', qualified_ids: ['q1'] });
+});
+
+test('selects all from partial selection, toggles off and opens file manager', () => {
+  const selected = vi.fn();
+  const props = { data: { folders: ['数学'], assignments: { q1: '数学', q2: '数学' } }, items: [{ qualified_id: 'q1' }, { qualified_id: 'q2' }], onChange: vi.fn(), onError: vi.fn(), onSelectIds: selected, renderItem: (item: {qualified_id: string}) => <li key={item.qualified_id}>{item.qualified_id}</li> };
+  const view = render(<BankFolderExplorer {...props} selectedIds={['q1']} />);
+  fireEvent.click(screen.getByRole('button', { name: '全选 / 取消全选' }));
+  expect(selected).toHaveBeenLastCalledWith(['q1', 'q2']);
+  view.rerender(<BankFolderExplorer {...props} selectedIds={['q1', 'q2']} />);
+  fireEvent.click(screen.getByRole('button', { name: '全选 / 取消全选' }));
+  expect(selected).toHaveBeenLastCalledWith([]);
+  view.rerender(<BankFolderExplorer {...props} selectedIds={[]} />);
+  fireEvent.click(screen.getByRole('button', { name: '打开文件管理器' }));
+  expect(screen.getByRole('dialog', { name: '题库文件管理器' })).toBeInTheDocument();
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '全选 / 取消全选' }));
+  expect(selected).toHaveBeenLastCalledWith(['q1', 'q2']);
 });
