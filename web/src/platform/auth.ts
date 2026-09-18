@@ -210,6 +210,7 @@ export type PaperPublicationRecord = {
 };
 
 export type PaperSubmissionAnswerRecord = {
+  correct_answer?: string | null;
   question_id: string;
   header?: string | null;
   content?: string | null;

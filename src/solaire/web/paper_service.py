@@ -1245,6 +1245,7 @@ def _answer_public_payload(row: dict[str, Any], question: dict[str, Any] | None 
         "score_per_item": (question or {}).get("score_per_item"),
         "options": (question or {}).get("options"),
         "analysis": (question or {}).get("analysis"),
+        "correct_answer": (question or {}).get("correct_answer"),
         "section_id": (question or {}).get("section_id"),
         "tags": (question or {}).get("tags") or [],
     }
@@ -1344,7 +1345,7 @@ def _question_maps_for_attempt(
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
     attempt_payload = attempt if attempt.get("exam_id") else {**attempt, "exam_id": paper.get("exam_id")}
     questions, _answer_keys = _load_attempt_question_payloads(project_root, attempt_payload, root=root)
-    by_id = {str(item.get("question_id")): item for item in questions}
+    by_id = {str(item.get("question_id")): {**item, 'correct_answer': _answer_keys.get(str(item.get('question_id')))} for item in questions}
     score_by_id = {qid: float(item.get("score_per_item") or 0) for qid, item in by_id.items()}
     return questions, by_id, score_by_id
 

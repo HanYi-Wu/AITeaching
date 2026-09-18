@@ -327,8 +327,8 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
       await publishPlatformPaper(selectedPaper.paper_id, {
         class_ids: selectedClassIds,
         title: selectedPaper.title,
-        start_at: publishStartAt || null,
-        end_at: publishEndAt || null,
+        start_at: publishStartAt ? new Date(publishStartAt).toISOString() : null,
+        end_at: publishEndAt ? new Date(publishEndAt).toISOString() : null,
         submission_mode: submissionMode,
         max_screen_switches: maxScreenSwitches,
         time_limit_minutes: timeLimitMinutes > 0 ? timeLimitMinutes : null,
@@ -1342,6 +1342,10 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                                   </span>
                                 </div>
                                 {answer.content ? <KatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}
+                                <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-sm">
+                                  <span className="font-semibold">参考答案：</span>
+                                  <KatexText text={answer.correct_answer ?? '未配置参考答案'} className="inline" />
+                                </div>
                                 {answer.options && Object.keys(answer.options).length > 0 ? (
                                   <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
                                     {Object.entries(answer.options).map(([optionKey, optionText]) => (
