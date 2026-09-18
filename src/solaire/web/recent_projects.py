@@ -31,6 +31,10 @@ class RecentProjectEntry:
 
 
 def app_data_dir() -> Path:
+    # Explicit override allows isolated acceptance environments without touching business data.
+    override = os.environ.get('EH_DATA_ROOT')
+    if override:
+        return Path(override).expanduser().resolve()
     if sys.platform == "win32":
         base = os.environ.get("APPDATA")
         if base:
