@@ -85,6 +85,7 @@ function AppShell() {
   const { toggleSidebar, sidebarOpen, setSidebarOpen } = useAgentContext();
   const { left: toolBarLeft, right: toolBarRight } = useToolBar();
   const [page, setPage] = useState<AppPage>("compose");
+  const [composeOwner, setComposeOwner] = useState<string | null>(null);
   const [info, setInfo] = useState<ProjectInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [graphFocusNodeId, setGraphFocusNodeId] = useState<string | null>(null);
@@ -207,6 +208,10 @@ function AppShell() {
     userRole: currentUser?.role ?? null,
     adminProjectMode,
   });
+
+  useEffect(() => {
+    if (info?.bound && currentUser && page === 'compose') setComposeOwner(currentUser.id);
+  }, [info?.bound, currentUser?.id, page]);
 
   return (
     <div
@@ -359,7 +364,7 @@ function AppShell() {
               >
                 <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
                   <Suspense fallback={<AppLoadingFallback />}>
-                  {info?.bound && (
+                  {info?.bound && (page === 'compose' || Boolean(composeOwner && composeOwner === currentUser?.id)) && (
                     <div
                       className={cn(
                         "h-full min-h-0 min-w-0 overflow-hidden",
@@ -368,6 +373,7 @@ function AppShell() {
                       aria-hidden={page !== "compose"}
                     >
                       <ComposeRoute
+                        key={currentUser?.id ?? 'local'}
                         info={info}
                         onRefreshInfo={refreshInfo}
                         onError={setErr}

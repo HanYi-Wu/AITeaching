@@ -1,11 +1,12 @@
 import path from "node:path";
-import { cpSync, mkdirSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { gzipSync } from 'node:zlib';
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const apiProxy = {
   "/api": {
-    target: "http://127.0.0.1:8000",
+    target: process.env.EH_BACKEND_URL || "http://127.0.0.1:8000",
     changeOrigin: true,
     xfwd: true,
   },
@@ -20,6 +21,25 @@ export default defineConfig({
         mkdirSync(destination, { recursive: true });
         cpSync(path.join(config.root, "node_modules", "pdfjs-dist", directory), destination, { recursive: true });
       }
+    },
+  }, {
+    name: 'precompressed-static-assets',
+    apply: 'build',
+    closeBundle() {
+      function compress(directory: string) {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          const file = path.join(directory, entry.name);
+          if (entry.isDirectory()) compress(file);
+          else if (/\.(js|css|svg|json)$/.test(entry.name)) {
+            const bytes = readFileSync(file);
+            if (bytes.length > 1024) {
+              const compressed = gzipSync(bytes, { level: 9 });
+              if (compressed.length < bytes.length) writeFileSync(file + '.gz', compressed);
+            }
+          }
+        }
+      }
+      compress(path.resolve('dist'));
     },
   }],
 

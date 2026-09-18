@@ -1,5 +1,7 @@
 """Production static frontend and streaming API proxy; no Node/npm at runtime."""
 import os
+import mimetypes
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -63,7 +65,24 @@ async def static(request: Request):
     if not target.is_relative_to(ROOT) or any(p.startswith('.') for p in Path(relative).parts):
         return Response(status_code=404)
     if target.is_file():
-        return FileResponse(target)
+        headers = {'Cache-Control': 'no-cache' if target.name == 'index.html' else
+                   'public, max-age=31536000, immutable' if relative.startswith('assets/') and re.search(r'-[\w-]{8,}\.', target.name) else 'public, max-age=86400',
+                   'Vary': 'Accept-Encoding'}
+        accepted = request.headers.get('accept-encoding', '')
+        gzip_allowed = False
+        for part in accepted.split(','):
+            fields = [field.strip() for field in part.split(';')]
+            if fields[0] != 'gzip':
+                continue
+            try:
+                gzip_allowed = float(next((field[2:] for field in fields[1:] if field.startswith('q=')), '1')) > 0
+            except ValueError:
+                pass
+        compressed = target.with_name(target.name + '.gz')
+        if gzip_allowed and compressed.is_file() and compressed.resolve().is_relative_to(ROOT):
+            headers['Content-Encoding'] = 'gzip'
+            return FileResponse(compressed, media_type=mimetypes.guess_type(str(target))[0], headers=headers)
+        return FileResponse(target, headers=headers)
     if '.' in Path(relative).name:
         return Response(status_code=404)
     return FileResponse(ROOT / 'index.html', headers={'Cache-Control': 'no-cache'})

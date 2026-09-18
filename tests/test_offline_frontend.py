@@ -1,7 +1,25 @@
 import httpx
+import gzip
 from starlette.testclient import TestClient
 
 from solaire.web import offline_frontend as frontend
+
+
+def test_precompressed_hashed_assets_and_uncached_html(tmp_path, monkeypatch):
+    (tmp_path / 'assets').mkdir()
+    asset = tmp_path / 'assets' / 'entry-abcdefgh.js'
+    asset.write_text('hello frontend')
+    asset.with_name(asset.name + '.gz').write_bytes(gzip.compress(asset.read_bytes()))
+    (tmp_path / 'index.html').write_text('page')
+    monkeypatch.setattr(frontend, 'ROOT', tmp_path)
+    with TestClient(frontend.app) as client:
+        response = client.get('/assets/entry-abcdefgh.js', headers={'Accept-Encoding': 'gzip'})
+        assert response.text == 'hello frontend'
+        assert response.headers['content-encoding'] == 'gzip'
+        assert 'immutable' in response.headers['cache-control']
+        assert response.headers['vary'] == 'Accept-Encoding'
+        assert 'content-encoding' not in client.get('/assets/entry-abcdefgh.js', headers={'Accept-Encoding': 'gzip;q=0'}).headers
+        assert client.get('/index.html').headers['cache-control'] == 'no-cache'
 
 
 def test_static_assets_spa_missing_files_and_release_identity(tmp_path, monkeypatch):
