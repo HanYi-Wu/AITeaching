@@ -62,7 +62,7 @@ AI 密钥在管理员设置中保存；Windows 与 Linux 的配置独立。AI �
 | `tests` / `web/src/**/__tests__` | 后端和前端测试 |
 | `scripts` | 安装、更新、构建与辅助脚本 |
 
-[AI 接口](docs/api/agent.md) · [更新日志](src/solaire/web/assets/help_docs/changelog.md) · [题目分组说明](docs/bank-folders-and-ui-fixes.md)
+[产品介绍（双创素材）](docs/product-introduction-for-innovation-plan.md) · [1.5.6 功能文档](docs/feature-specification-1.5.6.md) · [AI 接口](docs/api/agent.md) · [更新日志](src/solaire/web/assets/help_docs/changelog.md) · [题目分组说明](docs/bank-folders-and-ui-fixes.md)
 
 ```bash
 python -m pytest tests
