@@ -16,6 +16,7 @@ import type { EmbedKind } from "../lib/bankEditorEmbedKinds";
 import { ChoiceOptionsFields } from "./ChoiceOptionsFields";
 import { LatexRichTextField } from "./LatexRichTextField";
 import { readAnswerLogic } from '../lib/answerLogic';
+import { AnswerRelationEditor } from './AnswerRelationEditor';
 import { KatexText } from './KatexText';
 
 export type QuestionJson = {
@@ -582,7 +583,12 @@ export function BankQuestionEditorPanel({
                     </div>
                   )}
                   <div className="mt-2">
-                    <BankGiLatexField
+                    <AnswerRelationEditor teacher value={it.answer} onChange={next => {
+                      const items = [...qg.items];
+                      items[i] = { ...items[i], answer: next };
+                      setDetail({ ...detail, question_group: { ...qg, items }, question: memberIdx === i ? { ...detail.question, answer: next } : detail.question });
+                    }} />
+                    {readAnswerLogic(it.answer) ? <KatexText text={it.answer} /> : <BankGiLatexField
                       memberIndex={i}
                       field="answer"
                       label={t("components:bankEditor.fieldAnswer")}
@@ -599,7 +605,7 @@ export function BankQuestionEditorPanel({
                       beginImageEmbed={beginImageEmbed}
                       busy={busy}
                       hideToolbar={!advancedToolsOpen}
-                    />
+                    />}
                   </div>
                   <div className="mt-2">
                     <BankGiLatexField
@@ -695,7 +701,7 @@ export function BankQuestionEditorPanel({
               )}
               <div className="block">
                 <span className="text-xs font-medium text-slate-600">{t("components:bankEditor.fieldAnswer")}</span>
-                <p className="mb-1 text-xs text-slate-500">多答案及“且 / 或”关系请交给助手AI设置或适配；原始答案会保留，已发布试卷不受影响。</p>
+                <AnswerRelationEditor teacher value={detail.question.answer} onChange={next => setDetail({ ...detail, question: { ...detail.question, answer: next } })} />
                 {readAnswerLogic(detail.question.answer) ? <KatexText text={detail.question.answer} className="rounded border bg-emerald-50 p-3 text-sm" /> : <LatexRichTextField
                   textAreaRef={answerRef}
                   minRows={3}

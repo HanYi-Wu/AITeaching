@@ -21,3 +21,35 @@ export function formatAnswerLogic(text: string): string {
   const render = (entry: AnswerLogic): string => entry.op === 'value' ? entry.value : '(' + entry.items.map(render).join(entry.op === 'and' ? ' 且 ' : ' 或 ') + ')';
   return node ? render(node) : text;
 }
+
+/** Explicit teacher-requested syntax recognition, never an automatic semantic migration. */
+export function recognizeAnswerExpression(text: string): AnswerLogic {
+  const tokens = text.replace(/（/g, '(').replace(/）/g, ')').split(/(\(|\)|或者|而且|以及|并且|或|且|和|\|\||&&)/).map(t => t.trim()).filter(Boolean);
+  let position = 0;
+  const isOr = (t: string) => ['或', '或者', '||'].includes(t);
+  const isAnd = (t: string) => ['且', '而且', '以及', '并且', '和', '&&'].includes(t);
+  const combine = (op: 'and' | 'or', a: AnswerLogic, b: AnswerLogic): AnswerLogic => ({ op, items: [a, b] });
+  function atom(): AnswerLogic {
+    const token = tokens[position++];
+    if (token === '(') {
+      const node = alternative();
+      if (tokens[position++] !== ')') throw new Error('括号不匹配');
+      return node;
+    }
+    if (!token || token === ')' || isOr(token) || isAnd(token)) throw new Error('关系符两侧必须有答案');
+    return { op: 'value', value: token };
+  }
+  function conjunction(): AnswerLogic {
+    let node = atom();
+    while (isAnd(tokens[position])) { position++; node = combine('and', node, atom()); }
+    return node;
+  }
+  function alternative(): AnswerLogic {
+    let node = conjunction();
+    while (isOr(tokens[position])) { position++; node = combine('or', node, conjunction()); }
+    return node;
+  }
+  const node = alternative();
+  if (position !== tokens.length || !readAnswerLogic(ANSWER_LOGIC_PREFIX + JSON.stringify(node))) throw new Error('答案关系过复杂或格式无效');
+  return node;
+}

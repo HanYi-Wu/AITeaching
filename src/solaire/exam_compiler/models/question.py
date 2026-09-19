@@ -19,9 +19,23 @@ _ANSWER_OPTION_RE = re.compile(r"[A-Z]")
 
 
 def infer_choice_type_from_answer(answer: object) -> ChoiceQuestionType:
+    from solaire.common.answer_logic import PREFIX, branches, decode
+    if str(answer or '').startswith(PREFIX):
+        alternatives = branches(decode(str(answer)))
+        return 'multiple_choice' if any(len({letter for value in branch for letter in _ANSWER_OPTION_RE.findall(value.upper())}) > 1 for branch in alternatives) else 'single_choice'
     letters = _ANSWER_OPTION_RE.findall(str(answer or "").upper())
     unique = set(letters)
     return "multiple_choice" if len(unique) >= 2 else "single_choice"
+
+
+def _valid_judge_answer(answer: str) -> bool:
+    if answer in {'T', 'F'}:
+        return True
+    from solaire.common.answer_logic import PREFIX, branches, decode
+    if not answer.startswith(PREFIX):
+        return False
+    alternatives = branches(decode(answer))
+    return all(len(branch) == 1 and next(iter(branch)).upper() in {'T', 'F'} for branch in alternatives)
 
 
 def is_choice_type(qtype: object) -> bool:
@@ -142,7 +156,7 @@ class TaggedJudge(BaseModel):
 
     @model_validator(mode="after")
     def _tf(self) -> Self:
-        if self.answer not in ("T", "F"):
+        if not _valid_judge_answer(self.answer):
             raise ValueError("judge answer must be T or F")
         return self
 
@@ -210,7 +224,7 @@ class QuestionItem(BaseModel):
         else:
             if self.options is not None:
                 raise ValueError("non-choice must not have options key in bank YAML")
-        if self.type == "judge" and self.answer not in ("T", "F"):
+        if self.type == "judge" and not _valid_judge_answer(self.answer):
             raise ValueError("judge answer must be T or F")
         return self
 
@@ -342,7 +356,7 @@ class QuestionGroupRecord(BaseModel):
                 if isinstance(it, dict) and it.get("type") is not None:
                     raise ValueError("unified group items must not have a 'type' field")
                 body = model.model_validate(it)
-                if ut == "judge" and body.answer not in ("T", "F"):
+                if ut == "judge" and not _valid_judge_answer(body.answer):
                     raise ValueError("judge answer must be T or F")
                 if is_choice_type(ut) and isinstance(body, ChoiceBody) and not body.options:
                     raise ValueError("choice requires non-empty options")

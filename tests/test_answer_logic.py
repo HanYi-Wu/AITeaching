@@ -68,3 +68,15 @@ def test_teacher_assistant_adapts_own_answer_and_preserves_original(web_client, 
     assert invoke_registered_tool('bank.legacy_answer_candidates', {}, context).data['total'] == 0
     context.platform_user = {'id':teacher_id,'role':'student'}
     assert invoke_registered_tool('bank.adapt_answers', {'questions':[]}, context).status == 'failed'
+def test_structured_choice_inference_and_judge_reference_models():
+    import pytest
+    from solaire.common.answer_logic import encode
+    from solaire.exam_compiler.models.question import QuestionItem, infer_choice_type_from_answer
+    alternative = encode({'op':'or','items':[{'op':'value','value':'A'},{'op':'value','value':'B'}]})
+    together = encode({'op':'and','items':[{'op':'value','value':'A'},{'op':'value','value':'B'}]})
+    assert infer_choice_type_from_answer(alternative) == 'single_choice'
+    assert infer_choice_type_from_answer(together) == 'multiple_choice'
+    true_false = encode({'op':'or','items':[{'op':'value','value':'T'},{'op':'value','value':'F'}]})
+    assert QuestionItem(id='q', type='judge', content='判断', answer=true_false).answer == true_false
+    with pytest.raises(ValueError):
+        QuestionItem(id='q', type='judge', content='判断', answer=together)

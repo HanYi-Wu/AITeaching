@@ -369,6 +369,11 @@ def _dump_record_yaml(rec: BankRecord) -> dict[str, Any]:
 
 
 def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *, create_only: bool = False) -> dict[str, str]:
+    from solaire.common.answer_logic import PREFIX, decode
+    answers = [body.answer] if isinstance(body, QuestionItem) else [str(getattr(item, 'answer', '') if not isinstance(item, dict) else item.get('answer', '')) for item in body.items]
+    for answer in answers:
+        if answer.startswith(PREFIX):
+            decode(answer)
     ns, qid = split_qualified_id(qualified_id)
     if body.id != qid:
         raise ValueError("Resource id in body must match URL")
