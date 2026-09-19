@@ -33,11 +33,11 @@ try {
     $env:SOLAIRE_USER_CONFIG_DIR = Join-Path $dataPath 'config'
     $env:SOLAIRE_PUBLIC_MODE = '1'
     $env:EH_WEB_ROOT = $webPath
-    $env:EH_RELEASE_ID = '1.5.5-local'
+    $env:EH_RELEASE_ID = '1.5.6-local'
     $env:EH_BACKEND_URL = 'http://127.0.0.1:8155'
     Start-ServiceProcess 8155 'solaire.web.app:app' 'desktop-backend' 'http://127.0.0.1:8155/openapi.json'
     Start-ServiceProcess 5155 'solaire.web.offline_frontend:app' 'desktop-frontend' "$url/_eh_release"
-    Write-Host "EducationHelper 1.5.5 ready: $url"
+    Write-Host "EducationHelper 1.5.6 ready: $url"
     Write-Host 'Test password: EHtest155!'
     if (-not $NoBrowser) { Start-Process $url }
 } catch {

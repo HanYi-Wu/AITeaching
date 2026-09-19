@@ -1,6 +1,8 @@
 # EducationHelper (EH)
 
-EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.5.5**.
+EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.5.6**.
+
+Version 1.5.6 adds nested-folder drag moves and cut/paste, seven-day snapshot invitations including images, teacher-editable alternative/AND/OR answers, and persisted first-use guidance after changing an initial teacher password. Invitation holders can copy the shared snapshot; revoke unused invitations when needed. See [release notes](docs/release-1.5.6.md).
 
 See the [Chinese README](README.md) for the maintained setup guide and [release notes](src/solaire/web/assets/help_docs/changelog.md) for version history.
 
