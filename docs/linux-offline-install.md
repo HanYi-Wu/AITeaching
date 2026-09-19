@@ -39,7 +39,7 @@ sudo bash install.sh --app-base /opt/educationhelper --data-dir /var/lib/educati
 
 ## 构建与校验
 
-在 GitHub Actions 手动运行 `Linux offline installer`，生成的 artifact 包含 tar.gz 和 SHA256 文件。它使用 conda-pack 生成可搬移运行环境，依赖列表随包记录。校验和用于传输完整性，不是数字签名；请仅使用可信仓库构建产物。
+版本标签会触发 GitHub Actions 构建，并把 tar.gz 和 SHA256 文件发布到同版本 GitHub Release；也可手动运行 `Linux offline installer` 获取临时 artifact。它使用 conda-pack 生成可搬移运行环境，依赖列表随包记录。校验和用于传输完整性，不是数字签名；请仅使用可信仓库构建产物。
 
 Linux 本地构建可准备含 Python3.12、Cairo、Tesseract、conda-pack 的 conda 环境，安装项目依赖并构建 web/dist，然后执行：
 
