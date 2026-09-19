@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from solaire.web import state
@@ -20,7 +20,7 @@ from solaire.web.auth_service import (
     update_user_credentials,
     update_user_profile,
 )
-from solaire.web.platform_db import default_platform_root, init_platform_db
+from solaire.web.platform_db import default_platform_root, init_platform_db, connect
 
 router = APIRouter()
 
@@ -84,6 +84,27 @@ def current_session_token(
     x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
 ) -> str | None:
     return extract_session_token(authorization=authorization, x_solaire_session=x_solaire_session)
+
+
+class TeacherGuideBody(BaseModel):
+    step: int = Field(ge=0, le=8)
+
+
+@router.post('/auth/teacher-guide')
+def teacher_guide_progress(body: TeacherGuideBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    if user.get('role') != 'teacher':
+        raise HTTPException(status_code=403, detail='仅教师可更新使用引导')
+    if user.get('must_change_password'):
+        raise HTTPException(status_code=400, detail='请先修改初始密码')
+    root = require_platform_root()
+    with connect(root) as con:
+        con.execute('BEGIN IMMEDIATE')
+        row = con.execute('SELECT teacher_guide_step FROM users WHERE id=?', (user['id'],)).fetchone()
+        current = int(row['teacher_guide_step'])
+        if body.step != 0 and body.step not in {current, current + 1}:
+            raise HTTPException(status_code=400, detail='请按顺序完成引导')
+        con.execute('UPDATE users SET teacher_guide_step=? WHERE id=?', (body.step, user['id']))
+    return {'user': get_user_profile(root, str(user['id']))}
 
 
 @router.get("/platform/status")

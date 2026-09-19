@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { DesktopTitleBar } from "./components/DesktopTitleBar";
 import { WorkspaceLoadBoundary } from './components/WorkspaceLoadBoundary';
+import { TeacherFirstUseGuide } from './components/TeacherFirstUseGuide';
 import { ToolBar } from "./components/layout/ToolBar";
 import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
 import { ToolBarProvider, useToolBar } from "./contexts/ToolBarContext";
@@ -260,6 +261,7 @@ function AppShell() {
           <StudentWorkspace user={currentUser} onLogout={() => void onLogout()} />
         ) : (
           <TeacherWorkspace>
+            {currentUser?.role === 'teacher' ? <TeacherFirstUseGuide key={currentUser.id} user={currentUser} onUpdated={setCurrentUser} onNavigate={setPage} onOpenAssistant={() => setSidebarOpen(true)} /> : null}
             <aside className="flex w-16 shrink-0 flex-col border-r border-slate-800 bg-slate-900">
               {currentUser ? <TeacherUserBadge user={currentUser} /> : null}
               <nav className="flex flex-1 flex-col gap-1 p-2">

@@ -102,7 +102,8 @@ export function SettingsWorkspace({
     }
     setSaving(true);
     try {
-      await updateAccountCredentials({ current_password: currentPassword, new_password: newPassword });
+      const result = await updateAccountCredentials({ current_password: currentPassword, new_password: newPassword });
+      onProfileUpdated?.(result.user);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -223,6 +224,7 @@ export function SettingsWorkspace({
   const personalizationPanel = profile ? (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <h2 className="text-sm font-semibold text-slate-900">个性化与账号资料</h2>
+      {userRole === 'teacher' ? <button type="button" className="mt-2 rounded border px-3 py-1 text-xs" onClick={() => window.dispatchEvent(new Event('eh-replay-teacher-guide'))}>重新打开教师使用引导</button> : null}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <div>
           <label className="text-sm font-medium text-slate-700">头像</label>

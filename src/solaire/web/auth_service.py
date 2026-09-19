@@ -62,6 +62,7 @@ def _public_user(row: dict[str, object]) -> dict[str, object]:
         "email": row.get("email"),
         "status": row["status"],
         "must_change_password": bool(int(row.get("must_change_password") or 0)),
+        "teacher_guide_step": int(row.get("teacher_guide_step") or 0),
         "avatar_data_url": row.get("avatar_data_url"),
         "preferences": preferences if isinstance(preferences, dict) else {},
         "created_at": row["created_at"],
@@ -215,6 +216,8 @@ def update_user_credentials(
             updates.append("username = ?")
             params.append(clean_username)
         if new_password:
+            if verify_password(new_password, str(user['password_hash'])):
+                raise ValueError('新密码不能与当前密码相同')
             updates.append("password_hash = ?")
             params.append(hash_password(new_password))
             updates.append("must_change_password = 0")

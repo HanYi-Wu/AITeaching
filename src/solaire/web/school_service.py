@@ -248,9 +248,9 @@ def create_teacher(
         con.execute(
             """
             INSERT INTO users (
-              id, school_id, role, username, password_hash, display_name, email, status, created_at, updated_at
+              id, school_id, role, username, password_hash, display_name, email, status, must_change_password, created_at, updated_at
             )
-            VALUES (?, ?, 'teacher', ?, ?, ?, ?, 'active', ?, ?)
+            VALUES (?, ?, 'teacher', ?, ?, ?, ?, 'active', 1, ?, ?)
             """,
             (user_id, school_id, clean_username, hash_password(password), clean_display_name, clean_email, now, now),
         )
@@ -416,7 +416,7 @@ def reset_teacher_password(
         con.execute(
             """
             UPDATE users
-            SET password_hash = ?, status = 'active', updated_at = ?
+            SET password_hash = ?, status = 'active', must_change_password = 1, updated_at = ?
             WHERE id = ? AND school_id = ? AND role = 'teacher'
             """,
             (hash_password(new_password), now, teacher_id, school_id),

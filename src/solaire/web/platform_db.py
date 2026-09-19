@@ -8,7 +8,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   must_change_password INTEGER NOT NULL DEFAULT 0,
+  teacher_guide_step INTEGER NOT NULL DEFAULT 0,
   avatar_data_url TEXT,
   preferences_json TEXT,
   created_at TEXT NOT NULL,
@@ -248,6 +249,7 @@ def init_platform_db(root: Path) -> None:
     with connect(root) as con:
         con.executescript(SCHEMA_SQL)
         _ensure_column(con, "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(con, "users", "teacher_guide_step", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "users", "avatar_data_url", "TEXT")
         _ensure_column(con, "users", "preferences_json", "TEXT")
         _ensure_column(con, "students", "user_id", "TEXT REFERENCES users(id) ON DELETE SET NULL")

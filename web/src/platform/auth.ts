@@ -14,6 +14,7 @@ export type PlatformUser = {
   email?: string | null;
   status: string;
   must_change_password?: boolean;
+  teacher_guide_step?: number;
   avatar_data_url?: string | null;
   preferences?: { theme?: string; density?: string; font_scale?: number };
   subjects?: string[];
