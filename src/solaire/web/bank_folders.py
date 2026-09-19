@@ -54,6 +54,16 @@ def _parents(db, path):
 
 
 def act(root: Path, action: str, *, path: str = '', target: str = '', qualified_ids: list[str] | None = None, owner_id: str = '') -> dict:
+    if action == 'move_folder':
+        parent = _path(target, root=True)
+        if parent == path or parent.startswith(path + '/'):
+            raise ValueError('不能将目录移到自身或子目录中')
+        if parent and parent not in read(root, owner_id=owner_id)['folders']:
+            raise ValueError('目标目录不存在')
+        target = '/'.join(filter(None, [parent, path.rsplit('/', 1)[-1]]))
+        if target == path:
+            return read(root, owner_id=owner_id)
+        action = 'rename'
     path = _path(path, root=action == 'move')
     with _db(root, owner_id) as db:
         db.execute('BEGIN IMMEDIATE')
@@ -87,6 +97,8 @@ def act(root: Path, action: str, *, path: str = '', target: str = '', qualified_
                     raise ValueError('目标目录已存在，或位于自身子目录中')
                 for old in descendants:
                     _path(target + old[len(path):])
+                    if target + old[len(path):] in folders:
+                        raise ValueError('目标子目录已存在，不允许合并覆盖')
                 _parents(db, target)
                 for old in descendants:
                     new = target + old[len(path):]

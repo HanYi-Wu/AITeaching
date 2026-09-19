@@ -408,9 +408,10 @@ _RAW_TOOLS: list[RegisteredTool] = [
     ),
     _fn(
         "bank.organize",
-        "管理题库逻辑文件夹：list 列目录与题目归属，create 新建（支持父/子路径），rename 重命名，move 将最多500题移动到已有目录（空path移出目录），remove 删除目录并把题目移到父目录，不删除题目。先检索真实题目ID。",
+        "管理题库逻辑文件夹：list 列目录；create 新建父/子目录；rename 重命名；move 将最多500题移到path（空为根）；move_folder 将path及子目录移到target父目录；remove 仅删目录不删题。share 为path生成7天邀请CDK（最多300题，含图片快照）；redeem 输入code在根目录复制同名目录；revoke 撤销本人code。先检索真实题目ID，分享会授予持码教师复制权限。",
         {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["list", "create", "rename", "move", "remove"]},
+            "action": {"type": "string", "enum": ["list", "create", "rename", "move", "remove", "move_folder", "share", "redeem", "revoke"]},
+            "code": {"type": "string"},
             "path": {"type": "string"}, "target": {"type": "string"},
             "qualified_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 500}
         }, "required": ["action"], "additionalProperties": False},

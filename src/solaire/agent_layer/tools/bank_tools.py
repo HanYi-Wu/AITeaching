@@ -61,6 +61,8 @@ def tool_bank_adapt_answers(ctx: InvocationContext, args: dict[str, Any]) -> Too
 
 def tool_bank_organize(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     from solaire.web.bank_folders import act, read
+    from solaire.common.actor_context import actor as content_actor
+    actor_token = content_actor.set(ctx.platform_user)
     try:
         actor = ctx.platform_user
         if actor and actor.get('role') not in {'teacher', 'admin'}:
@@ -69,12 +71,18 @@ def tool_bank_organize(ctx: InvocationContext, args: dict[str, Any]) -> ToolResu
             raise ValueError('请先登录')
         owner_id = str(actor['id']) if actor else ''
         action = str(args.get('action') or 'list')
+        if action in {'share', 'redeem', 'revoke'}:
+            from solaire.web import bank_sharing
+            result = bank_sharing.create(_root(ctx), str(args.get('path') or '')) if action == 'share' else bank_sharing.redeem(_root(ctx), str(args.get('code') or '')) if action == 'redeem' else bank_sharing.revoke(str(args.get('code') or ''))
+            return ToolResult(status='succeeded', data=result)
         result = read(_root(ctx), owner_id=owner_id) if action == 'list' else act(
             _root(ctx), action, path=str(args.get('path') or ''),
             target=str(args.get('target') or ''), qualified_ids=args.get('qualified_ids'), owner_id=owner_id)
         return ToolResult(status='succeeded', data=result)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, PermissionError, FileNotFoundError) as exc:
         return ToolResult(status='failed', error_code='bank_folder', error_message=str(exc))
+    finally:
+        content_actor.reset(actor_token)
 
 
 def _format_check_payload(qualified_id: str, item: QuestionItem) -> dict[str, Any]:

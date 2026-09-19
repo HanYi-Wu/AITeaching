@@ -65,7 +65,7 @@ TEACHER_CAPABILITIES: tuple[TeacherCapability, ...] = (
     _tool("search_question_bank", "question_bank", "检索题库", "bank.search_items"),
     _tool("create_question", "question_bank", "创建题目", "bank.create_item"),
     _tool("create_questions", "question_bank", "整批创建题目（一次确认）", "bank.create_items"),
-    _tool("organize_questions", "question_bank", "整理题目文件夹与批量移动", "bank.organize"),
+    _tool("organize_questions", "question_bank", "整理题目、移动次级目录及生成/兑换/撤销文件夹邀请CDK", "bank.organize"),
     _tool("delete_exam", "exam", "删除试卷草稿（可恢复）", "exam.workspace_delete"),
     _tool("update_question", "question_bank", "修改题目", "bank.update_item"),
     _tool("delete_question", "question_bank", "删除题目", "bank.delete_item"),

@@ -32,3 +32,19 @@ test('selects all from partial selection, toggles off and opens file manager', (
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '全选 / 取消全选' }));
   expect(selected).toHaveBeenLastCalledWith(['q1', 'q2']);
 });
+
+test('blank cancels selection, right click cuts and drag moves into a folder', () => {
+  const selected = vi.fn();
+  render(<BankFolderExplorer data={{ folders: ['folder'], assignments: {} }} items={[{qualified_id: 'q1'}]} selectedIds={['q1']}
+    onChange={vi.fn()} onError={vi.fn()} onSelectIds={selected} renderItem={item => <li key={item.qualified_id}>{item.qualified_id}</li>} />);
+  fireEvent.click(screen.getByRole('navigation', { name: '题目文件夹' }));
+  expect(selected).toHaveBeenLastCalledWith([]);
+  fireEvent.click(screen.getByRole('button', { name: '打开文件管理器' }));
+  const dialog = screen.getByRole('dialog');
+  fireEvent.contextMenu(within(dialog).getByRole('checkbox'), { clientX: 100, clientY: 100 });
+  fireEvent.click(screen.getByRole('menuitem', { name: '剪切' }));
+  expect(within(dialog).getByRole('button', { name: '粘贴到当前目录' })).not.toBeDisabled();
+  const folder = within(dialog).getByRole('button', { name: 'folder' });
+  fireEvent.drop(folder, { dataTransfer: { getData: () => JSON.stringify({ ids: ['q1'] }) } });
+  expect(apiPost).toHaveBeenLastCalledWith('/api/bank/folders/actions', { action: 'move', path: 'folder', qualified_ids: ['q1'] });
+});

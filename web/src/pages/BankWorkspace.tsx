@@ -1678,6 +1678,7 @@ export function BankWorkspace({
           <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("title")}</h2>
         </div>
         <BankFolderExplorer data={folders} items={filtered} selectedIds={selectedExportIds}
+          onOpenItem={openOrFocusTab} onRefresh={loadList}
           onSelectIds={setSelectedExportIds}
           onChange={setFolders} onError={onError} renderItem={(it) => {
               const graphNodes = graphLinkIndex[it.qualified_id] ?? [];

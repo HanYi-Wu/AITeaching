@@ -31,6 +31,21 @@ def test_invalid_move_is_atomic(tmp_path):
             bank_folders.act(tmp_path, 'create', path=path)
 
 
+def test_move_folder_preserves_nested_assignments_and_rejects_cycles(tmp_path):
+    qid = 'math/default/q1'
+    save_question(tmp_path, qid, QuestionItem(id='q1', type='short_answer', content='hello', answer='yes'))
+    bank_folders.act(tmp_path, 'create', path='a/child')
+    bank_folders.act(tmp_path, 'create', path='b')
+    bank_folders.act(tmp_path, 'move', path='a/child', qualified_ids=[qid])
+    for destination in ['a', 'a/child', 'missing']:
+        with pytest.raises(ValueError):
+            bank_folders.act(tmp_path, 'move_folder', path='a', target=destination)
+    bank_folders.act(tmp_path, 'move_folder', path='a', target='b')
+    assert bank_folders.read(tmp_path)['assignments'][qid] == 'b/a/child'
+    bank_folders.act(tmp_path, 'move_folder', path='b/a', target='')
+    assert bank_folders.read(tmp_path)['assignments'][qid] == 'a/child'
+
+
 def test_rename_cannot_merge_existing_folder_or_nest_inside_self(tmp_path):
     bank_folders.act(tmp_path, 'create', path='a')
     bank_folders.act(tmp_path, 'create', path='b')

@@ -206,7 +206,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="EducationHelper API", version="1.5.5", lifespan=_lifespan)
+app = FastAPI(title="EducationHelper API", version="1.5.6", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
@@ -1248,7 +1248,7 @@ def bank_folders_get(request: Request) -> dict[str, Any]:
 
 
 class BankFolderActionBody(BaseModel):
-    action: Literal['create', 'rename', 'move', 'remove']
+    action: Literal['create', 'rename', 'move', 'remove', 'move_folder']
     path: str = Field(default='', max_length=240)
     target: str = Field(default='', max_length=240)
     qualified_ids: list[str] = Field(default_factory=list, max_length=500)
@@ -1261,6 +1261,28 @@ def bank_folders_action(body: BankFolderActionBody, request: Request) -> dict[st
         return act(_require_root(), body.action, path=body.path,
                    target=body.target, qualified_ids=body.qualified_ids, owner_id=_bank_folder_owner(request))
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class BankShareBody(BaseModel):
+    action: Literal['create', 'redeem', 'revoke']
+    path: str = Field(default='', max_length=240)
+    code: str = Field(default='', max_length=100)
+
+
+@app.post('/api/bank/folders/share')
+def bank_folder_share(body: BankShareBody, request: Request) -> dict[str, Any]:
+    from solaire.web import bank_sharing
+    _bank_folder_owner(request)
+    try:
+        if body.action == 'create':
+            return bank_sharing.create(_require_root(), body.path)
+        if body.action == 'revoke':
+            return bank_sharing.revoke(body.code)
+        return bank_sharing.redeem(_require_root(), body.code)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
