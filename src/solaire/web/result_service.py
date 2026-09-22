@@ -169,6 +169,7 @@ def list_exam_results(project_root: Path) -> list[dict[str, Any]]:
                 "exam_id": exam_id,
                 "exam_title": meta.get("title", exam_id),
                 "subject": meta.get("subject"),
+                "owner_teacher_id": meta.get("owner_teacher_id"),
                 "export_label": meta.get("export_label"),
                 "template_ref": exam.template_ref,
                 "question_count": len(questions),

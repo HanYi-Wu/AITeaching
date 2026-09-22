@@ -389,6 +389,7 @@ def tool_paper_analyze(ctx: InvocationContext, args: dict[str, Any]) -> ToolResu
         lambda: analyze_paper(
             default_platform_root(), paper_id=_required(args, "paper_id"), user=_actor(ctx), project_root=ctx.project_root,
             publication_id=str(args.get("publication_id") or "").strip() or None,
+            class_id=str(args.get("class_id") or "").strip() or None,
         )
     )
 

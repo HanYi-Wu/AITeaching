@@ -368,7 +368,7 @@ export function AnalysisWorkspace({
     );
   }, [historyMode, historyQuery, historySubject, legacyExams]);
 
-  const handleOnlinePaperSelect = useCallback(async (paper: PlatformPaperRecord, publicationId?: string) => {
+  const handleOnlinePaperSelect = useCallback(async (paper: PlatformPaperRecord, publicationId?: string, classId?: string) => {
     const requestId = ++onlineAnalysisRequestIdRef.current;
     legacyDetailRequestIdRef.current += 1;
     legacyAnalysisRequestIdRef.current += 1;
@@ -379,7 +379,7 @@ export function AnalysisWorkspace({
     setAnalysis(null);
     setLoadingOnlineAnalysis(true);
     try {
-      const data = await (publicationId ? analyzePlatformPaper(paper.paper_id, publicationId) : analyzePlatformPaper(paper.paper_id));
+      const data = await analyzePlatformPaper(paper.paper_id, publicationId, classId);
       if (onlineAnalysisRequestIdRef.current === requestId) {
         setOnlineAnalysis(data.analysis);
       }
@@ -909,6 +909,15 @@ export function AnalysisWorkspace({
                     <select aria-label="分析发布批次" className="ml-3 max-w-full rounded border p-2" value={onlineAnalysis.publication_id ?? ""}
                       onChange={(e) => { if (selectedOnlinePaper) void handleOnlinePaperSelect(selectedOnlinePaper, e.target.value); }}>
                       {onlineAnalysis.publications?.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.created_at} · {item.id.slice(0, 8)}</option>)}
+                    </select>
+                  </label>
+                )}
+                {(onlineAnalysis.available_classes?.length ?? 0) > 0 && selectedOnlinePaper && (
+                  <label className="block text-sm">分析班级
+                    <select aria-label="分析班级" className="ml-3 max-w-full rounded border p-2" value={onlineAnalysis.class_id ?? ""}
+                      onChange={(e) => void handleOnlinePaperSelect(selectedOnlinePaper, onlineAnalysis.publication_id ?? undefined, e.target.value || undefined)}>
+                      <option value="">全部班级</option>
+                      {onlineAnalysis.available_classes?.map((item) => <option key={item.id} value={item.id}>{item.name}{item.grade && !item.name.includes(item.grade) ? ` · ${item.grade}` : ""}</option>)}
                     </select>
                   </label>
                 )}

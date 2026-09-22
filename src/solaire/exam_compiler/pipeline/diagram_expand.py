@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import struct
+import hashlib
+import shutil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -41,6 +43,7 @@ def expand_embed_img_markers_in_text(
     *,
     mode: Literal["latex", "web"],
     project_root: Path | None,
+    image_dir: Path | None = None,
     primebrush_pdf: PrimeBrushPdfOptions | None = None,
 ) -> str:
     """
@@ -69,6 +72,13 @@ def expand_embed_img_markers_in_text(
         if not path.is_file():
             return m.group(0)
         basename = path.name
+        if image_dir is not None and path.parent != image_dir.resolve():
+            image_dir.mkdir(parents=True, exist_ok=True)
+            basename = f"embed-{hashlib.sha256(rel.encode('utf-8')).hexdigest()[:12]}{path.suffix.lower()}"
+            target = (image_dir / basename).resolve()
+            if target.parent != image_dir.resolve():
+                return m.group(0)
+            shutil.copy2(path, target)
         inc = f"\\includegraphics[width={pp.latex_width},keepaspectratio]{{{basename}}}"
         return f"\n{inc}\n"
 
@@ -258,4 +268,3 @@ def strip_diagram_fences_for_preview(text: str, max_len: int = 200) -> str:
     t = _TABLE_FENCE.sub(" [table] ", t)
     t = " ".join(t.split())
     return t if len(t) <= max_len else t[: max_len - 3] + "..."
-

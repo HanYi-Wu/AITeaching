@@ -78,10 +78,26 @@ def _paper_record_for_exam(root: Path, exam: dict[str, Any], user: dict[str, Any
     title = _clean_title(exam.get("exam_title"), exam_id)
     now = utc_now()
     user_role = str(user.get("role") or "")
-    owner_teacher_id = str(user.get("id")) if user_role == "teacher" else None
+    owner_teacher_id = str(exam.get("owner_teacher_id") or "").strip() or None
     school_id = str(user.get("school_id")) if user.get("school_id") else None
 
     with connect(root) as con:
+        if not owner_teacher_id and user_role == "teacher":
+            # Legacy exams without provenance can be assigned only when the
+            # whole platform has one possible teacher. Otherwise keep unowned.
+            candidates = con.execute(
+                "SELECT id FROM users WHERE role='teacher'",
+            ).fetchall()
+            if len(candidates) == 1:
+                owner_teacher_id = str(candidates[0]["id"])
+        if user_role == "teacher" and owner_teacher_id and owner_teacher_id != str(user.get("id")):
+            raise PermissionError("No permission for this exam")
+        if owner_teacher_id:
+            teacher_school = con.execute(
+                "SELECT school_id FROM users WHERE id=? AND role='teacher'", (owner_teacher_id,)
+            ).fetchone()
+            if teacher_school is not None:
+                school_id = str(teacher_school["school_id"]) if teacher_school["school_id"] else None
         row = con.execute(
             "SELECT * FROM paper_records WHERE exam_id = ? AND subject = ?",
             (exam_id, subject),
@@ -99,14 +115,16 @@ def _paper_record_for_exam(root: Path, exam: dict[str, Any], user: dict[str, Any
             )
         else:
             paper_id = str(row["id"])
+            existing_owner = str(row["owner_teacher_id"] or "").strip() or None
+            if user_role == "teacher" and existing_owner and existing_owner != str(user.get("id")):
+                raise PermissionError("No permission for this exam")
+            if existing_owner and owner_teacher_id and existing_owner != owner_teacher_id:
+                raise PermissionError("Exam owner conflicts with existing paper record")
             updates: list[str] = ["title = ?", "subject = ?", "updated_at = ?"]
             params: list[object] = [title, subject, now]
             if owner_teacher_id and row["owner_teacher_id"] is None:
                 updates.append("owner_teacher_id = ?")
                 params.append(owner_teacher_id)
-            if school_id and row["school_id"] is None:
-                updates.append("school_id = ?")
-                params.append(school_id)
             params.append(paper_id)
             con.execute(f"UPDATE paper_records SET {', '.join(updates)} WHERE id = ?", params)
         stored = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
@@ -156,9 +174,9 @@ def _paper_visible_to_user(paper: dict[str, Any], user: dict[str, Any]) -> bool:
     if role == "admin":
         return True
     if role == "school":
-        return paper.get("school_id") in (None, user.get("school_id"))
+        return paper.get("school_id") == user.get("school_id")
     if role == "teacher":
-        return paper.get("owner_teacher_id") in (None, user.get("id"))
+        return paper.get("owner_teacher_id") == user.get("id")
     return False
 
 
@@ -192,7 +210,10 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
     exams = list_exam_results(project_root)
     papers: list[dict[str, Any]] = []
     for exam in exams:
-        record = _paper_record_for_exam(platform_root, exam, user)
+        try:
+            record = _paper_record_for_exam(platform_root, exam, user)
+        except PermissionError:
+            continue
         if not _paper_visible_to_user(record, user):
             continue
         stats = _publication_stats(platform_root, str(record["id"]), user)
@@ -340,9 +361,9 @@ def _ensure_paper_access(paper: dict[str, Any], user: dict[str, Any]) -> None:
     role = str(user.get("role") or "")
     if role == "admin":
         return
-    if role == "school" and paper.get("school_id") in (None, user.get("school_id")):
+    if role == "school" and paper.get("school_id") == user.get("school_id"):
         return
-    if role == "teacher" and paper.get("owner_teacher_id") in (None, user.get("id")):
+    if role == "teacher" and paper.get("owner_teacher_id") == user.get("id"):
         return
     raise PermissionError("No permission for this paper")
 
@@ -538,9 +559,9 @@ def _attempt_status_group(attempt: dict[str, Any]) -> str:
     return "not_started"
 
 
-def _analysis_question_maps(root: Path, project_root: Path, paper: dict[str, Any], user: dict[str, Any], publication_id: str | None):
+def _analysis_question_maps(root: Path, project_root: Path, paper: dict[str, Any], user: dict[str, Any], publication_id: str | None, class_id: str | None = None):
     # Published snapshots, not the editable source, define historical exam content.
-    clause, params = _analysis_attempt_clause(user, publication_id)
+    clause, params = _analysis_attempt_clause(user, publication_id, class_id=class_id)
     with connect(root) as con:
         rows = con.execute(
             f"SELECT sa.question_payload_json FROM student_attempts sa "
@@ -572,11 +593,12 @@ def _build_module_report(
     average_score: float | None,
     user: dict[str, Any],
     publication_id: str | None = None,
+    class_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
-        questions, _by_id, score_by_id = _analysis_question_maps(root, project_root, paper, user, publication_id)
+        questions, _by_id, score_by_id = _analysis_question_maps(root, project_root, paper, user, publication_id, class_id)
     except (FileNotFoundError, ValueError):
         return []
     modules: dict[str, dict[str, Any]] = {}
@@ -609,7 +631,7 @@ def _build_module_report(
     if not modules:
         return []
 
-    access_clause, access_params = _analysis_attempt_clause(user, publication_id)
+    access_clause, access_params = _analysis_attempt_clause(user, publication_id, class_id=class_id)
     with connect(root) as con:
         rows = con.execute(
             f"""
@@ -669,11 +691,12 @@ def _build_question_report(
     paper: dict[str, Any],
     user: dict[str, Any],
     publication_id: str | None = None,
+    class_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
-        questions, _by_id, score_by_id = _analysis_question_maps(root, project_root, paper, user, publication_id)
+        questions, _by_id, score_by_id = _analysis_question_maps(root, project_root, paper, user, publication_id, class_id)
     except (FileNotFoundError, ValueError):
         return []
     reports: dict[str, dict[str, Any]] = {}
@@ -699,7 +722,7 @@ def _build_question_report(
     if not reports:
         return []
 
-    access_clause, access_params = _analysis_attempt_clause(user, publication_id)
+    access_clause, access_params = _analysis_attempt_clause(user, publication_id, class_id=class_id)
     with connect(root) as con:
         rows = con.execute(
             f"""
@@ -753,8 +776,8 @@ def _build_question_report(
     return out
 
 
-def _build_class_report(root: Path, *, paper_id: str, user: dict[str, Any], publication_id: str | None = None) -> list[dict[str, Any]]:
-    access_clause, access_params = _analysis_attempt_clause(user, publication_id)
+def _build_class_report(root: Path, *, paper_id: str, user: dict[str, Any], publication_id: str | None = None, class_id: str | None = None) -> list[dict[str, Any]]:
+    access_clause, access_params = _analysis_attempt_clause(user, publication_id, class_id=class_id)
     with connect(root) as con:
         rows = con.execute(
             f"""
@@ -868,11 +891,18 @@ def _build_radar(
     return [{"id": axis_id, "label": label, "value": round(max(0.0, min(100.0, float(value))), 2)} for axis_id, label, value in axes]
 
 
-def _analysis_attempt_clause(user: dict[str, Any], publication_id: str | None, *, attempt_alias: str = "sa") -> tuple[str, list[str]]:
+def _analysis_attempt_clause(user: dict[str, Any], publication_id: str | None, *, attempt_alias: str = "sa", class_id: str | None = None) -> tuple[str, list[str]]:
     clause, params = _attempt_access_clause(user, attempt_alias=attempt_alias)
     if publication_id:
         clause = f"({clause}) AND {attempt_alias}.publication_id = ?"
         params = [*params, publication_id]
+    if class_id:
+        clause = (f"({clause}) AND EXISTS (SELECT 1 FROM publication_classes filter_pc "
+                  f"JOIN class_students filter_cs ON filter_cs.class_id = filter_pc.class_id "
+                  f"WHERE filter_pc.publication_id = {attempt_alias}.publication_id "
+                  f"AND filter_pc.class_id = ? AND filter_cs.student_id = "
+                  f"{attempt_alias}.student_id)")
+        params = [*params, class_id]
     return clause, params
 
 
@@ -883,13 +913,14 @@ def analyze_paper(
     user: dict[str, Any],
     project_root: Path | None = None,
     publication_id: str | None = None,
+    class_id: str | None = None,
 ) -> dict[str, Any]:
     init_platform_db(root)
     paper = get_paper(root, paper_id)
     role = str(user.get("role") or "")
-    if role == "teacher" and paper.get("owner_teacher_id") not in (None, user.get("id")):
+    if role == "teacher" and paper.get("owner_teacher_id") != user.get("id"):
         raise PermissionError("Teacher can only analyze own papers")
-    if role == "school" and paper.get("school_id") not in (None, user.get("school_id")):
+    if role == "school" and paper.get("school_id") != user.get("school_id"):
         raise PermissionError("School can only analyze own papers")
     if role not in {"admin", "school", "teacher"}:
         raise PermissionError("Only admin, school, and teacher users can analyze papers")
@@ -905,9 +936,24 @@ def analyze_paper(
             publication_id = str(next((row for row in publication_rows if row["status"] != "revoked"), publication_rows[0])["id"])
         if publication_id and publication_id not in {str(row["id"]) for row in publication_rows}:
             raise FileNotFoundError("发布记录不存在或无权访问")
+        if class_id:
+            allowed_class = con.execute(
+                f"SELECT 1 FROM exam_publications ep JOIN publication_classes pc ON pc.publication_id=ep.id "
+                f"WHERE ep.paper_id=? AND ep.id=? AND pc.class_id=? AND {publication_access} LIMIT 1",
+                (paper_id, publication_id, class_id, *publication_params),
+            ).fetchone()
+            if allowed_class is None:
+                raise PermissionError("无权查看该发布批次的班级分析")
+        class_choices = [row_to_dict(row) or {} for row in con.execute(
+            f"SELECT DISTINCT c.id, c.name, c.grade FROM exam_publications ep "
+            f"JOIN publication_classes pc ON pc.publication_id=ep.id "
+            f"JOIN classes c ON c.id=pc.class_id "
+            f"WHERE ep.paper_id=? AND (? IS NULL OR ep.id=?) AND {publication_access} ORDER BY c.name",
+            (paper_id, publication_id, publication_id, *publication_params),
+        ).fetchall()]
         publication_rows = [row for row in publication_rows if str(row["id"]) == publication_id]
-        attempt_access, attempt_params = _analysis_attempt_clause(user, publication_id)
-        event_access, event_params = _analysis_attempt_clause(user, publication_id, attempt_alias="pe")
+        attempt_access, attempt_params = _analysis_attempt_clause(user, publication_id, class_id=class_id)
+        event_access, event_params = _analysis_attempt_clause(user, publication_id, attempt_alias="pe", class_id=class_id)
         attempt_rows = con.execute(
             f"""
             SELECT
@@ -1070,9 +1116,10 @@ def analyze_paper(
         average_score=average_score,
         user=user,
         publication_id=publication_id,
+        class_id=class_id,
     )
-    questions = _build_question_report(root, paper_id=paper_id, project_root=project_root, paper=paper, user=user, publication_id=publication_id)
-    classes = _build_class_report(root, paper_id=paper_id, user=user, publication_id=publication_id)
+    questions = _build_question_report(root, paper_id=paper_id, project_root=project_root, paper=paper, user=user, publication_id=publication_id, class_id=class_id)
+    classes = _build_class_report(root, paper_id=paper_id, user=user, publication_id=publication_id, class_id=class_id)
     radar = _build_radar(
         completion_rate=completion_rate,
         average_score=average_score,
@@ -1084,6 +1131,8 @@ def analyze_paper(
 
     return {
         "publication_id": publication_id,
+        "class_id": class_id,
+        "available_classes": class_choices,
         "publications": [{"id": row["id"], "title": row["title"], "created_at": row["created_at"], "status": row["status"]} for row in available_publications],
         "paper": {
             "paper_id": paper["id"],
@@ -1197,7 +1246,7 @@ def _paper_exam_question_payloads(project_root: Path, paper: dict[str, Any]) -> 
 
 def _ensure_publishable_paper(project_root: Path | None, paper: dict[str, Any]) -> None:
     if project_root is None:
-        return
+        raise ValueError("发布试卷必须加载题目内容，请提供试卷所在的项目目录")
     questions, _answer_keys = _paper_exam_question_payloads(project_root, paper)
     if len(questions) <= 0:
         raise ValueError("paper must contain at least one question before publish")
@@ -1267,9 +1316,8 @@ def _attempt_access_clause(user: dict[str, Any], *, attempt_alias: str = "sa") -
         return "1 = 1", []
     if role == "teacher":
         return (
-            f"EXISTS (SELECT 1 FROM publication_classes pac "
-            f"JOIN teacher_class_assignments tca ON tca.class_id = pac.class_id "
-            f"WHERE pac.publication_id = {attempt_alias}.publication_id AND tca.teacher_id = ?)",
+            f"EXISTS (SELECT 1 FROM exam_publications owner_ep "
+            f"WHERE owner_ep.id = {attempt_alias}.publication_id AND owner_ep.teacher_id = ?)",
             [str(user.get("id") or "")],
         )
     if role == "school":
@@ -1287,12 +1335,7 @@ def _publication_access_clause(user: dict[str, Any], *, publication_alias: str =
     if role == "admin":
         return "1 = 1", []
     if role == "teacher":
-        return (
-            f"EXISTS (SELECT 1 FROM publication_classes pac "
-            f"JOIN teacher_class_assignments tca ON tca.class_id = pac.class_id "
-            f"WHERE pac.publication_id = {publication_alias}.id AND tca.teacher_id = ?)",
-            [str(user.get("id") or "")],
-        )
+        return f"{publication_alias}.teacher_id = ?", [str(user.get("id") or "")]
     if role == "school":
         return (
             f"EXISTS (SELECT 1 FROM publication_classes pac "
@@ -1583,8 +1626,7 @@ def publish_online_paper(
     clean_description = description.strip() if description and description.strip() else None
     frozen_questions: list[dict[str, Any]] = []
     frozen_answer_keys: dict[str, str] = {}
-    if project_root is not None:
-        frozen_questions, frozen_answer_keys = _paper_exam_question_payloads(project_root, paper)
+    frozen_questions, frozen_answer_keys = _paper_exam_question_payloads(project_root, paper)
     frozen_questions_json = json.dumps(frozen_questions, ensure_ascii=False) if frozen_questions else None
     frozen_answer_keys_json = json.dumps(frozen_answer_keys, ensure_ascii=False) if frozen_questions else None
 

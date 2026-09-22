@@ -132,7 +132,7 @@ def expand_hydrated_for_latex(hydrated: HydratedExam, loaded: LoadedQuestions) -
                 primebrush_pdf=primebrush_pdf,
             )
             q.content = expand_embed_img_markers_in_text(
-                q.content, mode="latex", project_root=pr, primebrush_pdf=primebrush_pdf
+                q.content, mode="latex", project_root=pr, image_dir=image_dir, primebrush_pdf=primebrush_pdf
             )
             q.content = expand_tables_for_latex(q.content)
             from solaire.common.answer_logic import display as display_answer
@@ -146,7 +146,7 @@ def expand_hydrated_for_latex(hydrated: HydratedExam, loaded: LoadedQuestions) -
                 primebrush_pdf=primebrush_pdf,
             )
             q.answer = expand_embed_img_markers_in_text(
-                q.answer, mode="latex", project_root=pr, primebrush_pdf=primebrush_pdf
+                q.answer, mode="latex", project_root=pr, image_dir=image_dir, primebrush_pdf=primebrush_pdf
             )
             q.answer = expand_tables_for_latex(q.answer)
             q.analysis, pi, mi = expand_diagram_fences_in_text(
@@ -159,7 +159,7 @@ def expand_hydrated_for_latex(hydrated: HydratedExam, loaded: LoadedQuestions) -
                 primebrush_pdf=primebrush_pdf,
             )
             q.analysis = expand_embed_img_markers_in_text(
-                q.analysis, mode="latex", project_root=pr, primebrush_pdf=primebrush_pdf
+                q.analysis, mode="latex", project_root=pr, image_dir=image_dir, primebrush_pdf=primebrush_pdf
             )
             q.analysis = expand_tables_for_latex(q.analysis)
             if q.options:
@@ -175,7 +175,7 @@ def expand_hydrated_for_latex(hydrated: HydratedExam, loaded: LoadedQuestions) -
                         primebrush_pdf=primebrush_pdf,
                     )
                     opt = expand_embed_img_markers_in_text(
-                        opt, mode="latex", project_root=pr, primebrush_pdf=primebrush_pdf
+                        opt, mode="latex", project_root=pr, image_dir=image_dir, primebrush_pdf=primebrush_pdf
                     )
                     next_options[key] = expand_tables_for_latex(opt)
                 q.options = next_options
@@ -190,6 +190,6 @@ def expand_hydrated_for_latex(hydrated: HydratedExam, loaded: LoadedQuestions) -
                     primebrush_pdf=primebrush_pdf,
                 )
                 q.group_material = expand_embed_img_markers_in_text(
-                    q.group_material, mode="latex", project_root=pr, primebrush_pdf=primebrush_pdf
+                    q.group_material, mode="latex", project_root=pr, image_dir=image_dir, primebrush_pdf=primebrush_pdf
                 )
                 q.group_material = expand_tables_for_latex(q.group_material)

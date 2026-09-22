@@ -158,6 +158,19 @@ def test_embed_img_path_traversal_unchanged(tmp_path: Path) -> None:
     assert out == marker
 
 
+def test_embed_img_from_another_library_is_staged_for_pdf(tmp_path: Path) -> None:
+    source = tmp_path / "resource" / "数学" / "题集A" / "image" / "pic.png"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"\x89PNG\r\n\x1a\n")
+    target_dir = tmp_path / "resource" / "数学" / "题集B" / "image"
+    out = expand_embed_img_markers_in_text(
+        ":::EMBED_IMG:数学/题集A/image/pic.png:::", mode="latex",
+        project_root=tmp_path, image_dir=target_dir,
+    )
+    assert "\\includegraphics" in out
+    assert len(list(target_dir.glob("embed-*.png"))) == 1
+
+
 def test_embed_img_web_mode_unchanged() -> None:
     t = ":::EMBED_IMG:x/y/z.png:::"
     assert expand_embed_img_markers_in_text(t, mode="web", project_root=None) == t

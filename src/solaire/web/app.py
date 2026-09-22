@@ -1333,7 +1333,7 @@ def bank_item_create(body: BankCreateBody) -> dict[str, Any]:
     if question_exists(root, qualified_id):
         raise HTTPException(status_code=409, detail=f"题目已存在: {qualified_id}")
     try:
-        save_bank_record(root, qualified_id, body.question)
+        save_bank_record(root, qualified_id, body.question, create_only=True)
         ensure_probe_list_yaml(root)
         return {"ok": True, "qualified_id": qualified_id}
     except ValueError as e:
@@ -1506,6 +1506,32 @@ def _assert_overwrite_target(
     return dest
 
 
+def _assert_export_destination_owner(root: Path, dest_dir: Path, teacher_id: str | None) -> None:
+    """A teacher must not replace a colleague's exam with the same label/path."""
+    if not teacher_id:
+        return
+    from solaire.web.platform_db import connect, default_platform_root
+    exam_id = dest_dir.relative_to(root / "exams").as_posix()
+    with connect(default_platform_root()) as con:
+        row = con.execute("SELECT id, owner_teacher_id FROM paper_records WHERE exam_id=?", (exam_id,)).fetchone()
+        publishers = {str(item[0]) for item in con.execute(
+            "SELECT DISTINCT teacher_id FROM exam_publications WHERE paper_id=?", (str(row["id"]),)
+        )} if row is not None else set()
+    if row is not None and row["owner_teacher_id"] and str(row["owner_teacher_id"]) != teacher_id:
+        raise HTTPException(status_code=403, detail="该试卷属于其他教师，请使用不同的试卷说明")
+    if publishers and publishers != {teacher_id}:
+        raise HTTPException(status_code=403, detail="该试卷已有其他教师的发布记录，请使用不同的试卷说明")
+    existing = dest_dir / "exam.yaml"
+    if existing.is_file():
+        try:
+            metadata = (yaml.safe_load(existing.read_text(encoding="utf-8")) or {}).get("metadata") or {}
+            previous_owner = str(metadata.get("owner_teacher_id") or "").strip()
+        except (OSError, ValueError, AttributeError) as exc:
+            raise HTTPException(status_code=400, detail="现有试卷归属信息无法读取，拒绝覆盖") from exc
+        if previous_owner and previous_owner != teacher_id:
+            raise HTTPException(status_code=403, detail="该试卷属于其他教师，请使用不同的试卷说明")
+
+
 @app.post("/api/exam/validate")
 def exam_validate(body: ExamDraftBody) -> dict[str, Any]:
     root = _require_root()
@@ -1570,6 +1596,10 @@ def exam_export(body: ExamExportBody) -> dict[str, Any]:
         "subject": body.subject,
         "export_label": body.export_label,
     }
+    from solaire.common.actor_context import actor
+    export_actor = actor.get()
+    if export_actor and export_actor.get("role") == "teacher":
+        metadata["owner_teacher_id"] = str(export_actor["id"])
     sections = _draft_to_sections(body)
 
     log = logging.getLogger(__name__)
@@ -1601,6 +1631,7 @@ def exam_export(body: ExamExportBody) -> dict[str, Any]:
                     ).parent.resolve()
                 except ValueError as e:
                     raise HTTPException(status_code=400, detail=str(e)) from e
+        _assert_export_destination_owner(root, dest_dir, str(metadata.get("owner_teacher_id") or "") or None)
         result_dir, s_name, t_name = export_pdfs(
             root,
             exam_yaml=exam_yaml,
@@ -1677,6 +1708,10 @@ def exam_export_word(body: ExamExportBody) -> dict[str, Any]:
         "subject": body.subject,
         "export_label": body.export_label,
     }
+    from solaire.common.actor_context import actor
+    export_actor = actor.get()
+    if export_actor and export_actor.get("role") == "teacher":
+        metadata["owner_teacher_id"] = str(export_actor["id"])
     sections = _draft_to_sections(body)
 
     log = logging.getLogger(__name__)
@@ -1708,6 +1743,7 @@ def exam_export_word(body: ExamExportBody) -> dict[str, Any]:
                     ).parent.resolve()
                 except ValueError as e:
                     raise HTTPException(status_code=400, detail=str(e)) from e
+        _assert_export_destination_owner(root, dest_dir, str(metadata.get("owner_teacher_id") or "") or None)
         result_dir, s_name, t_name = export_docx(
             root,
             exam_yaml=exam_yaml,
@@ -1953,6 +1989,45 @@ def exams_from_exam(exam_path: str, body: CopyFromExamBody) -> dict[str, Any]:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"ok": True, "exam": doc}
+
+
+@app.get("/api/exams/download/{exam_path:path}")
+def exams_download_bundle(
+    exam_path: str,
+    format: str = Query("pdf", description="pdf 或 docx"),
+) -> Response:
+    """Download the actual exported student/teacher files as one ZIP."""
+    import io
+    import zipfile
+    from urllib.parse import quote
+    from solaire.common.actor_context import actor
+    from solaire.web.platform_db import connect, default_platform_root
+
+    root = _require_root()
+    user = actor.get()
+    if not user or user.get("role") not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="只有教师或管理员可以下载试卷")
+    if format not in {"pdf", "docx"}:
+        raise HTTPException(status_code=400, detail="format 须为 pdf 或 docx")
+    if user.get("role") == "teacher":
+        with connect(default_platform_root()) as con:
+            row = con.execute("SELECT owner_teacher_id FROM paper_records WHERE exam_id=?", (exam_path,)).fetchone()
+        if row is None or str(row["owner_teacher_id"] or "") != str(user.get("id")):
+            raise HTTPException(status_code=403, detail="无权下载此试卷")
+    finder = find_exported_pdf_path if format == "pdf" else find_exported_docx_path
+    try:
+        files = [finder(root, exam_path, variant=variant) for variant in ("student", "teacher")]
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as target:
+        for path in files:
+            target.write(path, arcname=path.name)
+    filename = f"{Path(exam_path).name}-{format}-学生版与教师版.zip"
+    return Response(
+        archive.getvalue(), media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @app.get("/api/exams/{exam_path:path}/pdf-file")

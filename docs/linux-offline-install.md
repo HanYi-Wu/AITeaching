@@ -27,7 +27,7 @@ sudo bash install.sh --app-base /opt/educationhelper --data-dir /var/lib/educati
 ## 中断与保护
 
 1. 校验包与平台、检查磁盘、加独占锁；原服务继续运行。
-2. 将文件解到新版本目录，修复运行环境路径并检查应用导入。备份原配置、服务单元和 SQLite 在线快照（包含已提交 WAL），不停止业务。
+2. 将文件解到新版本目录，修复运行环境路径并检查应用导入。备份原配置、服务单元和 SQLite 在线快照（包含已提交 WAL），不停止业务。新版本还会执行保守的旧试卷数据修复：仅按发布记录／试卷元数据校正教师归属、恢复能与来源题目对应的旧答卷快照；冲突或缺失来源的记录只报告，不猜测。
 3. 准备成功后才停止旧服务，原子替换 current 链接，启动新服务并检查后端、前端和 API 转发。前端使用 Python 静态服务器／流式代理，无 Node 运行时依赖。
 4. 失败恢复旧链接和服务单元，重启旧服务并记录恢复健康检查结果。旧版本与失败版本均保留，不删除原项目文件、上传资料或配置。
 
@@ -36,6 +36,15 @@ sudo bash install.sh --app-base /opt/educationhelper --data-dir /var/lib/educati
 备份位于 `/opt/educationhelper/backups/<时间>/`，包括 transaction.json 和配置／数据库快照。数据库快照取于切换前，可能不包含之后刚提交的答卷；自动回滚**只回滚代码，不用旧数据库覆盖实时数据**。如未来版本含不兼容数据库迁移，旧代码可能不能直接恢复，管理员应结合日志进行人工恢复，不可把代码回滚当成数据库事务回滚。非数据库上传文件不改动，在线快照不是全部资料的时间点一致备份。
 
 旧部署原配置文件逐字保留，包括 AI 密钥、数据路径和网络规则；本安装器不会再执行旧升级器的代理设置迁移。初次安装才生成配置，无内置万能密码。
+
+修复工具也可单独运行。默认仅检查，不写入；确认报告后加 `--apply` 才会先在平台数据库旁的 `.solaire/repair-backups/` 创建 SQLite 在线备份，再应用可验证修复。实际路径请按服务配置替换：
+
+```bash
+PYTHONPATH=/opt/educationhelper/current/src /opt/educationhelper/current/runtime/bin/python -m solaire.web.legacy_exam_repair --project-root /var/lib/educationhelper/workspace --platform-root /var/lib/educationhelper/appdata/SolEdu/platform
+PYTHONPATH=/opt/educationhelper/current/src /opt/educationhelper/current/runtime/bin/python -m solaire.web.legacy_exam_repair --project-root /var/lib/educationhelper/workspace --platform-root /var/lib/educationhelper/appdata/SolEdu/platform --apply
+```
+
+如使用了 `EH_DATA_ROOT`，平台数据库目录应为 `$EH_DATA_ROOT/platform`。安装器会自动识别它；手动执行时请代入真实目录。修复输出的 `unresolved` 需要人工核对，程序不会制造丢失的答题记录或擅自把试卷归给某位教师。
 
 ## 构建与校验
 

@@ -12,7 +12,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../api/client";
+import { ApiError, apiDelete, apiGet, apiGetBlob, apiPost, apiPut } from "../api/client";
 import { useContentLibraryChanged } from "../lib/contentEvents";
 import { AdaptivePracticeSelector } from "../components/AdaptivePracticeSelector";
 import { KatexPlainPreview } from "../components/KatexText";
@@ -54,6 +54,18 @@ import {
 import type { ExamDoc, ExamWorkspaceSummary, QuestionRow, RightSelection, TemplateRow } from "../types/compose";
 
 type GraphBindingNode = { id: string; canonical_name: string; node_kind?: string };
+
+async function downloadExportedBundle(examId: string, format: "pdf" | "docx") {
+  const blob = await apiGetBlob(`/api/exams/download/${encodeURIComponent(examId)}?format=${format}`);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${examId.replace(/[\\/]/g, "-")}-${format}-学生版与教师版.zip`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
 
 /** 与后端 `_norm_template_path_rel` 一致：去掉 ``../``，与 ``/api/templates`` 列表匹配 */
 function normTemplatePath(p: string): string {
@@ -1060,6 +1072,14 @@ export function ComposeWorkspace({
       teacher: res.teacher_pdf,
       dir: res.exam_dir,
     });
+    if (examPathId) {
+      try {
+        await syncPlatformPaperFromExam(examPathId);
+        await downloadExportedBundle(examPathId, "pdf");
+      } catch (error) {
+        successText += `；文件已保存在服务器，但浏览器下载失败：${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
     if (idsToDelete.length) {
       setCurrentExamId((cur) => (cur && idsToDelete.includes(cur) ? null : cur));
       setExportFailureExamIds([]);
@@ -1120,6 +1140,14 @@ export function ComposeWorkspace({
       teacher: res.teacher_docx,
       dir: res.exam_dir,
     });
+    if (examPathId) {
+      try {
+        await syncPlatformPaperFromExam(examPathId);
+        await downloadExportedBundle(examPathId, "docx");
+      } catch (error) {
+        successText += `；文件已保存在服务器，但浏览器下载失败：${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
     if (idsToDelete.length) {
       setCurrentExamId((cur) => (cur && idsToDelete.includes(cur) ? null : cur));
       setExportFailureExamIds([]);
@@ -2661,6 +2689,9 @@ export function ComposeWorkspace({
               <option value="teacher">{t("compose:pdfVariantTeacher")}</option>
             </select>
             {pdfExamId && !previewPdfId ? (
+              <button type="button" className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800" onClick={() => void downloadExportedBundle(pdfExamId, "pdf").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>下载正式 PDF</button>
+            ) : null}
+            {pdfExamId && !previewPdfId ? (
               <button
                 type="button"
                 className="ml-auto rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-800 disabled:opacity-50"
@@ -2669,6 +2700,9 @@ export function ComposeWorkspace({
               >
                 {t("compose:openPdfExternal")}
               </button>
+            ) : null}
+            {wordOpenExamId && !previewPdfId ? (
+              <button type="button" className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800" onClick={() => void downloadExportedBundle(wordOpenExamId, "docx").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>下载正式 Word</button>
             ) : null}
             {wordOpenExamId && !previewPdfId ? (
               <button

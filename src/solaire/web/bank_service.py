@@ -376,7 +376,7 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *,
             decode(answer)
     ns, qid = split_qualified_id(qualified_id)
     if body.id != qid:
-        raise ValueError("Resource id in body must match URL")
+        raise ValueError("题目编号与保存路径不一致；请刷新题目后重试，不能直接修改已有题目的编号")
     lib = library_root_for_namespace(project_root, ns)
     lib.mkdir(parents=True, exist_ok=True)
 

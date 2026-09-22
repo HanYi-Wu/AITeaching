@@ -1,3 +1,5 @@
+import yaml
+
 from tests.test_platform_paper_api import _bootstrap_admin, _create_school_teacher_class, _write_exam, _headers, _teacher_token
 from solaire.web.platform_db import connect, default_platform_root
 
@@ -10,6 +12,10 @@ def test_shared_class_student_profile_excludes_other_teacher_exams(web_client, t
     second = web_client.post('/api/school/teachers', headers=school, json={'username':'teacher_two','password':'secret123','display_name':'Second','subjects':['Math']}).json()['teacher']
     web_client.post('/api/school/teacher-class-assignments', headers=school, json={'teacher_id':second['id'],'class_id':class_id,'subject':'Math'})
     _write_exam(tmp_path)
+    exam_yaml = tmp_path / 'exams' / 'midterm' / 'Math' / 'exam.yaml'
+    source = yaml.safe_load(exam_yaml.read_text(encoding='utf-8'))
+    source['metadata']['owner_teacher_id'] = teacher_id
+    exam_yaml.write_text(yaml.safe_dump(source, allow_unicode=True), encoding='utf-8')
     headers = _headers(_teacher_token(web_client))
     paper = web_client.get('/api/papers', headers=headers).json()['papers'][0]
     publication = web_client.post(f"/api/papers/{paper['paper_id']}/publish", headers=headers, json={'class_ids':[class_id]}).json()['publication']

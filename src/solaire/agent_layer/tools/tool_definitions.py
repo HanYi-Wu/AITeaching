@@ -1176,7 +1176,7 @@ _RAW_TOOLS.extend(
         _fn("exam.workspace_delete", "删除试卷/组卷草稿文件（移至回收站），必须先 workspace_list 核对 exam_id，再由用户确认。已有发布记录不能删除源卷，改用 paper.update_publication 撤销发布。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_delete, risk=ToolRisk.DESTRUCTIVE, requires_confirmation_override=True),
         _fn("exam.workspace_copy", "从现有试卷复制一份新的组卷工作区。", _teacher_schema({"source_exam_id": _S, "export_label": _S}, ["source_exam_id", "export_label"]), teacher_tools.tool_exam_workspace_copy),
         _fn("paper.list", "按关键字、学科、状态和交付模式查询当前教师的试卷。", _teacher_schema({"q": _S, "delivery_mode": _S, "status": _S, "subject": _S, "page": {"type": "integer"}, "page_size": {"type": "integer"}}), teacher_tools.tool_paper_list, risk=ToolRisk.READ),
-        _fn("paper.analyze", "按发布批次分析试卷，默认最近一次有效发布；可传 publication_id 查询历史批次。需要批改答卷标识时调用 paper.find_submissions。", _teacher_schema({"paper_id": _S, "publication_id": _S}, ["paper_id"]), teacher_tools.tool_paper_analyze, risk=ToolRisk.READ),
+        _fn("paper.analyze", "按发布批次和班级分析试卷，默认最近一次有效发布；可传 publication_id 查询历史批次、class_id 查询指定班级。需要批改答卷标识时调用 paper.find_submissions。", _teacher_schema({"paper_id": _S, "publication_id": _S, "class_id": _S}, ["paper_id"]), teacher_tools.tool_paper_analyze, risk=ToolRisk.READ),
         _fn("paper.publications", "列出试卷的发布记录。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_publications, risk=ToolRisk.READ),
         _fn(
             "paper.practice_history",

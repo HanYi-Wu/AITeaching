@@ -637,7 +637,8 @@ export function BankQuestionEditorPanel({
                 <input
                   className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-sm"
                   value={detail.question.id}
-                  onChange={(e) => setDetail({ ...detail, question: { ...detail.question, id: e.target.value } })}
+                  readOnly
+                  title="题目编号创建后不可在此修改，避免与题库路径不一致"
                 />
               </label>
               <label className="block text-xs font-medium text-slate-600">

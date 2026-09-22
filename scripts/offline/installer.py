@@ -241,7 +241,7 @@ def _install_locked(args, app, data, config, current, old):
     if old and not cfg.is_file():
         raise ValueError('已有部署缺少配置文件，拒绝创建替代配置')
     values = environment_file(cfg)
-    for key in ['SOLAIRE_PROJECT_ROOT', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME']:
+    for key in ['SOLAIRE_PROJECT_ROOT', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'EH_DATA_ROOT']:
         if key in values and not safe_directory(values[key]).is_relative_to(data):
             raise ValueError(key + ' 不在指定持久化目录中；请用 --data-dir 指定原数据根目录')
     units = Path('/etc/systemd/system')
@@ -312,6 +312,22 @@ def _install_locked(args, app, data, config, current, old):
         if body is not None:
             (backup / name).write_bytes(body)
     backup_databases([data], backup / 'databases')
+    # Repair only evidence-backed legacy records, while the old service remains
+    # available. The repair tool creates its own online SQLite backup as well.
+    repair_env = {**os.environ, 'PYTHONPATH': str(release / 'src'), 'PYTHONNOUSERSITE': '1',
+                  'LD_LIBRARY_PATH': str(release / 'runtime/lib'),
+                  'XDG_DATA_HOME': values.get('XDG_DATA_HOME', str(data / 'appdata')),
+                  'XDG_CONFIG_HOME': values.get('XDG_CONFIG_HOME', str(data / 'config'))}
+    if values.get('EH_DATA_ROOT'):
+        repair_env['EH_DATA_ROOT'] = values['EH_DATA_ROOT']
+    else:
+        repair_env.pop('EH_DATA_ROOT', None)
+    repair_platform = (Path(repair_env['EH_DATA_ROOT']) if repair_env.get('EH_DATA_ROOT')
+                       else Path(repair_env['XDG_DATA_HOME']) / 'SolEdu') / 'platform'
+    run(release / 'runtime/bin/python', '-m', 'solaire.web.legacy_exam_repair',
+        '--project-root', values.get('SOLAIRE_PROJECT_ROOT', str(data / 'workspace')),
+        '--platform-root', str(repair_platform),
+        '--apply', env=repair_env, preexec_fn=as_service_user, timeout=300)
     record = {'previous_release': str(old) if old else None, 'new_release': str(release),
               'data_dir': str(data), 'config_dir': str(config), 'status': 'prepared'}
     journal = backup / 'transaction.json'

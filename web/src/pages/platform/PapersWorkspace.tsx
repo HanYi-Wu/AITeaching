@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { resolveApiUrl } from "../../api/client";
 import { formatLocaleDateTime } from "../../lib/locale";
-import { KatexText } from "../../components/KatexText";
+import { ContentWithPrimeBrush as KatexText } from "../../components/ContentWithPrimeBrush";
 import {
   analyzePlatformPaper,
   completePaperAttemptGrading,
@@ -420,12 +420,12 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
     }
   }
 
-  async function loadSelectedAnalysis(publicationId?: string) {
+  async function loadSelectedAnalysis(publicationId?: string, classId?: string) {
     if (!selectedPaper) return;
     setBusy(`analysis:${selectedPaper.paper_id}`);
     setMessage(null);
     try {
-      const result = await (publicationId ? analyzePlatformPaper(selectedPaper.paper_id, publicationId) : analyzePlatformPaper(selectedPaper.paper_id));
+      const result = await analyzePlatformPaper(selectedPaper.paper_id, publicationId, classId);
       setAnalysis(result.analysis);
     } catch (e) {
       reportError(e);
@@ -439,7 +439,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
     setBusy(`report:${format}:${selectedPaper.paper_id}`);
     setMessage(null);
     try {
-      const blob = await (analysis?.publication_id ? downloadPaperAnalysisReport(selectedPaper.paper_id, format, analysis.publication_id) : downloadPaperAnalysisReport(selectedPaper.paper_id, format));
+      const blob = await downloadPaperAnalysisReport(selectedPaper.paper_id, format, analysis?.publication_id ?? undefined, analysis?.class_id ?? undefined);
       downloadBlob(blob, `${selectedPaper.title || selectedPaper.exam_id}-analysis-report.${format}`);
     } catch (e) {
       reportError(e);
@@ -1500,6 +1500,13 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                 <select aria-label="分析发布批次" disabled={busy !== null} value={analysis.publication_id ?? ""} className="ml-3 max-w-full rounded border p-2"
                   onChange={(e) => void loadSelectedAnalysis(e.target.value)}>
                   {analysis.publications?.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.created_at} · {item.id.slice(0, 8)}</option>)}
+                </select>
+              </label>}
+              {(analysis.available_classes?.length ?? 0) > 0 && <label className="ml-3 block text-sm">分析班级
+                <select aria-label="分析班级" disabled={busy !== null} value={analysis.class_id ?? ""} className="ml-3 max-w-full rounded border p-2"
+                  onChange={(e) => void loadSelectedAnalysis(analysis.publication_id ?? undefined, e.target.value || undefined)}>
+                  <option value="">全部班级</option>
+                  {analysis.available_classes?.map((item) => <option key={item.id} value={item.id}>{item.name}{item.grade && !item.name.includes(item.grade) ? ` · ${item.grade}` : ""}</option>)}
                 </select>
               </label>}
               <PlatformPaperAnalysisCharts analysis={analysis} />

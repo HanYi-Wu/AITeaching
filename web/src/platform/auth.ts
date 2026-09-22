@@ -339,6 +339,8 @@ export type TeacherClassAssignmentRecord = {
 
 export type PlatformPaperAnalysis = {
   publication_id?: string | null;
+  class_id?: string | null;
+  available_classes?: Array<{ id: string; name: string; grade?: string | null }>;
   publications?: Array<{ id: string; title: string; created_at: string; status: string }>;
   paper: {
     paper_id: string;
@@ -1162,12 +1164,18 @@ export function revokePlatformPaperPublication(
   );
 }
 
-export function analyzePlatformPaper(paperId: string, publicationId?: string): Promise<{ analysis: PlatformPaperAnalysis }> {
-  return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/analysis${publicationId ? `?publication_id=${encodeURIComponent(publicationId)}` : ""}`);
+export function analyzePlatformPaper(paperId: string, publicationId?: string, classId?: string): Promise<{ analysis: PlatformPaperAnalysis }> {
+  const params = new URLSearchParams();
+  if (publicationId) params.set("publication_id", publicationId);
+  if (classId) params.set("class_id", classId);
+  return platformRequest(`/api/papers/${encodeURIComponent(paperId)}/analysis${params.size ? `?${params}` : ""}`);
 }
 
-export function downloadPaperAnalysisReport(paperId: string, format: "xlsx" | "pdf", publicationId?: string): Promise<Blob> {
-  return downloadAuthorizedBlob(`/api/papers/${encodeURIComponent(paperId)}/analysis.${format}${publicationId ? `?publication_id=${encodeURIComponent(publicationId)}` : ""}`);
+export function downloadPaperAnalysisReport(paperId: string, format: "xlsx" | "pdf", publicationId?: string, classId?: string): Promise<Blob> {
+  const params = new URLSearchParams();
+  if (publicationId) params.set("publication_id", publicationId);
+  if (classId) params.set("class_id", classId);
+  return downloadAuthorizedBlob(`/api/papers/${encodeURIComponent(paperId)}/analysis.${format}${params.size ? `?${params}` : ""}`);
 }
 
 export function listPaperSubmissions(paperId: string): Promise<{ submissions: PaperSubmissionRecord[] }> {

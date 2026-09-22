@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
+import zipfile
 from pathlib import Path
 
 import yaml
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 from PIL import Image
+from fastapi import HTTPException
+import pytest
 
 from solaire.agent_layer.models import InvocationContext, SessionState
 from solaire.agent_layer.registry import invoke_registered_tool
 from solaire.exam_compiler.models import ExamConfig, QuestionLibraryRef, SelectedSection
 from solaire.web import recent_projects, state
-from solaire.web.app import ensure_project_layout
+from solaire.web.app import _assert_export_destination_owner, ensure_project_layout
 from solaire.web.platform_db import connect, default_platform_root
 from solaire.web.paper_service import _contains_grading_prompt_injection
 
@@ -568,13 +572,65 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
         con.execute("UPDATE paper_records SET owner_teacher_id = NULL, school_id = NULL WHERE id = ?", (paper["paper_id"],))
     other_login = web_client.post("/api/auth/login", json={"username": "teacher_other", "password": "teacher123"})
     other_headers = _headers(str(other_login.json()["token"]))
-    other_history = web_client.get("/api/papers?delivery_mode=online", headers=other_headers).json()["papers"][0]
-    assert other_history["submitted_student_count"] == 0
-    assert web_client.get(f"/api/papers/{paper['paper_id']}/publications", headers=other_headers).json()["publications"] == []
-    assert web_client.get(f"/api/papers/{paper['paper_id']}/submissions", headers=other_headers).json()["submissions"] == []
+    assert web_client.get("/api/papers?delivery_mode=online", headers=other_headers).json()["papers"] == []
+    assert web_client.get(f"/api/papers/{paper['paper_id']}/publications", headers=other_headers).status_code == 403
+    assert web_client.get(f"/api/papers/{paper['paper_id']}/submissions", headers=other_headers).status_code == 403
     isolated = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=other_headers)
-    assert isolated.status_code == 200
-    assert isolated.json()["analysis"]["summary"]["total_students"] == 0
+    assert isolated.status_code == 403
+
+
+def test_legacy_repair_recovers_only_verified_owner_and_question_snapshot(web_client: TestClient, tmp_path: Path) -> None:
+    from solaire.web.legacy_exam_repair import repair
+
+    admin = _bootstrap_admin(web_client)
+    _, teacher_id, class_id = _create_school_teacher_class(web_client, admin)
+    _write_exam(tmp_path)
+    school = _headers(web_client.post('/api/auth/login', json={'username': 'school_a', 'password': 'secret123'}).json()['token'])
+    web_client.post('/api/school/students/import', headers=school,
+                    json={'class_id': class_id, 'students': [{'student_no': 'S001', 'display_name': 'One'}]})
+    teacher = _headers(_teacher_token(web_client))
+    paper = web_client.get('/api/papers', headers=teacher).json()['papers'][0]
+    with pytest.raises(HTTPException) as conflict:
+        _assert_export_destination_owner(tmp_path, tmp_path / 'exams' / 'midterm' / 'Math', 'another-teacher')
+    assert conflict.value.status_code == 403
+    publication = web_client.post(f"/api/papers/{paper['paper_id']}/publish", headers=teacher,
+                                  json={'class_ids': [class_id]}).json()['publication']
+    class_analysis = web_client.get(f"/api/papers/{paper['paper_id']}/analysis?class_id={class_id}", headers=teacher)
+    assert class_analysis.status_code == 200
+    assert class_analysis.json()['analysis']['class_id'] == class_id
+    assert class_analysis.json()['analysis']['summary']['total_students'] == 1
+    exam_dir = tmp_path / 'exams' / 'midterm' / 'Math'
+    (exam_dir / '学生版.pdf').write_bytes(b'%PDF-student')
+    (exam_dir / '教师版.pdf').write_bytes(b'%PDF-teacher')
+    exported = web_client.get('/api/exams/download/midterm/Math?format=pdf', headers=teacher)
+    assert exported.status_code == 200
+    with zipfile.ZipFile(BytesIO(exported.content)) as archive:
+        assert set(archive.namelist()) == {'学生版.pdf', '教师版.pdf'}
+    root = default_platform_root()
+    with connect(root) as con:
+        attempt = con.execute('SELECT id FROM student_attempts WHERE publication_id=?', (publication['id'],)).fetchone()['id']
+        con.execute('UPDATE paper_records SET owner_teacher_id=NULL, school_id=NULL WHERE id=?', (paper['paper_id'],))
+        con.execute('UPDATE student_attempts SET question_payload_json=NULL, answer_key_json=NULL, max_score=0 WHERE id=?', (attempt,))
+    preview = repair(tmp_path, root)
+    assert paper['paper_id'] in preview['owners_repaired']
+    assert attempt in preview['attempts_repaired']
+    with connect(root) as con:
+        assert con.execute('SELECT owner_teacher_id FROM paper_records WHERE id=?', (paper['paper_id'],)).fetchone()[0] is None
+    applied = repair(tmp_path, root, apply=True)
+    assert applied['backup'] and Path(applied['backup']).is_file()
+    with connect(root) as con:
+        assert con.execute('SELECT owner_teacher_id FROM paper_records WHERE id=?', (paper['paper_id'],)).fetchone()[0] == teacher_id
+        recovered = con.execute('SELECT question_payload_json, max_score FROM student_attempts WHERE id=?', (attempt,)).fetchone()
+        assert len(json.loads(recovered[0])) == 2
+        assert recovered[1] == 10
+    assert not repair(tmp_path, root)['attempts_repaired']
+    with connect(root) as con:
+        con.execute('UPDATE student_attempts SET question_payload_json=?, question_payload_version=1 WHERE id=?',
+                    (json.dumps([{'question_id': 'math/q1', 'content': 'math/q1', 'type': 'unknown'}]), attempt))
+    assert attempt in repair(tmp_path, root, apply=True)['attempts_repaired']
+    with connect(root) as con:
+        restored = json.loads(con.execute('SELECT question_payload_json FROM student_attempts WHERE id=?', (attempt,)).fetchone()[0])
+    assert restored[0]['content'] == '1+1=?'
 
 
 def test_teacher_reviews_image_submission_with_manual_and_ai_grade_suggestions(

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, CalendarDays, Clock3, RefreshCw, Search, ShieldAlert, TrendingUp, Users, X } from "lucide-react";
 
-import { KatexText } from "../../components/KatexText";
+import { ContentWithPrimeBrush as KatexText } from "../../components/ContentWithPrimeBrush";
 import { useAgentContext } from "../../contexts/AgentContext";
 import {
   getTeacherStudentProfile,

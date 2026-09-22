@@ -540,18 +540,18 @@ export function BankWorkspace({
     if (!root) return;
     const onPointerDownCapture = (e: PointerEvent) => {
       if (e.composedPath().includes(root)) return;
-      setBankNewQuestionOpen(false);
+      if (!busy) setBankNewQuestionOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDownCapture, true);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setBankNewQuestionOpen(false);
+      if (e.key === "Escape" && !busy) setBankNewQuestionOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("pointerdown", onPointerDownCapture, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [bankNewQuestionOpen]);
+  }, [bankNewQuestionOpen, busy]);
 
   useEffect(() => {
     if (!bankImportOpen) return;
@@ -798,6 +798,9 @@ export function BankWorkspace({
           throw new Error(t("bank:errors.yamlMustBeObject"));
         }
         const obj = parsed as Record<string, unknown>;
+        if (String(obj.id ?? "") !== detail.qualified_id.split("/").at(-1)) {
+          throw new Error("题目 ID 不可在 YAML 中修改；如需更名，请新建题目后迁移内容。");
+        }
         const enc = encodeURIComponent(detail.qualified_id);
         if (obj.type === "group") {
           await apiPut(`/api/bank/items/${enc}`, obj as unknown as QuestionGroupJson);
@@ -819,10 +822,10 @@ export function BankWorkspace({
   async function createQuestion() {
     setBusy(true);
     onError(null);
+    const subj = newSubject.trim();
+    const coll = newCollection.trim();
+    const qid = newId.trim();
     try {
-      const subj = newSubject.trim();
-      const coll = newCollection.trim();
-      const qid = newId.trim();
       let body: { subject: string; collection: string; question: QuestionJson | QuestionGroupJson };
       if (newType === "group") {
         const unified = newGroupUnified === "mixed" ? false : newGroupUnified;
@@ -861,7 +864,28 @@ export function BankWorkspace({
       setSelectedId(r.qualified_id);
       setBankNewQuestionOpen(false);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      // The server can finish creating a question after a slow response timed out.
+      // Reconcile the intended ID before offering another create attempt.
+      const qualifiedId = `${subj}/${coll}/${qid}`;
+      let recovered = false;
+      for (const delay of [0, 350, 1000]) {
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+        try {
+          await apiGet(`/api/bank/items/${encodeURIComponent(qualifiedId)}`);
+          recovered = true;
+          break;
+        } catch { /* The request may still be committing on the server. */ }
+      }
+      if (recovered) {
+        await loadList();
+        openModalAfterCreateRef.current = true;
+        setOpenTabs((prev) => (prev.includes(qualifiedId) ? prev : [...prev, qualifiedId]));
+        setSelectedId(qualifiedId);
+        setBankNewQuestionOpen(false);
+        onError(null);
+      } else {
+        onError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setBusy(false);
     }
