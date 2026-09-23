@@ -230,7 +230,7 @@ describe("AnalysisWorkspace", () => {
     expect(screen.getByText("4 份已提交 · 1 份答题中")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /演示线上答题/ }));
 
-    await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("online-1"));
+    await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("online-1", undefined, undefined));
     await waitFor(() => {
       expect(screen.getByTestId("page-context-probe")).toHaveTextContent('"selected_resource_type":"paper"');
       expect(screen.getByTestId("page-context-probe")).toHaveTextContent('"selected_resource_id":"online-1"');

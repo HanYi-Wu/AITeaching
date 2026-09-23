@@ -271,7 +271,7 @@ describe("PapersWorkspace", () => {
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByTestId("paper-load-analysis"));
 
-    await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("p1"));
+    await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("p1", undefined, undefined));
     expect(await screen.findByRole("dialog", { name: "试卷分析" })).toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-charts")).toBeInTheDocument();
     expect(screen.getByTestId("paper-analysis-chart-score")).toBeInTheDocument();
@@ -283,9 +283,9 @@ describe("PapersWorkspace", () => {
     expect(screen.getByText("75 · 高风险")).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("paper-export-report-xlsx"));
-    await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith("p1", "xlsx"));
+    await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith("p1", "xlsx", undefined, undefined));
     await userEvent.click(screen.getByTestId("paper-export-report-pdf"));
-    await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith("p1", "pdf"));
+    await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith("p1", "pdf", undefined, undefined));
   });
 
   it("disables publishing until a paper has questions and sends image submission mode", async () => {

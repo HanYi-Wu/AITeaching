@@ -3761,7 +3761,7 @@ dependencies = [
 
 [[package]]
 name = "solaire-desktop"
-version = "1.5.6"
+version = "1.5.7"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
