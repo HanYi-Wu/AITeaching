@@ -298,15 +298,37 @@ def test_teacher_cannot_publish_empty_paper_and_can_choose_image_submission(
 def test_teacher_syncs_paper_from_exam_id_for_compose_direct_publish(web_client: TestClient, tmp_path: Path) -> None:
     admin_token = _bootstrap_admin(web_client)
     _, _, class_id = _create_school_teacher_class(web_client, admin_token)
+    # Add a second teacher so the system has multiple teachers in the database
+    school_login = web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"})
+    assert school_login.status_code == 200
+    web_client.post(
+        "/api/school/teachers",
+        json={"username": "teacher_second", "password": "teacher123", "display_name": "Second", "subjects": ["Math"]},
+        headers=_headers(str(school_login.json()["token"])),
+    )
+    t2_login = web_client.post("/api/auth/login", json={"username": "teacher_second", "password": "teacher123"})
+    assert t2_login.status_code == 200
+    teacher2_headers = _headers(str(t2_login.json()["token"]))
+
     exam_id = _write_exam(tmp_path)
     teacher_headers = _headers(_teacher_token(web_client))
 
+    # Teacher 1 syncs exam without provenance in multi-teacher system -> should succeed and own the paper
     synced = web_client.post("/api/papers/from-exam", json={"exam_id": exam_id}, headers=teacher_headers)
     assert synced.status_code == 200
     paper = synced.json()["paper"]
     assert paper["exam_id"] == exam_id
     assert paper["delivery_mode"] == "offline"
 
+    # Teacher 2 should NOT have permission to publish Teacher 1's paper
+    forbidden = web_client.post(
+        f"/api/papers/{paper['paper_id']}/publish",
+        json={"class_ids": [class_id], "title": "Hacked"},
+        headers=teacher2_headers,
+    )
+    assert forbidden.status_code == 403
+
+    # Teacher 1 publishes online paper -> must succeed
     published = web_client.post(
         f"/api/papers/{paper['paper_id']}/publish",
         json={"class_ids": [class_id], "title": "Compose Online"},

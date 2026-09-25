@@ -1,8 +1,10 @@
 # EducationHelper (EH)
 
-EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.6.0**.
+EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.6.1**.
 
-Version 1.6.0 fixes permission errors when teachers create, rename, or copy exam workspaces while preserving teacher isolation and duplicate-name protection. This release provides source code and release notes, without installer assets. See [1.6.0 release notes](docs/release-1.6.0.md).
+Version 1.6.1 resolves permission errors (403 No permission for this paper) during exam-to-paper conversion and direct paper publishing in multi-teacher setups, standardizing paper claim and read-only query isolation. See [1.6.1 release notes](docs/release-1.6.1.md).
+
+Version 1.6.0 fixes permission errors when teachers create, rename, or copy exam workspaces while preserving teacher isolation and duplicate-name protection. See [1.6.0 release notes](docs/release-1.6.0.md).
 
 Version 1.5.6 adds nested-folder drag moves and cut/paste, seven-day snapshot invitations including images, teacher-editable alternative/AND/OR answers, and persisted first-use guidance after changing an initial teacher password. Invitation holders can copy the shared snapshot; revoke unused invitations when needed. See [release notes](docs/release-1.5.6.md).
 

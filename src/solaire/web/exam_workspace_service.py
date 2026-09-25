@@ -428,6 +428,7 @@ def _build_exam_doc(
     created_at: str,
     updated_at: str,
     source_exam_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     tpl_rel = _norm_template_path_rel(template_path)
     doc: dict[str, Any] = {
@@ -443,6 +444,8 @@ def _build_exam_doc(
     }
     if source_exam_id:
         doc["source_exam_id"] = source_exam_id
+    if metadata:
+        doc["metadata"] = dict(metadata)
     return doc
 
 
@@ -507,6 +510,11 @@ def save_exam_workspace(
         pair = label_subject_pair(export_label, subject)
         if _identity_nonempty(pair):
             assert_unique_exam_identity(project_root, export_label, subject, exclude_exam_id=eid)
+        meta = dict(old.get("metadata")) if isinstance(old, dict) and isinstance(old.get("metadata"), dict) else {}
+        from solaire.common.actor_context import actor
+        current_actor = actor.get()
+        if current_actor and current_actor.get("role") == "teacher" and not meta.get("owner_teacher_id"):
+            meta["owner_teacher_id"] = str(current_actor["id"])
         doc = _build_exam_doc(
             exam_id=eid,
             name=final_name,
@@ -518,6 +526,7 @@ def save_exam_workspace(
             created_at=created,
             updated_at=now,
             source_exam_id=str(src_ex) if src_ex else None,
+            metadata=meta or None,
         )
         status: ExamStatus = "exported" if (cfg0 or {}).get("status") == "exported" else "draft"
         _write_exam_yaml(project_root, doc)
@@ -546,6 +555,11 @@ def save_exam_workspace(
         raise ValueError(str(e)) from e
     wdir = workspace_dir(project_root, new_id)
     wdir.mkdir(parents=True, exist_ok=True)
+    new_meta: dict[str, Any] = {}
+    from solaire.common.actor_context import actor
+    current_actor = actor.get()
+    if current_actor and current_actor.get("role") == "teacher":
+        new_meta["owner_teacher_id"] = str(current_actor["id"])
     doc = _build_exam_doc(
         exam_id=new_id,
         name=final_name,
@@ -556,6 +570,7 @@ def save_exam_workspace(
         selected_items=sections,
         created_at=now,
         updated_at=now,
+        metadata=new_meta or None,
     )
     _write_exam_yaml(project_root, doc)
     _write_config(

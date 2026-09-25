@@ -70,7 +70,13 @@ def _contains_query(item: dict[str, Any], query: str, fields: list[str]) -> bool
     return needle in " ".join(values).lower()
 
 
-def _paper_record_for_exam(root: Path, exam: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+def _paper_record_for_exam(
+    root: Path,
+    exam: dict[str, Any],
+    user: dict[str, Any],
+    *,
+    claim: bool = False,
+) -> dict[str, Any]:
     exam_id = str(exam.get("exam_id") or "").strip()
     if not exam_id:
         raise ValueError("exam_id is required")
@@ -82,9 +88,9 @@ def _paper_record_for_exam(root: Path, exam: dict[str, Any], user: dict[str, Any
     school_id = str(user.get("school_id")) if user.get("school_id") else None
 
     with connect(root) as con:
-        if not owner_teacher_id and user_role == "teacher":
-            # Legacy exams without provenance can be assigned only when the
-            # whole platform has one possible teacher. Otherwise keep unowned.
+        if not owner_teacher_id and user_role == "teacher" and claim:
+            owner_teacher_id = str(user.get("id"))
+        elif not owner_teacher_id:
             candidates = con.execute(
                 "SELECT id FROM users WHERE role='teacher'",
             ).fetchall()
@@ -122,9 +128,15 @@ def _paper_record_for_exam(root: Path, exam: dict[str, Any], user: dict[str, Any
                 raise PermissionError("Exam owner conflicts with existing paper record")
             updates: list[str] = ["title = ?", "subject = ?", "updated_at = ?"]
             params: list[object] = [title, subject, now]
-            if owner_teacher_id and row["owner_teacher_id"] is None:
+            if claim and user_role == "teacher" and row["owner_teacher_id"] is None:
+                updates.append("owner_teacher_id = ?")
+                params.append(str(user.get("id")))
+            elif owner_teacher_id and row["owner_teacher_id"] is None:
                 updates.append("owner_teacher_id = ?")
                 params.append(owner_teacher_id)
+            if school_id and row["school_id"] is None:
+                updates.append("school_id = ?")
+                params.append(school_id)
             params.append(paper_id)
             con.execute(f"UPDATE paper_records SET {', '.join(updates)} WHERE id = ?", params)
         stored = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
@@ -292,7 +304,7 @@ def sync_paper_for_exam(
     matched = next((exam for exam in exams if str(exam.get("exam_id") or "") == clean_exam_id), None)
     if matched is None:
         raise ValueError("exam not found")
-    record = _paper_record_for_exam(platform_root, matched, user)
+    record = _paper_record_for_exam(platform_root, matched, user, claim=True)
     _ensure_paper_access(record, user)
     stats = _publication_stats(platform_root, str(record["id"]), user)
     return {
