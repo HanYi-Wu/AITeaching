@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
 import solaire.web.state as st
 from fastapi.testclient import TestClient
 from solaire.web.exam_workspace_service import _fill_identity_from_exam_path_fields, _norm_template_path_rel
@@ -71,3 +74,102 @@ def test_get_exams_returns_canonical_exam_id_despite_stale_yaml(web_client: Test
     r1 = web_client.get("/api/exams/%E6%9C%9F%E4%B8%AD%2F%E7%89%A9%E7%90%86")
     assert r1.status_code == 200, r1.text
     assert r1.json()["exam"]["exam_id"] == "期中/物理"
+
+
+@pytest.fixture
+def other_teacher_exam(web_client, tmp_path, monkeypatch):
+    from solaire.web.public_access import reset_login_rate_limiter
+    from tests.test_platform_paper_api import (
+        _bootstrap_admin,
+        _create_school_teacher_class,
+        _headers,
+        _teacher_token,
+        _write_exam,
+    )
+
+    monkeypatch.setenv("SOLAIRE_PUBLIC_MODE", "1")
+    reset_login_rate_limiter()
+    admin = _bootstrap_admin(web_client)
+    _create_school_teacher_class(web_client, admin)
+    exam_id = _write_exam(tmp_path)
+    response = web_client.get("/api/papers", headers=_headers(_teacher_token(web_client)))
+    assert response.status_code == 200, response.text
+    assert response.json()["papers"][0]["exam_id"] == exam_id
+
+    school_login = web_client.post(
+        "/api/auth/login", json={"username": "school_a", "password": "secret123"}
+    )
+    second = web_client.post(
+        "/api/school/teachers",
+        headers=_headers(school_login.json()["token"]),
+        json={"username": "teacher_two", "password": "secret123", "display_name": "Second", "subjects": []},
+    )
+    assert second.status_code == 200, second.text
+    login = web_client.post(
+        "/api/auth/login", json={"username": "teacher_two", "password": "secret123"}
+    )
+    assert login.status_code == 200, login.text
+    return exam_id, _headers(login.json()["token"]), second.json()["teacher"]["id"]
+
+
+@pytest.mark.parametrize("has_config", [False, True])
+def test_teacher_can_create_rename_and_copy_exam_with_other_teacher_workspaces(
+    web_client, tmp_path, other_teacher_exam, has_config
+):
+    """Unrelated private exams must not make the global duplicate check fail."""
+    from solaire.common.actor_context import actor
+    from solaire.web.exam_workspace_service import load_exam_workspace
+
+    other_id, headers, teacher_id = other_teacher_exam
+    other_dir = tmp_path / "exams" / other_id
+    if has_config:
+        (other_dir / "config.json").write_text(
+            json.dumps({"exam_label": "midterm", "subject": "Math"}), encoding="utf-8"
+        )
+    original = (other_dir / "exam.yaml").read_bytes()
+    body = {
+        "export_label": "期末测验",
+        "subject": "数学",
+        "template_ref": "t1",
+        "template_path": "templates/minimal.yaml",
+        "selected_items": [{"section_id": "s1", "question_ids": []}],
+    }
+    created = web_client.post("/api/exams", headers=headers, json=body)
+    assert created.status_code == 200, created.text
+    assert created.json()["exam"]["exam_id"] == "期末测验/数学"
+
+    renamed = web_client.put(
+        "/api/exams/期末测验/数学", headers=headers, json={**body, "export_label": "期末测验修订"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["exam"]["exam_id"] == "期末测验修订/数学"
+    copied = web_client.post(
+        "/api/exams/from-exam/期末测验修订/数学", headers=headers, json={"export_label": "期末测验副本"}
+    )
+    assert copied.status_code == 200, copied.text
+    assert copied.json()["exam"]["exam_id"] == "期末测验副本/数学"
+    assert (tmp_path / "exams" / "期末测验副本" / "数学" / "exam.yaml").is_file()
+    assert (other_dir / "exam.yaml").read_bytes() == original
+
+    token = actor.set({"id": teacher_id, "role": "teacher"})
+    try:
+        with pytest.raises(PermissionError):
+            load_exam_workspace(tmp_path, other_id)
+    finally:
+        actor.reset(token)
+
+
+def test_teacher_duplicate_name_conflict_does_not_overwrite_private_exam(
+    web_client, tmp_path, other_teacher_exam
+):
+    other_id, headers, _ = other_teacher_exam
+    source = tmp_path / "exams" / other_id / "exam.yaml"
+    original = source.read_bytes()
+    response = web_client.post(
+        "/api/exams",
+        headers=headers,
+        json={"export_label": "midterm", "subject": "Math", "template_path": "templates/minimal.yaml"},
+    )
+    assert response.status_code == 400, response.text
+    assert "已存在" in response.json()["detail"]
+    assert source.read_bytes() == original

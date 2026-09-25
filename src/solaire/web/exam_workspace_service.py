@@ -263,6 +263,7 @@ def label_subject_taken(
     root = _exams_root(project_root)
     if not root.is_dir():
         return False
+    target_dir = (root / exam_id_from_labels(export_label, subject)).resolve()
     for label_dir in root.iterdir():
         if not label_dir.is_dir():
             continue
@@ -272,7 +273,13 @@ def label_subject_taken(
             eid = f"{label_dir.name}/{subj_dir.name}"
             if excl and eid == excl:
                 continue
-            cfg = _read_config(project_root, eid)
+            try:
+                cfg = _read_config(project_root, eid)
+            except PermissionError:
+                # 不读取其他教师的内容；仍保留其目录名，避免同名创建覆盖已有试卷。
+                if subj_dir.resolve() == target_dir:
+                    return True
+                continue
             if cfg:
                 got = label_subject_pair(str(cfg.get("exam_label") or ""), str(cfg.get("subject") or ""))
             else:

@@ -1,0 +1,24 @@
+name: Source release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish release notes without installer assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "EducationHelper $GITHUB_REF_NAME" \
+            --notes-file "docs/release-${GITHUB_REF_NAME#v}.md" \
+            --verify-tag
