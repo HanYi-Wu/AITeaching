@@ -35,20 +35,25 @@ jobs:
           python scripts/build_linux_offline.py --runtime-prefix "$CONDA_PREFIX"
           bash scripts/test-offline-install-linux.sh
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: EducationHelper-linux-x86_64-offline
           path: dist-offline/*
           compression-level: 0
-          retention-days: 90
+          retention-days: 14
       - name: Verify release files
         run: cd dist-offline && sha256sum --check *.sha256
       - name: Publish tagged GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist-offline/* \
+          TARGET_TAG="${GITHUB_REF_NAME}"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            TARGET_TAG="v$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | tr -d '[:space:]')"
+          fi
+          gh release upload "$TARGET_TAG" dist-offline/* --repo "$GITHUB_REPOSITORY" --clobber || \
+          gh release create "$TARGET_TAG" dist-offline/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "EducationHelper $GITHUB_REF_NAME" \
-            --notes-file "docs/release-${GITHUB_REF_NAME#v}.md" \
+            --title "EducationHelper $TARGET_TAG" \
+            --notes-file "docs/release-${TARGET_TAG#v}.md" \
             --verify-tag
