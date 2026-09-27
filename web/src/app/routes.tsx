@@ -5,16 +5,16 @@ import { ProjectPanel } from "../components/ProjectPanel";
 import type { ProjectInfo } from "../types/project";
 
 const BankWorkspace = lazy(() =>
-  import("../pages/BankWorkspace").then((module) => ({ default: module.BankWorkspace })),
+  import("../pages/bank/BankWorkspace").then((module) => ({ default: module.BankWorkspace })),
 );
 const ComposeWorkspace = lazy(() =>
-  import("../pages/ComposeWorkspace").then((module) => ({ default: module.ComposeWorkspace })),
+  import("../pages/compose/ComposeWorkspace").then((module) => ({ default: module.ComposeWorkspace })),
 );
 const GraphWorkspace = lazy(() =>
-  import("../pages/GraphWorkspace").then((module) => ({ default: module.GraphWorkspace })),
+  import("../pages/graph/GraphWorkspace").then((module) => ({ default: module.GraphWorkspace })),
 );
 const TemplateWorkspace = lazy(() =>
-  import("../pages/TemplateWorkspace").then((module) => ({ default: module.TemplateWorkspace })),
+  import("../pages/template/TemplateWorkspace").then((module) => ({ default: module.TemplateWorkspace })),
 );
 
 export function ComposeRoute({

@@ -206,7 +206,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="EducationHelper API", version="1.6.1", lifespan=_lifespan)
+app = FastAPI(title="EducationHelper API", version="1.6.2", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")

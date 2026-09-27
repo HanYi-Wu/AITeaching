@@ -42,31 +42,31 @@ const AgentSidebar = lazy(() =>
   import("./components/AgentSidebar").then((module) => ({ default: module.AgentSidebar })),
 );
 const AnalysisWorkspace = lazy(() =>
-  import("./pages/AnalysisWorkspace").then((module) => ({ default: module.AnalysisWorkspace })),
+  import("./pages/analysis/AnalysisWorkspace").then((module) => ({ default: module.AnalysisWorkspace })),
 );
 const HelpWorkspace = lazy(() =>
-  import("./pages/HelpWorkspace").then((module) => ({ default: module.HelpWorkspace })),
+  import("./pages/help/HelpWorkspace").then((module) => ({ default: module.HelpWorkspace })),
 );
 const SettingsWorkspace = lazy(() =>
-  import("./pages/SettingsWorkspace").then((module) => ({ default: module.SettingsWorkspace })),
+  import("./pages/settings/SettingsWorkspace").then((module) => ({ default: module.SettingsWorkspace })),
 );
 const AdminWorkspace = lazy(() =>
-  import("./pages/platform/AdminWorkspace").then((module) => ({ default: module.AdminWorkspace })),
+  import("./pages/platform/admin/AdminWorkspace").then((module) => ({ default: module.AdminWorkspace })),
 );
 const PapersWorkspace = lazy(() =>
-  import("./pages/platform/PapersWorkspace").then((module) => ({ default: module.PapersWorkspace })),
+  import("./pages/platform/papers/PapersWorkspace").then((module) => ({ default: module.PapersWorkspace })),
 );
 const TeacherStudentInsightsWorkspace = lazy(() =>
-  import("./pages/platform/TeacherStudentInsightsWorkspace").then((module) => ({ default: module.TeacherStudentInsightsWorkspace })),
+  import("./pages/platform/insights/TeacherStudentInsightsWorkspace").then((module) => ({ default: module.TeacherStudentInsightsWorkspace })),
 );
 const PlatformLogin = lazy(() =>
-  import("./pages/platform/PlatformLogin").then((module) => ({ default: module.PlatformLogin })),
+  import("./pages/platform/login/PlatformLogin").then((module) => ({ default: module.PlatformLogin })),
 );
 const SchoolWorkspace = lazy(() =>
-  import("./pages/platform/SchoolWorkspace").then((module) => ({ default: module.SchoolWorkspace })),
+  import("./pages/platform/school/SchoolWorkspace").then((module) => ({ default: module.SchoolWorkspace })),
 );
 const StudentWorkspace = lazy(() =>
-  import("./pages/platform/StudentWorkspace").then((module) => ({ default: module.StudentWorkspace })),
+  import("./pages/platform/student/StudentWorkspace").then((module) => ({ default: module.StudentWorkspace })),
 );
 const TeacherWorkspace = lazy(() =>
   import("./pages/platform/TeacherWorkspace").then((module) => ({ default: module.TeacherWorkspace })),

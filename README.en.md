@@ -1,6 +1,8 @@
 # EducationHelper (EH)
 
-EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.6.1**.
+EducationHelper is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.6.2**.
+
+Version 1.6.2 modularizes all 16 frontend workspace and platform pages into per-page subdirectories with co-located tests, preserving 100% existing functionality, Tailwind styling, and event bindings. See [1.6.2 release notes](docs/release-1.6.2.md).
 
 Version 1.6.1 resolves permission errors (403 No permission for this paper) during exam-to-paper conversion and direct paper publishing in multi-teacher setups, standardizing paper claim and read-only query isolation. See [1.6.1 release notes](docs/release-1.6.1.md).
 
