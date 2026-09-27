@@ -81,6 +81,4 @@ Rust 检查：在 `primebrush-rs` 执行 `cargo test --workspace`。GitHub Actio
 
 ## 版本和许可
 
-更新日志从 1.4.3 起记录功能变化；Git 提交记录保留实际开发历史。已补齐可核实的 1.4.4、1.4.5、1.4.8 和 1.5.0–1.5.4 发布标签。1.4.3、1.4.6、1.4.7 未找到独立版本提交，不伪造标签。[浏览版本](https://github.com/HanYi-Wu/AITeaching/tags)
-
 本项目使用自定义**非商业许可**，允许查看、学习和非商业使用，须保留署名与来源；商业使用需作者书面授权。详见 [LICENSE](LICENSE)。
