@@ -12,6 +12,10 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from solaire.common.runtime_config import load_runtime_config
+
+load_runtime_config()
+
 ROOT = Path(os.environ.get('EH_WEB_ROOT', 'web/dist')).resolve()
 BACKEND = os.environ.get('EH_BACKEND_URL', 'http://127.0.0.1:8000')
 HOP = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
@@ -65,23 +69,25 @@ async def static(request: Request):
     if not target.is_relative_to(ROOT) or any(p.startswith('.') for p in Path(relative).parts):
         return Response(status_code=404)
     if target.is_file():
-        headers = {'Cache-Control': 'no-cache' if target.name == 'index.html' else
-                   'public, max-age=31536000, immutable' if relative.startswith('assets/') and re.search(r'-[\w-]{8,}\.', target.name) else 'public, max-age=86400',
+        headers = {'Cache-Control': 'public, max-age=31536000, immutable'
+                   if relative.startswith('assets/') and re.search(r'-[\w-]{8,}\.', target.name)
+                   else 'no-cache',
                    'Vary': 'Accept-Encoding'}
         accepted = request.headers.get('accept-encoding', '')
-        gzip_allowed = False
+        encodings = {}
         for part in accepted.split(','):
             fields = [field.strip() for field in part.split(';')]
-            if fields[0] != 'gzip':
+            if fields[0] not in {'br', 'gzip'}:
                 continue
             try:
-                gzip_allowed = float(next((field[2:] for field in fields[1:] if field.startswith('q=')), '1')) > 0
+                encodings[fields[0]] = float(next((field[2:] for field in fields[1:] if field.startswith('q=')), '1'))
             except ValueError:
                 pass
-        compressed = target.with_name(target.name + '.gz')
-        if gzip_allowed and compressed.is_file() and compressed.resolve().is_relative_to(ROOT):
-            headers['Content-Encoding'] = 'gzip'
-            return FileResponse(compressed, media_type=mimetypes.guess_type(str(target))[0], headers=headers)
+        for encoding in ('br', 'gzip'):
+            compressed = target.with_name(target.name + ('.br' if encoding == 'br' else '.gz'))
+            if encodings.get(encoding, 0) > 0 and compressed.is_file() and compressed.resolve().is_relative_to(ROOT):
+                headers['Content-Encoding'] = encoding
+                return FileResponse(compressed, media_type=mimetypes.guess_type(str(target))[0], headers=headers)
         return FileResponse(target, headers=headers)
     if '.' in Path(relative).name:
         return Response(status_code=404)

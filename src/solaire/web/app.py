@@ -19,6 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
+from solaire.common.runtime_config import load_runtime_config
+
+load_runtime_config()
+
 from solaire.exam_compiler.facade import (
     EditorMetadataDefaultsBody,
     ExamConfig,
@@ -206,7 +210,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="EducationHelper API", version="1.6.2", lifespan=_lifespan)
+app = FastAPI(title="OriginReach API", version="1.6.3", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")

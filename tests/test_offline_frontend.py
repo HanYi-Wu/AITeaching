@@ -10,6 +10,8 @@ def test_precompressed_hashed_assets_and_uncached_html(tmp_path, monkeypatch):
     asset = tmp_path / 'assets' / 'entry-abcdefgh.js'
     asset.write_text('hello frontend')
     asset.with_name(asset.name + '.gz').write_bytes(gzip.compress(asset.read_bytes()))
+    brotli_bytes = bytes.fromhex('8b068068656c6c6f2066726f6e74656e6403')
+    asset.with_name(asset.name + '.br').write_bytes(brotli_bytes)
     (tmp_path / 'index.html').write_text('page')
     monkeypatch.setattr(frontend, 'ROOT', tmp_path)
     with TestClient(frontend.app) as client:
@@ -18,8 +20,13 @@ def test_precompressed_hashed_assets_and_uncached_html(tmp_path, monkeypatch):
         assert response.headers['content-encoding'] == 'gzip'
         assert 'immutable' in response.headers['cache-control']
         assert response.headers['vary'] == 'Accept-Encoding'
+        brotli_response = client.get('/assets/entry-abcdefgh.js', headers={'Accept-Encoding': 'br, gzip'})
+        assert brotli_response.content in {brotli_bytes, b'hello frontend'}
+        assert brotli_response.headers['content-encoding'] == 'br'
+        assert 'content-encoding' not in client.get('/assets/entry-abcdefgh.js', headers={'Accept-Encoding': 'br;q=0,gzip;q=0'}).headers
         assert 'content-encoding' not in client.get('/assets/entry-abcdefgh.js', headers={'Accept-Encoding': 'gzip;q=0'}).headers
         assert client.get('/index.html').headers['cache-control'] == 'no-cache'
+        assert client.get('/pdfjs/cmaps/unknown.bin').status_code == 404
 
 
 def test_static_assets_spa_missing_files_and_release_identity(tmp_path, monkeypatch):

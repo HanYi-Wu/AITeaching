@@ -1,12 +1,20 @@
 import path from "node:path";
 import { cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { gzipSync } from 'node:zlib';
+import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+function configValue(key: string): string | undefined {
+  if (process.env[key]) return process.env[key];
+  const file = process.env.EH_CONFIG_FILE;
+  if (!file) return undefined;
+  const entry = readFileSync(file, 'utf8').split(/\r?\n/).find((line) => line.trim().startsWith(`${key}=`));
+  return entry?.slice(entry.indexOf('=') + 1).trim().replace(/^(['"])(.*)\1$/, '$2') || undefined;
+}
+
 const apiProxy = {
   "/api": {
-    target: process.env.EH_BACKEND_URL || "http://127.0.0.1:8000",
+    target: configValue('EH_BACKEND_URL') || "http://127.0.0.1:8000",
     changeOrigin: true,
     xfwd: true,
   },
@@ -35,6 +43,10 @@ export default defineConfig({
             if (bytes.length > 1024) {
               const compressed = gzipSync(bytes, { level: 9 });
               if (compressed.length < bytes.length) writeFileSync(file + '.gz', compressed);
+              const brotli = brotliCompressSync(bytes, {
+                params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+              });
+              if (brotli.length < bytes.length) writeFileSync(file + '.br', brotli);
             }
           }
         }

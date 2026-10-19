@@ -2,10 +2,14 @@
 setlocal
 cd /d "%~dp0"
 set "PYTHONPATH=%~dp0src;%PYTHONPATH%"
-set "SOLAIRE_PROJECT_ROOT=%~dp0"
-set "SOLAIRE_BIND_PROJECT_FROM_ENV=1"
+if exist "%~dp0educationhelper.env" (
+  set "EH_CONFIG_FILE=%~dp0educationhelper.env"
+) else (
+  set "SOLAIRE_PROJECT_ROOT=%~dp0"
+  set "SOLAIRE_BIND_PROJECT_FROM_ENV=1"
+)
 
-echo [EducationHelper] Checking backend http://127.0.0.1:8000 ...
+echo [OriginReach] Checking backend http://127.0.0.1:8000 ...
 powershell -NoProfile -Command "try { $r = Invoke-WebRequest 'http://127.0.0.1:8000/api/health' -TimeoutSec 2 -UseBasicParsing; if ($r.StatusCode -ne 200) { exit 1 } } catch { exit 1 }"
 if %ERRORLEVEL%==0 (
   echo [EducationHelper] Backend already running.

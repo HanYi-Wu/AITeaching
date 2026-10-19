@@ -4,6 +4,7 @@
 # Node (Web UI)
 node_modules/
 /output/
+/educationhelper.env
 /test/test/exams/
 /.playwright-cli/
 /test/test/.solaire/
