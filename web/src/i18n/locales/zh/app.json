@@ -1,5 +1,5 @@
 {
-  "brand": "Solaire",
+  "brand": "源远教学平台",
   "errorBannerLogHint": "（完整说明见运行日志）",
   "nav": {
     "compose": "组卷",
@@ -12,10 +12,10 @@
     "graph": "知识图谱",
     "analysis": "分析",
     "analysisTitle": "成绩分析与统计",
-    "assistant": "助手",
-    "assistantTitle": "打开或收起智能助手侧栏",
+    "assistant": "智能体",
+    "assistantTitle": "打开或收起源远智能体侧栏",
     "settings": "设置",
-    "settingsTitle": "智能助手模型服务参数",
+    "settingsTitle": "源远智能体模型服务参数",
     "logout": "退出",
     "logoutTitle": "退出登录",
     "help": "手册",
@@ -38,7 +38,7 @@
     "fileCloseProject": "关闭当前内容库",
     "fileWelcome": "返回欢迎页",
     "view": "视图",
-    "viewAssistant": "切换智能助手"
+    "viewAssistant": "切换源远智能体"
   },
   "status": {
     "saved": "已保存",
@@ -54,7 +54,7 @@
     "close": "关闭"
   },
   "route": {
-    "composeSummary": "内容库就绪后即可组卷；可使用侧栏智能助手协助校验与导出。",
+    "composeSummary": "内容库就绪后即可组卷；可使用源远智能体协助校验与导出。",
     "bankSummary": "内容库就绪后即可管理题库。",
     "templateSummary": "内容库就绪后即可编辑试卷模板。",
     "graphSummary": "内容库就绪后即可维护知识图谱。"

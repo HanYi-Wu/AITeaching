@@ -87,7 +87,7 @@
     "copyFailed": "Could not copy automatically. Copy the install command manually.",
     "confirmSystemInstall": "Install “{{name}}” with the system installer and open a local installer window?",
     "windowsInstallerMissingTitle": "Windows App Installer was not detected, so one-click installation is unavailable.",
-    "windowsInstallerMissingHint": "Install App Installer from Microsoft, restart EducationHelper, and check again. Each component also keeps its manual download link.",
+    "windowsInstallerMissingHint": "Install App Installer from Microsoft, restart OriginReach, and check again. Each component also keeps its manual download link.",
     "getWindowsInstaller": "Get Windows App Installer",
     "chooseInstallDir": "Choose install folder",
     "chooseProgramFile": "Choose program file",

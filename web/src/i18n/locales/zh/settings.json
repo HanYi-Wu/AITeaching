@@ -1,6 +1,6 @@
 {
   "title": "设置",
-  "intro": "配置智能助手连接的模型服务：与运行环境变量叠加；本机用户目录为默认保存位置，内容目录中的设置可单独覆盖并优先生效。",
+  "intro": "配置源远智能体连接的模型服务：与运行环境变量叠加；本机用户目录为默认保存位置，内容目录中的设置可单独覆盖并优先生效。",
   "switchProject": "切换内容目录",
   "loading": "加载中…",
   "saveScopeGlobalHint": "当前使用本机默认设置：保存后将写入本机用户目录。",
@@ -69,7 +69,7 @@
   "updatedSafety": "已更新助手安全策略。",
   "confirmClearKey": "确定清除保存在内容目录中的访问密钥？清除后将改用运行环境中的配置（若已设置）。",
   "confirmClearKeyUser": "确定清除本机用户目录中保存的访问密钥？清除后将改用运行环境中的配置（若已设置）。",
-  "pageSummary": "智能助手模型服务参数",
+  "pageSummary": "源远智能体模型服务参数",
   "tabModel": "模型与服务",
   "tabExtensions": "扩展组件",
   "ext": {
@@ -87,7 +87,7 @@
     "copyFailed": "无法自动复制，请手动复制安装命令。",
     "confirmSystemInstall": "将使用系统安装器安装“{{name}}”，并在本机打开安装窗口。是否继续？",
     "windowsInstallerMissingTitle": "未检测到 Windows 系统安装器，暂时无法一键安装。",
-    "windowsInstallerMissingHint": "请先从 Microsoft 安装“应用安装程序”，完成后重启 EducationHelper，再点击重新检测；也可以继续使用每个组件的手动下载入口。",
+    "windowsInstallerMissingHint": "请先从 Microsoft 安装“应用安装程序”，完成后重启源远教学平台，再点击重新检测；也可以继续使用每个组件的手动下载入口。",
     "getWindowsInstaller": "获取 Windows 系统安装器",
     "chooseInstallDir": "选择安装目录",
     "chooseProgramFile": "选择程序文件",

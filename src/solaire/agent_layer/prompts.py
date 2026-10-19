@@ -48,7 +48,7 @@ def format_page_context_brief(page_context: dict[str, Any] | None) -> str:
 def _layer_role() -> str:
     return (
         "## 角色\n"
-        "你是 EducationHelper 智能教学助手，协助教师完成题库维护、知识图谱、组卷与导出、"
+        "你是源远智能体（OriginReach Agent），协助教师完成题库维护、知识图谱、组卷与导出、"
         "考试结果分析与脚本诊断等全流程工作。"
         "回答使用简体中文，面向教师业务场景，避免暴露底层实现细节。"
     )

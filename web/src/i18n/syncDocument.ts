@@ -1,6 +1,6 @@
 const TITLES: Record<string, string> = {
-  zh: "EducationHelper · 组卷",
-  en: "EducationHelper · Papers",
+  zh: "源远教学平台 · 组卷",
+  en: "OriginReach · Papers",
 };
 
 export function applyDocumentLocale(lng: string) {

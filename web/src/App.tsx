@@ -262,9 +262,12 @@ function AppShell() {
         ) : (
           <TeacherWorkspace>
             {currentUser?.role === 'teacher' ? <TeacherFirstUseGuide key={currentUser.id} user={currentUser} onUpdated={setCurrentUser} onNavigate={setPage} onOpenAssistant={() => setSidebarOpen(true)} /> : null}
-            <aside className="flex w-16 shrink-0 flex-col border-r border-slate-800 bg-slate-900">
+            <aside className="flex w-[76px] shrink-0 flex-col border-r border-slate-800 bg-slate-950 text-white">
+              <div className="flex h-14 shrink-0 items-center justify-center border-b border-slate-800" title="源远教学平台 · OriginReach">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold tracking-tight shadow-lg shadow-indigo-950/40">OR</span>
+              </div>
               {currentUser ? <TeacherUserBadge user={currentUser} /> : null}
-              <nav className="flex flex-1 flex-col gap-1 p-2">
+              <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2" aria-label="教师工作区导航">
                 <div className="flex flex-1 flex-col gap-1">
                   <SidebarNavButton
                     icon={Network}
@@ -474,7 +477,7 @@ function TeacherUserBadge({ user }: { user: PlatformUser }) {
         ) : (
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-900">{initial}</span>
         )}
-        <span className="block max-w-12 truncate text-[10px] font-medium leading-tight text-slate-200">
+        <span className="block max-w-14 truncate text-[11px] font-medium leading-tight text-slate-200">
           {displayName}
         </span>
       </div>
@@ -508,10 +511,10 @@ function SidebarNavButton({
       onClick={disabled ? undefined : onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex flex-col items-center gap-0.5 rounded-lg px-1 py-2 text-[10px] font-medium transition-colors",
+        "flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[11px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400",
         disabled && "cursor-not-allowed opacity-40",
         !disabled && !active && "text-slate-400 hover:bg-slate-800 hover:text-slate-100",
-        active && "bg-slate-800 text-white shadow-inner",
+        active && "bg-indigo-600 text-white shadow-sm shadow-indigo-950/30",
       )}
     >
       <Icon className="h-5 w-5 shrink-0" strokeWidth={1.75} />

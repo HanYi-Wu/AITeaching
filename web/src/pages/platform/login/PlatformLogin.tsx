@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Eye, EyeOff, KeyRound, LogIn, UserPlus } from "lucide-react";
+import { BookOpenCheck, Eye, EyeOff, KeyRound, LogIn, UserPlus } from "lucide-react";
 import {
   bootstrapAdmin,
   loginPlatform,
@@ -7,7 +7,6 @@ import {
   type PlatformAuthResponse,
   type PlatformUser,
 } from "../../../platform/auth";
-import { PlatformShell } from "../PlatformShell";
 
 type Props = {
   mode: "bootstrap" | "login";
@@ -83,25 +82,35 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
   }
 
   return (
-    <PlatformShell
-      roleLabel="平台入口"
-      title={isBootstrap ? "创建管理员账户" : "登录平台"}
-      subtitle={isBootstrap ? "首次使用平台时需要初始化管理员。" : "使用平台账号进入对应端。"}
-    >
-      <div className="flex min-h-[calc(100vh-9rem)] items-center justify-center">
+    <div className="min-h-screen w-full flex-1 bg-slate-50 px-4 py-8 text-slate-950 sm:px-6 lg:flex lg:items-center lg:justify-center lg:py-12">
+      <div className="mx-auto grid w-full max-w-5xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 lg:min-h-[620px] lg:grid-cols-[1.05fr_1fr]">
+        <section className="relative overflow-hidden bg-slate-950 p-6 text-white sm:p-12 lg:flex lg:flex-col lg:justify-between">
+          <div className="absolute -right-24 -top-28 h-80 w-80 rounded-full bg-indigo-500/20 blur-3xl" aria-hidden="true" />
+          <div className="relative flex items-center gap-3">
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500"><BookOpenCheck className="h-6 w-6" /></span>
+            <div><p className="text-xl font-semibold">源远教学平台</p><p className="text-xs font-medium tracking-[0.22em] text-indigo-200">ORIGINREACH · OR</p></div>
+          </div>
+          <div className="relative mt-8 sm:mt-14 lg:mt-0">
+            <p className="mb-4 text-sm font-semibold tracking-[0.2em] text-indigo-300">教学 · 考试 · 成长</p>
+            <h1 className="max-w-md text-2xl font-semibold leading-tight tracking-tight sm:text-4xl">从备课到反馈，<br />让每一步都有依据。</h1>
+            <p className="mt-5 hidden max-w-md text-sm leading-7 text-slate-300 sm:block">题库、组卷、答题、批改与学情分析，围绕同一教学流程协同工作。</p>
+          </div>
+          <p className="relative mt-12 hidden text-xs text-slate-400 sm:block">源远智能体可辅助教师操作；成绩和关键决策仍由教师把关。</p>
+        </section>
+        <div className="flex items-center justify-center p-5 sm:p-10 lg:p-14">
       <form
         noValidate
         onSubmit={(event) => void submit(event)}
-        className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+        className="w-full max-w-sm"
       >
         <div className="mb-5 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 text-white">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700">
             {isBootstrap ? <UserPlus className="h-5 w-5" /> : <KeyRound className="h-5 w-5" />}
           </div>
           <div>
-            <h1 className="text-lg font-semibold text-slate-950">
+            <h2 className="text-xl font-semibold text-slate-950">
               {isBootstrap ? "创建管理员账户" : "登录平台"}
-            </h1>
+            </h2>
             <p className="text-sm text-slate-500">
               {isBootstrap ? "首次使用平台时需要初始化管理员。" : "使用管理员、学校、教师或学生账户进入。"}
             </p>
@@ -117,7 +126,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
               setUsername(event.target.value);
               clearError();
             }}
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
             autoComplete="username"
             required
           />
@@ -132,7 +141,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
                 setDisplayName(event.target.value);
                 clearError();
               }}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
               required
             />
           </label>
@@ -147,7 +156,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
                 setPassword(event.target.value);
                 clearError();
               }}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 pr-11 text-sm outline-none focus:border-slate-700"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 pr-11 text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
               type={showPassword ? "text" : "password"}
               autoComplete={isBootstrap ? "new-password" : "current-password"}
               minLength={6}
@@ -173,13 +182,14 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
         <button
           type="submit"
           disabled={busy}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60"
+          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60"
         >
           {isBootstrap ? <UserPlus className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}
           {busy ? "处理中" : isBootstrap ? "创建并进入" : "登录"}
         </button>
       </form>
+        </div>
       </div>
-    </PlatformShell>
+    </div>
   );
 }

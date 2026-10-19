@@ -682,7 +682,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
     setMessage(null);
     try {
       const blob = await downloadOfflineAnswerUploader();
-      downloadBlob(blob, "EducationHelper-Offline-Answer-Uploader.exe");
+      downloadBlob(blob, "OriginReach-Offline-Answer-Uploader.exe");
       setMessage("线下答卷采集器已下载。当前程序未做商业代码签名，Windows 可能提示“未知发布者”；请确认文件来自本系统后再运行。");
     } catch (e) {
       reportError(e);
@@ -724,23 +724,23 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-slate-50 text-slate-950">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-4">
+      <header className="flex shrink-0 flex-col items-stretch gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
             <ClipboardList className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-semibold">试卷管理</h1>
+            <h1 className="text-xl font-semibold">试卷管理</h1>
             <p className="text-sm text-slate-500">线上发布、线下成绩和分析入口</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             data-testid="paper-download-offline-uploader"
             onClick={() => void downloadOfflineUploader()}
             disabled={busy === "offline-uploader"}
-            className="inline-flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+            className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
           >
             <Download className="h-4 w-4" />
             {busy === "offline-uploader" ? "准备下载..." : "下载线下答卷采集器"}
@@ -749,7 +749,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
             type="button"
             onClick={() => void refresh()}
             disabled={loading}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+            className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-60"
           >
             <RefreshCw className="h-4 w-4" />
             刷新
