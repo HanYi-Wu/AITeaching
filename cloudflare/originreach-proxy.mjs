@@ -25,6 +25,7 @@ export default {
       ? { cf: { cacheEverything: true, cacheTtl: 31536000 } }
       : { cf: { cacheTtl: 0 } });
     const responseHeaders = new Headers(originResponse.headers);
+    responseHeaders.set('x-originreach-edge', '1');
     if (cacheable && originResponse.ok && !responseHeaders.has('set-cookie')) {
       responseHeaders.set('cache-control', 'public, max-age=31536000, immutable');
     } else {

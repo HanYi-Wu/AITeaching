@@ -19,6 +19,7 @@ test('fingerprinted public assets may be cached without sending credentials', as
   assert.equal(observed.request.headers.has('authorization'), false);
   assert.equal(observed.options.cf.cacheEverything, true);
   assert.match(response.headers.get('cache-control'), /immutable/);
+  assert.equal(response.headers.get('x-originreach-edge'), '1');
 });
 
 test('authenticated API responses are never cached', async () => {
@@ -33,4 +34,5 @@ test('authenticated API responses are never cached', async () => {
   assert.equal(observed.request.headers.get('authorization'), 'Bearer secret');
   assert.equal(observed.options.cf.cacheTtl, 0);
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  assert.equal(response.headers.get('x-originreach-edge'), '1');
 });
