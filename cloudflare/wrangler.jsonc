@@ -6,6 +6,7 @@
   "workers_dev": true,
   "preview_urls": false,
   "routes": [
-    { "pattern": "or.whenry.cc.cd", "custom_domain": true }
+    { "pattern": "or.whenry.cc.cd", "custom_domain": true },
+    { "pattern": "or.whenry.cc.cd/*", "zone_name": "whenry.cc.cd" }
   ]
 }
