@@ -171,11 +171,16 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
     fileDrag.current = { x:e.clientX,y:e.clientY,folder,ids:id ? selectedIds.includes(id) ? [...selectedIds] : [id] : undefined,moved:false };
   }} onPointerMove={pointerDrag} onPointerUp={finishPointerDrag} onDragEnd={finishPointerDrag} onPointerCancel={() => { if (!fileDrag.current?.moved) fileDrag.current = null; setDropHighlight(null); }}>
     <div className="space-y-2 border-b p-2">
-      <p className="break-all text-xs text-slate-500">当前目录：{selectedFolder || '根目录（未分组）'}</p>
+      <p className="truncate text-xs font-medium text-slate-700" title={selectedFolder || '根目录（未分组）'}>当前：{selectedFolder || '全部目录'}</p>
+      <div className="flex flex-wrap gap-1">
+        {onSelectIds ? <button type="button" className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100" onClick={() => toggleAll('')}>{items.length > 0 && items.every(item => selectedIds.includes(item.qualified_id)) ? '取消全选' : '全选当前结果'}</button> : null}
+        {onSelectIds ? <button type="button" className={buttonClass} onClick={() => setExploring(true)}>文件管理器</button> : null}
+      </div>
+      <details className="rounded border border-slate-200 bg-slate-50 p-2">
+        <summary className="cursor-pointer text-xs font-medium text-slate-700">目录操作与分享</summary>
+        <div className="mt-2 space-y-2">
       <label className="block text-xs">目录名称 / 子目录路径<input aria-label="目录路径" value={name} onChange={e => setName(e.target.value)} placeholder="数学/函数" className="mt-1 w-full rounded border px-2 py-1.5" /></label>
       <div className="flex flex-wrap gap-1">
-        {onSelectIds ? <button type="button" className={buttonClass} onClick={() => toggleAll('')}>全选 / 取消全选</button> : null}
-        {onSelectIds ? <button type="button" className={buttonClass} onClick={() => setExploring(true)}>打开文件管理器</button> : null}
         <button type="button" className={buttonClass} disabled={busy || !name.trim()} onClick={() => void act('create')}>新建目录</button>
         <button type="button" className={buttonClass} disabled={busy || !selectedFolder || !name.trim()} onClick={() => void act('rename')}>重命名</button>
         <button type="button" className={buttonClass} disabled={busy || !selectedFolder} onClick={() => void act('remove')}>删除目录</button>
@@ -186,10 +191,12 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
       <div className="space-y-1 border-t pt-2"><button className={buttonClass} disabled={busy || !selectedFolder} onClick={() => void share('create', selectedFolder)}>生成文件夹邀请CDK</button>
         {shareCode ? <><input aria-label="生成的邀请码" readOnly value={shareCode} className="w-full rounded border p-1 text-xs" onFocus={e => e.target.select()} /><button className={buttonClass} disabled={busy} onClick={() => void share('revoke')}>撤销邀请</button></> : null}
         <input aria-label="输入文件夹邀请CDK" value={invitation} onChange={e => setInvitation(e.target.value)} placeholder="输入其他教师的CDK" className="w-full rounded border p-1 text-xs" /><button className={buttonClass} disabled={busy || !invitation.trim()} onClick={() => void share('redeem')}>导入分享文件夹</button></div>
+        </div>
+      </details>
       {message ? <p role="status" className="text-xs text-emerald-700">{message}</p> : null}
     </div>
     <nav data-drop-root aria-label="题目文件夹" className="min-h-0 flex-1 overflow-auto" onClick={e => { if (!(e.target as HTMLElement).closest('li,button,input,summary')) { onSelectIds?.([]); setFocusedFolder(''); } }} onDragOver={e => e.preventDefault()} onDrop={e => drop(e, '')}>
-      <button type="button" className="p-2 text-xs text-slate-600" onDrop={e => drop(e, '')} onClick={() => { setSelectedFolder(''); setName(''); }}>全部目录 · {items.length} 道匹配题目</button>
+      <button type="button" className="m-1 w-[calc(100%-0.5rem)] rounded border border-slate-200 bg-white p-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-100" onDrop={e => drop(e, '')} onClick={() => { setSelectedFolder(''); setName(''); }}>全部目录 · {items.length} 道匹配题目</button>
       {branch('')}
       {!items.length ? <p className="p-3 text-xs text-slate-500">暂无匹配题目；可调整搜索与筛选，或新建题目。</p> : null}
     </nav>

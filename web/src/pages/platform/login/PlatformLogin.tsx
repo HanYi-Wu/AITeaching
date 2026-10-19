@@ -91,11 +91,10 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
             <div><p className="text-xl font-semibold">源远教学平台</p><p className="text-xs font-medium tracking-[0.22em] text-indigo-200">ORIGINREACH · OR</p></div>
           </div>
           <div className="relative mt-8 sm:mt-14 lg:mt-0">
-            <p className="mb-4 text-sm font-semibold tracking-[0.2em] text-indigo-300">教学 · 考试 · 成长</p>
-            <h1 className="max-w-md text-2xl font-semibold leading-tight tracking-tight sm:text-4xl">从备课到反馈，<br />让每一步都有依据。</h1>
-            <p className="mt-5 hidden max-w-md text-sm leading-7 text-slate-300 sm:block">题库、组卷、答题、批改与学情分析，围绕同一教学流程协同工作。</p>
+            <h1 className="text-2xl font-semibold leading-tight sm:text-4xl">统一登录</h1>
+            <p className="mt-5 text-sm leading-7 text-slate-300">教师管理教学内容，学生在此答题。</p>
           </div>
-          <p className="relative mt-12 hidden text-xs text-slate-400 sm:block">源远智能体可辅助教师操作；成绩和关键决策仍由教师把关。</p>
+          <p className="relative mt-12 hidden text-xs text-slate-400 sm:block">教师、学生、学校和平台账号共用此入口。</p>
         </section>
         <div className="flex items-center justify-center p-5 sm:p-10 lg:p-14">
       <form

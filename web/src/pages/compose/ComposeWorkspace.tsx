@@ -122,6 +122,7 @@ export function ComposeWorkspace({
   const [wordExamId, setWordExamId] = useState<string | null>(null);
   /** 校验生成的临时预览会话 id（不入历史试卷） */
   const [previewPdfId, setPreviewPdfId] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
   const [questionBindingsIndex, setQuestionBindingsIndex] = useState<Record<string, GraphBindingNode[]>>({});
   const [newPaperDialogOpen, setNewPaperDialogOpen] = useState(false);
@@ -791,12 +792,12 @@ export function ComposeWorkspace({
     setRightListAnchor(null);
   }, []);
 
-  function addFromLeft() {
-    if (!selectedTpl || !activeSection || selectedLeftIds.length === 0) {
+  function addQuestionsToSection(questionIds: string[], sectionId: string | null) {
+    if (!selectedTpl || !sectionId || questionIds.length === 0) {
       onError(t("compose:errors.selectQuestionFirst"));
       return;
     }
-    const sec = selectedTpl.sections.find((s) => s.section_id === activeSection);
+    const sec = selectedTpl.sections.find((s) => s.section_id === sectionId);
     if (!sec) {
       onError(t("compose:errors.sectionNotFound"));
       return;
@@ -805,13 +806,13 @@ export function ComposeWorkspace({
       onError(t("compose:errors.textSectionNoPick"));
       return;
     }
-    const compatible = selectedLeftIds.filter((qid) => {
+    const compatible = questionIds.filter((qid) => {
       const row = questionMap.get(qid);
       return row && questionTypeMatchesSection(row.type, sec.type, row.answer);
     });
-    const skippedType = selectedLeftIds.length - compatible.length;
+    const skippedType = questionIds.length - compatible.length;
     if (compatible.length === 0) {
-      const first = questionMap.get(selectedLeftIds[0]);
+      const first = questionMap.get(questionIds[0]);
       onError(
         t("compose:errors.typeMismatch", {
           need: sectionTypeToFilter(sec),
@@ -820,7 +821,7 @@ export function ComposeWorkspace({
       );
       return;
     }
-    const cur = bySection[activeSection] ?? [];
+    const cur = bySection[sectionId] ?? [];
     const newIds = compatible.filter((id) => !cur.includes(id));
     if (newIds.length === 0) {
       return;
@@ -832,11 +833,27 @@ export function ComposeWorkspace({
     onError(null);
     setBySection((prev) => ({
       ...prev,
-      [activeSection]: [...(prev[activeSection] ?? []), ...newIds],
+      [sectionId]: [...(prev[sectionId] ?? []), ...newIds],
     }));
     if (skippedType > 0) {
       setMsg(t("compose:messages.multiAddSkipped", { n: skippedType }));
     }
+  }
+
+  function addFromLeft() {
+    addQuestionsToSection(selectedLeftIds, activeSection);
+  }
+
+  function removeDraggedQuestion(sectionId: string, qid: string) {
+    setBySection((prev) => ({ ...prev, [sectionId]: (prev[sectionId] ?? []).filter((id) => id !== qid) }));
+    setScoreOverrides((prev) => {
+      if (!prev[sectionId] || !(qid in prev[sectionId])) return prev;
+      const nextSection = { ...prev[sectionId] };
+      delete nextSection[qid];
+      return { ...prev, [sectionId]: nextSection };
+    });
+    setSelectedRight(null);
+    onError(null);
   }
 
   function removeFromRight() {
@@ -894,6 +911,7 @@ export function ComposeWorkspace({
         selected_items,
       });
       setPreviewPdfId(res.preview_id);
+      setPreviewOpen(true);
       const w = res.warnings ?? [];
       setPreviewWarnings(w);
       setMsg(
@@ -1585,25 +1603,17 @@ export function ComposeWorkspace({
         >
           {t("compose:validatePreview")}
         </button>
+        {previewPdfId || pdfExamId ? <button type="button" className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 xl:hidden" onClick={() => setPreviewOpen(true)}>查看预览</button> : null}
+        <details className="relative group">
+          <summary className="list-none cursor-pointer rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50">导出 ▾</summary>
+          <div className="absolute right-0 top-full z-30 mt-1 min-w-32 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
+            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk} onClick={() => void exportExam()}>{t("compose:exportPdf")}</button>
+            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk} onClick={() => void exportWord()}>{t("compose:exportWord")}</button>
+          </div>
+        </details>
         <button
           type="button"
-          className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
-          disabled={busy || !countsOk}
-          onClick={() => void exportExam()}
-        >
-          {t("compose:exportPdf")}
-        </button>
-        <button
-          type="button"
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 disabled:opacity-50"
-          disabled={busy || !countsOk}
-          onClick={() => void exportWord()}
-        >
-          {t("compose:exportWord")}
-        </button>
-        <button
-          type="button"
-          className="rounded-md border border-emerald-300 bg-white px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+          className="rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
           disabled={busy || publishBusy}
           onClick={() => void openPublishDialog()}
           title="发布线上试卷"
@@ -1629,6 +1639,8 @@ export function ComposeWorkspace({
     templates,
     exportedExamRows,
     publishBusy,
+    previewPdfId,
+    pdfExamId,
   ]);
 
   useEffect(() => {
@@ -1971,7 +1983,7 @@ export function ComposeWorkspace({
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-row">
-        <aside className="flex w-[min(100%,140px)] shrink-0 flex-col border-r border-slate-200 bg-slate-50">
+        <aside className="flex w-48 shrink-0 flex-col border-r border-slate-200 bg-slate-50 xl:w-56">
           <div className="shrink-0 border-b border-slate-200 bg-white px-2 py-2">
             <h2 className="text-[10px] font-semibold uppercase leading-tight tracking-wide text-slate-500">
               {t("compose:historySidebarTitle")}
@@ -2083,8 +2095,8 @@ export function ComposeWorkspace({
           </div>
         </aside>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 lg:flex-row">
-        <section className="hidden w-full min-w-0 shrink-0 flex flex-col border-slate-200 bg-white lg:flex lg:w-[min(100%,187px)] lg:border-r">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 md:flex-row">
+        <section className="hidden w-full min-w-0 shrink-0 flex-col border-slate-200 bg-white md:flex md:w-56 md:border-r xl:w-72" onDragOver={(event) => { if (event.dataTransfer.types.includes('application/x-originreach-paper-item')) event.preventDefault(); }} onDrop={(event) => { const raw = event.dataTransfer.getData('application/x-originreach-paper-item'); if (!raw) return; event.preventDefault(); try { const item = JSON.parse(raw) as { sectionId: string; qid: string }; removeDraggedQuestion(item.sectionId, item.qid); } catch { onError('无法读取拖动的题目'); } }}>
           <div className="border-b border-slate-100 px-3 py-2">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("compose:bankSearchTitle")}</h2>
             <button
@@ -2179,7 +2191,7 @@ export function ComposeWorkspace({
                 />
               </div>
             )}
-            <p className="mt-2 text-[10px] leading-snug text-slate-500">{t("compose:bankListMultiSelectHint")}</p>
+            <p className="mt-2 text-[10px] leading-snug text-slate-500">可将题目拖入右侧小节；多选后也可用箭头加入。</p>
           </div>
           <ul className="min-h-0 flex-1 overflow-auto p-2">
             {contentSyncing ? (
@@ -2201,8 +2213,9 @@ export function ComposeWorkspace({
                   <li key={q.qualified_id}>
                     <button
                       type="button"
+                      draggable
+                      onDragStart={(event) => event.dataTransfer.setData('application/x-originreach-bank-qids', JSON.stringify(selectedLeftIdsSet.has(q.qualified_id) ? selectedLeftIds : [q.qualified_id]))}
                       onClick={(e) => handleLeftBankClick(q, index, e)}
-                      title={`${q.qualified_id}\n${q.content_preview}`}
                       className={cn(
                         "mb-1 w-full rounded-lg border px-2 py-2 text-left text-sm transition-colors",
                         selectedLeftIdsSet.has(q.qualified_id)
@@ -2240,7 +2253,7 @@ export function ComposeWorkspace({
           </ul>
         </section>
 
-        <div className="flex w-11 shrink-0 flex-col items-center justify-center gap-3 border-y border-slate-200 bg-slate-100/90 py-4 lg:border-x lg:border-y-0">
+        <div className="flex w-full shrink-0 flex-row items-center justify-center gap-2 border-y border-slate-200 bg-slate-100/90 py-2 md:w-11 md:flex-col md:justify-start md:gap-3 md:border-x md:border-y-0 md:py-4">
           <button type="button" disabled={!selectedTpl} className="rounded border bg-white p-1 text-xs" title="按当前筛选题目补齐各大题空缺；保留已选题目，不重复添加" onClick={() => {
             if (!selectedTpl) return;
             const next = fillSectionGaps(selectedTpl.sections, bySection, filteredQuestions, questionTypeMatchesSection);
@@ -2366,7 +2379,7 @@ export function ComposeWorkspace({
                 ))}
               </select>
             </p>
-            <p className="text-[10px] leading-snug text-slate-500">{t("compose:paperListMultiSelectHint")}</p>
+            <p className="text-[10px] leading-snug text-slate-500">拖回左侧题库可从试卷移除；点击题目可多选后用箭头移除。</p>
 
             {selectedTpl?.sections.map((s) => {
               const n = bySection[s.section_id]?.length ?? 0;
@@ -2400,6 +2413,8 @@ export function ComposeWorkspace({
                       }
                     }
                   }}
+                  onDragOver={(event) => { if (event.dataTransfer.types.includes('application/x-originreach-bank-qids')) event.preventDefault(); }}
+                  onDrop={(event) => { const raw = event.dataTransfer.getData('application/x-originreach-bank-qids'); if (!raw) return; event.preventDefault(); event.stopPropagation(); try { addQuestionsToSection(JSON.parse(raw) as string[], s.section_id); setActiveSection(s.section_id); } catch { onError('无法读取拖动的题目'); } }}
                   className={cn(
                     "rounded-xl border bg-white shadow-sm transition-shadow",
                     activeSection === s.section_id ? "border-slate-900 ring-1 ring-slate-900/10" : "border-slate-200 hover:border-slate-300",
@@ -2484,6 +2499,8 @@ export function ComposeWorkspace({
                               <li key={qid}>
                                 <button
                                   type="button"
+                                  draggable
+                                  onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData('application/x-originreach-paper-item', JSON.stringify({ sectionId: s.section_id, qid })); }}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     handleRightPaperSlotClick(s.section_id, slots, si, slot, e);
@@ -2637,7 +2654,7 @@ export function ComposeWorkspace({
             <p className="mt-2 text-xs text-slate-500">{t("compose:exportWhenReady")}</p>
           )}
         </section>
-        <aside className="flex min-h-0 w-full flex-col border-slate-200 bg-white shadow-xl lg:relative lg:z-auto lg:translate-x-0 lg:shadow-none lg:static lg:h-auto lg:w-auto lg:min-w-0 lg:flex-1 lg:basis-0">
+        <aside className="hidden min-h-0 w-full flex-col border-slate-200 bg-white shadow-xl xl:relative xl:z-auto xl:flex xl:translate-x-0 xl:shadow-none xl:static xl:h-auto xl:w-auto xl:min-w-0 xl:flex-1 xl:basis-0">
           <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
             <span className="text-xs font-medium text-slate-600">{t("compose:pdfVariantLabel")}</span>
             <select
@@ -2685,6 +2702,10 @@ export function ComposeWorkspace({
         </aside>
         </div>
       </div>
+      {previewOpen && composeRightPdfPath ? <div className="fixed inset-0 z-[80] flex flex-col bg-slate-900/70 p-3 sm:p-8" role="dialog" aria-modal="true" aria-label="试卷预览">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between rounded-t-lg bg-white px-4 py-2"><h2 className="text-sm font-semibold">试卷预览</h2><button type="button" className="rounded border border-slate-300 px-3 py-1 text-sm" onClick={() => setPreviewOpen(false)}>关闭</button></div>
+        <div className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-auto rounded-b-lg bg-white p-3"><PdfPreview apiPath={composeRightPdfPath} className="min-h-full" /></div>
+      </div> : null}
     </div>
   );
 }

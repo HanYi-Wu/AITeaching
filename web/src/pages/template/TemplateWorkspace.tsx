@@ -615,13 +615,15 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
           />
         ) : (
           <div className="mx-auto max-w-3xl space-y-6">
-            <section className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-slate-900">常用版式</h2><p className="mt-1 text-xs text-slate-600">空模板自动添加题型；已有题型和分值保留。应用后请保存。</p></div><div className="flex flex-wrap gap-2">{([['practice', '随堂练习'], ['unit', '单元测验'], ['major', '期中 / 期末']] as const).map(([id, label]) => <button key={id} type="button" disabled={busy} onClick={() => {
+            <details className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <summary className="cursor-pointer text-sm font-semibold text-slate-800">快速套用版式 <span title="会调整页面和题型结构；不会清除已选题目或分值。应用后仍需保存。" className="ml-1 cursor-help rounded-full border border-slate-300 px-1.5 text-[10px] text-slate-500">?</span></summary>
+              <p className="mt-2 text-xs text-slate-600">选一个起点，再修改下面的设置。应用后记得保存。</p>
+              <div className="mt-3 flex flex-wrap gap-2">{([['practice', '随堂练习'], ['unit', '单元测验'], ['major', '期中 / 期末']] as const).map(([id, label]) => <button key={id} type="button" title={`套用${label}的版式；已有题型与分值保留，应用后需要保存`} disabled={busy} onClick={() => {
                 const next = applyTemplatePreset(draft, id);
                 setDraft(next);
                 setMsg(`已应用「${label}」：${next.layout === 'double_column' ? '双栏' : '单栏'}，${next.metadata_defaults.margin_cm}cm 边距，${next.metadata_defaults.body_font_size_pt}pt 字号；${next.sections.reduce((sum, section) => sum + section.required_count, 0)} 题。请保存模板。`);
-              }} className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50">{label}</button>)}</div></div>
-            </section>
+              }} className="rounded-md border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50">{label}</button>)}</div>
+            </details>
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-sm font-semibold text-slate-800">{t("basicInfo")}</h2>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">

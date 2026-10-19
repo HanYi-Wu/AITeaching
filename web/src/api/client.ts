@@ -342,6 +342,15 @@ export async function apiDelete<T>(path: string): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+/** Download an authenticated API response without opening a popup (which browsers may block). */
+export async function apiDownloadBlob(path: string): Promise<{ blob: Blob; filename: string | null }> {
+  const response = await fetchWithLog(path);
+  return {
+    blob: await response.blob(),
+    filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
+  };
+}
+
 /** Download strict bank exchange ZIP (POST /api/bank/export-bundle — 避免 GET 查询串中 namespace 含 / 时的编码问题). */
 export async function downloadBankExportBundle(namespace: string): Promise<void> {
   const path = `/api/bank/export-bundle`;

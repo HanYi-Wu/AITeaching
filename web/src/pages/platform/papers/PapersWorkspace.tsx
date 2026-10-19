@@ -16,7 +16,7 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { resolveApiUrl } from "../../../api/client";
+import { apiDownloadBlob } from "../../../api/client";
 import { formatLocaleDateTime } from "../../../lib/locale";
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
 import {
@@ -61,6 +61,8 @@ import {
 } from "./paperHelpers";
 
 type Props = {
+  openTarget?: { paperId: string; attemptId: string; title: string } | null;
+  onOpenTargetConsumed?: () => void;
   onOpenAnalysis?: (examId: string) => void;
   onOpenBank?: () => void;
   onOpenTemplates?: () => void;
@@ -68,7 +70,7 @@ type Props = {
   onError?: (message: string | null) => void;
 };
 
-export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError }: Props) {
+export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError }: Props) {
   const [clock, setClock] = useState(Date.now());
   useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   const [papers, setPapers] = useState<PlatformPaperRecord[]>([]);
@@ -197,6 +199,17 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
   }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize]);
 
   useEffect(() => {
+    if (!openTarget) return;
+    setPaperQuery((current) => ({ ...current, q: openTarget.title, deliveryMode: "all", status: "all", page: 1 }));
+  }, [openTarget?.paperId]);
+
+  useEffect(() => {
+    if (!openTarget || !papers.some((paper) => paper.paper_id === openTarget.paperId)) return;
+    setSelectedPaperId(openTarget.paperId);
+    setPaperDetailView("grading");
+  }, [openTarget?.paperId, papers]);
+
+  useEffect(() => {
     submissionRequestIdRef.current += 1;
     if (selectedPaperId) {
       void loadPublications(selectedPaperId);
@@ -319,8 +332,12 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
 
   async function downloadScoreTemplate() {
     if (!selectedPaper) return;
-    const url = await resolveApiUrl(`/api/exams/${encodeURIComponent(selectedPaper.exam_id)}/score-template`);
-    window.open(url, "_blank", "noopener,noreferrer");
+    try {
+      const { blob, filename } = await apiDownloadBlob(`/api/exams/${encodeURIComponent(selectedPaper.exam_id)}/score-template`);
+      downloadBlob(blob, filename || "成绩模板.csv");
+    } catch (error) {
+      reportError(error);
+    }
   }
 
   async function uploadScores(event: ChangeEvent<HTMLInputElement>) {
@@ -453,6 +470,14 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
       setBusy(null);
     }
   }
+
+  useEffect(() => {
+    if (!openTarget || selectedPaperId !== openTarget.paperId) return;
+    setSelectedGradingAttemptId(openTarget.attemptId);
+    void loadSelectedSubmissions().finally(() => onOpenTargetConsumed?.());
+    // This navigation runs once after the target paper is selected.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTarget?.paperId, selectedPaperId]);
 
   function gradeKey(attemptId: string, questionId: string) {
     return `${attemptId}:${questionId}`;
@@ -769,7 +794,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                 onChange={(event) => updatePaperQuery({ q: event.target.value })}
               />
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <select
                 className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
                 value={paperQuery.deliveryMode}
@@ -787,15 +812,6 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                 <option value="all">全部状态</option>
                 <option value="draft">草稿</option>
                 <option value="published">已发布</option>
-              </select>
-              <select
-                className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
-                value={paperQuery.pageSize}
-                onChange={(event) => updatePaperQuery({ pageSize: Number(event.target.value) })}
-              >
-                <option value={10}>10 条</option>
-                <option value={20}>20 条</option>
-                <option value={50}>50 条</option>
               </select>
             </div>
           </div>
@@ -845,7 +861,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
               </div>
             ) : null}
           </div>
-          <Pager meta={paperMeta} onPage={(page) => updatePaperQuery({ page })} />
+          <Pager meta={paperMeta} onPage={(page) => updatePaperQuery({ page })} onPageSize={(pageSize) => updatePaperQuery({ pageSize })} />
         </aside>
 
         <main className="min-h-0 overflow-auto p-6">
@@ -922,7 +938,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                     paperDetailView === "grading" ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-950"
                   }`}
                 >
-                  提交批改
+                  提交批改{(selectedPaper.submitted_student_count ?? 0) > 0 ? `（${selectedPaper.submitted_student_count}）` : ""}
                 </button>
               </div>
 
@@ -1186,7 +1202,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                         >
                           {submissions.map((submission) => (
                             <option key={submission.attempt_id} value={submission.attempt_id}>
-                              {[submission.student_no, submission.student_name, submissionStatusLabel(submission.status)].filter(Boolean).join(" · ")}
+                              {[submission.student_no, submission.student_name, submission.grading_completed_at ? "已发布" : submissionStatusLabel(submission.status)].filter(Boolean).join(" · ")}
                             </option>
                           ))}
                         </select>
@@ -1198,7 +1214,7 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
                           <div className="min-w-0">
                             <p className="font-medium text-slate-950">{submission.student_name || submission.student_no}</p>
                             <p className="mt-1 text-xs text-slate-500">
-                              {[submission.student_no, submissionStatusLabel(submission.status), submission.submitted_at ? formatLocaleDateTime(submission.submitted_at) : null].filter(Boolean).join(" · ")}
+                              {[submission.student_no, submission.grading_completed_at ? "已发布" : submissionStatusLabel(submission.status), submission.submitted_at ? formatLocaleDateTime(submission.submitted_at) : null].filter(Boolean).join(" · ")}
                             </p>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1430,13 +1446,14 @@ export function PapersWorkspace({ onOpenAnalysis, onOpenBank, onOpenTemplates, o
   );
 }
 
-function Pager({ meta, onPage }: { meta: PageMeta; onPage: (page: number) => void }) {
+function Pager({ meta, onPage, onPageSize }: { meta: PageMeta; onPage: (page: number) => void; onPageSize: (pageSize: number) => void }) {
   return (
     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-sm text-slate-600">
       <span>
         第 {meta.page} / {meta.totalPages} 页，共 {meta.total} 条
       </span>
       <div className="flex gap-2">
+        <select aria-label="每页条数" className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm" value={meta.pageSize} onChange={(event) => onPageSize(Number(event.target.value))}><option value={10}>10 条</option><option value={20}>20 条</option><option value={50}>50 条</option></select>
         <button
           type="button"
           disabled={meta.page <= 1}

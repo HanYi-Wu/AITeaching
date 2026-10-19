@@ -64,3 +64,9 @@ def test_resolve_choice_layout_metadata_forces_stack() -> None:
     assert resolve_choice_layout({"choice_layout_mode": "stack"}, short) == "stack"
     assert resolve_choice_layout({"choice_layout_mode": "inline"}, short) == "inline_one_line"
     assert resolve_choice_layout({"choice_layout_mode": "grid"}, short) == "grid_two_rows"
+
+
+def test_forced_horizontal_layout_falls_back_for_long_options() -> None:
+    long_options = {letter: "这是一个较长的选项说明，需要在试卷里换行显示。" * 4 for letter in "ABCD"}
+    assert resolve_choice_layout({"choice_layout_mode": "inline"}, long_options) == "stack"
+    assert resolve_choice_layout({"choice_layout_mode": "grid"}, long_options) == "stack"

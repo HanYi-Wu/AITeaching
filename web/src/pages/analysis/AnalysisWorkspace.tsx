@@ -87,6 +87,7 @@ export function AnalysisWorkspace({
   const [importError, setImportError] = useState<string | null>(null);
   const [importWarnings, setImportWarnings] = useState<ImportResult["warnings"]>([]);
   const [tab, setTab] = useState<"overview" | "questions" | "nodes" | "students" | "diagnosis">("overview");
+  const [questionSectionFilter, setQuestionSectionFilter] = useState("all");
   const [diagLoading, setDiagLoading] = useState(false);
   const [diagKd, setDiagKd] = useState<any | null>(null);
   const [diagHeat, setDiagHeat] = useState<any | null>(null);
@@ -978,6 +979,13 @@ export function AnalysisWorkspace({
                 )}
 
                 {tab === "questions" && (
+                  <div className="space-y-3">
+                    <label className="flex items-center gap-2 text-sm text-slate-600">题目维度
+                      <select aria-label="按题组查看题目维度" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm" value={questionSectionFilter} onChange={(event) => setQuestionSectionFilter(event.target.value)}>
+                        <option value="all">全部题组</option>
+                        {[...new Set(analysis.question_stats.map((question) => question.section_id))].map((sectionId) => <option key={sectionId} value={sectionId}>{sectionId}</option>)}
+                      </select>
+                    </label>
                   <div className="overflow-x-auto rounded-lg border border-slate-200">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 text-xs text-slate-500">
@@ -991,7 +999,7 @@ export function AnalysisWorkspace({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {analysis.question_stats.map((q) => (
+                        {analysis.question_stats.filter((question) => questionSectionFilter === "all" || question.section_id === questionSectionFilter).map((q) => (
                           <tr key={q.question_id} className="hover:bg-slate-50">
                             <td className="px-3 py-2 font-mono font-semibold text-slate-700">{q.header}</td>
                             <td className="px-3 py-2 text-slate-500">{q.section_id}</td>
@@ -1019,6 +1027,7 @@ export function AnalysisWorkspace({
                         ))}
                       </tbody>
                     </table>
+                  </div>
                   </div>
                 )}
 

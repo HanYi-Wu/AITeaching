@@ -210,7 +210,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="OriginReach API", version="1.6.3", lifespan=_lifespan)
+app = FastAPI(title="OriginReach API", version="1.6.4", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
@@ -1979,8 +1979,24 @@ def exams_create(body: ExamSaveDraftBody) -> dict[str, Any]:
 @app.get("/api/exams/analysis-list")
 def exams_analysis_list() -> dict[str, Any]:
     """成绩分析用：列出含 ``exam.yaml`` 的考试目录（新接口，替代原 ``/api/results`` 列表）。"""
+    from solaire.common.actor_context import actor
+    from solaire.web.platform_db import connect, default_platform_root
+
     root = _require_root()
-    return {"exams": list_exam_results(root)}
+    exams = list_exam_results(root)
+    user = actor.get()
+    if user and user.get("role") == "teacher":
+        teacher_id = str(user.get("id") or "")
+        with connect(default_platform_root()) as con:
+            owners = {
+                str(row["exam_id"]): str(row["owner_teacher_id"] or "")
+                for row in con.execute("SELECT exam_id, owner_teacher_id FROM paper_records").fetchall()
+            }
+        exams = [
+            exam for exam in exams
+            if (owners.get(str(exam["exam_id"])) or str(exam.get("owner_teacher_id") or "")) == teacher_id
+        ]
+    return {"exams": exams}
 
 
 @app.post("/api/exams/from-exam/{exam_path:path}")

@@ -72,6 +72,7 @@ export function GraphWorkspace({
   const [connectRelType, setConnectRelType] = useState("related");
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [firstGraphName, setFirstGraphName] = useState("");
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? graphNodes.find((n) => n.id === selectedNodeId) ?? null : null),
@@ -714,7 +715,9 @@ export function GraphWorkspace({
 
   return (
     <div className="flex h-full min-h-[70vh] flex-col gap-2 p-2">
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+        <span className="text-sm font-medium text-slate-800">知识图谱</span>
+        <div className="flex items-center gap-2">
         <input
           ref={importInputRef}
           type="file"
@@ -743,6 +746,7 @@ export function GraphWorkspace({
           <Download className="h-3.5 w-3.5" />
           导出
         </button>
+        </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-row gap-2">
         {/* Left: Subject selector */}
@@ -767,9 +771,12 @@ export function GraphWorkspace({
               {t("loading")}
             </div>
           ) : activeSlug === null ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-slate-500">
-              <p>{t("noGraphsHint")}</p>
-              <p className="text-xs text-slate-400">{t("createFirstGraph")}</p>
+            <div className="flex h-full flex-col items-center justify-center gap-4 px-4 text-center text-sm text-slate-600">
+              <div><p className="font-medium text-slate-900">还没有图谱</p><p className="mt-1 text-xs text-slate-500">输入名称，先建一个空图谱；也可以在上方导入 JSON。</p></div>
+              <form className="flex w-full max-w-sm gap-2" onSubmit={(event) => { event.preventDefault(); if (!firstGraphName.trim()) return; void handleCreateGraph(firstGraphName.trim()); setFirstGraphName(""); }}>
+                <input aria-label="新图谱名称" className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" placeholder="例如：高中数学" value={firstGraphName} onChange={(event) => setFirstGraphName(event.target.value)} />
+                <button type="submit" disabled={busy || !firstGraphName.trim()} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">新建图谱</button>
+              </form>
             </div>
           ) : viewMode === "mindmap" ? (
             <MindMapCanvas

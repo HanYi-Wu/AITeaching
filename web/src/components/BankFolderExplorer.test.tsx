@@ -21,13 +21,13 @@ test('selects all from partial selection, toggles off and opens file manager', (
   const selected = vi.fn();
   const props = { data: { folders: ['数学'], assignments: { q1: '数学', q2: '数学' } }, items: [{ qualified_id: 'q1' }, { qualified_id: 'q2' }], onChange: vi.fn(), onError: vi.fn(), onSelectIds: selected, renderItem: (item: {qualified_id: string}) => <li key={item.qualified_id}>{item.qualified_id}</li> };
   const view = render(<BankFolderExplorer {...props} selectedIds={['q1']} />);
-  fireEvent.click(screen.getByRole('button', { name: '全选 / 取消全选' }));
+  fireEvent.click(screen.getByRole('button', { name: '全选当前结果' }));
   expect(selected).toHaveBeenLastCalledWith(['q1', 'q2']);
   view.rerender(<BankFolderExplorer {...props} selectedIds={['q1', 'q2']} />);
-  fireEvent.click(screen.getByRole('button', { name: '全选 / 取消全选' }));
+  fireEvent.click(screen.getByRole('button', { name: '取消全选' }));
   expect(selected).toHaveBeenLastCalledWith([]);
   view.rerender(<BankFolderExplorer {...props} selectedIds={[]} />);
-  fireEvent.click(screen.getByRole('button', { name: '打开文件管理器' }));
+  fireEvent.click(screen.getByRole('button', { name: '文件管理器' }));
   expect(screen.getByRole('dialog', { name: /^题库文件管理器/ })).toBeInTheDocument();
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '全选 / 取消全选' }));
   expect(selected).toHaveBeenLastCalledWith(['q1', 'q2']);
@@ -39,7 +39,7 @@ test('blank cancels selection, right click cuts and drag moves into a folder', (
     onChange={vi.fn()} onError={vi.fn()} onSelectIds={selected} renderItem={item => <li key={item.qualified_id}>{item.qualified_id}</li>} />);
   fireEvent.click(screen.getByRole('navigation', { name: '题目文件夹' }));
   expect(selected).toHaveBeenLastCalledWith([]);
-  fireEvent.click(screen.getByRole('button', { name: '打开文件管理器' }));
+  fireEvent.click(screen.getByRole('button', { name: '文件管理器' }));
   const dialog = screen.getByRole('dialog');
   fireEvent.contextMenu(within(dialog).getByRole('checkbox'), { clientX: 100, clientY: 100 });
   fireEvent.click(screen.getByRole('menuitem', { name: '剪切' }));

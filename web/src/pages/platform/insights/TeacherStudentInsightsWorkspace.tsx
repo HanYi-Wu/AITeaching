@@ -22,7 +22,7 @@ import {
   type TeacherStudentProfile,
 } from "../../../platform/auth";
 
-type Props = { onError?: (message: string | null) => void };
+type Props = { onError?: (message: string | null) => void; onOpenPaper?: (target: { paperId: string; attemptId: string; title: string }) => void };
 type ListedStudent = TeacherClassStudentRecord & { class_id: string; class_name: string };
 
 function formatSeconds(seconds?: number | null): string {
@@ -34,7 +34,7 @@ function classLabel(name: string, grade?: string | null): string {
   return grade && !name.includes(grade) ? `${name} · ${grade}` : name;
 }
 
-export function TeacherStudentInsightsWorkspace({ onError }: Props) {
+export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper }: Props) {
   const [classes, setClasses] = useState<TeacherClassRecord[]>([]);
   const [students, setStudents] = useState<ListedStudent[]>([]);
   const [selectedClassId, setSelectedClassId] = useState("");
@@ -178,7 +178,7 @@ export function TeacherStudentInsightsWorkspace({ onError }: Props) {
               </section>
               <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center justify-between"><h3 className="font-semibold">考试记录</h3><button type="button" onClick={() => setWeakModalOpen(true)} className="rounded-md bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">查看薄弱题排名</button></div>
-                <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-xs text-slate-500"><tr><th className="py-2">考试</th><th>类型</th><th>状态</th><th>得分率</th><th>行为事件</th></tr></thead><tbody>{profile.recent_exams.map((exam) => <tr key={exam.attempt_id} className="border-t border-slate-100"><td className="py-3 font-medium">{exam.title}</td><td>{exam.submission_mode === "offline_scan" ? "线下照片" : "在线答题"}</td><td>{{ submitted: "已提交", in_progress: "答题中", not_started: "未开始" }[exam.status] ?? exam.status}</td><td>{exam.score_percent == null ? "待教师发布" : `${exam.score_percent}%`}</td><td>{exam.integrity_event_count || 0}</td></tr>)}</tbody></table>{profile.recent_exams.length === 0 ? <p className="py-8 text-center text-sm text-slate-400">所选时间内暂无记录</p> : null}</div>
+                <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-xs text-slate-500"><tr><th className="py-2">考试</th><th>类型</th><th>状态</th><th>得分率</th><th>行为事件</th><th>操作</th></tr></thead><tbody>{profile.recent_exams.map((exam) => <tr key={exam.attempt_id} className="border-t border-slate-100"><td className="py-3 font-medium">{exam.title}</td><td>{exam.submission_mode === "offline_scan" ? "线下照片" : "在线答题"}</td><td>{{ submitted: "已提交", in_progress: "答题中", not_started: "未开始" }[exam.status] ?? exam.status}</td><td>{exam.score_percent == null ? "待教师发布" : `${exam.score_percent}%`}</td><td>{exam.integrity_event_count || 0}</td><td><button type="button" disabled={!onOpenPaper} className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50" onClick={() => onOpenPaper?.({ paperId: exam.paper_id, attemptId: exam.attempt_id, title: exam.title })}>查看与批改</button></td></tr>)}</tbody></table>{profile.recent_exams.length === 0 ? <p className="py-8 text-center text-sm text-slate-400">所选时间内暂无记录</p> : null}</div>
               </section>
             </div>
           ) : <div className="flex h-64 items-center justify-center text-sm text-slate-400">请从左侧选择学生</div>}

@@ -1472,7 +1472,7 @@ export function BankWorkspace({
           title={selectedExportIds.length === 0 ? "先在左侧勾选题目" : undefined}
           onClick={() => void doExportSelection()}
         >
-          导出已选 {selectedExportIds.length || ""} 题
+          导出已选（{selectedExportIds.length}）
         </button>
       </div>
     );
@@ -1655,9 +1655,9 @@ export function BankWorkspace({
 
   return (
     <>
-    <div className="flex h-full min-h-0 flex-col lg:flex-row">
+    <div className="flex h-full min-h-0 flex-col md:flex-row">
       {/* 左：筛选 + 列表 + 导入 */}
-      <section className="flex w-full shrink-0 flex-col border-slate-200 bg-white lg:w-[min(100%,300px)] lg:border-r">
+      <section className="flex w-full shrink-0 flex-col border-slate-200 bg-white md:w-[min(100%,300px)] md:border-r">
         <div className="border-b border-slate-100 p-3">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("title")}</h2>
         </div>

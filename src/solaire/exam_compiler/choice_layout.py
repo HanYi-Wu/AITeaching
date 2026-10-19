@@ -270,6 +270,14 @@ def resolve_choice_layout(
         }
         m = aliases.get(m, m)
         if m in _VALID_FORCED_LAYOUTS:
+            # A saved template preference must not squeeze long options into an
+            # overflowing row. Fall back to the measured layout for this question.
+            if options and m in {"inline_one_line", "grid_two_rows"}:
+                inferred = infer_choice_layout(options)
+                if m == "inline_one_line" and inferred != "inline_one_line":
+                    return inferred
+                if m == "grid_two_rows" and inferred == "stack":
+                    return inferred
             return m
     if options:
         return infer_choice_layout(options)
