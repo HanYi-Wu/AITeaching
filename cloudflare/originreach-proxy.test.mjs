@@ -18,8 +18,24 @@ test('fingerprinted public assets may be cached without sending credentials', as
   assert.equal(observed.request.headers.has('cookie'), false);
   assert.equal(observed.request.headers.has('authorization'), false);
   assert.equal(observed.options.cf.cacheEverything, true);
+  assert.equal(observed.options.cf.cacheTtlByStatus['200-299'], 31536000);
   assert.match(response.headers.get('cache-control'), /immutable/);
   assert.equal(response.headers.get('x-originreach-edge'), '1');
+});
+
+test('public app shell has a short edge TTL without forwarding credentials', async () => {
+  let observed;
+  globalThis.fetch = async (request, options) => {
+    observed = { request, options };
+    return new Response('<!doctype html>', { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+  const response = await worker.fetch(new Request('https://or.whenry.cc.cd/', {
+    headers: { cookie: 'session=secret', authorization: 'Bearer secret' },
+  }));
+  assert.equal(observed.request.headers.has('cookie'), false);
+  assert.equal(observed.request.headers.has('authorization'), false);
+  assert.equal(observed.options.cf.cacheTtlByStatus['200-299'], 60);
+  assert.equal(response.headers.get('cache-control'), 'public, max-age=0, s-maxage=60');
 });
 
 test('authenticated API responses are never cached', async () => {

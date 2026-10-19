@@ -7,8 +7,12 @@ export default {
   async fetch(request) {
     const incoming = new URL(request.url);
     const upstream = new URL(incoming.pathname + incoming.search, ORIGIN);
+    const immutableAsset = PUBLIC_ASSET.test(incoming.pathname);
+    const document = incoming.pathname === '/' || incoming.pathname === '/index.html';
+    const icon = incoming.pathname === '/favicon.svg';
+    const ttl = immutableAsset ? 31536000 : icon ? 3600 : 60;
     const cacheable = (request.method === 'GET' || request.method === 'HEAD')
-      && PUBLIC_ASSET.test(incoming.pathname);
+      && (immutableAsset || document || icon);
     const headers = new Headers(request.headers);
     headers.delete('host');
     if (cacheable) {
@@ -22,12 +26,14 @@ export default {
       redirect: 'manual',
     });
     const originResponse = await fetch(originRequest, cacheable
-      ? { cf: { cacheEverything: true, cacheTtl: 31536000 } }
+      ? { cf: { cacheEverything: true, cacheTtlByStatus: { '200-299': ttl, '300-599': 0 } } }
       : { cf: { cacheTtl: 0 } });
     const responseHeaders = new Headers(originResponse.headers);
     responseHeaders.set('x-originreach-edge', '1');
     if (cacheable && originResponse.ok && !responseHeaders.has('set-cookie')) {
-      responseHeaders.set('cache-control', 'public, max-age=31536000, immutable');
+      responseHeaders.set('cache-control', immutableAsset
+        ? 'public, max-age=31536000, immutable'
+        : document ? 'public, max-age=0, s-maxage=60' : 'public, max-age=3600');
     } else {
       responseHeaders.set('cache-control', 'private, no-store');
     }
