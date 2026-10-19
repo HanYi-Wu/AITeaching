@@ -135,6 +135,13 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper }: Props)
 
       <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] overflow-hidden">
         <aside className="flex min-h-0 flex-col border-r border-slate-200 bg-white p-4">
+          <div className="mb-3 shrink-0 space-y-2 border-b border-slate-200 pb-3">
+            <div className="relative"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索姓名、学号、账号" className="w-full rounded-md border border-slate-300 py-2 pl-8 pr-3 text-sm" /></div>
+            <select value={selectedClassId} onChange={(e) => { profileRequestIdRef.current += 1; setSelectedStudentKey(""); setProfile(null); setSelectedClassId(e.target.value); }} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
+              <option value="">全部班级</option>
+              {classes.map((klass) => <option key={klass.id} value={klass.id}>{classLabel(klass.name, klass.grade)}</option>)}
+            </select>
+          </div>
           <div className="min-h-0 flex-1 space-y-1 overflow-auto">
             {visibleStudents.map((student) => (
               <button key={`${student.class_id}:${student.id}`} type="button" onClick={() => setSelectedStudentKey(`${student.class_id}:${student.id}`)}
@@ -144,13 +151,6 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper }: Props)
               </button>
             ))}
             {!loading && visibleStudents.length === 0 ? <p className="p-4 text-center text-sm text-slate-400">没有匹配的学生</p> : null}
-          </div>
-          <div className="mt-3 shrink-0 space-y-2 border-t border-slate-200 pt-3">
-            <div className="relative"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索姓名、学号、账号" className="w-full rounded-md border border-slate-300 py-2 pl-8 pr-3 text-sm" /></div>
-            <select value={selectedClassId} onChange={(e) => { profileRequestIdRef.current += 1; setSelectedStudentKey(""); setProfile(null); setSelectedClassId(e.target.value); }} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
-              <option value="">全部班级</option>
-              {classes.map((klass) => <option key={klass.id} value={klass.id}>{classLabel(klass.name, klass.grade)}</option>)}
-            </select>
           </div>
         </aside>
 

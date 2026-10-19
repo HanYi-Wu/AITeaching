@@ -210,7 +210,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="OriginReach API", version="1.6.4", lifespan=_lifespan)
+app = FastAPI(title="OriginReach API", version="1.6.5", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
