@@ -411,7 +411,14 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
         ).fetchone()
         if publication is None:
             raise PermissionError("No assigned publication for this student")
-        if publication["practice_kind"]:
+        if publication["practice_kind"] or publication["recipient_scope"] == "student" or publication["folder_id"]:
+            # A folder-bound release has a frozen recipient roster. Newly added classmates
+            # must not silently acquire another attempt in a one-per-student folder.
+            folder_kind = con.execute("SELECT kind FROM content_folders WHERE id=?", (publication["folder_id"],)).fetchone()
+            fixed_roster = publication["practice_kind"] or publication["recipient_scope"] == "student" or (folder_kind and folder_kind["kind"] == "paper")
+        else:
+            fixed_roster = False
+        if fixed_roster:
             assigned = con.execute(
                 "SELECT 1 FROM student_attempts WHERE publication_id = ? AND student_id = ?",
                 (publication_id, student_id),
@@ -429,7 +436,7 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
         row = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
-                   ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
+                   ep.submission_mode, ep.recipient_scope, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
                    pr.exam_id, COALESCE(ep.subject, pr.subject) AS subject, pr.id AS paper_id, pr.title AS paper_title,
                    COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count
             FROM student_attempts sa
@@ -455,7 +462,7 @@ def _attempt_for_student_in_connection(con: Any, attempt_id: str, student_id: st
     row = con.execute(
         """
         SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
-               ep.submission_mode, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
+               ep.submission_mode, ep.recipient_scope, ep.max_screen_switches, ep.start_at, ep.end_at, ep.time_limit_minutes,
                pr.exam_id, COALESCE(ep.subject, pr.subject) AS subject, pr.id AS paper_id, pr.title AS paper_title,
                COALESCE((SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'), 0) AS screen_switch_count
         FROM student_attempts sa
@@ -493,6 +500,7 @@ def _attempt_payload(row: dict[str, Any]) -> dict[str, Any]:
         "results_released": results_released,
         "grading_completed_at": row.get("grading_completed_at"),
         "submission_mode": row.get("submission_mode") or "online",
+        "recipient_scope": row.get("recipient_scope") or "class",
         "publication_status": row.get("publication_status"),
         "start_at": row.get("start_at"),
         "end_at": row.get("end_at"),
@@ -523,7 +531,8 @@ def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) ->
             JOIN class_students cs ON cs.class_id = pc.class_id
             WHERE cs.student_id = ? AND ep.status IN ('published', 'paused', 'closed')
               AND (
-                ep.practice_kind IS NULL
+                  (ep.practice_kind IS NULL AND ep.recipient_scope = 'class'
+                   AND NOT EXISTS (SELECT 1 FROM content_folders cf WHERE cf.id=ep.folder_id AND cf.kind='paper'))
                 OR EXISTS (
                   SELECT 1 FROM student_attempts assigned
                   WHERE assigned.publication_id = ep.id AND assigned.student_id = cs.student_id

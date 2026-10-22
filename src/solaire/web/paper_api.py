@@ -17,6 +17,10 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
 from solaire.web import state
+from solaire.web.content_organizer import (
+    all_item_tags, analyze_paper_folder, assign_folder_item, assign_paper_folder, create_folder, item_tags, list_folder_items, list_folders, list_tags,
+    save_tag, set_item_tags, update_folder,
+)
 from solaire.web.analysis_report_service import (
     analysis_report_filename,
     build_paper_analysis_pdf,
@@ -94,7 +98,9 @@ class PaperFromExamBody(BaseModel):
 
 
 class PaperPublishBody(BaseModel):
-    class_ids: list[str] = Field(..., min_length=1)
+    class_ids: list[str] = Field(default_factory=list)
+    student_ids: list[str] = Field(default_factory=list)
+    folder_id: str | None = None
     title: str | None = None
     description: str | None = None
     start_at: str | None = None
@@ -116,6 +122,35 @@ class PaperPublicationUpdateBody(BaseModel):
     time_limit_minutes: int | None = Field(default=None, ge=0, le=1440)
     show_results_immediately: bool | None = None
     status: str | None = None
+
+
+class FolderCreateBody(BaseModel):
+    scope: Literal["template", "compose", "paper"]
+    name: str = Field(..., min_length=1, max_length=60)
+    parent_id: str | None = None
+    kind: Literal["category", "paper"] = "category"
+
+
+class FolderUpdateBody(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    parent_id: str | None = None
+    move: bool = False
+    kind: Literal["category", "paper"] | None = None
+
+
+class TagBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=5)
+    color: Literal["slate", "blue", "green", "amber", "rose", "violet"] = "slate"
+
+
+class TagLinksBody(BaseModel):
+    tag_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class FolderItemBody(BaseModel):
+    scope: Literal["template", "compose"]
+    item_id: str = Field(..., min_length=1)
+    folder_id: str | None = None
 
 
 class PaperAiGradeBody(BaseModel):
@@ -198,6 +233,7 @@ def papers_list(
     delivery_mode: str | None = None,
     status: str | None = None,
     subject: str | None = None,
+    folder_id: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
 ) -> dict[str, Any]:
@@ -212,6 +248,7 @@ def papers_list(
             delivery_mode=delivery_mode,
             status=status,
             subject=subject,
+            folder_id=folder_id,
             page=page,
             page_size=page_size,
         )
@@ -631,6 +668,105 @@ async def teacher_publish_reinforcement_practice(
     raise RuntimeError("unreachable")
 
 
+@router.get("/organizer/folders")
+def organizer_folders(scope: Literal["template", "compose", "paper"], user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    return {"folders": list_folders(require_platform_root(), user, scope)}
+
+
+@router.get("/organizer/folder-items")
+def organizer_folder_items(scope: Literal["template", "compose"], user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    return {"items": list_folder_items(require_platform_root(), user, scope)}
+
+
+@router.put("/organizer/folder-items")
+def organizer_folder_item_update(body: FolderItemBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    try:
+        assign_folder_item(require_platform_root(), user, **body.model_dump())
+        return {"ok": True}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.post("/organizer/folders")
+def organizer_folder_create(body: FolderCreateBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    try:
+        return {"folder": create_folder(require_platform_root(), user, **body.model_dump())}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.patch("/organizer/folders/{folder_id}")
+def organizer_folder_update(folder_id: str, body: FolderUpdateBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    try:
+        return {"folder": update_folder(require_platform_root(), user, folder_id, **body.model_dump())}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.post("/organizer/papers/{paper_id}/folder")
+def organizer_paper_folder(paper_id: str, body: dict[str, str], user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    try:
+        assign_paper_folder(require_platform_root(), user, paper_id, str(body.get("folder_id") or ""))
+        return {"ok": True}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.get("/organizer/folders/{folder_id}/analysis")
+def organizer_folder_analysis(folder_id: str, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    try:
+        return analyze_paper_folder(require_platform_root(), user, folder_id)
+    except (ValueError, PermissionError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.get("/organizer/tags")
+def organizer_tags(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    return {"tags": list_tags(require_platform_root(), user)}
+
+
+@router.get("/organizer/tagged-items")
+def organizer_tagged_items(scope: Literal["bank", "template", "compose", "paper"], user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    return {"items": all_item_tags(require_platform_root(), user, scope)}
+
+
+@router.post("/organizer/tags")
+def organizer_tag_create(body: TagBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    try:
+        return {"tag": save_tag(require_platform_root(), user, **body.model_dump())}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.patch("/organizer/tags/{tag_id}")
+def organizer_tag_update(tag_id: str, body: TagBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    try:
+        return {"tag": save_tag(require_platform_root(), user, tag_id=tag_id, **body.model_dump())}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.get("/organizer/tags/{scope}/{item_id}")
+def organizer_item_tags(scope: Literal["bank", "template", "compose", "paper"], item_id: str, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    return {"tags": item_tags(require_platform_root(), user, scope, item_id)}
+
+
+@router.put("/organizer/tags/{scope}/{item_id}")
+def organizer_item_tags_update(scope: Literal["bank", "template", "compose", "paper"], item_id: str, body: TagLinksBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    try:
+        return {"tag_ids": set_item_tags(require_platform_root(), user, scope=scope, item_id=item_id, tag_ids=body.tag_ids)}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
 @router.post("/papers/{paper_id}/publish")
 def papers_publish(
     paper_id: str,
@@ -645,6 +781,8 @@ def papers_publish(
             paper_id=paper_id,
             user=user,
             class_ids=body.class_ids,
+            student_ids=body.student_ids,
+            folder_id=body.folder_id,
             project_root=project_root,
             title=body.title,
             description=body.description,

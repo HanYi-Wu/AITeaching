@@ -163,6 +163,7 @@ export type PlatformPaperRecord = {
   status: string;
   owner_teacher_id?: string | null;
   school_id?: string | null;
+  folder_id?: string | null;
   question_count: number;
   section_count: number;
   score_batch_count: number;
@@ -194,7 +195,10 @@ export type PaperPublicationRecord = {
   description?: string | null;
   status: string;
   class_ids: string[];
+  folder_id?: string | null;
+  recipient_scope?: "class" | "student";
   class_names?: string[];
+  student_names?: string[];
   attempt_count?: number;
   submitted_count?: number;
   proctor_event_count?: number;
@@ -447,6 +451,7 @@ export type StudentPaperRecord = {
   exam_id: string;
   title: string;
   subject?: string | null;
+  recipient_scope?: "class" | "student";
   status: "not_started" | "in_progress" | "submitted" | "completed" | string;
   started_at?: string | null;
   submitted_at?: string | null;
@@ -969,6 +974,7 @@ function normalizePaper(raw: Partial<PlatformPaperRecord> & { id?: string }): Pl
     status: String(raw.status ?? "draft"),
     owner_teacher_id: raw.owner_teacher_id ?? null,
     school_id: raw.school_id ?? null,
+    folder_id: raw.folder_id ?? null,
     question_count: Number(raw.question_count ?? 0),
     section_count: Number(raw.section_count ?? 0),
     score_batch_count: Number(raw.score_batch_count ?? 0),
@@ -988,7 +994,7 @@ function normalizePaper(raw: Partial<PlatformPaperRecord> & { id?: string }): Pl
 }
 
 export async function listPlatformPapers(
-  params: (ListQuery & { deliveryMode?: "offline" | "online" | "all" | null; subject?: string | null }) = {},
+  params: (ListQuery & { deliveryMode?: "offline" | "online" | "all" | null; subject?: string | null; folderId?: string | null }) = {},
 ): Promise<{ papers: PlatformPaperRecord[] } & PagedResult> {
   const data = await platformRequest<
     { papers: Array<Partial<PlatformPaperRecord> & { id?: string }> } & PagedResult
@@ -998,6 +1004,7 @@ export async function listPlatformPapers(
       status: params.status,
       delivery_mode: params.deliveryMode,
       subject: params.subject,
+      folder_id: params.folderId,
       page: params.page,
       page_size: params.pageSize,
     })}`,
@@ -1068,6 +1075,8 @@ export function publishPlatformPaper(
   paperId: string,
   payload: {
     class_ids: string[];
+    student_ids?: string[];
+    folder_id?: string | null;
     title?: string | null;
     description?: string | null;
     start_at?: string | null;
@@ -1085,6 +1094,65 @@ export function publishPlatformPaper(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type ContentFolder = {
+  id: string;
+  owner_teacher_id: string;
+  scope: "template" | "compose" | "paper";
+  parent_id: string | null;
+  kind: "category" | "paper";
+  name: string;
+};
+
+export type ContentTag = { id: string; name: string; color: "slate" | "blue" | "green" | "amber" | "rose" | "violet" };
+
+export function listContentFolders(scope: ContentFolder["scope"]): Promise<{ folders: ContentFolder[] }> {
+  return platformRequest(`/api/organizer/folders?scope=${scope}`);
+}
+
+export function createContentFolder(payload: { scope: ContentFolder["scope"]; name: string; parent_id?: string | null; kind?: ContentFolder["kind"] }): Promise<{ folder: ContentFolder }> {
+  return platformRequest("/api/organizer/folders", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function updateContentFolder(id: string, payload: { name?: string; parent_id?: string | null; move?: boolean; kind?: ContentFolder["kind"] }): Promise<{ folder: ContentFolder }> {
+  return platformRequest(`/api/organizer/folders/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
+
+export function movePaperToFolder(paperId: string, folderId: string): Promise<{ ok: boolean }> {
+  return platformRequest(`/api/organizer/papers/${encodeURIComponent(paperId)}/folder`, { method: "POST", body: JSON.stringify({ folder_id: folderId }) });
+}
+
+export function listFolderItems(scope: "template" | "compose"): Promise<{ items: Record<string, string> }> {
+  return platformRequest(`/api/organizer/folder-items?scope=${scope}`);
+}
+
+export function assignFolderItem(scope: "template" | "compose", itemId: string, folderId: string | null): Promise<{ ok: boolean }> {
+  return platformRequest("/api/organizer/folder-items", { method: "PUT", body: JSON.stringify({ scope, item_id: itemId, folder_id: folderId }) });
+}
+
+export function analyzePaperFolder(folderId: string): Promise<{ folder: ContentFolder; summary: { assigned_count: number; submitted_count: number; graded_count: number; average_score_percent: number | null; publication_count: number }; personal_summary?: { assigned_count: number; submitted_count: number } | null; attempts: Array<{ student_no: string; display_name: string; title: string; status: string; score: number | null; max_score: number | null; recipient_scope: "class" | "student" }> }> {
+  return platformRequest(`/api/organizer/folders/${encodeURIComponent(folderId)}/analysis`);
+}
+
+export function listContentTags(): Promise<{ tags: ContentTag[] }> {
+  return platformRequest("/api/organizer/tags");
+}
+
+export function listTaggedItems(scope: "bank" | ContentFolder["scope"]): Promise<{ items: Record<string, ContentTag[]> }> {
+  return platformRequest(`/api/organizer/tagged-items?scope=${scope}`);
+}
+
+export function saveContentTag(payload: { name: string; color: ContentTag["color"] }, id?: string): Promise<{ tag: ContentTag }> {
+  return platformRequest(id ? `/api/organizer/tags/${encodeURIComponent(id)}` : "/api/organizer/tags", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
+}
+
+export function listItemTags(scope: "bank" | ContentFolder["scope"], itemId: string): Promise<{ tags: ContentTag[] }> {
+  return platformRequest(`/api/organizer/tags/${scope}/${encodeURIComponent(itemId)}`);
+}
+
+export function setItemTags(scope: "bank" | ContentFolder["scope"], itemId: string, tagIds: string[]): Promise<{ tag_ids: string[] }> {
+  return platformRequest(`/api/organizer/tags/${scope}/${encodeURIComponent(itemId)}`, { method: "PUT", body: JSON.stringify({ tag_ids: tagIds }) });
 }
 
 export function listClassPracticeHistory(classId: string): Promise<PracticeHistoryResponse> {

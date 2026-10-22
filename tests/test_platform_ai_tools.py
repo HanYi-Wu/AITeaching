@@ -156,7 +156,7 @@ def test_teacher_ai_publish_tool_resolves_paper_title_and_class_name(web_client:
 
     result = invoke_registered_tool(
         "exam.publish_online_paper",
-        {"paper_title": "Midterm", "class_names": ["Class 1"], "title": "Midterm Online"},
+        {"paper_title": "Midterm", "class_names": ["Class 1"], "folder_name": "默认文件夹", "title": "Midterm Online"},
         ctx,
     )
 
@@ -164,3 +164,14 @@ def test_teacher_ai_publish_tool_resolves_paper_title_and_class_name(web_client:
     assert result.data["publication"]["paper_id"] == paper_id
     assert len(result.data["publication"]["class_ids"]) == 1
     assert result.data["publication"]["title"] == "Midterm Online"
+
+
+def test_publish_confirmation_identifies_paper_folder_and_recipients() -> None:
+    from solaire.agent_layer.guardrails import human_confirmation_message
+
+    message = human_confirmation_message("exam.publish_online_paper", {
+        "paper_title": "单元练习", "folder_name": "A 文件夹", "student_names": ["张三"],
+        "class_names": ["一班"], "end_at": "2026-10-23T12:00:00+08:00",
+    })
+    assert "单元练习" in message and "A 文件夹" in message and "张三" in message
+    assert "2026-10-23" in message

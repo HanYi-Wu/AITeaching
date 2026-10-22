@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
   listPlatformPaperPublications: vi.fn(),
   listPlatformPapers: vi.fn(),
   listTeacherAssignedClasses: vi.fn(),
+  listTeacherClassStudents: vi.fn(),
+  listContentFolders: vi.fn(),
+  listTaggedItems: vi.fn(),
   updatePlatformPaperDeliveryMode: vi.fn(),
   publishPlatformPaper: vi.fn(),
   revokePlatformPaperPublication: vi.fn(),
@@ -27,6 +30,9 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     listPlatformPaperPublications: mocks.listPlatformPaperPublications,
     listPlatformPapers: mocks.listPlatformPapers,
     listTeacherAssignedClasses: mocks.listTeacherAssignedClasses,
+    listTeacherClassStudents: mocks.listTeacherClassStudents,
+    listContentFolders: mocks.listContentFolders,
+    listTaggedItems: mocks.listTaggedItems,
     updatePlatformPaperDeliveryMode: mocks.updatePlatformPaperDeliveryMode,
     publishPlatformPaper: mocks.publishPlatformPaper,
     revokePlatformPaperPublication: mocks.revokePlatformPaperPublication,
@@ -67,6 +73,9 @@ describe("PapersWorkspace", () => {
     mocks.listTeacherAssignedClasses.mockResolvedValue({
       classes: [{ id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: "Math", subject: "Math" }],
     });
+    mocks.listContentFolders.mockResolvedValue({ folders: [{ id: "f1", owner_teacher_id: "t1", scope: "paper", parent_id: null, kind: "category", name: "默认文件夹" }] });
+    mocks.listTaggedItems.mockResolvedValue({ items: {} });
+    mocks.listTeacherClassStudents.mockResolvedValue({ students: [{ id: "s1", student_no: "S001", display_name: "张三", status: "active" }] });
     mocks.listPlatformPaperPublications.mockResolvedValue({ publications: [] });
     mocks.listPaperSubmissions.mockResolvedValue({ submissions: [] });
     mocks.downloadPaperAnalysisReport.mockResolvedValue(new Blob(["report"]));
@@ -110,11 +119,14 @@ describe("PapersWorkspace", () => {
 
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByLabelText(/Class 1/));
-    await userEvent.click(screen.getByRole("button", { name: "发布到班级" }));
+    await userEvent.selectOptions(screen.getByLabelText("发布文件夹"), "f1");
+    await userEvent.click(screen.getByTestId("paper-publish"));
 
     await waitFor(() =>
       expect(mocks.publishPlatformPaper).toHaveBeenCalledWith("p1", {
         class_ids: ["c1"],
+        student_ids: [],
+        folder_id: "f1",
         title: "Midterm",
         start_at: null,
         end_at: null,
@@ -125,6 +137,14 @@ describe("PapersWorkspace", () => {
       }),
     );
     expect((await screen.findAllByText("已发布")).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the student preselected when opening practice from student insights", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    render(<PapersWorkspace assignStudent={{ classId: "c1", studentId: "s1", name: "张三" }} />);
+    expect(await screen.findByText("张三 · S001")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "指定学生" })).toHaveClass("bg-slate-900");
+    expect(screen.getByRole("checkbox", { name: /张三/ })).toBeChecked();
   });
 
   it("shows and revokes publication history", async () => {
@@ -303,6 +323,7 @@ describe("PapersWorkspace", () => {
     await userEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => expect(screen.getByTestId("paper-publish")).toBeDisabled());
     await userEvent.click(screen.getByLabelText(/Class 1/));
+    await userEvent.selectOptions(screen.getByLabelText("发布文件夹"), "f1");
     expect(screen.getByTestId("paper-publish")).not.toBeDisabled();
     await userEvent.click(screen.getByTestId("paper-submission-image-ai"));
     await userEvent.clear(screen.getByTestId("paper-time-limit"));

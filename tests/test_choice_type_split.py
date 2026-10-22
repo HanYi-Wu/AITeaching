@@ -99,3 +99,16 @@ def test_validate_exam_splits_single_and_multiple_choice_sections() -> None:
     )
     with pytest.raises(ValueError):
         validate_exam(wrong, template, loaded)
+
+
+def test_exam_local_question_count_can_override_template_default() -> None:
+    template = ExamTemplate(template_id="tpl", sections=[{"section_id": "choice", "type": "choice", "required_count": 1, "score_per_item": 5}])
+    loaded = LoadedQuestions(by_qualified={
+        "bank/q1": QuestionItem.model_validate(_choice_payload("q1", "A")),
+        "bank/q2": QuestionItem.model_validate(_choice_payload("q2", "B")),
+    })
+    exam = ExamConfig(exam_id="exam", template_ref="tpl", selected_items=[
+        SelectedSection(section_id="choice", question_ids=["bank/q1", "bank/q2"], required_count=2, score_per_item=10),
+    ])
+    validate_exam(exam, template, loaded)
+    assert exam.selected_items[0].required_count == 2

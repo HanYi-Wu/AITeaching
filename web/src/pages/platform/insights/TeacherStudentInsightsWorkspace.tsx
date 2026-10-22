@@ -22,7 +22,7 @@ import {
   type TeacherStudentProfile,
 } from "../../../platform/auth";
 
-type Props = { onError?: (message: string | null) => void; onOpenPaper?: (target: { paperId: string; attemptId: string; title: string }) => void };
+type Props = { onError?: (message: string | null) => void; onOpenPaper?: (target: { paperId: string; attemptId: string; title: string }) => void; onAssignStudent?: (target: { classId: string; studentId: string; name: string }) => void };
 type ListedStudent = TeacherClassStudentRecord & { class_id: string; class_name: string };
 
 function formatSeconds(seconds?: number | null): string {
@@ -34,7 +34,7 @@ function classLabel(name: string, grade?: string | null): string {
   return grade && !name.includes(grade) ? `${name} · ${grade}` : name;
 }
 
-export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper }: Props) {
+export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssignStudent }: Props) {
   const [classes, setClasses] = useState<TeacherClassRecord[]>([]);
   const [students, setStudents] = useState<ListedStudent[]>([]);
   const [selectedClassId, setSelectedClassId] = useState("");
@@ -163,7 +163,7 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper }: Props)
           </section>
           {profile ? (
             <div className="mx-auto max-w-6xl space-y-5">
-              <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-semibold">{profile.student.display_name}</h2><p className="mt-1 text-sm text-slate-500">{profile.student.student_no} · {selectedStudent?.class_name}</p></section>
+              <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div><h2 className="text-lg font-semibold">{profile.student.display_name}</h2><p className="mt-1 text-sm text-slate-500">{profile.student.student_no} · {selectedStudent?.class_name}</p></div>{selectedStudent && onAssignStudent ? <button type="button" onClick={() => onAssignStudent({ classId: selectedStudent.class_id, studentId: selectedStudent.id, name: selectedStudent.display_name })} className="rounded-md bg-slate-900 px-3 py-2 text-sm text-white">布置练习</button> : null}</section>
               <section className="grid gap-4 md:grid-cols-4">
                 {[
                   { label: "考试完成率", value: `${profile.summary.completion_rate}%`, icon: BookOpen, color: "text-blue-600" },

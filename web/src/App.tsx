@@ -93,6 +93,7 @@ function AppShell() {
   const [graphFocusNodeId, setGraphFocusNodeId] = useState<string | null>(null);
   const [composeOpenExamId, setComposeOpenExamId] = useState<string | null>(null);
   const [paperOpenTarget, setPaperOpenTarget] = useState<{ paperId: string; attemptId: string; title: string } | null>(null);
+  const [studentPracticeTarget, setStudentPracticeTarget] = useState<{ classId: string; studentId: string; name: string } | null>(null);
   const [assistantOverlayHost, setAssistantOverlayHost] = useState<HTMLDivElement | null>(null);
   const [platformStatus, setPlatformStatus] = useState<PlatformStatus | null>(null);
   const [currentUser, setCurrentUser] = useState<PlatformUser | null>(null);
@@ -416,6 +417,8 @@ function AppShell() {
                   {page === "papers" && (
                     <PapersWorkspace
                       openTarget={paperOpenTarget}
+                      assignStudent={studentPracticeTarget}
+                      onAssignStudentConsumed={() => setStudentPracticeTarget(null)}
                       onOpenTargetConsumed={() => setPaperOpenTarget(null)}
                       onOpenBank={() => setPage("bank")}
                       onOpenTemplates={() => setPage("template")}
@@ -426,7 +429,7 @@ function AppShell() {
                       onError={setErr}
                     />
                   )}
-                  {page === "students" && <TeacherStudentInsightsWorkspace onError={setErr} onOpenPaper={(target) => { setPaperOpenTarget(target); setPage("papers"); }} />}
+                  {page === "students" && <TeacherStudentInsightsWorkspace onError={setErr} onOpenPaper={(target) => { setPaperOpenTarget(target); setPage("papers"); }} onAssignStudent={(target) => { setStudentPracticeTarget(target); setPage("papers"); }} />}
                   {page === "settings" && (
                     <SettingsWorkspace onError={setErr} userRole={currentUser?.role} onProfileUpdated={setCurrentUser} />
                   )}

@@ -216,6 +216,14 @@ def check_tool_call(
 
 
 def human_confirmation_message(tool_name: str, args: dict) -> str:
+    if tool_name == "exam.publish_online_paper":
+        paper = str(args.get("paper_title") or args.get("title") or args.get("paper_id") or args.get("exam_id") or "未指定试卷")
+        folder = str(args.get("folder_name") or args.get("folder_id") or "未指定文件夹")
+        students = args.get("student_names") or args.get("student_ids") or []
+        classes = args.get("class_names") or args.get("class_ids") or []
+        recipients = f"指定学生：{'、'.join(map(str, students))}" if students else f"班级：{'、'.join(map(str, classes))}"
+        timing = f"开始：{args.get('start_at') or '立即'}；截止：{args.get('end_at') or '不限'}"
+        return f"确认发布试卷「{paper}」？文件夹：{folder}；{recipients}；{timing}。请核对后继续。"
     if tool_name == 'bank.create_items':
         questions = args.get('questions') or []
         ids = '、'.join(str(q.get('question_id', '')) for q in questions[:12] if isinstance(q, dict))

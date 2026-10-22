@@ -1,5 +1,7 @@
 import { fillSectionGaps } from "../../lib/manualPaperShortcuts";
 import { QuestionHoverDetails } from '../../components/QuestionHoverDetails';
+import { ContentFolders } from '../../components/ContentFolders';
+import { ContentTags, TagChips } from '../../components/ContentTags';
 import {
   useCallback,
   useDeferredValue,
@@ -37,15 +39,25 @@ import { isTauriShell } from "../../lib/tauriEnv";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../../lib/ime";
 import {
   listTeacherAssignedClasses,
+  listTeacherClassStudents,
   listClassPracticeHistory,
   publishPlatformPaper,
   publishReinforcementPractice,
   publishWrongQuestionPractice,
   syncPlatformPaperFromExam,
+  listContentFolders,
+  listFolderItems,
+  listTaggedItems,
+  assignFolderItem,
+  createContentFolder,
+  updateContentFolder,
+  type ContentFolder,
+  type ContentTag,
   type PracticeHistoryRecord,
   type PracticePublishMode,
   type PaperSubmissionMode,
   type TeacherClassRecord,
+  type TeacherClassStudentRecord,
 } from "../../platform/auth";
 import type { ExamDoc, ExamWorkspaceSummary, QuestionRow, RightSelection, TemplateRow } from "../../types/compose";
 import {
@@ -106,6 +118,7 @@ export function ComposeWorkspace({
   const contentRequestIdRef = useRef(0);
 
   const [scoreBySection, setScoreBySection] = useState<Record<string, number | undefined>>({});
+  const [countBySection, setCountBySection] = useState<Record<string, number>>({});
   const [scoreOverrides, setScoreOverrides] = useState<Record<string, Record<string, number>>>({});
   const [perQuestionMode, setPerQuestionMode] = useState<Record<string, boolean>>({});
   const [currentExamId, setCurrentExamId] = useState<string | null>(null);
@@ -113,6 +126,10 @@ export function ComposeWorkspace({
   const [exportFailureExamIds, setExportFailureExamIds] = useState<string[]>([]);
   const [draftName, setDraftName] = useState("");
   const [examSummaries, setExamSummaries] = useState<ExamWorkspaceSummary[]>([]);
+  const [composeFolders, setComposeFolders] = useState<ContentFolder[]>([]);
+  const [composeFolderItems, setComposeFolderItems] = useState<Record<string, string>>({});
+  const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
+  const [selectedComposeFolderId, setSelectedComposeFolderId] = useState<string | null>(null);
   const [conflictTargetId, setConflictTargetId] = useState<string | null>(null);
   const [conflictExportKind, setConflictExportKind] = useState<"pdf" | "word" | null>(null);
   /** 最近一次导出成功后的考试目录标识（用于在未打开侧栏项时仍可从右侧打开 PDF） */
@@ -137,6 +154,13 @@ export function ComposeWorkspace({
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishClasses, setPublishClasses] = useState<TeacherClassRecord[]>([]);
   const [publishClassIds, setPublishClassIds] = useState<string[]>([]);
+  const [publishFolders, setPublishFolders] = useState<ContentFolder[]>([]);
+  const [publishFolderId, setPublishFolderId] = useState("");
+  const [publishRecipientScope, setPublishRecipientScope] = useState<"class" | "student">("class");
+  const [publishStudents, setPublishStudents] = useState<TeacherClassStudentRecord[]>([]);
+  const [publishStudentIds, setPublishStudentIds] = useState<string[]>([]);
+  const [publishStudentSearch, setPublishStudentSearch] = useState("");
+  const [publishNewFolderName, setPublishNewFolderName] = useState("");
   const [publishSubmissionMode, setPublishSubmissionMode] = useState<PaperSubmissionMode>("online");
   const [publishMaxScreenSwitches, setPublishMaxScreenSwitches] = useState(0);
   const [publishStartAt, setPublishStartAt] = useState("");
@@ -151,6 +175,15 @@ export function ComposeWorkspace({
 
   const currentExamIdRef = useRef<string | null>(null);
   currentExamIdRef.current = currentExamId;
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([listContentFolders("compose"), listFolderItems("compose"), listTaggedItems("compose")]).then(([folders, items, tags]) => {
+      if (active) { setComposeFolders(folders.folders); setComposeFolderItems(items.items); setTaggedItems(tags.items); }
+    }).catch((error) => onError(error instanceof Error ? error.message : String(error)));
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const openViewPdfExternally = useCallback(async () => {
     const id = pdfExamId ?? lastExportedExamId;
@@ -585,9 +618,9 @@ export function ComposeWorkspace({
       if (s.type === "practice") {
         return (bySection[s.section_id]?.length ?? 0) > 0;
       }
-      return (bySection[s.section_id]?.length ?? 0) === s.required_count;
+      return (bySection[s.section_id]?.length ?? 0) === (countBySection[s.section_id] ?? s.required_count);
     });
-  }, [selectedTpl, bySection]);
+  }, [selectedTpl, bySection, countBySection]);
 
   const totalScore = useMemo(() => {
     if (!selectedTpl) {
@@ -724,12 +757,12 @@ export function ComposeWorkspace({
   );
 
   const draftExamRows = useMemo(
-    () => examSummaries.filter((e) => (e.status ?? "draft") !== "exported"),
-    [examSummaries],
+    () => examSummaries.filter((e) => (e.status ?? "draft") !== "exported" && (!selectedComposeFolderId || composeFolderItems[e.exam_id] === selectedComposeFolderId)),
+    [examSummaries, selectedComposeFolderId, composeFolderItems],
   );
   const exportedExamRows = useMemo(
-    () => examSummaries.filter((e) => e.status === "exported"),
-    [examSummaries],
+    () => examSummaries.filter((e) => e.status === "exported" && (!selectedComposeFolderId || composeFolderItems[e.exam_id] === selectedComposeFolderId)),
+    [examSummaries, selectedComposeFolderId, composeFolderItems],
   );
 
   const buildSelectedItemsForApi = useCallback(() => {
@@ -748,9 +781,10 @@ export function ComposeWorkspace({
         question_ids: bySection[s.section_id] ?? [],
         score_per_item,
         score_overrides,
+        required_count: countBySection[s.section_id] ?? null,
       };
     });
-  }, [selectedTpl, bySection, scoreBySection, scoreOverrides]);
+  }, [selectedTpl, bySection, scoreBySection, scoreOverrides, countBySection]);
 
   const applyExamDocument = useCallback((doc: ExamDoc) => {
     setPreviewPdfId(null);
@@ -770,6 +804,7 @@ export function ComposeWorkspace({
     const items = doc.selected_items ?? [];
     const by: Record<string, string[]> = {};
     const sc: Record<string, number | undefined> = {};
+    const counts: Record<string, number> = {};
     const ov: Record<string, Record<string, number>> = {};
     const perQ: Record<string, boolean> = {};
     for (const it of items) {
@@ -777,6 +812,7 @@ export function ComposeWorkspace({
       if (it.score_per_item !== undefined && it.score_per_item !== null) {
         sc[it.section_id] = Number(it.score_per_item);
       }
+      if (it.required_count !== undefined && it.required_count !== null) counts[it.section_id] = Number(it.required_count);
       if (it.score_overrides && Object.keys(it.score_overrides).length > 0) {
         ov[it.section_id] = { ...it.score_overrides };
         perQ[it.section_id] = true;
@@ -784,6 +820,7 @@ export function ComposeWorkspace({
     }
     setBySection(by);
     setScoreBySection(sc);
+    setCountBySection(counts);
     setScoreOverrides(ov);
     setPerQuestionMode(perQ);
     setSelectedLeftIds([]);
@@ -826,7 +863,7 @@ export function ComposeWorkspace({
     if (newIds.length === 0) {
       return;
     }
-    if (sec.type !== "practice" && cur.length + newIds.length > sec.required_count) {
+    if (sec.type !== "practice" && cur.length + newIds.length > (countBySection[sectionId] ?? sec.required_count)) {
       onError(t("compose:errors.sectionFull"));
       return;
     }
@@ -1367,8 +1404,12 @@ export function ComposeWorkspace({
     setPublishBusy(true);
     onError(null);
     try {
-      const data = await listTeacherAssignedClasses();
+      const [data, folderData] = await Promise.all([listTeacherAssignedClasses(), listContentFolders("paper")]);
       setPublishClasses(data.classes);
+      setPublishFolders(folderData.folders);
+      setPublishFolderId("");
+      setPublishRecipientScope("class");
+      setPublishStudentIds([]);
       setPublishClassIds([]);
       setPublishSubmissionMode("online");
       setPublishMaxScreenSwitches(0);
@@ -1411,7 +1452,15 @@ export function ComposeWorkspace({
     };
   }, [onError, publishClassIds, publishDialogOpen]);
 
+  useEffect(() => {
+    if (!publishDialogOpen || publishRecipientScope !== "student" || publishClassIds.length !== 1) { setPublishStudents([]); return; }
+    let active = true;
+    void listTeacherClassStudents(publishClassIds[0]).then(({ students }) => { if (active) setPublishStudents(students); }).catch((error) => onError(error instanceof Error ? error.message : String(error)));
+    return () => { active = false; };
+  }, [publishDialogOpen, publishRecipientScope, publishClassIds, onError]);
+
   function togglePublishClass(classId: string) {
+    if (publishRecipientScope === "student") { setPublishClassIds([classId]); setPublishStudentIds([]); return; }
     setPublishClassIds((current) =>
       current.includes(classId) ? current.filter((id) => id !== classId) : [...current, classId],
     );
@@ -1422,6 +1471,8 @@ export function ComposeWorkspace({
       onError("请先选择要发布的班级");
       return;
     }
+    if (!publishFolderId) { onError("发布前请选择试卷文件夹或归类文件夹"); return; }
+    if (publishRecipientScope === "student" && (publishStudentIds.length === 0 || publishFolders.find((folder) => folder.id === publishFolderId)?.kind !== "paper")) { onError("指定学生发布须选择学生和试卷文件夹"); return; }
     setPublishBusy(true);
     onError(null);
     try {
@@ -1475,6 +1526,8 @@ export function ComposeWorkspace({
       const synced = await syncPlatformPaperFromExam(examId);
       await publishPlatformPaper(synced.paper.paper_id, {
         class_ids: publishClassIds,
+        student_ids: publishRecipientScope === "student" ? publishStudentIds : [],
+        folder_id: publishFolderId,
         title: exportLabel.trim() || synced.paper.title,
         start_at: publishStartAt || null,
         end_at: publishEndAt || null,
@@ -1813,6 +1866,10 @@ export function ComposeWorkspace({
             <p className="mt-1 text-sm text-slate-600">
               将当前组卷保存为试卷，并发布给选中的班级。线上发布不依赖 PDF 编译。
             </p>
+            <div className="mt-3 flex gap-2"><button type="button" onClick={() => { setPublishRecipientScope("class"); setPublishStudentIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${publishRecipientScope === "class" ? "bg-slate-900 text-white" : ""}`}>发布到班级</button><button type="button" onClick={() => { setPublishRecipientScope("student"); setPublishClassIds([]); setPublishMode("current"); }} className={`rounded border px-3 py-1.5 text-sm ${publishRecipientScope === "student" ? "bg-slate-900 text-white" : ""}`}>指定学生</button></div>
+            <label className="mt-3 block text-sm">试卷归类（必选）<select aria-label="组卷发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-2 py-2"><option value="">请选择文件夹</option>{publishFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
+            {publishRecipientScope === "student" && publishFolderId && publishFolders.find((folder) => folder.id === publishFolderId)?.kind === "category" ? <button type="button" className="mt-2 rounded border border-violet-300 px-2 py-1 text-xs text-violet-700" onClick={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setPublishFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch((error) => onError(error instanceof Error ? error.message : String(error)))}>将空文件夹转为试卷文件夹</button> : null}
+            <div className="mt-2 flex gap-2"><input aria-label="组卷新建文件夹名称" value={publishNewFolderName} onChange={(event) => setPublishNewFolderName(event.target.value)} placeholder="新文件夹名称" className="min-w-0 flex-1 rounded border px-2 py-1 text-sm" /><button type="button" disabled={!publishNewFolderName.trim()} onClick={() => { const parent = publishFolders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? publishFolders.find((folder) => folder.kind === "category" && !folder.parent_id); void createContentFolder({ scope: "paper", name: publishNewFolderName.trim(), kind: publishRecipientScope === "student" ? "paper" : "category", parent_id: publishRecipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => { setPublishFolders((current) => [...current, folder]); setPublishFolderId(folder.id); setPublishNewFolderName(""); }).catch((error) => onError(error instanceof Error ? error.message : String(error))); }} className="rounded border px-2 py-1 text-xs disabled:opacity-50">新建并选择</button></div>
             <div className="mt-4 max-h-72 space-y-2 overflow-auto rounded-lg border border-slate-200 p-2">
               {publishClasses.map((klass) => (
                 <label
@@ -1820,7 +1877,8 @@ export function ComposeWorkspace({
                   className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-slate-50"
                 >
                   <input
-                    type="checkbox"
+                    type={publishRecipientScope === "student" ? "radio" : "checkbox"}
+                    name={publishRecipientScope === "student" ? "compose-personal-class" : undefined}
                     checked={publishClassIds.includes(klass.id)}
                     onChange={() => togglePublishClass(klass.id)}
                     className="h-4 w-4"
@@ -1839,6 +1897,7 @@ export function ComposeWorkspace({
                 </p>
               ) : null}
             </div>
+            {publishRecipientScope === "student" && publishClassIds.length === 1 ? <div className="mt-3 rounded border p-3"><input aria-label="组卷搜索指定学生" value={publishStudentSearch} onChange={(event) => setPublishStudentSearch(event.target.value)} placeholder="搜索姓名或学号" className="mb-2 w-full rounded border px-2 py-1.5 text-sm" /><div className="max-h-32 overflow-auto">{publishStudents.filter((student) => `${student.display_name} ${student.student_no}`.toLowerCase().includes(publishStudentSearch.toLowerCase())).map((student) => <label key={student.id} className="flex gap-2 p-1 text-sm"><input type="checkbox" checked={publishStudentIds.includes(student.id)} onChange={() => setPublishStudentIds((ids) => ids.includes(student.id) ? ids.filter((id) => id !== student.id) : [...ids, student.id])} />{student.display_name} · {student.student_no}</label>)}</div></div> : null}
             <AdaptivePracticeSelector
               mode={publishMode}
               history={practiceHistory}
@@ -1934,6 +1993,8 @@ export function ComposeWorkspace({
                 disabled={
                   publishBusy ||
                   publishClassIds.length === 0 ||
+                  !publishFolderId ||
+                  (publishRecipientScope === "student" && (publishStudentIds.length === 0 || publishFolders.find((folder) => folder.id === publishFolderId)?.kind !== "paper")) ||
                   (publishMode === "current" && !countsOk) ||
                   (publishMode === "wrong_questions" && (publishClassIds.length !== 1 || practiceSourceIds.length !== 1)) ||
                   (publishMode === "reinforcement" && (publishClassIds.length !== 1 || practiceSourceIds.length < 3))
@@ -1984,6 +2045,7 @@ export function ComposeWorkspace({
 
       <div className="flex min-h-0 flex-1 flex-row">
         <aside className="flex w-48 shrink-0 flex-col border-r border-slate-200 bg-slate-50 xl:w-56">
+          <div className="shrink-0 p-2"><ContentFolders scope="compose" folders={composeFolders} selectedId={selectedComposeFolderId} onSelect={setSelectedComposeFolderId} onCreated={(folder) => setComposeFolders((current) => [...current, folder])} onUpdated={(folder) => setComposeFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDropItem={(id, folderId) => void assignFolderItem("compose", id, folderId).then(() => setComposeFolderItems((items) => ({ ...items, [id]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error)))} onError={onError} /></div>
           <div className="shrink-0 border-b border-slate-200 bg-white px-2 py-2">
             <h2 className="text-[10px] font-semibold uppercase leading-tight tracking-wide text-slate-500">
               {t("compose:historySidebarTitle")}
@@ -2002,6 +2064,8 @@ export function ComposeWorkspace({
                     <li key={d.exam_id} className="flex min-w-0 items-stretch gap-0.5">
                       <button
                         type="button"
+                        draggable
+                        onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "compose", id: d.exam_id }))}
                         className={cn(
                           "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs",
                           currentExamId === d.exam_id
@@ -2014,6 +2078,8 @@ export function ComposeWorkspace({
                         }}
                       >
                         <span className="font-medium text-slate-900">{d.name || d.exam_id}</span>
+                        <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800">临时</span>
+                        {(taggedItems[d.exam_id]?.length ?? 0) > 0 ? <TagChips tags={taggedItems[d.exam_id]} /> : null}
                         <span className="mt-0.5 block text-[10px] text-slate-500">
                           {t("compose:examStatusEditing")}
                         </span>
@@ -2051,6 +2117,8 @@ export function ComposeWorkspace({
                     <li key={ex.exam_id} className="flex min-w-0 items-stretch gap-0.5">
                       <button
                         type="button"
+                        draggable
+                        onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "compose", id: ex.exam_id }))}
                         className={cn(
                           "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs",
                           currentExamId === ex.exam_id
@@ -2070,6 +2138,7 @@ export function ComposeWorkspace({
                         <span className="font-medium text-slate-900">
                           {ex.export_label || ex.name || ex.exam_id}
                         </span>
+                        {(taggedItems[ex.exam_id]?.length ?? 0) > 0 ? <TagChips tags={taggedItems[ex.exam_id]} /> : null}
                         {ex.subject ? (
                           <span className="mt-0.5 block text-[10px] text-slate-500">{ex.subject}</span>
                         ) : null}
@@ -2104,7 +2173,7 @@ export function ComposeWorkspace({
               className="mt-2 flex w-full items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left text-xs font-medium text-slate-800 hover:bg-slate-100"
               onClick={() => setComposeFilterExpanded((v) => !v)}
             >
-              <span>{t("compose:filter")}</span>
+              <span>{t("compose:filter")} · {Number(namespaceFilter !== "__all__") + Number(typeFilter !== "__all__") + Number(Boolean(search.trim())) + Number(hasActiveMetadataFilters(metadataFilters))} 项</span>
               <span className="truncate pl-2 text-[10px] font-normal text-slate-500">
                 {composeFilterExpanded
                   ? t("common:collapseHint")
@@ -2122,7 +2191,7 @@ export function ComposeWorkspace({
               </span>
             </button>
             {composeFilterExpanded && (
-              <div className="mt-2 space-y-2">
+              <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-label="组卷筛选" onClick={() => setComposeFilterExpanded(false)}><div className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="mb-4 flex items-center justify-between"><h3 className="font-semibold">筛选题目</h3><button type="button" aria-label="关闭组卷筛选" onClick={() => setComposeFilterExpanded(false)}>×</button></div><div className="space-y-2">
                 <label className="block text-[11px] font-medium text-slate-600">
                   {t("compose:subjectForExport")}
                   <select
@@ -2189,7 +2258,7 @@ export function ComposeWorkspace({
                   filters={metadataFilters}
                   onChange={setMetadataFilters}
                 />
-              </div>
+              </div><div className="mt-4 flex justify-end"><button type="button" onClick={() => setComposeFilterExpanded(false)} className="rounded bg-slate-900 px-4 py-2 text-sm text-white">查看结果</button></div></div></div>
             )}
             <p className="mt-2 text-[10px] leading-snug text-slate-500">可将题目拖入右侧小节；多选后也可用箭头加入。</p>
           </div>
@@ -2256,7 +2325,7 @@ export function ComposeWorkspace({
         <div className="flex w-full shrink-0 flex-row items-center justify-center gap-2 border-y border-slate-200 bg-slate-100/90 py-2 md:w-11 md:flex-col md:justify-start md:gap-3 md:border-x md:border-y-0 md:py-4">
           <button type="button" disabled={!selectedTpl} className="rounded border bg-white p-1 text-xs" title="按当前筛选题目补齐各大题空缺；保留已选题目，不重复添加" onClick={() => {
             if (!selectedTpl) return;
-            const next = fillSectionGaps(selectedTpl.sections, bySection, filteredQuestions, questionTypeMatchesSection);
+            const next = fillSectionGaps(selectedTpl.sections.map((section) => ({ ...section, required_count: countBySection[section.section_id] ?? section.required_count })), bySection, filteredQuestions, questionTypeMatchesSection);
             const added = Object.values(next).flat().length - Object.values(bySection).flat().length;
             setBySection(next);
             setMsg(`已补入 ${added} 题；不足时请放宽左侧筛选条件。`);
@@ -2280,6 +2349,7 @@ export function ComposeWorkspace({
         </div>
 
         <section className="min-h-0 min-w-0 flex-1 basis-0 overflow-auto bg-slate-50 p-4 lg:min-w-0">
+          {currentExamId ? <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-white p-2 text-xs"><span>当前试卷归类</span><select aria-label="组卷所在文件夹" value={composeFolderItems[currentExamId] ?? ""} onChange={(event) => { const folderId = event.target.value; void assignFolderItem("compose", currentExamId, folderId || null).then(() => setComposeFolderItems((items) => ({ ...items, [currentExamId]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error))); }} className="rounded border px-2 py-1"><option value="">未归类</option>{composeFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><ContentTags scope="compose" itemId={currentExamId} onError={onError} onChange={() => void listTaggedItems("compose").then(({ items }) => setTaggedItems(items))} /></div> : null}
           {conflictTargetId ? (
             <div
               className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4"
@@ -2374,7 +2444,7 @@ export function ComposeWorkspace({
                       ? t("compose:sectionOptionText")
                       : s.type === "practice"
                         ? t("compose:sectionOptionPractice")
-                      : t("compose:sectionOptionNeed", { n: s.required_count })}
+                      : t("compose:sectionOptionNeed", { n: countBySection[s.section_id] ?? s.required_count })}
                   </option>
                 ))}
               </select>
@@ -2385,7 +2455,7 @@ export function ComposeWorkspace({
               const n = bySection[s.section_id]?.length ?? 0;
               const isText = s.type === "text";
               const isPractice = s.type === "practice";
-              const ok = isText || (isPractice ? n > 0 : n === s.required_count);
+              const ok = isText || (isPractice ? n > 0 : n === (countBySection[s.section_id] ?? s.required_count));
               const sectionBaseScore = scoreBySection[s.section_id] ?? s.score_per_item;
               const slots = clusterAdjacentGroupSlots(bySection[s.section_id] ?? [], questionMap);
               return (
@@ -2436,7 +2506,7 @@ export function ComposeWorkspace({
                           </>
                         ) : (
                           <>
-                            {t("compose:pickedCount", { n, need: s.required_count })}
+                            {t("compose:pickedCount", { n, need: countBySection[s.section_id] ?? s.required_count })}
                             {ok && <span className="ml-2 text-emerald-600">{t("compose:satisfied")}</span>}
                           </>
                         )}
@@ -2450,6 +2520,7 @@ export function ComposeWorkspace({
                           onClick={(e) => e.stopPropagation()}
                           onKeyDown={(e) => e.stopPropagation()}
                         >
+                          {s.type !== "practice" ? <label className="flex items-center gap-1 text-[11px] font-medium text-slate-600">题目数量<input aria-label={`${s.section_id}题目数量`} type="number" min={0} max={500} value={countBySection[s.section_id] ?? s.required_count} onChange={(event) => setCountBySection((current) => ({ ...current, [s.section_id]: Math.max(0, Math.min(500, Number(event.target.value) || 0)) }))} className="w-16 rounded-md border border-slate-300 px-1.5 py-1 text-sm" /></label> : null}
                           <label className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
                             {t("compose:scorePerItem")}
                             <input

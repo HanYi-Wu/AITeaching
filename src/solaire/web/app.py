@@ -210,7 +210,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="OriginReach API", version="1.6.5", lifespan=_lifespan)
+app = FastAPI(title="OriginReach API", version="1.6.6", lifespan=_lifespan)
 app.include_router(agent_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
@@ -277,6 +277,7 @@ class SelectedSectionIn(BaseModel):
     question_ids: list[str]
     score_per_item: float | None = None
     score_overrides: dict[str, float] | None = None
+    required_count: int | None = Field(default=None, ge=0, le=500)
 
 
 class ExamDraftBody(BaseModel):
@@ -1482,6 +1483,7 @@ def _draft_to_sections(body: ExamDraftBody) -> list[SelectedSection]:
                 question_ids=list(s.question_ids),
                 score_per_item=s.score_per_item,
                 score_overrides=dict(ov) if ov else None,
+                required_count=s.required_count,
             )
         )
     return out

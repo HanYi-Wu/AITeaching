@@ -19,6 +19,8 @@ class SelectedSection(BaseModel):
     """Override template default per-section score when set."""
     score_overrides: dict[str, float] | None = None
     """Per-question scores by qualified_id; keys must be ids from question_ids."""
+    required_count: int | None = Field(default=None, ge=0, le=500)
+    """Exam-local question count; template is only the initial default."""
 
 
 class ExamConfig(BaseModel):

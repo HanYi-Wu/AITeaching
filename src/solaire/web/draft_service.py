@@ -42,6 +42,8 @@ def _section_dump(s: SelectedSection) -> dict[str, Any]:
         d["score_per_item"] = s.score_per_item
     if s.score_overrides:
         d["score_overrides"] = dict(s.score_overrides)
+    if s.required_count is not None:
+        d["required_count"] = s.required_count
     return d
 
 
@@ -68,6 +70,7 @@ def _sections_from_raw(items: list[dict[str, Any]] | None) -> list[SelectedSecti
                 question_ids=[str(x) for x in qids],
                 score_per_item=score_per_item,
                 score_overrides=score_overrides,
+                required_count=int(raw["required_count"]) if raw.get("required_count") is not None else None,
             )
         )
     return out

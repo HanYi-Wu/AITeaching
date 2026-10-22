@@ -60,6 +60,7 @@ def _sections_from_args(args: dict[str, Any]) -> list[SelectedSection]:
                     question_ids=[str(x) for x in qids],
                     score_per_item=score_per_item,
                     score_overrides=score_overrides,
+                    required_count=int(s["required_count"]) if s.get("required_count") is not None else None,
                 )
             )
     return out
@@ -445,6 +446,34 @@ def _resolve_class_ids(root: Path, actor: dict[str, Any], args: dict[str, Any]) 
     return list(dict.fromkeys(resolved)), None
 
 
+def _resolve_folder_and_students(root: Path, actor: dict[str, Any], args: dict[str, Any], class_ids: list[str]) -> tuple[str | None, list[str], str | None]:
+    folder_id = str(args.get("folder_id") or "").strip() or None
+    folder_name = str(args.get("folder_name") or "").strip()
+    if not folder_id and folder_name:
+        with connect(root) as con:
+            rows = con.execute("SELECT id, name FROM content_folders WHERE owner_teacher_id=? AND scope='paper' AND name LIKE ?",
+                (str(actor.get("id")), f"%{folder_name}%")).fetchall()
+        exact = [row for row in rows if str(row["name"]) == folder_name]
+        matches = exact or rows
+        if len(matches) != 1:
+            return None, [], "文件夹名称不唯一或不存在，请先用 content.folders 选择文件夹 ID"
+        folder_id = str(matches[0]["id"])
+    student_ids = [str(item).strip() for item in (args.get("student_ids") or []) if str(item).strip()]
+    student_names = _split_name_terms(args.get("student_names"))
+    if student_names:
+        if len(class_ids) != 1:
+            return folder_id, [], "按学生姓名发布时须先确定一个班级"
+        with connect(root) as con:
+            rows = con.execute("SELECT s.id, s.student_no, s.display_name FROM students s JOIN class_students cs ON cs.student_id=s.id WHERE cs.class_id=?", (class_ids[0],)).fetchall()
+        for term in student_names:
+            exact = [row for row in rows if term in {str(row["id"]), str(row["student_no"]), str(row["display_name"])}]
+            matches = exact or [row for row in rows if term in str(row["display_name"])]
+            if len(matches) != 1:
+                return folder_id, [], f"学生「{term}」不唯一或不在班级中，请用学号或学生 ID 指定"
+            student_ids.append(str(matches[0]["id"]))
+    return folder_id, list(dict.fromkeys(student_ids)), None
+
+
 def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     actor = _platform_actor(ctx)
     if actor is None:
@@ -504,12 +533,19 @@ def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> T
             error_code="invalid_arguments",
             error_message=paper_error or class_error or "paper and class are required",
         )
+    folder_id, student_ids, recipient_error = _resolve_folder_and_students(platform_root, actor, args, class_ids)
+    if recipient_error:
+        return ToolResult(status="failed", error_code="invalid_arguments", error_message=recipient_error)
+    if not folder_id:
+        return ToolResult(status="failed", error_code="folder_required", error_message="发布前须指定文件夹，请先调用 content.folders，必要时调用 content.folder_create。")
     try:
         publication = publish_online_paper(
             platform_root,
             paper_id=paper_id,
             user=actor,
             class_ids=class_ids,
+            student_ids=student_ids,
+            folder_id=folder_id,
             project_root=ctx.project_root,
             title=str(args.get("title") or "").strip() or None,
             description=str(args.get("description") or "").strip() or None,
@@ -526,7 +562,7 @@ def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> T
     return ToolResult(
         status="succeeded",
         data={"publication": publication},
-        summary_for_llm=f"Published paper to {len(class_ids)} class(es).",
+        summary_for_llm=f"已发布到 {len(student_ids)} 名指定学生。" if student_ids else f"已发布到 {len(class_ids)} 个班级。",
     )
 
 

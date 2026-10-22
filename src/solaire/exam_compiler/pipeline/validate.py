@@ -57,9 +57,10 @@ def validate_exam(exam: ExamConfig, template: ExamTemplate, loaded: LoadedQuesti
                     f"小节「{sel.section_id}」为卷面说明，不需要挂载题目，请移除本题小节下的选题。"
                 )
             continue
-        if sec.type != "practice" and len(sel.question_ids) != sec.required_count:
+        required_count = sel.required_count if sel.required_count is not None else sec.required_count
+        if sec.type != "practice" and len(sel.question_ids) != required_count:
             raise ValueError(
-                f"小节「{sel.section_id}」需要 {sec.required_count} 道题，当前已选 {len(sel.question_ids)} 道。"
+                f"小节「{sel.section_id}」需要 {required_count} 道题，当前已选 {len(sel.question_ids)} 道。"
             )
         for qid in sel.question_ids:
             entry = loaded.by_qualified.get(qid)
@@ -120,6 +121,7 @@ def normalize_exam_for_preview(exam: ExamConfig, template: ExamTemplate) -> tupl
         qids = list(sel.question_ids)
         spo = sel.score_per_item
         sov = sel.score_overrides
+        required_count = sel.required_count if sel.required_count is not None else sec.required_count
 
         if sec.type == "text":
             if len(qids) != 0:
@@ -130,6 +132,7 @@ def normalize_exam_for_preview(exam: ExamConfig, template: ExamTemplate) -> tupl
                     question_ids=[],
                     score_per_item=spo,
                     score_overrides=sov,
+                    required_count=sel.required_count,
                 )
             )
             continue
@@ -141,19 +144,20 @@ def normalize_exam_for_preview(exam: ExamConfig, template: ExamTemplate) -> tupl
                     question_ids=qids,
                     score_per_item=spo,
                     score_overrides=sov,
+                    required_count=sel.required_count,
                 )
             )
             continue
 
-        if len(qids) > sec.required_count:
+        if len(qids) > required_count:
             warnings.append(
-                f"小节「{sec.section_id}」最多需要 {sec.required_count} 道题，预览中已截断多余选题。"
+                f"小节「{sec.section_id}」最多需要 {required_count} 道题，预览中已截断多余选题。"
             )
-            qids = qids[: sec.required_count]
+            qids = qids[: required_count]
 
-        if len(qids) < sec.required_count:
+        if len(qids) < required_count:
             warnings.append(
-                f"小节「{sec.section_id}」需要 {sec.required_count} 道题，当前已选 {len(qids)} 道（预览仍可生成）。"
+                f"小节「{sec.section_id}」需要 {required_count} 道题，当前已选 {len(qids)} 道（预览仍可生成）。"
             )
 
         new_items.append(
@@ -162,6 +166,7 @@ def normalize_exam_for_preview(exam: ExamConfig, template: ExamTemplate) -> tupl
                 question_ids=qids,
                 score_per_item=spo,
                 score_overrides=sov,
+                required_count=sel.required_count,
             )
         )
 

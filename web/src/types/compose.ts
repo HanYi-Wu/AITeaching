@@ -63,6 +63,7 @@ export type ExamDoc = {
     question_ids: string[];
     score_per_item?: number | null;
     score_overrides?: Record<string, number> | null;
+    required_count?: number | null;
   }>;
 };
 

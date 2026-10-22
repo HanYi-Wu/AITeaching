@@ -30,6 +30,7 @@ import type { EmbedKind } from "../../lib/bankEditorEmbedKinds";
 import { ContentWithPrimeBrush } from "../../components/ContentWithPrimeBrush";
 import { BankFolderExplorer, type BankFolders } from "../../components/BankFolderExplorer";
 import { QuestionHoverDetails } from '../../components/QuestionHoverDetails';
+import { ContentTags, TagChips } from '../../components/ContentTags';
 import { KatexPlainPreview } from "../../components/KatexText";
 import { MathInsertOverlay } from "../../components/MathInsertOverlay";
 import { MermaidEditorModal } from "../../components/MermaidEditorModal";
@@ -46,7 +47,7 @@ import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
 import { notifyContentLibraryChanged, useContentLibraryChanged } from "../../lib/contentEvents";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../../lib/ime";
 import { cn } from "../../lib/utils";
-import { downloadPlatformBlob } from "../../platform/auth";
+import { downloadPlatformBlob, listTaggedItems, type ContentTag } from "../../platform/auth";
 import { QUESTION_TYPE_OPTIONS, isChoiceQuestionType } from "../../lib/questionTypes";
 import {
   buildMetadataFilterDefinitions,
@@ -76,6 +77,9 @@ export function BankWorkspace({
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
+  const refreshTags = useCallback(() => { void listTaggedItems("bank").then(({ items }) => setTaggedItems(items)).catch(() => undefined); }, []);
+  useEffect(() => refreshTags(), [refreshTags]);
   const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
   /** 已打开的题目标签（多窗口编辑） */
   const [openTabs, setOpenTabs] = useState<string[]>([]);
@@ -1716,6 +1720,7 @@ export function BankWorkspace({
                       </div>
                     )}
                   </button>
+                  {(taggedItems[it.qualified_id]?.length ?? 0) > 0 ? <div className="mt-1"><TagChips tags={taggedItems[it.qualified_id]} /></div> : null}
                   {graphNodes.length > 0 ? (
                     <div className="mt-1.5 flex flex-wrap gap-1 border-t border-slate-200/80 pt-1.5">
                       <span className="w-full text-[10px] font-medium text-slate-500">{t("knowledgePoints")}</span>
@@ -1768,6 +1773,7 @@ export function BankWorkspace({
           }}
         />
         <div className="min-h-0 flex-1 overflow-auto p-4">
+          {selectedId ? <div className="mb-2 rounded border bg-white p-2 text-xs"><ContentTags scope="bank" itemId={selectedId} onError={onError} onChange={refreshTags} /></div> : null}
           {!detail ? (
             <p className="text-sm text-slate-500">{t("selectLeft")}</p>
           ) : editorModalOpen ? (

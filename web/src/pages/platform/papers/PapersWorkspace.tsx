@@ -17,6 +17,8 @@ import {
   X,
 } from "lucide-react";
 import { apiDownloadBlob } from "../../../api/client";
+import { ContentFolders } from "../../../components/ContentFolders";
+import { ContentTags, TagChips } from "../../../components/ContentTags";
 import { formatLocaleDateTime } from "../../../lib/locale";
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
 import {
@@ -27,6 +29,13 @@ import {
   downloadOfflineScanImage,
   gradePaperAnswer,
   getAccountProfile,
+  analyzePaperFolder,
+  createContentFolder,
+  listContentFolders,
+  listTaggedItems,
+  movePaperToFolder,
+  updateContentFolder,
+  listTeacherClassStudents,
   listPaperSubmissions,
   listPlatformPaperPublications,
   listPlatformPapers,
@@ -43,6 +52,9 @@ import {
   type PlatformPaperAnalysis,
   type PlatformPaperRecord,
   type TeacherClassRecord,
+  type TeacherClassStudentRecord,
+  type ContentFolder,
+  type ContentTag,
 } from "../../../platform/auth";
 import { PlatformPaperAnalysisCharts } from "../AnalysisCharts";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
@@ -68,9 +80,11 @@ type Props = {
   onOpenTemplates?: () => void;
   onOpenCompose?: () => void;
   onError?: (message: string | null) => void;
+  assignStudent?: { classId: string; studentId: string; name: string } | null;
+  onAssignStudentConsumed?: () => void;
 };
 
-export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError }: Props) {
+export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError, assignStudent, onAssignStudentConsumed }: Props) {
   const [clock, setClock] = useState(Date.now());
   useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   const [papers, setPapers] = useState<PlatformPaperRecord[]>([]);
@@ -96,6 +110,16 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<string, string>>({});
   const [selectedPaperId, setSelectedPaperId] = useState("");
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
+  const [folders, setFolders] = useState<ContentFolder[]>([]);
+  const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
+  const [browserFolderId, setBrowserFolderId] = useState<string | null>(null);
+  const [publishFolderId, setPublishFolderId] = useState("");
+  const [newFolderName, setNewFolderName] = useState("");
+  const [recipientScope, setRecipientScope] = useState<"class" | "student">("class");
+  const [classStudents, setClassStudents] = useState<TeacherClassStudentRecord[]>([]);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [studentSearch, setStudentSearch] = useState("");
+  const [folderAnalysis, setFolderAnalysis] = useState<Awaited<ReturnType<typeof analyzePaperFolder>> | null>(null);
   const [teacherSubjects, setTeacherSubjects] = useState<string[]>([]);
   const [selectedSubject, setSelectedSubject] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -128,6 +152,20 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    void listContentFolders("paper").then((result) => setFolders(result.folders)).catch(reportError);
+    void listTaggedItems("paper").then((result) => setTaggedItems(result.items)).catch(reportError);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (recipientScope !== "student" || selectedClassIds.length !== 1) { setClassStudents([]); return; }
+    let active = true;
+    void listTeacherClassStudents(selectedClassIds[0]).then((result) => { if (active) setClassStudents(result.students); }).catch(reportError);
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipientScope, selectedClassIds.join(",")]);
+
   const selectedPaper = useMemo(
     () => papers.find((paper) => paper.paper_id === selectedPaperId) ?? papers[0] ?? null,
     [papers, selectedPaperId],
@@ -135,7 +173,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const activePublishedClassIds = useMemo(() => {
     const ids = new Set<string>();
     publications
-      .filter((publication) => publication.status !== "revoked")
+      .filter((publication) => publication.status !== "revoked" && publication.recipient_scope !== "student")
       .forEach((publication) => {
         publication.class_ids.forEach((classId) => ids.add(classId));
       });
@@ -170,6 +208,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           status: paperQuery.status,
           page: paperQuery.page,
           pageSize: paperQuery.pageSize,
+          folderId: browserFolderId,
         }),
         listTeacherAssignedClasses(),
       ]);
@@ -196,7 +235,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize]);
+  }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize, browserFolderId]);
 
   useEffect(() => {
     if (!openTarget) return;
@@ -221,7 +260,10 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     setGradeDrafts({});
     setFeedbackDrafts({});
     clearScanObjectUrls();
-    setSelectedClassIds([]);
+    setSelectedClassIds(assignStudent && selectedPaperId ? [assignStudent.classId] : []);
+    setPublishFolderId("");
+    setSelectedStudentIds(assignStudent && selectedPaperId ? [assignStudent.studentId] : []);
+    if (assignStudent && selectedPaperId) { setRecipientScope("student"); onAssignStudentConsumed?.(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPaperId, clearScanObjectUrls]);
 
@@ -241,7 +283,12 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   }
 
   function toggleClass(classId: string) {
-    if (activePublishedClassIds.has(classId)) {
+    if (recipientScope === "class" && activePublishedClassIds.has(classId)) {
+      return;
+    }
+    if (recipientScope === "student") {
+      setSelectedClassIds([classId]);
+      setSelectedStudentIds([]);
       return;
     }
     setSelectedClassIds((current) =>
@@ -259,6 +306,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       setMessage("请选择要发布的班级。");
       return;
     }
+    if (!publishFolderId) { setMessage("请选择试卷文件夹或归类文件夹。"); return; }
+    if (recipientScope === "student" && selectedStudentIds.length === 0) { setMessage("请选择接收练习的学生。"); return; }
+    if (recipientScope === "student" && folders.find((folder) => folder.id === publishFolderId)?.kind !== "paper") {
+      setMessage("指定学生发布须选择试卷文件夹。"); return;
+    }
     if (teacherSubjects.length > 1 && !selectedSubject) {
       setMessage("你设置了多个学科，请选择本次发布所用学科。");
       return;
@@ -268,6 +320,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     try {
       await publishPlatformPaper(selectedPaper.paper_id, {
         class_ids: selectedClassIds,
+        student_ids: recipientScope === "student" ? selectedStudentIds : [],
+        folder_id: publishFolderId,
         title: selectedPaper.title,
         start_at: publishStartAt ? new Date(publishStartAt).toISOString() : null,
         end_at: publishEndAt ? new Date(publishEndAt).toISOString() : null,
@@ -290,6 +344,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         ),
       );
       setSelectedClassIds([]);
+      setSelectedStudentIds([]);
       setMessage("已发布");
       await loadPublications(selectedPaper.paper_id);
     } catch (e) {
@@ -745,7 +800,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const selectedGradingSubmission =
     submissions.find((submission) => submission.attempt_id === selectedGradingAttemptId) ?? submissions[0] ?? null;
   const canPublish =
-    Boolean(selectedPaper) && !publishBusy && Number(selectedPaper?.question_count || 0) > 0 && selectedClassIds.length > 0;
+    Boolean(selectedPaper) && !publishBusy && Number(selectedPaper?.question_count || 0) > 0 && selectedClassIds.length > 0 && Boolean(publishFolderId) && (recipientScope === "class" || selectedStudentIds.length > 0);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-slate-50 text-slate-950">
@@ -784,6 +839,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,390px)_minmax(0,1fr)] overflow-hidden">
         <aside className="flex min-h-0 flex-col overflow-hidden border-r border-slate-200 bg-white p-3">
+          <ContentFolders scope="paper" folders={folders} selectedId={browserFolderId} onSelect={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }} onCreated={(folder) => setFolders((current) => [...current, folder])} onUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)} onError={(error) => reportError(error)} allowPaperFolder />
+          {browserFolderId ? <div className="my-2 flex gap-2 text-xs"><button type="button" onClick={() => void analyzePaperFolder(browserFolderId).then(setFolderAnalysis).catch(reportError)} className="rounded border px-2 py-1 hover:bg-slate-50">分析此文件夹</button></div> : null}
           <div className="mb-3 shrink-0 space-y-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
@@ -820,6 +877,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
               <button
                 key={paper.paper_id}
                 type="button"
+                draggable
+                onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "paper", id: paper.paper_id }))}
                 onClick={() => {
                   setSelectedPaperId(paper.paper_id);
                   setAnalysis(null);
@@ -846,6 +905,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                  {(taggedItems[paper.paper_id]?.length ?? 0) > 0 ? <TagChips tags={taggedItems[paper.paper_id]} /> : null}
                   <span>{paper.subject}</span>
                   <span>{paper.question_count} 题</span>
                   <span>{paper.submitted_student_count ?? 0} 份已提交</span>
@@ -872,6 +932,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-slate-500">{selectedPaper.subject}</p>
                     <h2 className="mt-1 text-2xl font-semibold text-slate-950">{selectedPaper.title}</h2>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><ContentTags scope="paper" itemId={selectedPaper.paper_id} onError={(error) => reportError(error)} onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))} /><label>归类 <select aria-label="试卷所在文件夹" className="rounded border px-2 py-1" value={selectedPaper.folder_id ?? ""} onChange={(event) => void movePaperToFolder(selectedPaper.paper_id, event.target.value).then(() => refresh()).catch(reportError)}>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label></div>
                     <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-600">
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.question_count} 题</span>
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.section_count} 个题组</span>
@@ -948,7 +1009,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
               {paperDetailView === "manage" ? (
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
                 <section className="space-y-5">
-                  <Panel title="发布班级" icon={<Wifi className="h-5 w-5 text-slate-600" />}>
+                  <Panel title="发布试卷" icon={<Wifi className="h-5 w-5 text-slate-600" />}>
+                    <div className="mb-4 flex gap-2"><button type="button" onClick={() => { setRecipientScope("class"); setSelectedStudentIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${recipientScope === "class" ? "bg-slate-900 text-white" : "bg-white"}`}>发布到班级</button><button type="button" onClick={() => { setRecipientScope("student"); setSelectedClassIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${recipientScope === "student" ? "bg-slate-900 text-white" : "bg-white"}`}>指定学生</button></div>
+                    <label className="mb-3 block text-sm">试卷归类（必选）<select aria-label="发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option value="">请选择文件夹</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
+                    {recipientScope === "student" && publishFolderId && folders.find((folder) => folder.id === publishFolderId)?.kind === "category" ? <button type="button" className="mb-3 rounded border border-violet-300 px-2 py-1 text-xs text-violet-700" onClick={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch(reportError)}>将空文件夹转为试卷文件夹</button> : null}
+                    <div className="mb-4 flex gap-2"><input aria-label="新文件夹名称" value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} className="min-w-0 flex-1 rounded border px-2 py-1 text-sm" placeholder="新建文件夹名称" /><button type="button" disabled={!newFolderName.trim()} className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={() => { const parent = folders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? folders.find((folder) => folder.kind === "category" && !folder.parent_id); void createContentFolder({ scope: "paper", name: newFolderName.trim(), kind: recipientScope === "student" ? "paper" : "category", parent_id: recipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => { setFolders((current) => [...current, folder]); setPublishFolderId(folder.id); setNewFolderName(""); }).catch(reportError); }}>新建并选择</button></div>
                     <label className="mb-4 block text-sm font-medium text-slate-700">
                       发布学科
                       <select
@@ -964,7 +1029,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                     </label>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {classes.map((klass) => {
-                        const alreadyPublished = activePublishedClassIds.has(klass.id);
+                        const alreadyPublished = recipientScope === "class" && activePublishedClassIds.has(klass.id);
                         return (
                         <label
                           key={klass.id}
@@ -976,7 +1041,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                         >
                           <input
                             data-testid={`paper-class-${klass.id}`}
-                            type="checkbox"
+                          type={recipientScope === "student" ? "radio" : "checkbox"}
+                          name={recipientScope === "student" ? "personal-publish-class" : undefined}
                             disabled={alreadyPublished}
                             checked={selectedClassIds.includes(klass.id)}
                             onChange={() => toggleClass(klass.id)}
@@ -999,6 +1065,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                         </div>
                       ) : null}
                     </div>
+                    {recipientScope === "student" && selectedClassIds.length === 1 ? <div className="mt-3 rounded-lg border border-slate-200 p-3"><input aria-label="搜索指定学生" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} placeholder="按姓名或学号搜索" className="mb-2 w-full rounded border px-2 py-1.5 text-sm" /><div className="max-h-40 space-y-1 overflow-auto">{classStudents.filter((student) => `${student.display_name} ${student.student_no}`.toLowerCase().includes(studentSearch.toLowerCase())).map((student) => <label key={student.id} className="flex items-center gap-2 rounded p-1 text-sm hover:bg-slate-50"><input type="checkbox" checked={selectedStudentIds.includes(student.id)} onChange={() => setSelectedStudentIds((ids) => ids.includes(student.id) ? ids.filter((id) => id !== student.id) : [...ids, student.id])} />{student.display_name} · {student.student_no}</label>)}</div><p className="mt-1 text-xs text-slate-500">已选 {selectedStudentIds.length} 人；每人在所选试卷文件夹内最多收到一份。</p></div> : null}
                     <div className="mt-4 grid gap-2 sm:grid-cols-3">
                       {[
                         ["online", "网页答题"],
@@ -1080,7 +1147,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                       className="mt-4 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      发布到班级
+                      {recipientScope === "student" ? "布置个人练习" : "发布到班级"}
                     </button>
                   </Panel>
 
@@ -1093,7 +1160,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                             <span className="rounded bg-slate-100 px-2 py-1 text-xs">{publicationWindowLabel(publication, clock)}</span>
                           </div>
                           <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                            <div className="break-all">班级：{(publication.class_names || []).join("、") || "-"}</div>
+                            <div className="break-all">{publication.recipient_scope === "student" ? "指定学生" : "班级"}：{((publication.recipient_scope === "student" ? publication.student_names : publication.class_names) ?? []).join("、") || "-"}</div>
                             <div>提交进度：<span>{publication.submitted_count ?? 0}/{publication.attempt_count ?? 0}</span></div>
                             <div>允许切屏：{publication.max_screen_switches ?? 0} 次</div>
                             <div>限时 {publication.time_limit_minutes ? `${publication.time_limit_minutes} 分钟` : "不限"}</div>
@@ -1445,6 +1512,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           </section>
         </div>
       ) : null}
+      {folderAnalysis ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="文件夹分析"><section className="flex h-[85vh] w-[85vw] flex-col overflow-hidden rounded-xl bg-white shadow-xl"><header className="flex items-center justify-between border-b p-4"><div><h2 className="font-semibold">{folderAnalysis.folder.name} · 文件夹分析</h2><p className="text-xs text-slate-500">仅统计实际收到该练习的学生；不计入班级统考平均分。</p></div><button type="button" aria-label="关闭文件夹分析" onClick={() => setFolderAnalysis(null)}><X className="h-5 w-5" /></button></header><div className="overflow-auto p-5"><div className="mb-4 grid gap-2 text-sm sm:grid-cols-5">{[["接收人数", folderAnalysis.summary.assigned_count], ["已提交", folderAnalysis.summary.submitted_count], ["已批改", folderAnalysis.summary.graded_count], ["发布批次", folderAnalysis.summary.publication_count], ["平均得分率", folderAnalysis.summary.average_score_percent == null ? "暂无" : `${folderAnalysis.summary.average_score_percent}%`]].map(([label, value]) => <div key={label} className="rounded border bg-slate-50 p-3"><div className="text-slate-500">{label}</div><b>{value}</b></div>)}</div><div className="space-y-1 text-sm">{folderAnalysis.attempts.map((attempt, index) => <div key={index} className="flex flex-wrap justify-between gap-2 rounded border p-2"><span>{attempt.display_name} · {attempt.student_no}</span><span>{attempt.title} · {attempt.status} · {attempt.score == null ? "未发布成绩" : `${attempt.score}/${attempt.max_score ?? "—"}`}</span></div>)}</div></div></section></div> : null}
     </div>
   );
 }

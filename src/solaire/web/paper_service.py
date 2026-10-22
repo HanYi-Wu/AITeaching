@@ -113,11 +113,12 @@ def _paper_record_for_exam(
             con.execute(
                 """
                 INSERT INTO paper_records (
-                  id, exam_id, title, subject, delivery_mode, owner_teacher_id, school_id, status, created_at, updated_at
+                  id, exam_id, title, subject, delivery_mode, owner_teacher_id, school_id, status, created_at, updated_at, folder_id
                 )
-                VALUES (?, ?, ?, ?, 'offline', ?, ?, 'draft', ?, ?)
+                VALUES (?, ?, ?, ?, 'offline', ?, ?, 'draft', ?, ?, ?)
                 """,
-                (paper_id, exam_id, title, subject, owner_teacher_id, school_id, now, now),
+                (paper_id, exam_id, title, subject, owner_teacher_id, school_id, now, now,
+                 f"paper-default-{owner_teacher_id}" if owner_teacher_id else None),
             )
         else:
             paper_id = str(row["id"])
@@ -137,6 +138,9 @@ def _paper_record_for_exam(
             if school_id and row["school_id"] is None:
                 updates.append("school_id = ?")
                 params.append(school_id)
+            if row["folder_id"] is None and owner_teacher_id:
+                updates.append("folder_id = ?")
+                params.append(f"paper-default-{owner_teacher_id}")
             params.append(paper_id)
             con.execute(f"UPDATE paper_records SET {', '.join(updates)} WHERE id = ?", params)
         stored = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
@@ -239,6 +243,7 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
                 "status": record["status"],
                 "owner_teacher_id": record["owner_teacher_id"],
                 "school_id": record["school_id"],
+                "folder_id": record.get("folder_id"),
                 "question_count": int(exam.get("question_count") or 0),
                 "section_count": int(exam.get("section_count") or 0),
                 "score_batch_count": int(exam.get("score_batch_count") or 0),
@@ -272,6 +277,7 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
                 "status": record.get("status"),
                 "owner_teacher_id": record.get("owner_teacher_id"),
                 "school_id": record.get("school_id"),
+                "folder_id": record.get("folder_id"),
                 "question_count": question_count,
                 "section_count": 1 if question_count else 0,
                 "score_batch_count": 0,
@@ -316,6 +322,7 @@ def sync_paper_for_exam(
         "status": record["status"],
         "owner_teacher_id": record["owner_teacher_id"],
         "school_id": record["school_id"],
+        "folder_id": record.get("folder_id"),
         "question_count": int(matched.get("question_count") or 0),
         "section_count": int(matched.get("section_count") or 0),
         "score_batch_count": int(matched.get("score_batch_count") or 0),
@@ -338,6 +345,7 @@ def query_papers(
     delivery_mode: str | None = None,
     status: str | None = None,
     subject: str | None = None,
+    folder_id: str | None = None,
     page: int = 1,
     page_size: int = 10,
 ) -> dict[str, Any]:
@@ -348,6 +356,14 @@ def query_papers(
         papers = [paper for paper in papers if str(paper.get("status") or "") == status]
     if subject and subject != "all":
         papers = [paper for paper in papers if str(paper.get("subject") or "") == subject]
+    if folder_id:
+        with connect(platform_root) as con:
+            folder_rows = con.execute(
+                "WITH RECURSIVE subtree(id) AS (SELECT id FROM content_folders WHERE id=? UNION ALL SELECT child.id FROM content_folders child JOIN subtree parent ON child.parent_id=parent.id) SELECT id FROM subtree",
+                (folder_id,),
+            ).fetchall()
+        allowed_folders = {str(row["id"]) for row in folder_rows}
+        papers = [paper for paper in papers if str(paper.get("folder_id") or "") in allowed_folders]
     if q:
         papers = [
             paper
@@ -418,6 +434,7 @@ def list_paper_publications(root: Path, *, paper_id: str, user: dict[str, Any]) 
               u.username AS teacher_username,
               GROUP_CONCAT(DISTINCT c.id) AS class_ids,
               GROUP_CONCAT(DISTINCT c.name) AS class_names,
+              GROUP_CONCAT(DISTINCT CASE WHEN ep.recipient_scope='student' THEN s.display_name END) AS student_names,
               COUNT(DISTINCT sa.id) AS attempt_count,
               COUNT(DISTINCT CASE WHEN sa.status IN ('submitted', 'completed') OR sa.submitted_at IS NOT NULL THEN sa.id END) AS submitted_count,
               COUNT(DISTINCT pe.id) AS proctor_event_count
@@ -426,6 +443,7 @@ def list_paper_publications(root: Path, *, paper_id: str, user: dict[str, Any]) 
             LEFT JOIN publication_classes pc ON pc.publication_id = ep.id
             LEFT JOIN classes c ON c.id = pc.class_id
             LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
+            LEFT JOIN students s ON s.id = sa.student_id
             LEFT JOIN proctor_events pe ON pe.publication_id = ep.id
             WHERE ep.paper_id = ? AND {access_clause}
             GROUP BY ep.id
@@ -441,6 +459,7 @@ def list_paper_publications(root: Path, *, paper_id: str, user: dict[str, Any]) 
         item["randomize_answers"] = bool(item.get("randomize_answers"))
         item["class_ids"] = [part for part in str(item.pop("class_ids") or "").split(",") if part]
         item["class_names"] = [part for part in str(item.pop("class_names") or "").split(",") if part]
+        item["student_names"] = [part for part in str(item.pop("student_names") or "").split(",") if part]
         item["attempt_count"] = int(item.get("attempt_count") or 0)
         item["submitted_count"] = int(item.get("submitted_count") or 0)
         item["proctor_event_count"] = int(item.get("proctor_event_count") or 0)
@@ -499,13 +518,15 @@ def update_paper_publication(
     params.extend([publication_id, paper_id])
     with connect(root) as con:
         publication = con.execute(
-            "SELECT teacher_id, start_at, end_at FROM exam_publications WHERE id = ? AND paper_id = ?",
+            "SELECT teacher_id, start_at, end_at, folder_id, status FROM exam_publications WHERE id = ? AND paper_id = ?",
             (publication_id, paper_id),
         ).fetchone()
         if publication is None:
             raise ValueError("publication not found")
         if user.get("role") == "teacher" and str(publication["teacher_id"]) != str(user.get("id")):
             raise PermissionError("Teacher can only manage own publications")
+        if status is not None and publication["status"] == "revoked" and status != "revoked":
+            raise ValueError("已撤回的发布不能直接恢复，请重新发布并重新校验接收人")
         _normalized_schedule(start_at if start_at is not None else publication['start_at'],
                              end_at if end_at is not None else publication['end_at'])
         con.execute(
@@ -911,7 +932,9 @@ def _analysis_attempt_clause(user: dict[str, Any], publication_id: str | None, *
     if class_id:
         clause = (f"({clause}) AND EXISTS (SELECT 1 FROM publication_classes filter_pc "
                   f"JOIN class_students filter_cs ON filter_cs.class_id = filter_pc.class_id "
+                  f"JOIN exam_publications filter_ep ON filter_ep.id = filter_pc.publication_id "
                   f"WHERE filter_pc.publication_id = {attempt_alias}.publication_id "
+                  f"AND filter_ep.recipient_scope = 'class' "
                   f"AND filter_pc.class_id = ? AND filter_cs.student_id = "
                   f"{attempt_alias}.student_id)")
         params = [*params, class_id]
@@ -951,7 +974,7 @@ def analyze_paper(
         if class_id:
             allowed_class = con.execute(
                 f"SELECT 1 FROM exam_publications ep JOIN publication_classes pc ON pc.publication_id=ep.id "
-                f"WHERE ep.paper_id=? AND ep.id=? AND pc.class_id=? AND {publication_access} LIMIT 1",
+                f"WHERE ep.paper_id=? AND ep.id=? AND ep.recipient_scope='class' AND pc.class_id=? AND {publication_access} LIMIT 1",
                 (paper_id, publication_id, class_id, *publication_params),
             ).fetchone()
             if allowed_class is None:
@@ -960,7 +983,7 @@ def analyze_paper(
             f"SELECT DISTINCT c.id, c.name, c.grade FROM exam_publications ep "
             f"JOIN publication_classes pc ON pc.publication_id=ep.id "
             f"JOIN classes c ON c.id=pc.class_id "
-            f"WHERE ep.paper_id=? AND (? IS NULL OR ep.id=?) AND {publication_access} ORDER BY c.name",
+            f"WHERE ep.paper_id=? AND ep.recipient_scope='class' AND (? IS NULL OR ep.id=?) AND {publication_access} ORDER BY c.name",
             (paper_id, publication_id, publication_id, *publication_params),
         ).fetchall()]
         publication_rows = [row for row in publication_rows if str(row["id"]) == publication_id]
@@ -1277,6 +1300,7 @@ def _ensure_class_not_already_published(root: Path, *, paper_id: str, class_ids:
             JOIN classes c ON c.id = pc.class_id
             WHERE ep.paper_id = ?
               AND ep.status <> 'revoked'
+              AND ep.recipient_scope = 'class'
               AND pc.class_id IN ({placeholders})
             ORDER BY c.name
             """,
@@ -1589,6 +1613,8 @@ def publish_online_paper(
     paper_id: str,
     user: dict[str, Any],
     class_ids: list[str],
+    student_ids: list[str] | None = None,
+    folder_id: str | None = None,
     project_root: Path | None = None,
     title: str | None = None,
     description: str | None = None,
@@ -1607,10 +1633,14 @@ def publish_online_paper(
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("Only teachers and admins can publish papers")
     selected_class_ids = _validate_publish_classes(root, user, class_ids)
+    selected_student_ids = list(dict.fromkeys(str(item).strip() for item in (student_ids or []) if str(item).strip()))
+    if selected_student_ids and len(selected_class_ids) != 1:
+        raise ValueError("指定学生发布时须选择一个班级")
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
     _ensure_publishable_paper(project_root, paper)
-    _ensure_class_not_already_published(root, paper_id=paper_id, class_ids=selected_class_ids)
+    if not selected_student_ids:
+        _ensure_class_not_already_published(root, paper_id=paper_id, class_ids=selected_class_ids)
     clean_submission_mode = submission_mode.strip() or "online"
     if clean_submission_mode not in SUBMISSION_MODES:
         raise ValueError("submission_mode must be online, image_manual, or image_ai")
@@ -1643,14 +1673,58 @@ def publish_online_paper(
     frozen_answer_keys_json = json.dumps(frozen_answer_keys, ensure_ascii=False) if frozen_questions else None
 
     with connect(root) as con:
+        if folder_id:
+            folder = con.execute(
+                "SELECT kind, owner_teacher_id FROM content_folders WHERE id=? AND scope='paper'",
+                (folder_id,),
+            ).fetchone()
+            if folder is None or folder["owner_teacher_id"] != teacher_id:
+                raise PermissionError("试卷文件夹不存在或无权使用")
+            folder_kind = str(folder["kind"])
+        else:
+            folder_id = str(paper.get("folder_id") or "")
+            folder = con.execute("SELECT kind FROM content_folders WHERE id=?", (folder_id,)).fetchone()
+            folder_kind = str(folder["kind"]) if folder else "category"
+        existing_folder = con.execute("SELECT folder_id FROM exam_publications WHERE paper_id=? LIMIT 1", (paper_id,)).fetchone()
+        if existing_folder and existing_folder["folder_id"] and existing_folder["folder_id"] != folder_id:
+            raise ValueError("该试卷已有发布记录，不能改绑其他文件夹；请移动整个文件夹")
+        if selected_student_ids and folder_kind != "paper":
+            raise ValueError("指定学生发布须选择试卷文件夹")
+        if selected_student_ids:
+            placeholders = ",".join("?" for _ in selected_student_ids)
+            rows = con.execute(
+                f"SELECT student_id FROM class_students WHERE class_id=? AND student_id IN ({placeholders})",
+                (selected_class_ids[0], *selected_student_ids),
+            ).fetchall()
+            if len(rows) != len(selected_student_ids):
+                raise ValueError("指定学生不全部属于所选班级")
+        else:
+            rows = con.execute(
+                f"SELECT DISTINCT student_id FROM class_students WHERE class_id IN ({','.join('?' for _ in selected_class_ids)})",
+                tuple(selected_class_ids),
+            ).fetchall()
+        student_ids_to_assign = [str(row["student_id"]) for row in rows]
+        if folder_kind == "paper" and student_ids_to_assign:
+            placeholders = ",".join("?" for _ in student_ids_to_assign)
+            conflicts = con.execute(
+                f"""SELECT DISTINCT s.display_name, s.student_no, ep.title
+                    FROM student_attempts sa JOIN exam_publications ep ON ep.id=sa.publication_id
+                    JOIN students s ON s.id=sa.student_id
+                    WHERE ep.folder_id=? AND ep.status<>'revoked' AND sa.student_id IN ({placeholders})
+                    ORDER BY s.student_no LIMIT 10""",
+                (folder_id, *student_ids_to_assign),
+            ).fetchall()
+            if conflicts:
+                detail = "、".join(f"{row['display_name']}({row['student_no']})" for row in conflicts)
+                raise ValueError(f"该试卷文件夹已有发放记录：{detail}；请选择其他文件夹或接收人")
         con.execute(
             """
             INSERT INTO exam_publications (
               id, paper_id, teacher_id, title, description, subject, start_at, end_at,
               show_results_immediately, randomize_questions, randomize_answers,
-              submission_mode, max_screen_switches, time_limit_minutes, status, created_at, updated_at
+              submission_mode, max_screen_switches, time_limit_minutes, folder_id, recipient_scope, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
             """,
             (
                 publication_id,
@@ -1667,6 +1741,8 @@ def publish_online_paper(
                 clean_submission_mode,
                 clean_max_screen_switches,
                 clean_time_limit_minutes,
+                folder_id or None,
+                "student" if selected_student_ids else "class",
                 now,
                 now,
             ),
@@ -1675,14 +1751,6 @@ def publish_online_paper(
             "INSERT INTO publication_classes (publication_id, class_id) VALUES (?, ?)",
             [(publication_id, class_id) for class_id in selected_class_ids],
         )
-        student_rows = con.execute(
-            f"""
-            SELECT DISTINCT student_id
-            FROM class_students
-            WHERE class_id IN ({','.join('?' for _ in selected_class_ids)})
-            """,
-            tuple(selected_class_ids),
-        ).fetchall()
         con.executemany(
             """
             INSERT OR IGNORE INTO student_attempts
@@ -1691,19 +1759,20 @@ def publish_online_paper(
             """,
             [
                 (_new_id(), publication_id, str(row["student_id"]), frozen_questions_json, frozen_answer_keys_json)
-                for row in student_rows
+                for row in rows
             ],
         )
         con.execute(
-            "UPDATE paper_records SET delivery_mode = 'online', status = 'published', updated_at = ? WHERE id = ?",
-            (now, paper_id),
+            "UPDATE paper_records SET delivery_mode='online', status='published', folder_id=?, updated_at=? WHERE id=?",
+            (folder_id or None, now, paper_id),
         )
         row = con.execute("SELECT * FROM exam_publications WHERE id = ?", (publication_id,)).fetchone()
     publication = row_to_dict(row)
     if publication is None:
         raise RuntimeError("failed to publish paper")
     publication["class_ids"] = selected_class_ids
-    publication["attempt_count"] = len(student_rows)
+    publication["attempt_count"] = len(rows)
+    publication["student_ids"] = selected_student_ids
     publication["submission_mode"] = clean_submission_mode
     publication["max_screen_switches"] = clean_max_screen_switches
     publication["time_limit_minutes"] = clean_time_limit_minutes

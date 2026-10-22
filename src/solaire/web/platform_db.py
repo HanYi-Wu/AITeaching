@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -84,6 +85,42 @@ CREATE TABLE IF NOT EXISTS teacher_class_assignments (
   PRIMARY KEY(teacher_id, class_id, subject)
 );
 
+CREATE TABLE IF NOT EXISTS content_folders (
+  id TEXT PRIMARY KEY,
+  owner_teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL CHECK(scope IN ('template', 'compose', 'paper')),
+  parent_id TEXT REFERENCES content_folders(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL DEFAULT 'category' CHECK(kind IN ('category', 'paper')),
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_content_folders_owner_scope ON content_folders(owner_teacher_id, scope, parent_id);
+
+CREATE TABLE IF NOT EXISTS content_folder_items (
+  owner_teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL CHECK(scope IN ('template', 'compose')),
+  item_id TEXT NOT NULL,
+  folder_id TEXT NOT NULL REFERENCES content_folders(id) ON DELETE CASCADE,
+  PRIMARY KEY(owner_teacher_id, scope, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS content_tags (
+  id TEXT PRIMARY KEY,
+  owner_teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(owner_teacher_id, name)
+);
+CREATE TABLE IF NOT EXISTS content_tag_links (
+  tag_id TEXT NOT NULL REFERENCES content_tags(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL CHECK(scope IN ('bank', 'template', 'compose', 'paper')),
+  item_id TEXT NOT NULL,
+  PRIMARY KEY(tag_id, scope, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_content_tag_links_item ON content_tag_links(scope, item_id);
+
 CREATE TABLE IF NOT EXISTS paper_records (
   id TEXT PRIMARY KEY,
   exam_id TEXT NOT NULL,
@@ -95,6 +132,7 @@ CREATE TABLE IF NOT EXISTS paper_records (
   status TEXT NOT NULL DEFAULT 'draft',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  folder_id TEXT REFERENCES content_folders(id) ON DELETE SET NULL,
   UNIQUE(exam_id, subject)
 );
 
@@ -115,6 +153,8 @@ CREATE TABLE IF NOT EXISTS exam_publications (
   time_limit_minutes INTEGER,
   practice_kind TEXT,
   source_publication_ids_json TEXT,
+  folder_id TEXT REFERENCES content_folders(id) ON DELETE SET NULL,
+  recipient_scope TEXT NOT NULL DEFAULT 'class' CHECK(recipient_scope IN ('class', 'student')),
   status TEXT NOT NULL DEFAULT 'draft',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -125,21 +165,6 @@ CREATE TABLE IF NOT EXISTS publication_classes (
   class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
   PRIMARY KEY(publication_id, class_id)
 );
-
-CREATE TRIGGER IF NOT EXISTS publication_classes_one_active_per_paper
-BEFORE INSERT ON publication_classes
-WHEN EXISTS (
-  SELECT 1
-  FROM publication_classes existing_pc
-  JOIN exam_publications existing_ep ON existing_ep.id = existing_pc.publication_id
-  JOIN exam_publications incoming_ep ON incoming_ep.id = NEW.publication_id
-  WHERE existing_pc.class_id = NEW.class_id
-    AND existing_ep.paper_id = incoming_ep.paper_id
-    AND existing_ep.status <> 'revoked'
-)
-BEGIN
-  SELECT RAISE(ABORT, 'paper already published to class');
-END;
 
 CREATE TABLE IF NOT EXISTS student_attempts (
   id TEXT PRIMARY KEY,
@@ -247,6 +272,13 @@ def connect(root: Path) -> sqlite3.Connection:
 
 def init_platform_db(root: Path) -> None:
     with connect(root) as con:
+        previous_version = int(con.execute("PRAGMA user_version").fetchone()[0])
+        if 0 < previous_version < SCHEMA_VERSION:
+            backup_dir = platform_db_path(root).parent / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            with sqlite3.connect(backup_dir / f"platform-before-v{SCHEMA_VERSION}-{stamp}.db") as backup:
+                con.backup(backup)
         con.executescript(SCHEMA_SQL)
         _ensure_column(con, "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "users", "teacher_guide_step", "INTEGER NOT NULL DEFAULT 0")
@@ -260,6 +292,38 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "exam_publications", "practice_kind", "TEXT")
         _ensure_column(con, "exam_publications", "source_publication_ids_json", "TEXT")
         _ensure_column(con, "exam_publications", "subject", "TEXT")
+        _ensure_column(con, "exam_publications", "folder_id", "TEXT REFERENCES content_folders(id) ON DELETE SET NULL")
+        _ensure_column(con, "exam_publications", "recipient_scope", "TEXT NOT NULL DEFAULT 'class'")
+        _ensure_column(con, "paper_records", "folder_id", "TEXT REFERENCES content_folders(id) ON DELETE SET NULL")
+        if previous_version < 12:
+            con.execute("DROP TRIGGER IF EXISTS publication_classes_one_active_per_paper")
+            con.executescript("""
+            CREATE TRIGGER publication_classes_one_active_per_paper
+            BEFORE INSERT ON publication_classes
+            WHEN EXISTS (
+              SELECT 1 FROM publication_classes pc
+              JOIN exam_publications old_ep ON old_ep.id=pc.publication_id
+              JOIN exam_publications new_ep ON new_ep.id=NEW.publication_id
+              WHERE pc.class_id=NEW.class_id AND old_ep.paper_id=new_ep.paper_id
+                AND old_ep.status<>'revoked' AND old_ep.recipient_scope='class'
+                AND new_ep.recipient_scope='class'
+            )
+            BEGIN SELECT RAISE(ABORT, 'paper already published to class'); END;
+            """)
+            con.execute("DROP TRIGGER IF EXISTS one_active_attempt_per_paper_folder")
+            con.executescript("""
+            CREATE TRIGGER one_active_attempt_per_paper_folder
+            BEFORE INSERT ON student_attempts
+            WHEN EXISTS (
+              SELECT 1 FROM exam_publications incoming
+              JOIN content_folders f ON f.id=incoming.folder_id
+              JOIN student_attempts prior ON prior.student_id=NEW.student_id
+              JOIN exam_publications existing ON existing.id=prior.publication_id
+              WHERE incoming.id=NEW.publication_id AND f.kind='paper'
+                AND existing.folder_id=incoming.folder_id AND existing.status<>'revoked'
+            )
+            BEGIN SELECT RAISE(ABORT, 'student already assigned in paper folder'); END;
+            """)
         _ensure_column(con, "student_answers", "grading_status", "TEXT NOT NULL DEFAULT 'pending'")
         _ensure_column(con, "student_answers", "feedback", "TEXT")
         _ensure_column(con, "student_answers", "ai_suggested_score", "REAL")
@@ -276,6 +340,21 @@ def init_platform_db(root: Path) -> None:
         # Keep legacy records readable after the subject model became mandatory.
         con.execute("UPDATE paper_records SET subject = '通用' WHERE subject IS NULL OR TRIM(subject) = '' OR subject = '未分科'")
         con.execute("UPDATE exam_publications SET subject = (SELECT subject FROM paper_records WHERE id = exam_publications.paper_id) WHERE subject IS NULL OR TRIM(subject) = '' OR subject = '未分科'")
+        # Existing papers remain in an ordinary folder; historical publications retain their records.
+        con.execute("""
+            INSERT OR IGNORE INTO content_folders(id, owner_teacher_id, scope, parent_id, kind, name, created_at, updated_at)
+            SELECT 'paper-default-' || id, id, 'paper', NULL, 'category', '默认文件夹', created_at, updated_at
+            FROM users WHERE role = 'teacher'
+        """)
+        con.execute("""
+            UPDATE paper_records SET folder_id = 'paper-default-' || owner_teacher_id
+            WHERE folder_id IS NULL AND owner_teacher_id IS NOT NULL
+              AND EXISTS (SELECT 1 FROM users WHERE id = owner_teacher_id AND role = 'teacher')
+        """)
+        con.execute("""
+            UPDATE exam_publications SET folder_id = (SELECT folder_id FROM paper_records WHERE id = exam_publications.paper_id)
+            WHERE folder_id IS NULL
+        """)
         _dedupe_active_publication_classes(con)
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -292,7 +371,7 @@ def _dedupe_active_publication_classes(con: sqlite3.Connection) -> None:
         SELECT ep.id, ep.paper_id, pc.class_id
         FROM exam_publications ep
         JOIN publication_classes pc ON pc.publication_id = ep.id
-        WHERE ep.status <> 'revoked'
+        WHERE ep.status <> 'revoked' AND ep.recipient_scope = 'class'
         ORDER BY ep.paper_id, pc.class_id, ep.created_at DESC, ep.id DESC
         """
     ).fetchall()

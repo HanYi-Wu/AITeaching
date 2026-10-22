@@ -241,6 +241,66 @@ def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClie
     assert body["publication"]["max_screen_switches"] == 2
 
 
+def test_personal_paper_folder_targets_only_selected_student_and_rejects_duplicate(web_client: TestClient, tmp_path: Path) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _, _, class_id = _create_school_teacher_class(web_client, admin_token)
+    school_login = web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"})
+    imported = web_client.post("/api/school/students/import", headers=_headers(school_login.json()["token"]),
+        json={"class_id": class_id, "students": [{"student_no": "S001", "display_name": "One"}, {"student_no": "S002", "display_name": "Two"}]})
+    assert imported.status_code == 200
+    students = imported.json()["students"]
+    _write_exam(tmp_path)
+    teacher_headers = _headers(_teacher_token(web_client))
+    paper_id = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]["paper_id"]
+    root_folder = web_client.post("/api/organizer/folders", headers=teacher_headers,
+        json={"scope": "paper", "name": "专项练习", "kind": "category"}).json()["folder"]["id"]
+    exam_folder = web_client.post("/api/organizer/folders", headers=teacher_headers,
+        json={"scope": "paper", "name": "第一次练习", "kind": "paper", "parent_id": root_folder}).json()["folder"]["id"]
+    first = web_client.post(f"/api/papers/{paper_id}/publish", headers=teacher_headers,
+        json={"class_ids": [class_id], "student_ids": [students[0]["id"]], "folder_id": exam_folder})
+    assert first.status_code == 200, first.text
+    assert first.json()["publication"]["attempt_count"] == 1
+    duplicate = web_client.post(f"/api/papers/{paper_id}/publish", headers=teacher_headers,
+        json={"class_ids": [class_id], "student_ids": [students[0]["id"]], "folder_id": exam_folder})
+    assert duplicate.status_code == 400
+    second = web_client.post(f"/api/papers/{paper_id}/publish", headers=teacher_headers,
+        json={"class_ids": [class_id], "student_ids": [students[1]["id"]], "folder_id": exam_folder})
+    assert second.status_code == 200, second.text
+    student_headers = []
+    for student in students:
+        login = web_client.post("/api/auth/login", json={"username": student["account_username"], "password": student["initial_password"]})
+        student_headers.append(_headers(login.json()["token"]))
+    first_papers = web_client.get("/api/student/papers", headers=student_headers[0]).json()["papers"]
+    second_papers = web_client.get("/api/student/papers", headers=student_headers[1]).json()["papers"]
+    assert len(first_papers) == len(second_papers) == 1
+    assert first_papers[0]["publication_id"] != second_papers[0]["publication_id"]
+    analysis = web_client.get(f"/api/organizer/folders/{exam_folder}/analysis", headers=teacher_headers)
+    assert analysis.status_code == 200
+    assert analysis.json()["summary"]["assigned_count"] == 2
+
+
+def test_folder_types_and_teacher_tag_validation(web_client: TestClient, tmp_path: Path) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _create_school_teacher_class(web_client, admin_token)
+    teacher_headers = _headers(_teacher_token(web_client))
+    root_blocked = web_client.post("/api/organizer/folders", headers=teacher_headers,
+        json={"scope": "paper", "name": "错误根目录", "kind": "paper"})
+    assert root_blocked.status_code == 400
+    category = web_client.post("/api/organizer/folders", headers=teacher_headers,
+        json={"scope": "paper", "name": "归类", "kind": "category"}).json()["folder"]
+    child = web_client.post("/api/organizer/folders", headers=teacher_headers,
+        json={"scope": "paper", "name": "空试卷", "kind": "category", "parent_id": category["id"]}).json()["folder"]
+    converted = web_client.patch(f"/api/organizer/folders/{child['id']}", headers=teacher_headers, json={"kind": "paper"})
+    assert converted.status_code == 200 and converted.json()["folder"]["kind"] == "paper"
+    too_long = web_client.post("/api/organizer/tags", headers=teacher_headers, json={"name": "六个汉字标签", "color": "blue"})
+    assert too_long.status_code == 422
+    tag = web_client.post("/api/organizer/tags", headers=teacher_headers, json={"name": "重点", "color": "blue"})
+    assert tag.status_code == 200
+    renamed = web_client.patch(f"/api/organizer/tags/{tag.json()['tag']['id']}", headers=teacher_headers,
+        json={"name": "难点", "color": "rose"})
+    assert renamed.status_code == 200 and renamed.json()["tag"]["color"] == "rose"
+
+
 def test_teacher_publishes_legacy_exported_paper_with_resource_path(web_client: TestClient, tmp_path: Path) -> None:
     admin_token = _bootstrap_admin(web_client)
     _, _, class_id = _create_school_teacher_class(web_client, admin_token)

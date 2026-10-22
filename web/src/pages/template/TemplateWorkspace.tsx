@@ -5,6 +5,9 @@ import { standardSections } from "../../lib/manualPaperShortcuts";
 import { ChevronDown, ChevronUp, Plus, Save, Trash2 } from "lucide-react";
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../../api/client";
 import { TabPanel, type TabItem } from "../../components/layout/TabPanel";
+import { ContentFolders } from "../../components/ContentFolders";
+import { ContentTags, TagChips } from "../../components/ContentTags";
+import { assignFolderItem, listContentFolders, listFolderItems, listTaggedItems, type ContentFolder, type ContentTag } from "../../platform/auth";
 import { useAgentContext } from "../../contexts/AgentContext";
 import { useToolBar } from "../../contexts/ToolBarContext";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
@@ -89,6 +92,10 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
   const { setPageContext } = useAgentContext();
   const { setToolBar, clearToolBar } = useToolBar();
   const [templates, setTemplates] = useState<TemplateListRow[]>([]);
+  const [folders, setFolders] = useState<ContentFolder[]>([]);
+  const [folderItems, setFolderItems] = useState<Record<string, string>>({});
+  const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [path, setPath] = useState("");
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const baselineYamlRef = useRef<Record<string, string>>({});
@@ -139,6 +146,15 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     );
     setTemplates(tplRes.templates);
     return tplRes.templates;
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([listContentFolders("template"), listFolderItems("template"), listTaggedItems("template")]).then(([folderData, itemData, tags]) => {
+      if (active) { setFolders(folderData.folders); setFolderItems(itemData.items); setTaggedItems(tags.items); }
+    }).catch((error) => onError(error instanceof Error ? error.message : String(error)));
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -548,14 +564,17 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-0 flex-1 flex-row">
         <aside className="flex w-full max-w-[14rem] shrink-0 flex-col border-r border-slate-200 bg-white">
+          <div className="p-2"><ContentFolders scope="template" folders={folders} selectedId={selectedFolderId} onSelect={setSelectedFolderId} onCreated={(folder) => setFolders((current) => [...current, folder])} onUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDropItem={(id, folderId) => void assignFolderItem("template", id, folderId).then(() => setFolderItems((items) => ({ ...items, [id]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error)))} onError={onError} /></div>
           <div className="border-b border-slate-100 p-2">
             <h2 className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{t("fileList")}</h2>
           </div>
           <ul className="min-h-0 flex-1 overflow-auto p-1">
-            {templates.map((tpl) => (
+            {templates.filter((tpl) => !selectedFolderId || folderItems[tpl.path] === selectedFolderId).map((tpl) => (
               <li key={tpl.path}>
                 <button
                   type="button"
+                  draggable
+                  onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "template", id: tpl.path }))}
                   className={cn(
                     "mb-0.5 w-full rounded-md px-2 py-1.5 text-left text-xs",
                     path === tpl.path ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100",
@@ -563,6 +582,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
                   onClick={() => openOrFocusTemplate(tpl.path)}
                 >
                   <span className="block font-medium">{tpl.id}</span>
+                  {(taggedItems[tpl.path]?.length ?? 0) > 0 ? <TagChips tags={taggedItems[tpl.path]} /> : null}
                   {advancedMode ? <span className="block truncate font-mono text-[10px] opacity-80">{tpl.path}</span> : null}
                 </button>
               </li>
@@ -606,6 +626,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
             }}
           />
           <div className="min-h-0 flex-1 overflow-auto p-4">
+        {path ? <div className="mb-3 flex flex-wrap items-center gap-2 rounded border bg-white p-2 text-xs"><span>模板归类</span><select aria-label="模板所在文件夹" value={folderItems[path] ?? ""} onChange={(event) => { const folderId = event.target.value; void assignFolderItem("template", path, folderId || null).then(() => setFolderItems((items) => ({ ...items, [path]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error))); }} className="rounded border px-2 py-1"><option value="">未归类</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><ContentTags scope="template" itemId={path} onError={onError} onChange={() => void listTaggedItems("template").then(({ items }) => setTaggedItems(items))} /></div> : null}
         {msg && <p className="mb-2 text-sm text-emerald-700">{msg}</p>}
         {tab === "yaml" ? (
           <textarea

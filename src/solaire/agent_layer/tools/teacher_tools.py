@@ -50,6 +50,10 @@ from solaire.web.paper_service import (
     update_paper_publication,
 )
 from solaire.web.platform_db import default_platform_root
+from solaire.web.content_organizer import (
+    analyze_paper_folder, assign_folder_item, assign_paper_folder, create_folder,
+    list_folders, list_tags, save_tag, set_item_tags, update_folder,
+)
 
 
 def _ok(**data: Any) -> ToolResult:
@@ -398,6 +402,57 @@ def tool_paper_publications(ctx: InvocationContext, args: dict[str, Any]) -> Too
     return _run(
         lambda: list_paper_publications(default_platform_root(), paper_id=_required(args, "paper_id"), user=_actor(ctx))
     )
+
+
+def tool_content_folders(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(lambda: {"folders": list_folders(default_platform_root(), _actor(ctx), _required(args, "scope"))})
+
+
+def tool_content_folder_create(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(lambda: {"folder": create_folder(default_platform_root(), _actor(ctx), scope=_required(args, "scope"),
+        name=_required(args, "name"), parent_id=str(args.get("parent_id") or "") or None, kind=str(args.get("kind") or "category"))})
+
+
+def tool_content_folder_update(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(lambda: {"folder": update_folder(default_platform_root(), _actor(ctx), _required(args, "folder_id"),
+        name=str(args["name"]) if "name" in args else None, parent_id=str(args.get("parent_id") or "") or None,
+        move=bool(args.get("move")), kind=str(args["kind"]) if "kind" in args else None)})
+
+
+def tool_content_move_item(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    def invoke() -> dict[str, Any]:
+        scope = _required(args, "scope")
+        item_id = _required(args, "item_id")
+        folder_id = _required(args, "folder_id")
+        if scope == "paper":
+            assign_paper_folder(default_platform_root(), _actor(ctx), item_id, folder_id)
+        else:
+            assign_folder_item(default_platform_root(), _actor(ctx), scope=scope, item_id=item_id, folder_id=folder_id)
+        return {"ok": True}
+    return _run(invoke)
+
+
+def tool_content_tags(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(lambda: {"tags": list_tags(default_platform_root(), _actor(ctx))})
+
+
+def tool_content_tag_save(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(lambda: {"tag": save_tag(default_platform_root(), _actor(ctx), name=_required(args, "name"),
+        color=str(args.get("color") or "slate"), tag_id=str(args.get("tag_id") or "") or None)})
+
+
+def tool_content_item_tags(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    def invoke() -> dict[str, Any]:
+        tag_ids = args.get("tag_ids")
+        if not isinstance(tag_ids, list):
+            raise ValueError("tag_ids 必须是数组")
+        return {"tag_ids": set_item_tags(default_platform_root(), _actor(ctx), scope=_required(args, "scope"),
+            item_id=_required(args, "item_id"), tag_ids=[str(item) for item in tag_ids])}
+    return _run(invoke)
+
+
+def tool_paper_folder_analyze(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    return _run(lambda: analyze_paper_folder(default_platform_root(), _actor(ctx), _required(args, "folder_id")))
 
 
 def _practice_settings(args: dict[str, Any]) -> dict[str, Any]:

@@ -721,7 +721,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="font-semibold text-slate-950">待答试卷</h2>
-                <p className="mt-1 text-sm text-slate-500">老师发布到你所在班级的线上试卷会显示在这里。</p>
+                <p className="mt-1 text-sm text-slate-500">班级试卷和专门布置给你的练习会显示在这里。</p>
               </div>
               <button
                 type="button"
@@ -739,6 +739,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                       <p className="break-words font-medium text-slate-950">{paper.title}</p>
+                      {paper.recipient_scope === "student" ? <span className="mt-1 inline-block rounded bg-violet-100 px-2 py-0.5 text-xs text-violet-700">个人练习</span> : null}
                       <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                         <span>{paper.subject || "未分科"}</span>
                         <span>{paper.question_count} 题</span>
