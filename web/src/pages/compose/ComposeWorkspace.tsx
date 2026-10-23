@@ -116,6 +116,7 @@ export function ComposeWorkspace({
   const [msg, setMsg] = useState<string | null>(null);
   const [contentSyncing, setContentSyncing] = useState(false);
   const contentRequestIdRef = useRef(0);
+  const templateRequestIdRef = useRef(0);
 
   const [scoreBySection, setScoreBySection] = useState<Record<string, number | undefined>>({});
   const [countBySection, setCountBySection] = useState<Record<string, number>>({});
@@ -266,14 +267,16 @@ export function ComposeWorkspace({
   }, [bySection, scoreBySection, templates, templatePath, templateRef]);
 
   const refreshTemplates = useCallback(async () => {
+    const requestId = ++templateRequestIdRef.current;
     const r = await apiGet<{ templates: TemplateRow[] }>("/api/templates");
     const next = r.templates ?? [];
-    setTemplates(next);
+    if (requestId === templateRequestIdRef.current) setTemplates(next);
     return next;
   }, []);
 
   const refreshContentLibrary = useCallback(async () => {
     const requestId = ++contentRequestIdRef.current;
+    const templateRequestId = ++templateRequestIdRef.current;
     const [templateData, questionData, subjectData] = await Promise.all([
       apiGet<{ templates: TemplateRow[] }>("/api/templates"),
       apiGet<{ questions: QuestionRow[] }>("/api/questions"),
@@ -281,7 +284,7 @@ export function ComposeWorkspace({
     ]);
     if (requestId !== contentRequestIdRef.current) return false;
     const nextTemplates = templateData.templates ?? [];
-    setTemplates(nextTemplates);
+    if (templateRequestId === templateRequestIdRef.current) setTemplates(nextTemplates);
     setQuestions(questionData.questions);
     const list = subjectData.subjects.length
       ? subjectData.subjects

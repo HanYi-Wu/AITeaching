@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +87,20 @@ describe("role-specific project requests", () => {
     await user.click(await screen.findByRole("button", { name: "以学校身份登录" }));
     await screen.findByText("学校工作区");
     expect(mocks.apiGet).toHaveBeenCalledTimes(1);
+    expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith(null);
+  });
+
+  it("ignores a delayed teacher project response after switching to school", async () => {
+    let finish!: (value: { bound: boolean; root: string }) => void;
+    mocks.apiGet.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    mocks.getCurrentUser.mockResolvedValue({ user: { ...school, role: "teacher" } });
+    const user = userEvent.setup();
+    renderApp();
+    await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledTimes(1));
+    await user.click(await screen.findByRole("button", { name: "退出" }));
+    await user.click(await screen.findByRole("button", { name: "以学校身份登录" }));
+    await screen.findByText("学校工作区");
+    await act(async () => { finish({ bound: true, root: "/previous-teacher-project" }); });
     expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith(null);
   });
 });

@@ -81,4 +81,24 @@ describe("new paper template selection", () => {
     await user.click(screen.getByRole("button", { name: "创建并进入编辑" }));
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exams", expect.objectContaining({ template_path: "templates/first.yaml" })));
   });
+
+  it("keeps the current template when an older library request finishes late", async () => {
+    let finishOld!: (value: { templates: TemplateRow[] }) => void;
+    const oldRequest = new Promise<{ templates: TemplateRow[] }>((resolve) => { finishOld = resolve; });
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    let templateRequests = 0;
+    mocks.apiGet.mockImplementation((path: string) => {
+      if (path === "/api/templates" && ++templateRequests === 1) return oldRequest;
+      return normalGet(path);
+    });
+    renderWorkspace();
+    await waitFor(() => expect(templateRequests).toBe(1));
+    templates = [template("latest")];
+    const user = await openDialog();
+    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveValue("templates/latest.yaml");
+    await act(async () => { finishOld({ templates: [template("outdated")] }); });
+    expect(screen.getByRole("combobox", { name: "模板" })).toHaveValue("templates/latest.yaml");
+    await user.click(screen.getByRole("button", { name: "创建并进入编辑" }));
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exams", expect.objectContaining({ template_path: "templates/latest.yaml" })));
+  });
 });

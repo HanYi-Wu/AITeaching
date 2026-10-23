@@ -99,28 +99,33 @@ function AppShell() {
   const [currentUser, setCurrentUser] = useState<PlatformUser | null>(null);
   const [platformLoading, setPlatformLoading] = useState(true);
   const [adminProjectMode, setAdminProjectMode] = useState(false);
+  const projectInfoRequestId = useRef(0);
 
   const refreshInfo = useCallback(async () => {
+    const requestId = ++projectInfoRequestId.current;
     try {
       setErr(null);
       const i = await apiGet<ProjectInfo>("/api/project/info");
-      setInfo(i);
+      if (requestId === projectInfoRequestId.current) setInfo(i);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (requestId === projectInfoRequestId.current) setErr(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
   useEffect(() => {
-    if (platformLoading || platformStatus === null) return;
+    const invalidate = () => { projectInfoRequestId.current += 1; };
+    invalidate();
+    if (platformLoading || platformStatus === null) return invalidate;
     if (currentUser?.role === "school" || currentUser?.role === "student") {
       setInfo(null);
-      return;
+      return invalidate;
     }
     if (platformStatus.public_mode && currentUser === null) {
       setInfo(null);
-      return;
+      return invalidate;
     }
     void refreshInfo();
+    return invalidate;
   }, [currentUser, platformLoading, platformStatus, refreshInfo]);
 
   useEffect(() => {
