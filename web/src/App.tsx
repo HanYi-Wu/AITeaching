@@ -112,6 +112,10 @@ function AppShell() {
 
   useEffect(() => {
     if (platformLoading || platformStatus === null) return;
+    if (currentUser?.role === "school" || currentUser?.role === "student") {
+      setInfo(null);
+      return;
+    }
     if (platformStatus.public_mode && currentUser === null) {
       setInfo(null);
       return;

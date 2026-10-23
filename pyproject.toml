@@ -51,6 +51,10 @@ primebrush = "solaire.primebrush.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests", "src/solaire/agent_layer/tests"]
+pythonpath = ["src"]
+
 [tool.setuptools.package-data]
 "solaire.exam_compiler" = ["templates/latex/*.j2", "templates/latex/*.metadata_ui.yaml"]
 "solaire.agent_layer" = ["skills/**/*"]
