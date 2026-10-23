@@ -4,6 +4,7 @@ from io import BytesIO
 import json
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 import yaml
 from fastapi.testclient import TestClient
@@ -299,6 +300,67 @@ def test_folder_types_and_teacher_tag_validation(web_client: TestClient, tmp_pat
     renamed = web_client.patch(f"/api/organizer/tags/{tag.json()['tag']['id']}", headers=teacher_headers,
         json={"name": "难点", "color": "rose"})
     assert renamed.status_code == 200 and renamed.json()["tag"]["color"] == "rose"
+
+
+@pytest.mark.parametrize(
+    ("scope", "item_id"),
+    [("bank", "math/q1"), ("template", "templates/test.yaml"), ("compose", "单元练习/Math")],
+)
+def test_content_tags_support_nested_ids_and_remain_teacher_private(
+    web_client: TestClient, tmp_path: Path, scope: str, item_id: str,
+) -> None:
+    _create_school_teacher_class(web_client, _bootstrap_admin(web_client))
+    _write_exam(tmp_path, label="单元练习")
+    teacher_headers = _headers(_teacher_token(web_client))
+    tag = web_client.post("/api/organizer/tags", headers=teacher_headers,
+                          json={"name": "重点", "color": "blue"}).json()["tag"]
+    endpoint = f"/api/organizer/tags/{scope}/{quote(item_id, safe='')}"
+    initial = web_client.get(endpoint, headers=teacher_headers)
+    assert initial.status_code == 200, initial.text
+    assert initial.json()["tags"] == []
+    saved = web_client.put(endpoint, headers=teacher_headers, json={"tag_ids": [tag["id"]]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["tag_ids"] == [tag["id"]]
+    assert web_client.get(endpoint, headers=teacher_headers).json()["tags"][0]["name"] == "重点"
+    listed = web_client.get(f"/api/organizer/tagged-items?scope={scope}", headers=teacher_headers)
+    assert listed.json()["items"][item_id][0]["id"] == tag["id"]
+
+    school_headers = _headers(web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"}).json()["token"])
+    created = web_client.post("/api/school/teachers", headers=school_headers,
+                             json={"username": "teacher_other", "password": "teacher123", "display_name": "Other"})
+    assert created.status_code == 200
+    other_headers = _headers(web_client.post("/api/auth/login", json={"username": "teacher_other", "password": "teacher123"}).json()["token"])
+    assert web_client.get(endpoint, headers=other_headers).json()["tags"] == []
+    denied = web_client.put(endpoint, headers=other_headers, json={"tag_ids": [tag["id"]]})
+    assert denied.status_code == 403
+    assert web_client.get(endpoint, headers=teacher_headers).json()["tags"][0]["id"] == tag["id"]
+    cleared = web_client.put(endpoint, headers=teacher_headers, json={"tag_ids": []})
+    assert cleared.status_code == 200
+    assert web_client.get(endpoint, headers=teacher_headers).json()["tags"] == []
+
+
+@pytest.mark.parametrize("role", ["admin", "school", "student"])
+def test_organizer_read_endpoints_reject_non_teachers_without_server_error(
+    web_client: TestClient, role: str,
+) -> None:
+    admin_headers = _headers(_bootstrap_admin(web_client))
+    _, _, class_id = _create_school_teacher_class(web_client, admin_headers["Authorization"].removeprefix("Bearer "))
+    school_headers = _headers(web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"}).json()["token"])
+    if role == "student":
+        imported = web_client.post("/api/school/students/import", headers=school_headers,
+                                   json={"class_id": class_id, "students": [{"student_no": "S001", "display_name": "Student"}]})
+        student = imported.json()["students"][0]
+        headers = _headers(web_client.post("/api/auth/login", json={"username": student["account_username"], "password": student["initial_password"]}).json()["token"])
+    else:
+        headers = admin_headers if role == "admin" else school_headers
+    for endpoint in (
+        "/api/organizer/folders?scope=paper", "/api/organizer/folder-items?scope=compose",
+        "/api/organizer/tags", "/api/organizer/tagged-items?scope=bank",
+        "/api/organizer/tags/compose/单元练习%2FMath",
+    ):
+        response = web_client.get(endpoint, headers=headers)
+        assert response.status_code == 403, (endpoint, response.text)
+        assert response.json()["detail"] == "此操作仅限教师"
 
 
 def test_teacher_publishes_legacy_exported_paper_with_resource_path(web_client: TestClient, tmp_path: Path) -> None:

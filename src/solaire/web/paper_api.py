@@ -203,6 +203,14 @@ def require_content_project_root():
     return root
 
 
+def current_organizer_teacher(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    if user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="此操作仅限教师")
+    return user
+
+
 @router.get("/tools/offline-answer-uploader.exe")
 def download_offline_answer_uploader(
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
@@ -669,17 +677,17 @@ async def teacher_publish_reinforcement_practice(
 
 
 @router.get("/organizer/folders")
-def organizer_folders(scope: Literal["template", "compose", "paper"], user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_folders(scope: Literal["template", "compose", "paper"], user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     return {"folders": list_folders(require_platform_root(), user, scope)}
 
 
 @router.get("/organizer/folder-items")
-def organizer_folder_items(scope: Literal["template", "compose"], user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_folder_items(scope: Literal["template", "compose"], user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     return {"items": list_folder_items(require_platform_root(), user, scope)}
 
 
 @router.put("/organizer/folder-items")
-def organizer_folder_item_update(body: FolderItemBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_folder_item_update(body: FolderItemBody, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         assign_folder_item(require_platform_root(), user, **body.model_dump())
         return {"ok": True}
@@ -689,7 +697,7 @@ def organizer_folder_item_update(body: FolderItemBody, user: Annotated[dict[str,
 
 
 @router.post("/organizer/folders")
-def organizer_folder_create(body: FolderCreateBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_folder_create(body: FolderCreateBody, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         return {"folder": create_folder(require_platform_root(), user, **body.model_dump())}
     except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
@@ -698,7 +706,7 @@ def organizer_folder_create(body: FolderCreateBody, user: Annotated[dict[str, An
 
 
 @router.patch("/organizer/folders/{folder_id}")
-def organizer_folder_update(folder_id: str, body: FolderUpdateBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_folder_update(folder_id: str, body: FolderUpdateBody, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         return {"folder": update_folder(require_platform_root(), user, folder_id, **body.model_dump())}
     except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
@@ -707,7 +715,7 @@ def organizer_folder_update(folder_id: str, body: FolderUpdateBody, user: Annota
 
 
 @router.post("/organizer/papers/{paper_id}/folder")
-def organizer_paper_folder(paper_id: str, body: dict[str, str], user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_paper_folder(paper_id: str, body: dict[str, str], user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         assign_paper_folder(require_platform_root(), user, paper_id, str(body.get("folder_id") or ""))
         return {"ok": True}
@@ -717,7 +725,7 @@ def organizer_paper_folder(paper_id: str, body: dict[str, str], user: Annotated[
 
 
 @router.get("/organizer/folders/{folder_id}/analysis")
-def organizer_folder_analysis(folder_id: str, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_folder_analysis(folder_id: str, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         return analyze_paper_folder(require_platform_root(), user, folder_id)
     except (ValueError, PermissionError) as exc:
@@ -726,17 +734,17 @@ def organizer_folder_analysis(folder_id: str, user: Annotated[dict[str, Any], De
 
 
 @router.get("/organizer/tags")
-def organizer_tags(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_tags(user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     return {"tags": list_tags(require_platform_root(), user)}
 
 
 @router.get("/organizer/tagged-items")
-def organizer_tagged_items(scope: Literal["bank", "template", "compose", "paper"], user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_tagged_items(scope: Literal["bank", "template", "compose", "paper"], user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     return {"items": all_item_tags(require_platform_root(), user, scope)}
 
 
 @router.post("/organizer/tags")
-def organizer_tag_create(body: TagBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_tag_create(body: TagBody, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         return {"tag": save_tag(require_platform_root(), user, **body.model_dump())}
     except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
@@ -745,7 +753,7 @@ def organizer_tag_create(body: TagBody, user: Annotated[dict[str, Any], Depends(
 
 
 @router.patch("/organizer/tags/{tag_id}")
-def organizer_tag_update(tag_id: str, body: TagBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+def organizer_tag_update(tag_id: str, body: TagBody, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         return {"tag": save_tag(require_platform_root(), user, tag_id=tag_id, **body.model_dump())}
     except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
@@ -753,13 +761,13 @@ def organizer_tag_update(tag_id: str, body: TagBody, user: Annotated[dict[str, A
     raise RuntimeError("unreachable")
 
 
-@router.get("/organizer/tags/{scope}/{item_id}")
-def organizer_item_tags(scope: Literal["bank", "template", "compose", "paper"], item_id: str, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+@router.get("/organizer/tags/{scope}/{item_id:path}")
+def organizer_item_tags(scope: Literal["bank", "template", "compose", "paper"], item_id: str, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     return {"tags": item_tags(require_platform_root(), user, scope, item_id)}
 
 
-@router.put("/organizer/tags/{scope}/{item_id}")
-def organizer_item_tags_update(scope: Literal["bank", "template", "compose", "paper"], item_id: str, body: TagLinksBody, user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+@router.put("/organizer/tags/{scope}/{item_id:path}")
+def organizer_item_tags_update(scope: Literal["bank", "template", "compose", "paper"], item_id: str, body: TagLinksBody, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         return {"tag_ids": set_item_tags(require_platform_root(), user, scope=scope, item_id=item_id, tag_ids=body.tag_ids)}
     except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:

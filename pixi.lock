@@ -1584,6 +1584,7 @@ packages:
   - pyyaml>=6.0
   - jinja2>=3.1
   - fastapi>=0.110
+  - httpx>=0.27,<1
   - python-multipart>=0.0.9
   - uvicorn[standard]>=0.27
   - numpy>=1.26
@@ -1592,7 +1593,7 @@ packages:
   - python-docx>=1.1
   - python-pptx>=1.0
   - openai>=1.30
-  - anthropic>=0.40
+  - anthropic>=0.97,<0.98
   - tiktoken>=0.7
   - tokenizers>=0.20.0,<1
   - pdfplumber>=0.10

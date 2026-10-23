@@ -104,11 +104,8 @@ def test_analysis_script_job_endpoint_runtime(web_client) -> None:
         json={"script_id": script_id, "exam_id": "e1", "batch_id": "b1"},
     )
     assert r_run.status_code == 200
-    assert r_run.json()["status"] in {"succeeded", "failed"}
-    if r_run.json()["status"] == "failed":
-        assert r_run.json()["error_code"] in {"timeout", "sandbox_violation", "runtime_error", "resource_exceeded"}
-    else:
-        assert "chart_specs" in r_run.json()["output"]
+    assert r_run.json()["status"] == "succeeded", r_run.json()
+    assert "chart_specs" in r_run.json()["output"]
 
 
 def test_analysis_tools_schema_version_and_idempotency(web_client, tmp_path: Path) -> None:

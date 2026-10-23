@@ -94,8 +94,20 @@ def test_chart_object_result_payload(tmp_path: Path) -> None:
         ),
     )
     out = run_script(tmp_path, script_id=script["script"]["script_id"], exam_id="e1", batch_id="b1")
-    assert out["status"] in {"succeeded", "failed"}
-    if out["status"] == "succeeded":
-        output = out["output"]
-        assert "chart_specs" in output
-        assert "pictures" in output
+    assert out["status"] == "succeeded", out
+    output = out["output"]
+    assert "chart_specs" in output
+    assert "pictures" in output
+    assert output["chart_specs"][0]["title"] == "题目错误率示例"
+
+
+def test_script_preserves_non_ascii_result_and_output(tmp_path: Path) -> None:
+    ensure_project_layout(tmp_path)
+    script = save_script_doc(
+        tmp_path, name="中文脚本",
+        code="print('中文输出🙂')\nRESULT = {'summary': {'title': '中文分析🙂', 'status': 'succeeded'}}\n",
+    )
+    out = run_script(tmp_path, script_id=script["script"]["script_id"], exam_id="e1", batch_id="b1")
+    assert out["status"] == "succeeded", out
+    assert out["output"]["summary"]["title"] == "中文分析🙂"
+    assert "中文输出🙂" in json.dumps(out, ensure_ascii=False)

@@ -262,10 +262,11 @@ def execute_python_script(
         (temp_dir / "runtime_graph.json").write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
         try:
             p = subprocess.run(
-                [sys.executable, "-I", "runner.py"],
+                [sys.executable, "-I", "-X", "utf8", "runner.py"],
                 cwd=temp_dir,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=timeout_seconds,
                 check=False,
             )
