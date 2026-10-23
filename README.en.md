@@ -2,7 +2,7 @@
 
 OriginReach is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.6.7**.
 
-Version 1.6.7 fixes content tags with nested identifiers, teacher organizer permission errors, fresh-install dependencies, and Unicode analysis scripts. It includes a full Linux offline installer/update bundle. See [1.6.7 release notes](docs/release-1.6.7.md).
+Version 1.6.7 fixes nested content tags, organizer permissions, fresh-install dependencies, and Unicode analysis scripts. This revision also fixes repeated template and paper creation, template selection, folder deletion and duplicate names, mobile login layout, log copying, and teacher analysis requests. The existing 1.6.7 release includes the revised full Linux offline installer/update bundle. See [1.6.7 release notes](docs/release-1.6.7.md).
 
 Version 1.6.6 adds personal practice assignment, one-assignment-per-student paper folders, content folders and tags, and exam-local question-count overrides. See the in-app changelog for details.
 

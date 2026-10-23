@@ -409,9 +409,13 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     setBusy(true);
     try {
       const r = await apiPost<{ ok: boolean; path: string }>(
-        `/api/templates/create?name=${encodeURIComponent(n)}`,
+        `/api/templates/create?name=${encodeURIComponent(n)}&auto_rename=true`,
         {},
       );
+      if (selectedFolderId) {
+        await assignFolderItem("template", r.path, selectedFolderId);
+        setFolderItems((items) => ({ ...items, [r.path]: selectedFolderId }));
+      }
       await refreshList();
       notifyContentLibraryChanged("template");
       setPath(r.path);
@@ -564,7 +568,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-0 flex-1 flex-row">
         <aside className="flex w-full max-w-[14rem] shrink-0 flex-col border-r border-slate-200 bg-white">
-          <div className="p-2"><ContentFolders scope="template" folders={folders} selectedId={selectedFolderId} onSelect={setSelectedFolderId} onCreated={(folder) => setFolders((current) => [...current, folder])} onUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDropItem={(id, folderId) => void assignFolderItem("template", id, folderId).then(() => setFolderItems((items) => ({ ...items, [id]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error)))} onError={onError} /></div>
+          <div className="p-2"><ContentFolders scope="template" folders={folders} selectedId={selectedFolderId} onSelect={setSelectedFolderId} onCreated={(folder) => setFolders((current) => [...current, folder])} onUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDeleted={(result) => { setFolders(result.folders); setFolderItems(result.items); }} onDropItem={(id, folderId) => void assignFolderItem("template", id, folderId).then(() => setFolderItems((items) => ({ ...items, [id]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error)))} onError={onError} /></div>
           <div className="border-b border-slate-100 p-2">
             <h2 className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{t("fileList")}</h2>
           </div>

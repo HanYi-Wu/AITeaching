@@ -1,6 +1,6 @@
 import { fillSectionGaps } from "../../lib/manualPaperShortcuts";
 import { QuestionHoverDetails } from '../../components/QuestionHoverDetails';
-import { ContentFolders } from '../../components/ContentFolders';
+import { ContentFolderHelp, ContentFolders } from '../../components/ContentFolders';
 import { ContentTags, TagChips } from '../../components/ContentTags';
 import {
   useCallback,
@@ -146,6 +146,7 @@ export function ComposeWorkspace({
   const [dlgExportLabel, setDlgExportLabel] = useState("");
   const [dlgSubject, setDlgSubject] = useState("");
   const [dlgTemplatePath, setDlgTemplatePath] = useState("");
+  const dialogTemplate = templates.find((item) => normTemplatePath(item.path) === normTemplatePath(dlgTemplatePath)) ?? templates[0];
   const [dlgMode, setDlgMode] = useState<"scratch" | "history">("scratch");
   /** 从历史复制时的源考试目录标识（须为已导出试卷的 ``exam_id``） */
   const [dlgHistorySourceExamId, setDlgHistorySourceExamId] = useState("");
@@ -998,7 +999,7 @@ export function ComposeWorkspace({
       return;
     }
 
-    const tpl = templates.find((x) => normTemplatePath(x.path) === normTemplatePath(dlgTemplatePath));
+    const tpl = dialogTemplate;
     if (!tpl) {
       onError(t("compose:errors.selectTemplateForDraft"));
       return;
@@ -1017,6 +1018,7 @@ export function ComposeWorkspace({
       }));
       const r = await apiPost<{ exam: ExamDoc }>("/api/exams", {
         name: undefined,
+        auto_rename: true,
         export_label: dlgExportLabel.trim(),
         subject: dlgSubject.trim(),
         template_ref: tpl.id,
@@ -1625,13 +1627,19 @@ export function ComposeWorkspace({
           className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
           disabled={busy}
           onClick={() => {
-            setDlgExportLabel(exportLabel.trim() || i18n.t("defaultExamLabel", { ns: "compose" }));
-            setDlgSubject(subject.trim());
-            setDlgTemplatePath(templatePath || templates[0]?.path || "");
-            setDlgMode("scratch");
-            setDlgHistorySourceExamId(exportedExamRows[0]?.exam_id ?? "");
-            setDlgHistoryExportLabel("");
-            setNewPaperDialogOpen(true);
+            onError(null);
+            setBusy(true);
+            void refreshTemplates().then((latest) => {
+              const preferred = latest.find((item) => normTemplatePath(item.path) === normTemplatePath(templatePath)) ?? latest[0];
+              setDlgExportLabel(exportLabel.trim() || i18n.t("defaultExamLabel", { ns: "compose" }));
+              setDlgSubject(subject.trim());
+              setDlgTemplatePath(preferred?.path ?? "");
+              setDlgMode("scratch");
+              setDlgHistorySourceExamId(exportedExamRows[0]?.exam_id ?? "");
+              setDlgHistoryExportLabel("");
+              setNewPaperDialogOpen(true);
+            }).catch((error) => onError(error instanceof Error ? error.message : String(error)))
+              .finally(() => setBusy(false));
           }}
         >
           {t("compose:newPaper")}
@@ -1819,9 +1827,10 @@ export function ComposeWorkspace({
                   {t("compose:template")}
                   <select
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                    value={dlgTemplatePath}
+                    value={dialogTemplate?.path ?? ""}
                     onChange={(e) => setDlgTemplatePath(e.target.value)}
                   >
+                    {templates.length === 0 && <option value="">{t("compose:templatesMissing")}</option>}
                     {templates.map((tp) => (
                       <option key={tp.path} value={tp.path}>
                         {tp.id}
@@ -1843,7 +1852,7 @@ export function ComposeWorkspace({
               <button
                 type="button"
                 className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                disabled={busy}
+                disabled={busy || (dlgMode === "scratch" && !dialogTemplate)}
                 onClick={() => void confirmNewPaperDialog()}
               >
                 {t("compose:newPaperDialogConfirm")}
@@ -1867,7 +1876,7 @@ export function ComposeWorkspace({
               将当前组卷保存为试卷，并发布给选中的班级。线上发布不依赖 PDF 编译。
             </p>
             <div className="mt-3 flex gap-2"><button type="button" onClick={() => { setPublishRecipientScope("class"); setPublishStudentIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${publishRecipientScope === "class" ? "bg-slate-900 text-white" : ""}`}>发布到班级</button><button type="button" onClick={() => { setPublishRecipientScope("student"); setPublishClassIds([]); setPublishMode("current"); }} className={`rounded border px-3 py-1.5 text-sm ${publishRecipientScope === "student" ? "bg-slate-900 text-white" : ""}`}>指定学生</button></div>
-            <label className="mt-3 block text-sm">试卷归类（必选）<select aria-label="组卷发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-2 py-2"><option value="">请选择文件夹</option>{publishFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
+            <ContentFolderHelp paper /><label className="mt-3 block text-sm">试卷归类（必选）<select aria-label="组卷发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-2 py-2"><option value="">请选择文件夹</option>{publishFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
             {publishRecipientScope === "student" && publishFolderId && publishFolders.find((folder) => folder.id === publishFolderId)?.kind === "category" ? <button type="button" className="mt-2 rounded border border-violet-300 px-2 py-1 text-xs text-violet-700" onClick={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setPublishFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch((error) => onError(error instanceof Error ? error.message : String(error)))}>将空文件夹转为试卷文件夹</button> : null}
             <div className="mt-2 flex gap-2"><input aria-label="组卷新建文件夹名称" value={publishNewFolderName} onChange={(event) => setPublishNewFolderName(event.target.value)} placeholder="新文件夹名称" className="min-w-0 flex-1 rounded border px-2 py-1 text-sm" /><button type="button" disabled={!publishNewFolderName.trim()} onClick={() => { const parent = publishFolders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? publishFolders.find((folder) => folder.kind === "category" && !folder.parent_id); void createContentFolder({ scope: "paper", name: publishNewFolderName.trim(), kind: publishRecipientScope === "student" ? "paper" : "category", parent_id: publishRecipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => { setPublishFolders((current) => [...current, folder]); setPublishFolderId(folder.id); setPublishNewFolderName(""); }).catch((error) => onError(error instanceof Error ? error.message : String(error))); }} className="rounded border px-2 py-1 text-xs disabled:opacity-50">新建并选择</button></div>
             <div className="mt-4 max-h-72 space-y-2 overflow-auto rounded-lg border border-slate-200 p-2">
@@ -2045,7 +2054,7 @@ export function ComposeWorkspace({
 
       <div className="flex min-h-0 flex-1 flex-row">
         <aside className="flex w-48 shrink-0 flex-col border-r border-slate-200 bg-slate-50 xl:w-56">
-          <div className="shrink-0 p-2"><ContentFolders scope="compose" folders={composeFolders} selectedId={selectedComposeFolderId} onSelect={setSelectedComposeFolderId} onCreated={(folder) => setComposeFolders((current) => [...current, folder])} onUpdated={(folder) => setComposeFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDropItem={(id, folderId) => void assignFolderItem("compose", id, folderId).then(() => setComposeFolderItems((items) => ({ ...items, [id]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error)))} onError={onError} /></div>
+          <div className="shrink-0 p-2"><ContentFolders scope="compose" folders={composeFolders} selectedId={selectedComposeFolderId} onSelect={setSelectedComposeFolderId} onCreated={(folder) => setComposeFolders((current) => [...current, folder])} onUpdated={(folder) => setComposeFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDeleted={(result) => { setComposeFolders(result.folders); setComposeFolderItems(result.items); }} onDropItem={(id, folderId) => void assignFolderItem("compose", id, folderId).then(() => setComposeFolderItems((items) => ({ ...items, [id]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error)))} onError={onError} /></div>
           <div className="shrink-0 border-b border-slate-200 bg-white px-2 py-2">
             <h2 className="text-[10px] font-semibold uppercase leading-tight tracking-wide text-slate-500">
               {t("compose:historySidebarTitle")}

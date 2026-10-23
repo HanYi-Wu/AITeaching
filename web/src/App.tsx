@@ -436,6 +436,7 @@ function AppShell() {
                   {page === "help" && <HelpWorkspace onError={setErr} />}
                   {page === "analysis" && (
                     <AnalysisWorkspace
+                      allowHostTools={!platformStatus?.public_mode && currentUser?.role === "admin"}
                       onOpenExamInCompose={(examId) => {
                         setComposeOpenExamId(examId);
                         setPage("compose");

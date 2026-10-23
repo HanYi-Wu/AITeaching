@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Clipboard, ScrollText, Trash2 } from "lucide-react";
+import { copyTextToClipboard } from "../../lib/clipboard";
 import {
   clearLogs,
   copyLogsAsText,
@@ -23,6 +24,7 @@ export function LogWorkspace({ embedded = false }: { embedded?: boolean } = {}) 
   const entries = useLogs();
   const [levelFilter, setLevelFilter] = useState<LogLevel | "all">("all");
   const [copied, setCopied] = useState(false);
+  const [manualCopy, setManualCopy] = useState<string | null>(null);
 
   useEffect(() => {
     if (embedded) return;
@@ -40,12 +42,16 @@ export function LogWorkspace({ embedded = false }: { embedded?: boolean } = {}) 
     return [...entries].filter((e) => e.level === levelFilter).reverse();
   }, [entries, levelFilter]);
 
-  function handleCopy() {
+  async function handleCopy() {
     const clip = copyLogsAsText();
-    void navigator.clipboard.writeText(clip).then(() => {
+    try {
+      await copyTextToClipboard(clip);
+      setManualCopy(null);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
+    } catch {
+      setManualCopy(clip);
+    }
   }
 
   return (
@@ -75,7 +81,7 @@ export function LogWorkspace({ embedded = false }: { embedded?: boolean } = {}) 
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-            onClick={() => handleCopy()}
+            onClick={() => void handleCopy()}
           >
             <Clipboard className="h-3.5 w-3.5" />
             {copied ? t("log:copied") : t("log:copyAll")}
@@ -92,6 +98,10 @@ export function LogWorkspace({ embedded = false }: { embedded?: boolean } = {}) 
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
+        {manualCopy !== null && <div className="mb-3 space-y-2" role="alert">
+          <p className="text-sm text-amber-700">{t("log:manualCopyHint")}</p>
+          <textarea aria-label={t("log:manualCopyText")} readOnly value={manualCopy} onFocus={(event) => event.currentTarget.select()} className="h-36 w-full rounded border border-slate-300 p-2 font-mono text-xs" />
+        </div>}
         {filtered.length === 0 ? (
           <p className="text-sm text-slate-500">{t("log:empty")}</p>
         ) : (

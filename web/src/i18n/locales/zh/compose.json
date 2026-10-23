@@ -81,7 +81,7 @@
   "saveChanges": "保存更改",
   "newPaper": "新建试卷",
   "newPaperDialogTitle": "新建试卷",
-  "newPaperDialogHint": "填写试卷说明、学科与版式模板，或从历史试卷复制为一份新草稿。",
+  "newPaperDialogHint": "填写试卷说明、学科与版式模板，或从历史试卷复制为一份新草稿。新建空白试卷与已有试卷同名时，自动加 (2)、(3) 区分；保存已有试卷不会覆盖其他试卷。",
   "newPaperModeScratch": "空白试卷",
   "newPaperModeHistory": "从历史试卷复制",
   "newPaperPickHistory": "选择历史试卷",

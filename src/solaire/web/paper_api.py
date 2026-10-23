@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from solaire.web import state
 from solaire.web.content_organizer import (
     all_item_tags, analyze_paper_folder, assign_folder_item, assign_paper_folder, create_folder, item_tags, list_folder_items, list_folders, list_tags,
-    save_tag, set_item_tags, update_folder,
+    save_tag, set_item_tags, update_folder, delete_folder,
 )
 from solaire.web.analysis_report_service import (
     analysis_report_filename,
@@ -709,6 +709,19 @@ def organizer_folder_create(body: FolderCreateBody, user: Annotated[dict[str, An
 def organizer_folder_update(folder_id: str, body: FolderUpdateBody, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
     try:
         return {"folder": update_folder(require_platform_root(), user, folder_id, **body.model_dump())}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.delete("/organizer/folders/{folder_id}")
+def organizer_folder_delete(folder_id: str, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
+    try:
+        root = require_platform_root()
+        result = delete_folder(root, user, folder_id)
+        scope = result["scope"]
+        return {"parent_id": result["parent_id"], "folders": list_folders(root, user, scope),
+                "items": list_folder_items(root, user, scope) if scope != "paper" else {}}
     except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
         _raise_api_error(exc)
     raise RuntimeError("unreachable")

@@ -82,8 +82,8 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
   }
 
   return (
-    <div className="min-h-screen w-full flex-1 bg-slate-50 px-4 py-8 text-slate-950 sm:px-6 lg:flex lg:items-center lg:justify-center lg:py-12">
-      <div className="mx-auto grid w-full max-w-5xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 lg:min-h-[620px] lg:grid-cols-[1.05fr_1fr]">
+    <div className="flex min-h-dvh w-full flex-1 items-start justify-center bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:py-12">
+      <div className="mx-auto my-auto grid w-full max-w-5xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 lg:min-h-[620px] lg:grid-cols-[1.05fr_1fr]">
         <section className="relative overflow-hidden bg-slate-950 p-6 text-white sm:p-12 lg:flex lg:flex-col lg:justify-between">
           <div className="absolute -right-24 -top-28 h-80 w-80 rounded-full bg-indigo-500/20 blur-3xl" aria-hidden="true" />
           <div className="relative flex items-center gap-3">

@@ -80,7 +80,7 @@
   "saveChanges": "Save changes",
   "newPaper": "New paper",
   "newPaperDialogTitle": "New paper",
-  "newPaperDialogHint": "Set paper note, subject, and layout template, or copy from a past paper as a new draft.",
+  "newPaperDialogHint": "Set paper note, subject, and layout template, or copy a past paper. New blank papers use (2), (3), etc. for duplicate names; saving an existing paper never replaces another paper.",
   "newPaperModeScratch": "Blank paper",
   "newPaperModeHistory": "Copy from past paper",
   "newPaperPickHistory": "Past paper",

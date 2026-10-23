@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { apiDownloadBlob } from "../../../api/client";
-import { ContentFolders } from "../../../components/ContentFolders";
+import { ContentFolderHelp, ContentFolders } from "../../../components/ContentFolders";
 import { ContentTags, TagChips } from "../../../components/ContentTags";
 import { formatLocaleDateTime } from "../../../lib/locale";
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
@@ -581,6 +581,10 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
   async function completeGrading(submission: PaperSubmissionRecord) {
     if (!selectedPaper) return;
+    if (!submission.submitted_at && !["submitted", "completed"].includes(submission.status)) {
+      setMessage("该学生尚未提交答卷，提交后才能发布批改结果。");
+      return;
+    }
     setBusy(`complete:${submission.attempt_id}`);
     setMessage(null);
     try {
@@ -839,7 +843,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,390px)_minmax(0,1fr)] overflow-hidden">
         <aside className="flex min-h-0 flex-col overflow-hidden border-r border-slate-200 bg-white p-3">
-          <ContentFolders scope="paper" folders={folders} selectedId={browserFolderId} onSelect={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }} onCreated={(folder) => setFolders((current) => [...current, folder])} onUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)} onError={(error) => reportError(error)} allowPaperFolder />
+          <ContentFolders scope="paper" folders={folders} selectedId={browserFolderId} onSelect={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }} onCreated={(folder) => setFolders((current) => [...current, folder])} onUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }} onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)} onError={(error) => reportError(error)} allowPaperFolder />
           {browserFolderId ? <div className="my-2 flex gap-2 text-xs"><button type="button" onClick={() => void analyzePaperFolder(browserFolderId).then(setFolderAnalysis).catch(reportError)} className="rounded border px-2 py-1 hover:bg-slate-50">分析此文件夹</button></div> : null}
           <div className="mb-3 shrink-0 space-y-2">
             <div className="relative">
@@ -932,7 +936,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-slate-500">{selectedPaper.subject}</p>
                     <h2 className="mt-1 text-2xl font-semibold text-slate-950">{selectedPaper.title}</h2>
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><ContentTags scope="paper" itemId={selectedPaper.paper_id} onError={(error) => reportError(error)} onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))} /><label>归类 <select aria-label="试卷所在文件夹" className="rounded border px-2 py-1" value={selectedPaper.folder_id ?? ""} onChange={(event) => void movePaperToFolder(selectedPaper.paper_id, event.target.value).then(() => refresh()).catch(reportError)}>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label></div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><ContentTags scope="paper" itemId={selectedPaper.paper_id} onError={(error) => reportError(error)} onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))} /><label>归类 <select aria-label="试卷所在文件夹" disabled={selectedPaper.publication_count > 0} title={selectedPaper.publication_count > 0 ? "已有发布记录，请在左侧移动整个文件夹，以保留答卷和统计关系" : undefined} className="rounded border px-2 py-1" value={selectedPaper.folder_id ?? ""} onChange={(event) => void movePaperToFolder(selectedPaper.paper_id, event.target.value).then(() => refresh()).catch(reportError)}>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label></div>
                     <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-600">
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.question_count} 题</span>
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.section_count} 个题组</span>
@@ -1011,7 +1015,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                 <section className="space-y-5">
                   <Panel title="发布试卷" icon={<Wifi className="h-5 w-5 text-slate-600" />}>
                     <div className="mb-4 flex gap-2"><button type="button" onClick={() => { setRecipientScope("class"); setSelectedStudentIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${recipientScope === "class" ? "bg-slate-900 text-white" : "bg-white"}`}>发布到班级</button><button type="button" onClick={() => { setRecipientScope("student"); setSelectedClassIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${recipientScope === "student" ? "bg-slate-900 text-white" : "bg-white"}`}>指定学生</button></div>
-                    <label className="mb-3 block text-sm">试卷归类（必选）<select aria-label="发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option value="">请选择文件夹</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
+                    <ContentFolderHelp paper /><label className="mb-3 block text-sm">试卷归类（必选）<select aria-label="发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option value="">请选择文件夹</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
                     {recipientScope === "student" && publishFolderId && folders.find((folder) => folder.id === publishFolderId)?.kind === "category" ? <button type="button" className="mb-3 rounded border border-violet-300 px-2 py-1 text-xs text-violet-700" onClick={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch(reportError)}>将空文件夹转为试卷文件夹</button> : null}
                     <div className="mb-4 flex gap-2"><input aria-label="新文件夹名称" value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} className="min-w-0 flex-1 rounded border px-2 py-1 text-sm" placeholder="新建文件夹名称" /><button type="button" disabled={!newFolderName.trim()} className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={() => { const parent = folders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? folders.find((folder) => folder.kind === "category" && !folder.parent_id); void createContentFolder({ scope: "paper", name: newFolderName.trim(), kind: recipientScope === "student" ? "paper" : "category", parent_id: recipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => { setFolders((current) => [...current, folder]); setPublishFolderId(folder.id); setNewFolderName(""); }).catch(reportError); }}>新建并选择</button></div>
                     <label className="mb-4 block text-sm font-medium text-slate-700">
@@ -1430,12 +1434,12 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                           {submission.grading_completed_at ? (
                             <span className="text-sm font-medium text-emerald-700">成绩已发布给学生</span>
                           ) : (
-                            <span className="text-xs text-slate-500">所有题目保存分数后，完成整卷批改才会向学生展示成绩。</span>
+                            <span className="text-xs text-slate-500">{!submission.submitted_at && !["submitted", "completed"].includes(submission.status) ? "学生尚未提交答卷，提交后才能完成批改并发布成绩。" : "所有题目保存分数后，完成整卷批改才会向学生展示成绩。"}</span>
                           )}
                           <button
                             type="button"
                             data-testid={`paper-complete-grading-${submission.attempt_id}`}
-                            disabled={busy === `complete:${submission.attempt_id}`}
+                            disabled={busy === `complete:${submission.attempt_id}` || (!submission.submitted_at && !["submitted", "completed"].includes(submission.status))}
                             onClick={() => void completeGrading(submission)}
                             className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                           >

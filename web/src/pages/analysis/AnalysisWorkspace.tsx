@@ -66,8 +66,10 @@ import { SvgBarChart } from "./SvgBarChart";
 
 export function AnalysisWorkspace({
   onOpenExamInCompose,
+  allowHostTools = false,
 }: {
   onOpenExamInCompose?: (examId: string) => void;
+  allowHostTools?: boolean;
 } = {}) {
   const { t } = useTranslation("analysis");
   const [exams, setExams] = useState<ExamResult[]>([]);
@@ -383,20 +385,18 @@ export function AnalysisWorkspace({
   const loadEduAnalysisMeta = useCallback(async () => {
     try {
       const [s, j, t] = await Promise.all([
-        apiAnalysisListFolderScripts(),
+        allowHostTools ? apiAnalysisListFolderScripts() : Promise.resolve({ scripts: [] }),
         apiAnalysisListJobs(),
-        apiAnalysisListTools(),
+        allowHostTools ? apiAnalysisListTools() : Promise.resolve({ tools: [] }),
       ]);
       setFolderScripts(s.scripts ?? []);
       setJobs(j.jobs ?? []);
       setTools((t.tools as ToolSpec[]) ?? []);
-      if (!selectedFolderScriptPath && (s.scripts ?? []).length > 0) {
-        setSelectedFolderScriptPath((s.scripts ?? [])[0].path);
-      }
+      setSelectedFolderScriptPath((previous) => s.scripts.some((script) => script.path === previous) ? previous : s.scripts[0]?.path ?? "");
     } catch (e) {
       console.error("loadEduAnalysisMeta failed", e);
     }
-  }, [selectedFolderScriptPath]);
+  }, [allowHostTools]);
 
   useEffect(() => {
     void loadEduAnalysisMeta();
@@ -1423,6 +1423,7 @@ export function AnalysisWorkspace({
             </div>
 
             <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+              {allowHostTools && <>
               <div className="text-xs font-semibold text-slate-600">{t("scriptPickTitle")}</div>
               <select
                 value={selectedFolderScriptPath}
@@ -1443,6 +1444,7 @@ export function AnalysisWorkspace({
               >
                 {t("runSelectedScript")}
               </button>
+              </>}
               <button
                 onClick={() => void handleRunBuiltinStudio()}
                 disabled={!selectedBatchId}
@@ -1450,9 +1452,9 @@ export function AnalysisWorkspace({
               >
                 {t("runBuiltin")}
               </button>
-              <div className="text-[11px] text-slate-500">
+              {allowHostTools && <div className="text-[11px] text-slate-500">
                 {t("toolScriptCount", { tools: tools.length, scripts: folderScripts.length })}
-              </div>
+              </div>}
             </div>
 
             <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">

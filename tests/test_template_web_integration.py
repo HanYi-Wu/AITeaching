@@ -6,6 +6,34 @@ from pathlib import Path
 
 import yaml
 
+
+def test_create_repeated_templates_allocates_names_without_overwriting(web_client, tmp_path: Path) -> None:
+    paths = []
+    for _ in range(3):
+        response = web_client.post("/api/templates/create", params={"name": "新模板", "auto_rename": True})
+        assert response.status_code == 200, response.text
+        paths.append(response.json()["path"])
+    assert paths == ["templates/新模板.yaml", "templates/新模板 (2).yaml", "templates/新模板 (3).yaml"]
+    original = (tmp_path / paths[0]).read_bytes()
+    conflict = web_client.post("/api/templates/create", params={"name": "新模板"})
+    assert conflict.status_code == 409
+    assert (tmp_path / paths[0]).read_bytes() == original
+    assert [yaml.safe_load((tmp_path / path).read_text(encoding="utf-8"))["template_id"] for path in paths] == ["新模板", "新模板 (2)", "新模板 (3)"]
+
+
+def test_simultaneous_template_creation_keeps_every_template(web_client, tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    def create(_):
+        return web_client.post("/api/templates/create", params={"name": "并发模板", "auto_rename": True})
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        responses = list(pool.map(create, range(4)))
+    assert all(response.status_code == 200 for response in responses)
+    paths = [response.json()["path"] for response in responses]
+    assert len(set(paths)) == 4
+    assert all(yaml.safe_load((tmp_path / path).read_text(encoding="utf-8"))["sections"] for path in paths)
+
 from solaire.exam_compiler.models.template import MermaidPdfOptions, PrimeBrushPdfOptions
 from solaire.exam_compiler.template_editor_builtins import TEMPLATE_EDITOR_LAYOUT_BUILTIN_KEYS_ORDERED
 from solaire.exam_compiler.template_metadata_materialize import materialize_metadata_defaults_for_editor

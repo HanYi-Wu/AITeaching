@@ -11,6 +11,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Lock
 from typing import Annotated, Any, Literal, Union
 
 import yaml
@@ -311,6 +312,7 @@ class ExamSaveDraftBody(BaseModel):
     template_ref: str = ""
     template_path: str = Field(..., min_length=1, description="Relative to project root")
     selected_items: list[SelectedSectionIn] = Field(default_factory=list)
+    auto_rename: bool = False
 
 
 class CopyFromExamBody(BaseModel):
@@ -1147,18 +1149,27 @@ def template_rename(body: TemplateRenameBody) -> dict[str, Any]:
 
 
 @app.post("/api/templates/create")
-def template_create(name: str = Query(..., min_length=1, description="File stem under templates/, e.g. my_exam")) -> dict[str, Any]:
+def template_create(
+    name: str = Query(..., min_length=1, description="File stem under templates/, e.g. my_exam"),
+    auto_rename: bool = False,
+) -> dict[str, Any]:
     """Create a minimal valid template.yaml under templates/<name>.yaml if it does not exist."""
+    from solaire.web.content_names import available_name
+
     root = _require_root()
-    stem = safe_filename_component(name)
-    if not stem.endswith(".yaml"):
+    base = safe_filename_component(name).removesuffix(".yaml")
+    template_dir = root / "templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    while True:
+        stem = available_name(base, (item.stem for item in template_dir.glob("*.yaml"))) if auto_rename else base
         stem_path = f"templates/{stem}.yaml"
-    else:
-        stem_path = f"templates/{stem}"
-    p = _resolve_under_templates(root, stem_path)
-    if p.is_file():
-        raise HTTPException(status_code=409, detail=f"Template already exists: {stem_path}")
-    p.parent.mkdir(parents=True, exist_ok=True)
+        p = _resolve_under_templates(root, stem_path)
+        try:
+            target = p.open("x", encoding="utf-8")
+            break
+        except FileExistsError:
+            if not auto_rename:
+                raise HTTPException(status_code=409, detail=f"Template already exists: {stem_path}") from None
     minimal = {
         "template_id": stem.replace(".yaml", ""),
         "layout": "single_column",
@@ -1180,7 +1191,8 @@ def template_create(name: str = Query(..., min_length=1, description="File stem 
         ],
     }
     text = yaml.safe_dump(minimal, allow_unicode=True, sort_keys=False)
-    p.write_text(text, encoding="utf-8")
+    with target:
+        target.write(text)
     load_template(p)
     rel = p.relative_to(root).as_posix()
     return {"ok": True, "path": rel}
@@ -1958,21 +1970,34 @@ def exams_list(
     return {"exams": rows}
 
 
+_exam_creation_lock = Lock()
+
+
 @app.post("/api/exams")
 def exams_create(body: ExamSaveDraftBody) -> dict[str, Any]:
     root = _require_root()
     items = [s.model_dump(mode="json", exclude_none=True) for s in body.selected_items]
     try:
-        doc = save_exam_workspace(
-            root,
-            exam_id=None,
-            name=body.name,
-            subject=body.subject,
-            export_label=body.export_label,
-            template_ref=body.template_ref,
-            template_path=body.template_path,
-            selected_items=items,
-        )
+        with _exam_creation_lock:
+            export_label = body.export_label.strip()
+            if body.auto_rename:
+                from solaire.web.content_names import available_name
+                from solaire.web.exam_workspace_service import label_subject_taken
+
+                taken: list[str] = []
+                while label_subject_taken(root, export_label, body.subject):
+                    taken.append(export_label)
+                    export_label = available_name(body.export_label.strip(), taken, max_length=80)
+            doc = save_exam_workspace(
+                root,
+                exam_id=None,
+                name=body.name,
+                subject=body.subject,
+                export_label=export_label,
+                template_ref=body.template_ref,
+                template_path=body.template_path,
+                selected_items=items,
+            )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"ok": True, "exam": doc}

@@ -433,6 +433,16 @@ describe("PapersWorkspace", () => {
     );
   });
 
+  it("explains why an unsubmitted answer cannot have grading results published", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [{ attempt_id: "draft-a1", publication_id: "pub1", student_name: "未交卷学生", student_no: "S002", status: "in_progress", submitted_at: null, score: null, max_score: 10, answers: [] }] });
+    render(<PapersWorkspace />);
+    await screen.findAllByText("Midterm");
+    await userEvent.click(screen.getByTestId("paper-tab-grading"));
+    expect(await screen.findByText("学生尚未提交答卷，提交后才能完成批改并发布成绩。")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-complete-grading-draft-a1")).toBeDisabled();
+  });
+
   it("turns the empty paper page into a teacher getting-started entry", async () => {
     mocks.listPlatformPapers.mockResolvedValue({ papers: [] });
     const onOpenBank = vi.fn();

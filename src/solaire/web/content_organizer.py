@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from solaire.web.auth_service import utc_now
+from solaire.web.content_names import available_name
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 
 SCOPES = {"template", "compose", "paper"}
@@ -57,8 +58,14 @@ def create_folder(root: Path, user: dict[str, Any], *, scope: str, name: str,
     now = utc_now()
     folder_id = uuid.uuid4().hex
     with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
         if parent_id and _folder(con, parent_id, owner, scope)["kind"] != "category":
             raise ValueError("试卷文件夹下不能建立子文件夹")
+        names = con.execute(
+            "SELECT name FROM content_folders WHERE owner_teacher_id=? AND scope=? AND parent_id IS ?",
+            (owner, scope, parent_id),
+        ).fetchall()
+        clean_name = available_name(clean_name, (str(row["name"]) for row in names), max_length=60)
         con.execute(
             "INSERT INTO content_folders VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (folder_id, owner, scope, parent_id, kind, clean_name, now, now),
@@ -73,6 +80,7 @@ def update_folder(root: Path, user: dict[str, Any], folder_id: str, *,
     owner = _owner(user)
     init_platform_db(root)
     with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
         current = _folder(con, folder_id, owner, "paper") if kind == "paper" else None
         if current is None:
             row = con.execute("SELECT * FROM content_folders WHERE id=? AND owner_teacher_id=?", (folder_id, owner)).fetchone()
@@ -108,10 +116,64 @@ def update_folder(root: Path, user: dict[str, Any], folder_id: str, *,
         clean_name = str(name if name is not None else current["name"]).strip()
         if not clean_name or len(clean_name) > 60:
             raise ValueError("文件夹名称须为 1–60 个字符")
+        if clean_name != current["name"] or destination != current["parent_id"]:
+            _assert_folder_name_available(con, owner, scope, destination, clean_name, exclude_id=folder_id)
         con.execute("UPDATE content_folders SET name=?, parent_id=?, kind=?, updated_at=? WHERE id=?",
                     (clean_name, destination, new_kind, utc_now(), folder_id))
         row = con.execute("SELECT * FROM content_folders WHERE id=?", (folder_id,)).fetchone()
     return row_to_dict(row) or {}
+
+
+def _assert_folder_name_available(con: Any, owner: str, scope: str, parent_id: str | None,
+                                  name: str, *, exclude_id: str) -> None:
+    rows = con.execute(
+        "SELECT name FROM content_folders WHERE owner_teacher_id=? AND scope=? AND parent_id IS ? AND id<>?",
+        (owner, scope, parent_id, exclude_id),
+    ).fetchall()
+    if any(str(row["name"]).casefold() == name.casefold() for row in rows):
+        raise ValueError("该目录下已有同名文件夹，请修改名称后再重命名或移动")
+
+
+def delete_folder(root: Path, user: dict[str, Any], folder_id: str) -> dict[str, Any]:
+    """Remove organization only; never remove source files, papers or attempts."""
+    owner = _owner(user)
+    init_platform_db(root)
+    with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute(
+            "SELECT * FROM content_folders WHERE id=? AND owner_teacher_id=?", (folder_id, owner)
+        ).fetchone()
+        if row is None:
+            raise ValueError("文件夹不存在或无权访问")
+        current = dict(row)
+        scope, parent_id = str(current["scope"]), current["parent_id"]
+        if folder_id == f"paper-default-{owner}":
+            raise ValueError("默认文件夹由系统保留，不能删除；可以重命名或新建其他文件夹")
+        if scope == "paper":
+            occupied = con.execute(
+                "SELECT 1 FROM paper_records WHERE folder_id=? UNION SELECT 1 FROM exam_publications WHERE folder_id=? LIMIT 1",
+                (folder_id, folder_id),
+            ).fetchone()
+            if occupied:
+                raise ValueError("文件夹中仍有试卷或发布记录，不能删除；请先移走未发布试卷，已有发布记录的文件夹需保留")
+        children = con.execute("SELECT * FROM content_folders WHERE parent_id=?", (folder_id,)).fetchall()
+        child_names: set[str] = set()
+        for child in children:
+            if child["kind"] == "paper" and not parent_id:
+                raise ValueError("请先移动子试卷文件夹到其他归类文件夹，再删除此文件夹")
+            name = str(child["name"])
+            _assert_folder_name_available(con, owner, scope, parent_id, name, exclude_id=folder_id)
+            if name.casefold() in child_names:
+                raise ValueError("子文件夹存在重名，请先重命名后再删除上级文件夹")
+            child_names.add(name.casefold())
+        con.execute("UPDATE content_folders SET parent_id=?, updated_at=? WHERE parent_id=?", (parent_id, utc_now(), folder_id))
+        if scope in {"template", "compose"}:
+            if parent_id:
+                con.execute("UPDATE content_folder_items SET folder_id=? WHERE folder_id=?", (parent_id, folder_id))
+            else:
+                con.execute("DELETE FROM content_folder_items WHERE folder_id=?", (folder_id,))
+        con.execute("DELETE FROM content_folders WHERE id=?", (folder_id,))
+    return {"scope": scope, "parent_id": parent_id}
 
 
 def assign_paper_folder(root: Path, user: dict[str, Any], paper_id: str, folder_id: str) -> None:

@@ -206,11 +206,11 @@ describe("AnalysisWorkspace", () => {
     primeDefaultApi();
   });
 
-  function renderWs() {
+  function renderWs(allowHostTools = false) {
     return render(
       <TestI18nProvider>
         <AgentProvider>
-          <AnalysisWorkspace />
+          <AnalysisWorkspace allowHostTools={allowHostTools} />
           <PageContextProbe />
         </AgentProvider>
       </TestI18nProvider>,
@@ -220,6 +220,19 @@ describe("AnalysisWorkspace", () => {
   it("shows empty state before exam is selected", async () => {
     renderWs();
     expect(await screen.findByText("从左侧选择一个历史考试")).toBeInTheDocument();
+  });
+
+  it("does not request administrator script and tool endpoints for teachers", async () => {
+    renderWs();
+    await waitFor(() => expect(mocks.apiAnalysisListJobs).toHaveBeenCalled());
+    expect(mocks.apiAnalysisListFolderScripts).not.toHaveBeenCalled();
+    expect(mocks.apiAnalysisListTools).not.toHaveBeenCalled();
+  });
+
+  it("loads custom scripts when host tools are explicitly enabled", async () => {
+    renderWs(true);
+    await waitFor(() => expect(mocks.apiAnalysisListFolderScripts).toHaveBeenCalledTimes(1));
+    expect(mocks.apiAnalysisListTools).toHaveBeenCalledTimes(1);
   });
 
   it("shows online and offline papers in one history list and exposes the selected paper to AI", async () => {
@@ -322,12 +335,12 @@ describe("AnalysisWorkspace", () => {
     const runBuiltinBtn = await screen.findByRole("button", { name: "运行内置分析（exam_stats_v1）" });
     fireEvent.click(runBuiltinBtn);
     await waitFor(() => expect(mocks.apiAnalysisRunBuiltin).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(/工具数量：1/)).toBeInTheDocument();
+    expect(mocks.apiAnalysisListTools).not.toHaveBeenCalled();
   });
 
   it("shows error message when folder script run fails", async () => {
     mocks.apiAnalysisRunFolderScript.mockRejectedValueOnce(new Error("运行失败"));
-    renderWs();
+    renderWs(true);
 
     const examButton = await screen.findByRole("button", { name: /期末考试/ });
     fireEvent.click(examButton);

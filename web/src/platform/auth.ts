@@ -1119,6 +1119,12 @@ export function updateContentFolder(id: string, payload: { name?: string; parent
   return platformRequest(`/api/organizer/folders/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) });
 }
 
+export type FolderDeleteResult = { parent_id: string | null; folders: ContentFolder[]; items: Record<string, string> };
+
+export function deleteContentFolder(id: string): Promise<FolderDeleteResult> {
+  return platformRequest(`/api/organizer/folders/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export function movePaperToFolder(paperId: string, folderId: string): Promise<{ ok: boolean }> {
   return platformRequest(`/api/organizer/papers/${encodeURIComponent(paperId)}/folder`, { method: "POST", body: JSON.stringify({ folder_id: folderId }) });
 }

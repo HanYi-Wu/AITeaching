@@ -5,6 +5,8 @@
   "level": "Level",
   "copyAll": "Copy all",
   "copied": "Copied",
+  "manualCopyHint": "Automatic copying is unavailable. Select and copy the log text below.",
+  "manualCopyText": "Log text to copy",
   "clear": "Clear",
   "count": "{{n}} entries",
   "empty": "No log entries yet."

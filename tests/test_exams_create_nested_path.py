@@ -16,6 +16,23 @@ def test_norm_template_path_rel_strips_parent_segments() -> None:
     assert _norm_template_path_rel("templates/x.yaml") == "templates/x.yaml"
 
 
+def test_new_exam_auto_names_but_existing_exam_conflicts_still_reject(web_client, tmp_path):
+    payload = {"export_label": "期中", "subject": "数学", "template_ref": "t1", "template_path": "templates/t1.yaml", "selected_items": []}
+    first = web_client.post("/api/exams", json=payload)
+    assert first.status_code == 200
+    original = (tmp_path / "exams/期中/数学/exam.yaml").read_bytes()
+    assert web_client.post("/api/exams", json=payload).status_code == 400
+    created = []
+    for _ in range(2):
+        response = web_client.post("/api/exams", json={**payload, "auto_rename": True})
+        assert response.status_code == 200, response.text
+        created.append(response.json()["exam"])
+    assert [exam["export_label"] for exam in created] == ["期中 (2)", "期中 (3)"]
+    conflict = web_client.put(f"/api/exams/{created[0]['exam_id']}", json=payload)
+    assert conflict.status_code == 400
+    assert (tmp_path / "exams/期中/数学/exam.yaml").read_bytes() == original
+
+
 def test_fill_identity_from_exam_path_fields() -> None:
     d = {"export_label": "", "subject": ""}
     _fill_identity_from_exam_path_fields(d, "高考数学/数学")

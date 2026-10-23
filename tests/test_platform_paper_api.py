@@ -278,6 +278,11 @@ def test_personal_paper_folder_targets_only_selected_student_and_rejects_duplica
     analysis = web_client.get(f"/api/organizer/folders/{exam_folder}/analysis", headers=teacher_headers)
     assert analysis.status_code == 200
     assert analysis.json()["summary"]["assigned_count"] == 2
+    blocked_delete = web_client.delete(f"/api/organizer/folders/{exam_folder}", headers=teacher_headers)
+    assert blocked_delete.status_code == 400
+    assert "发布记录" in blocked_delete.json()["detail"]
+    assert web_client.get(f"/api/organizer/folders/{exam_folder}/analysis", headers=teacher_headers).json()["summary"]["assigned_count"] == 2
+    assert len(web_client.get("/api/student/papers", headers=student_headers[0]).json()["papers"]) == 1
 
 
 def test_folder_types_and_teacher_tag_validation(web_client: TestClient, tmp_path: Path) -> None:

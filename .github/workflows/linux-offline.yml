@@ -30,16 +30,17 @@ jobs:
           mkdir -p "$CONDA_PREFIX/share/tessdata"
           curl -fL --retry 3 https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/chi_sim.traineddata -o "$CONDA_PREFIX/share/tessdata/chi_sim.traineddata"
           curl -fL --retry 3 https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata -o "$CONDA_PREFIX/share/tessdata/eng.traineddata"
-          python -m pytest -q tests/test_linux_offline_installer.py tests/test_offline_frontend.py tests/test_ocr_network_policy.py
+          python -m pytest -q tests/test_linux_offline_installer.py tests/test_offline_frontend.py tests/test_ocr_network_policy.py tests/test_content_folder_management.py tests/test_template_web_integration.py tests/test_exams_create_nested_path.py tests/test_public_access_security.py
       - name: Build frontend
         working-directory: web
-        run: npm ci && npm run build
+        run: npm ci && npm test -- --reporter=dot && npm run build
       - name: Package and test real installation
         shell: micromamba-shell {0}
         run: |
           python scripts/build_linux_offline.py --runtime-prefix "$CONDA_PREFIX"
           bash scripts/test-offline-install-linux.sh
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.publish_release }}
         continue-on-error: true
         with:
           name: EducationHelper-linux-x86_64-offline

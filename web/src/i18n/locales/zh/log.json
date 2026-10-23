@@ -5,6 +5,8 @@
   "level": "级别",
   "copyAll": "复制全部",
   "copied": "已复制",
+  "manualCopyHint": "浏览器未允许自动复制，请选中下方日志后手动复制。",
+  "manualCopyText": "待复制的日志",
   "clear": "清空",
   "count": "{{n}} 条",
   "empty": "暂无日志。"
