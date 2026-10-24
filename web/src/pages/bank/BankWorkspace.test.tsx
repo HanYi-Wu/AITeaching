@@ -1,0 +1,113 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import yaml from "js-yaml";
+import { ToolBarProvider, useToolBar } from "../../contexts/ToolBarContext";
+import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
+import type { BankQuestionEditorPanelProps, QuestionJson } from "../../components/BankQuestionEditorPanel";
+import { BankWorkspace } from "./BankWorkspace";
+
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), blob: vi.fn(), error: vi.fn(), context: vi.fn() }));
+vi.mock("../../api/client", () => ({
+  apiGet: mocks.get, apiPost: mocks.post, apiPut: mocks.put, apiDelete: vi.fn(), apiPostFormData: vi.fn(),
+  apiGraphQuestionBindingsIndex: async () => ({ index: {} }),
+}));
+vi.mock("../../platform/auth", () => ({ listTaggedItems: async () => ({ items: {} }), downloadPlatformBlob: mocks.blob }));
+vi.mock("../../contexts/AgentContext", () => ({ useAgentContext: () => ({ setPageContext: mocks.context }) }));
+vi.mock("../../components/ContentTags", () => ({ ContentTags: () => null, TagChips: () => null }));
+vi.mock("../../components/QuestionHoverDetails", () => ({ QuestionHoverDetails: ({ children }: { children: ReactNode }) => children }));
+vi.mock("../../components/MathInsertOverlay", () => ({ MathInsertOverlay: () => null }));
+vi.mock("../../components/MermaidEditorModal", () => ({ MermaidEditorModal: () => null }));
+vi.mock("../../components/PrimeBrushEditorModal", () => ({ PrimeBrushEditorModal: () => null }));
+// The real workspace, toolbar, file list and save workflows are under test.
+// Replace only the rich editor's rendering with the same controlled input contract.
+vi.mock("../../components/BankQuestionEditorPanel", () => ({
+  BankQuestionEditorPanel: ({ panelMode, rawYaml, setRawYaml, metaRows, setMetaRows }: BankQuestionEditorPanelProps) => panelMode === "yaml" ? (
+    <textarea aria-label="题目 YAML" value={rawYaml} onChange={(event) => setRawYaml(event.target.value)} />
+  ) : (
+    <div>
+      <input aria-label="附加信息名称" value={metaRows[0]?.key ?? ""} onChange={(event) => setMetaRows([{ key: event.target.value, value: metaRows[0]?.value ?? "" }])} />
+      <input aria-label="附加信息内容" value={metaRows[0]?.value ?? ""} onChange={(event) => setMetaRows([{ key: metaRows[0]?.key ?? "", value: event.target.value }])} />
+    </div>
+  ),
+}));
+
+function Toolbar() {
+  const { left, right } = useToolBar();
+  return <div>{left}{right}</div>;
+}
+
+let savedQuestion: QuestionJson;
+const qid = "数学/default/q1";
+function mountWorkspace() {
+  return render(<TestI18nProvider><ToolBarProvider><Toolbar /><BankWorkspace onError={mocks.error} /></ToolBarProvider></TestI18nProvider>);
+}
+async function openFirstQuestion() {
+  mountWorkspace();
+  await userEvent.click(await screen.findByRole("button", { name: /数学\/default\/q1/ }));
+  await screen.findByRole("textbox", { name: "附加信息名称" });
+}
+
+describe("bank toolbar uses the current selection and edits", () => {
+  beforeAll(async () => { await setupTestI18n("zh"); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    savedQuestion = { id: "q1", type: "fill", content: "Question one", answer: "7", analysis: "original", metadata: {} };
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === "/api/bank/collections") return { collections: [{ id: "数学/default", label: "数学/default" }] };
+      if (path === "/api/bank/subjects") return { subjects: ["数学"] };
+      if (path === "/api/bank/folders") return { folders: [], assignments: {} };
+      if (path === "/api/bank/items") return { items: ["q1", "q2"].map((id) => ({ id, qualified_id: `数学/default/${id}`, collection: "数学/default", subject: "数学", type: "fill", content_preview: `Question ${id}`, metadata: {}, storage_path: `resource/数学/default/${id}.yaml`, storage_kind: "single" })) };
+      if (path === `/api/bank/items/${encodeURIComponent(qid)}`) return { qualified_id: qid, question: savedQuestion, file_yaml: yaml.dump(savedQuestion), storage_path: "resource/数学/default/q1.yaml", storage_kind: "single" };
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    mocks.put.mockImplementation(async (_path: string, question: QuestionJson) => {
+      savedQuestion = structuredClone(question);
+      return { ok: true };
+    });
+    mocks.post.mockResolvedValue({ download_url: "/api/bank/exports/selection.zip", filename: "selection.zip" });
+    mocks.blob.mockResolvedValue(new Blob(["zip"]));
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:selection"), revokeObjectURL: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it("updates the export count on every selection change and exports exactly the current IDs", async () => {
+    mountWorkspace();
+    const first = await screen.findByRole("checkbox", { name: `选择导出 ${qid}` });
+    const second = screen.getByRole("checkbox", { name: "选择导出 数学/default/q2" });
+    await userEvent.click(first);
+    expect(screen.getByRole("button", { name: "导出已选（1）" })).toBeEnabled();
+    await userEvent.click(second);
+    expect(screen.getByRole("button", { name: "导出已选（2）" })).toBeEnabled();
+    await userEvent.click(first);
+    await userEvent.click(screen.getByRole("button", { name: "导出已选（1）" }));
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledWith("/api/bank/export-selection", { qualified_ids: ["数学/default/q2"], title: "我的题目导出" }));
+    await waitFor(() => expect(mocks.blob).toHaveBeenCalledWith("/api/bank/exports/selection.zip"));
+    await userEvent.click(second);
+    expect(screen.getByRole("button", { name: "导出已选（0）" })).toBeDisabled();
+  });
+
+  it("saves the final YAML after successive edits while the document stays dirty", async () => {
+    await openFirstQuestion();
+    await userEvent.click(screen.getByRole("tab", { name: "源文件" }));
+    const editor = screen.getByRole("textbox", { name: "题目 YAML" });
+    fireEvent.change(editor, { target: { value: yaml.dump({ ...savedQuestion, analysis: "first edit" }) } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存" })).toBeEnabled());
+    fireEvent.change(editor, { target: { value: yaml.dump({ ...savedQuestion, analysis: "final edit" }) } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(`/api/bank/items/${encodeURIComponent(qid)}`, expect.objectContaining({ analysis: "final edit" })));
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "题目 YAML" }) as HTMLTextAreaElement).value).toContain("final edit"));
+  });
+
+  it("saves the final metadata values after editing their name and content separately", async () => {
+    await openFirstQuestion();
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息名称" }), { target: { value: "topic" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存" })).toBeEnabled());
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "first edit" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "final edit" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(`/api/bank/items/${encodeURIComponent(qid)}`, expect.objectContaining({ metadata: { topic: "final edit" } })));
+  });
+});

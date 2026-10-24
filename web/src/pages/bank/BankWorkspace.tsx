@@ -1132,6 +1132,11 @@ export function BankWorkspace({
     [selectedId, dirty, t],
   );
 
+  const saveFormRef = useRef(saveForm);
+  saveFormRef.current = saveForm;
+  const saveRawYamlRef = useRef(saveRawYaml);
+  saveRawYamlRef.current = saveRawYaml;
+
   useEffect(() => {
     const left: ReactNode = (
       <div className="flex flex-wrap items-center gap-2">
@@ -1492,9 +1497,9 @@ export function BankWorkspace({
             disabled={busy || !dirty}
             onClick={() => {
               if (workView === "source") {
-                void saveRawYaml();
+                void saveRawYamlRef.current();
               } else {
-                void saveForm();
+                void saveFormRef.current();
               }
             }}
           >
@@ -1508,6 +1513,7 @@ export function BankWorkspace({
     t,
     busy,
     selectedId,
+    selectedExportIds,
     detail,
     dirty,
     workView,
@@ -1544,11 +1550,6 @@ export function BankWorkspace({
     setToolBar,
     clearToolBar,
   ]);
-
-  const saveFormRef = useRef(saveForm);
-  saveFormRef.current = saveForm;
-  const saveRawYamlRef = useRef(saveRawYaml);
-  saveRawYamlRef.current = saveRawYaml;
 
   useEffect(() => {
     if (workView === "source") {
