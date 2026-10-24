@@ -113,7 +113,7 @@ describe("export result integration", () => {
   const examId = "Quiz/数学";
   const cacheKey = buildComposeDraftStorageKey({ accountId: "teacher", projectRoot: "C:/project", paperKey: `exam:${examId}` });
   const doc = () => ({ exam_id: examId, name: "Quiz", export_label: "Quiz", subject: "数学", template_ref: "original", template_path: "templates/original.yaml", selected_items: [{ section_id: "选择", question_ids: ["math/q1"] }] });
-  const completed = (format: "pdf" | "docx", status = "succeeded") => ({ id: "export-task", format, status, attempt: 1, created_at: "now", updated_at: "now", result: status === "succeeded" ? { exam_dir: `exams/${examId}`, [`student_${format}`]: `student.${format}`, [`teacher_${format}`]: `teacher.${format}` } : null, error: status === "failed" ? { status: 500, detail: { message: "Compile failed", exam_saved: { exam_id: "Recovery/数学", name: "恢复草稿" } } } : null });
+  const completed = (format: "pdf" | "docx", status = "succeeded") => ({ id: "export-task", exam_workspace_id: examId, export_label: "Quiz", subject: "数学", format, status, attempt: 1, created_at: "now", updated_at: "now", result: status === "succeeded" ? { exam_dir: `exams/${examId}`, [`student_${format}`]: `student.${format}`, [`teacher_${format}`]: `teacher.${format}` } : null, error: status === "failed" ? { status: 500, detail: { message: "Compile failed", exam_saved: { exam_id: "Recovery/数学", name: "恢复草稿" } } } : null });
 
   beforeAll(async () => { await setupTestI18n("zh"); });
   beforeEach(() => {
@@ -172,5 +172,56 @@ describe("export result integration", () => {
     await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(examId, "pdf"));
     expect(screen.getByRole("spinbutton", { name: "每题分值" })).toHaveValue(7);
     expect(localStorage.getItem(cacheKey)).toContain('"scoreBySection":{"选择":7}');
+  });
+
+  it("does not add a replayed failure draft to a new export's cleanup request", async () => {
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string) => path.startsWith("/api/exam/export-tasks?") ? { tasks: [completed("pdf", "failed")] } : normalGet(path));
+    mocks.apiPost.mockImplementation(async (path: string) => path.endsWith("check-conflict") ? { conflict: false } : completed("pdf"));
+    await loadedWorkspace();
+    await waitFor(() => expect(mocks.onError).toHaveBeenCalledWith("Compile failed（已保存为草稿「恢复草稿」）"));
+    await userEvent.click(screen.getByRole("button", { name: "导出 PDF" }));
+    await waitFor(() => expect(mocks.download).toHaveBeenCalled());
+    const payload = mocks.apiPost.mock.calls.find(([path]) => path === "/api/exam/export-tasks")![1];
+    expect(payload.exam_ids_to_delete_on_success).toBeUndefined();
+  });
+
+  it("clears a live failure's cleanup IDs when switching papers with a nonempty task list", async () => {
+    const failed = completed("pdf", "failed"), otherId = "Other/数学";
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string) => {
+      if (path.startsWith("/api/exam/export-tasks?")) return { tasks: [failed] };
+      if (path === `/api/exams/${encodeURIComponent(otherId)}`) return { exam: { ...doc(), exam_id: otherId, export_label: "Other" } };
+      return normalGet(path);
+    });
+    mocks.apiPost.mockImplementation(async (path: string) => path.endsWith("check-conflict") ? { conflict: false } : failed);
+    const mounted = await loadedWorkspace();
+    await userEvent.click(screen.getByRole("button", { name: "导出 PDF" }));
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exam/export-tasks", expect.anything()));
+    mounted.rerender(<TestI18nProvider><ToolBarProvider><Toolbar /><ComposeWorkspace onError={mocks.onError} accountId="teacher" projectRoot="C:/project" openExamId={otherId} /></ToolBarProvider></TestI18nProvider>);
+    await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledWith(`/api/exams/${encodeURIComponent(otherId)}`));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "重试导出" })).not.toBeInTheDocument());
+    mocks.apiPost.mockClear();
+    mocks.apiPost.mockImplementation(async (path: string) => path.endsWith("check-conflict") ? { conflict: false } : { ...completed("pdf"), exam_workspace_id: otherId, result: { exam_dir: `exams/${otherId}` } });
+    await userEvent.click(screen.getByRole("button", { name: "导出 PDF" }));
+    await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(otherId, "pdf"));
+    const payload = mocks.apiPost.mock.calls.find(([path]) => path === "/api/exam/export-tasks")![1];
+    expect(payload.exam_workspace_id).toBe(otherId);
+    expect(payload.exam_ids_to_delete_on_success).toBeUndefined();
+  });
+
+  it("detaches a removed open workspace before the next save on an older server", async () => {
+    mocks.apiPost.mockImplementation(async (path: string) => {
+      if (path.endsWith("check-conflict")) return { conflict: false };
+      if (path === "/api/exams") return { exam: doc() };
+      const result = completed("pdf");
+      return { ...result, result: { ...result.result, deleted_exam_ids: [examId] } };
+    });
+    await loadedWorkspace();
+    await userEvent.click(screen.getByRole("button", { name: "导出 PDF" }));
+    await waitFor(() => expect(mocks.download).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存更改" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "保存更改" }));
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exams", expect.objectContaining({ export_label: "Quiz" })));
   });
 });

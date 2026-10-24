@@ -8,9 +8,9 @@ import { useComposeExportTasks } from "./useComposeExportTasks";
 const mocks = vi.hoisted(() => ({ submit: vi.fn(), get: vi.fn(), list: vi.fn(), retry: vi.fn(), sync: vi.fn(), success: vi.fn(), failure: vi.fn(), error: vi.fn() }));
 vi.mock("./composeExportTasks", async (original) => ({ ...await original<typeof import("./composeExportTasks")>(), submitExportTaskApi: mocks.submit, getExportTaskApi: mocks.get, listExportTasksApi: mocks.list, retryExportTaskApi: mocks.retry }));
 vi.mock("../../api/client", async (original) => ({ ...await original<typeof import("../../api/client")>(), apiPost: mocks.sync }));
-const task = (status: ComposeExportTaskView["status"], attempt = 1): ComposeExportTaskView => ({ id: "task-1", format: "pdf", status, attempt, created_at: "now", updated_at: "now", result: status === "succeeded" ? { exam_dir: "exams/Quiz/Math", student_pdf: "student.pdf", teacher_pdf: "teacher.pdf" } : null, error: status === "failed" ? { status: 500, detail: { message: "Compiler failed", exam_saved: { exam_id: "Recovery/Math", name: "Recovery" } } } : null });
+const task = (status: ComposeExportTaskView["status"], attempt = 1): ComposeExportTaskView => ({ id: "task-1", exam_workspace_id: "paper", export_label: "Quiz", subject: "Math", format: "pdf", status, attempt, created_at: "now", updated_at: "now", result: status === "succeeded" ? { exam_dir: "exams/Quiz/Math", student_pdf: "student.pdf", teacher_pdf: "teacher.pdf" } : null, error: status === "failed" ? { status: 500, detail: { message: "Compiler failed", exam_saved: { exam_id: "Recovery/Math", name: "Recovery" } } } : null });
 const input = () => ({ format: "pdf" as const, body: { export_label: "Quiz", subject: "Math", template_ref: "math", template_path: "templates/math.yaml", selected_items: [{ section_id: "s", question_ids: ["q1"] }] }, idsToDelete: [], submitted: createEmptyPaperState({ bySection: { s: ["q1"] } }) });
-const mount = () => renderHook(({ scope }) => useComposeExportTasks({ ownerKey: scope, pollIntervalMs: 100, onTaskSucceeded: mocks.success, onTaskFailed: mocks.failure, onError: mocks.error }), { initialProps: { scope: "a/project/paper" } });
+const mount = () => renderHook(({ scope }) => useComposeExportTasks({ ownerKey: scope, currentExamId: scope.split("/").at(-1)!, exportLabel: "Quiz", subject: "Math", pollIntervalMs: 100, onTaskSucceeded: mocks.success, onTaskFailed: mocks.failure, onError: mocks.error }), { initialProps: { scope: "a/project/paper" } });
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
 beforeEach(() => { vi.useFakeTimers(); vi.resetAllMocks(); mocks.list.mockResolvedValue([]); mocks.submit.mockResolvedValue(task("running")); mocks.get.mockResolvedValue(task("running")); mocks.retry.mockResolvedValue(task("running", 2)); });
 afterEach(() => vi.useRealTimers());
@@ -66,6 +66,55 @@ describe("export task transport and recovery", () => {
     expect(mocks.retry).toHaveBeenCalledWith("task-1");
     expect(mocks.submit).toHaveBeenCalledTimes(1);
     expect(mocks.success).toHaveBeenCalledWith(expect.objectContaining({ submitted: input().submitted, sourceAction: "retry" }));
+  });
+
+  it.each(["running", "failed", "succeeded"] as const)("ignores another paper's %s task in a real nonempty recovery list", async (status) => {
+    mocks.list.mockResolvedValue([{ ...task(status), exam_workspace_id: "other-paper" }]);
+    const { result } = mount();
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeTask).toBeNull();
+    expect(result.current.isPollingOrRunning).toBe(false);
+    expect(mocks.failure).not.toHaveBeenCalled();
+    expect(mocks.success).not.toHaveBeenCalled();
+  });
+
+  it("keeps the newest success instead of resurrecting an older failed task", async () => {
+    mocks.list.mockResolvedValue([{ ...task("succeeded"), id: "new-success" }, { ...task("failed"), id: "old-failure" }]);
+    const { result } = mount();
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeTask?.id).toBe("new-success");
+    expect(mocks.failure).not.toHaveBeenCalled();
+    await act(async () => { await result.current.retryExportTask(); });
+    expect(mocks.retry).not.toHaveBeenCalled();
+  });
+
+  it("marks a restored failure as resumed so it cannot schedule cross-session draft cleanup", async () => {
+    mocks.list.mockResolvedValue([task("failed")]);
+    mount();
+    await act(async () => { await Promise.resolve(); });
+    expect(mocks.failure).toHaveBeenCalledWith(expect.objectContaining({ sourceAction: "recent_resume" }));
+  });
+
+  it("does not let a late list overwrite a new live export", async () => {
+    const late = deferred<ComposeExportTaskView[]>(); mocks.list.mockReturnValue(late.promise);
+    mocks.submit.mockResolvedValue({ ...task("running"), id: "new-task" });
+    const { result } = mount();
+    await act(async () => { await result.current.startExportTask(input()); });
+    await act(async () => { late.resolve([task("failed")]); });
+    expect(result.current.activeTask?.id).toBe("new-task");
+    expect(mocks.failure).not.toHaveBeenCalled();
+  });
+
+  it("drops an old status response when a new task starts in the same paper", async () => {
+    const late = deferred<ComposeExportTaskView>(); mocks.get.mockReturnValue(late.promise);
+    const { result } = mount();
+    await act(async () => { await result.current.startExportTask(input()); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(110); });
+    mocks.submit.mockResolvedValue({ ...task("running"), id: "new-task" });
+    await act(async () => { await result.current.startExportTask(input()); });
+    await act(async () => { late.resolve(task("failed")); });
+    expect(result.current.activeTask?.id).toBe("new-task");
+    expect(mocks.failure).not.toHaveBeenCalled();
   });
 
   it.each(["b/project/paper", "a/other-project/paper", "a/project/other-paper"])("discards a late response after switching to %s", async (scope) => {

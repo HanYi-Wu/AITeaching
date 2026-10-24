@@ -177,6 +177,7 @@ export type ComposeExportTaskResult = {
   teacher_pdf?: string;
   student_docx?: string;
   teacher_docx?: string;
+  deleted_exam_ids?: string[];
 };
 
 export type ComposeExportTaskError = {
@@ -186,6 +187,9 @@ export type ComposeExportTaskError = {
 
 export type ComposeExportTaskView = {
   id: string;
+  exam_workspace_id?: string | null;
+  export_label?: string | null;
+  subject?: string | null;
   format: ComposeExportTaskFormat;
   status: ComposeExportTaskStatus;
   created_at: string;

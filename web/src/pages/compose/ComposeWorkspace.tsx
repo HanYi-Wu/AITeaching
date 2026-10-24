@@ -168,6 +168,7 @@ export function ComposeWorkspace({
   currentExamIdRef.current = currentExamId;
 
   const draftScope = useComposeDraftScope({ accountId, projectRoot, currentExamId });
+  useEffect(() => { setExportFailureExamIds([]); setBusy(false); }, [currentExamId]);
   const captureOwnerRequest = useComposeRequestScope(draftScope.ownerKey);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -182,6 +183,7 @@ export function ComposeWorkspace({
     setPreviewPdfId(null); setPreviewOpen(false); setPreviewWarnings([]);
     setSelectedLeftIds([]); setSelectedRight(null); setLeftListAnchorIndex(null); setRightListAnchor(null);
     setExportFailureExamIds([]); setMsg(null); setNewPaperDialogOpen(false); setPublishDialogOpen(false);
+    setBusy(false);
     setConflictTargetId(null); setConflictExportKind(null);
   }, []);
   const {
@@ -643,14 +645,21 @@ export function ComposeWorkspace({
   const consumeExportResult = useCallback(async ({ format, result, submitted, idsToDelete, isCurrent }: ExportSuccess) => {
     if (!isCurrent()) return;
     const examPathId = extractExamPathIdFromDir(result.exam_dir);
+    const deletedIds = result.deleted_exam_ids ?? idsToDelete;
+    let baselineWarning = "";
     // Saving the submitted baseline must preserve edits made while the job ran.
     if (submitted) acceptSavedState(submitted, submitted);
     else if (examPathId && currentExamId === examPathId) {
-      const response = await apiGet<{ exam: ExamDoc }>(`/api/exams/${encodeURIComponent(examPathId)}`);
-      if (!isCurrent()) return;
-      const saved = examDocToPaperState(response.exam).state;
-      acceptSavedState(saved, saved);
+      try {
+        const response = await apiGet<{ exam: ExamDoc }>(`/api/exams/${encodeURIComponent(examPathId)}`);
+        if (!isCurrent()) return;
+        const saved = examDocToPaperState(response.exam).state;
+        acceptSavedState(saved, saved);
+      } catch (error) {
+        baselineWarning = `；已完成导出，但未能读取已保存试卷：${error instanceof Error ? error.message : String(error)}`;
+      }
     }
+    if (!isCurrent()) return;
     setLastExportedExamId(examPathId);
     if (examPathId) {
       setPdfVariant("student");
@@ -663,7 +672,8 @@ export function ComposeWorkspace({
       student: result[format === "pdf" ? "student_pdf" : "student_docx"] ?? "",
       teacher: result[format === "pdf" ? "teacher_pdf" : "teacher_docx"] ?? "", dir: result.exam_dir,
     });
-    if (idsToDelete.length) message += t("compose:messages.draftRemovedAfterExport");
+    message += baselineWarning;
+    if (deletedIds.length) message += t("compose:messages.draftRemovedAfterExport");
     setMsg(message);
     if (examPathId) {
       try { await syncPlatformPaperFromExam(examPathId); }
@@ -673,14 +683,24 @@ export function ComposeWorkspace({
       catch (error) { message += `；文件已保存在服务器，但浏览器下载失败：${error instanceof Error ? error.message : String(error)}`; }
       if (isCurrent()) setMsg(message);
     }
-  }, [acceptSavedState, currentExamId, examSummaries, refreshExamSummaries, t]);
+    if (isCurrent() && currentExamId && deletedIds.includes(currentExamId)) {
+      // Older servers may remove the workspace that is still open locally.
+      // Keep its current content, but save future edits as a new workspace.
+      const nextScope = draftScope.scope && { ...draftScope.scope, paperKey: buildComposeDraftPaperKey(null) };
+      const baseline = submitted ?? paperStateRef.current;
+      acceptSavedState(baseline, baseline, nextScope);
+      currentExamIdRef.current = null;
+      setCurrentExamId(null);
+    }
+  }, [acceptSavedState, currentExamId, draftScope.scope, examSummaries, refreshExamSummaries, t]);
 
   const exportTasks = useComposeExportTasks({
     ownerKey: `${draftScope.ownerKey}::${currentExamId ?? "scratch"}`,
+    currentExamId, exportLabel, subject,
     onTaskSucceeded: consumeExportResult,
-    onTaskFailed: ({ message, examSaved }) => {
+    onTaskFailed: ({ message, examSaved, sourceAction }) => {
       if (examSaved) {
-        setExportFailureExamIds((previous) => [...new Set([...previous, examSaved.exam_id])]);
+        if (sourceAction !== "recent_resume") setExportFailureExamIds((previous) => [...new Set([...previous, examSaved.exam_id])]);
         void refreshExamSummaries();
         onError(t("compose:errors.exportWithDraftSaved", { name: examSaved.name, detail: message }));
       } else onError(message);
