@@ -281,7 +281,7 @@ export function ComposeBankSearchPanel({
                       {t("compose:bundleBadge")}
                     </span>
                   ) : null}
-                  <span className="ml-1 font-mono text-[11px] text-slate-800">{q.qualified_id}</span>
+                  <span title={q.qualified_id} className="ml-1 font-mono text-[11px] text-slate-800 [overflow-wrap:anywhere]">{q.qualified_id}</span>
                   <QuestionHoverDetails id={q.qualified_id}>
                     <KatexPlainPreview
                       text={q.content_preview}

@@ -290,25 +290,25 @@ export function ComposePaperEditorPanel({
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
+            <div className="min-w-0">
               <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
                 {t("compose:examLabel")}
               </p>
-              <p className="mt-0.5 text-sm font-medium text-slate-900">
+              <p title={exportLabel.trim() || undefined} className="mt-0.5 truncate text-sm font-medium text-slate-900">
                 {exportLabel.trim() || "—"}
               </p>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
                 {t("compose:subjectPdf")}
               </p>
-              <p className="mt-0.5 text-sm font-medium text-slate-900">{subject.trim() || "—"}</p>
+              <p title={subject.trim() || undefined} className="mt-0.5 truncate text-sm font-medium text-slate-900">{subject.trim() || "—"}</p>
             </div>
             <div className="min-w-0">
               <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
                 {t("compose:template")}
               </p>
-              <p className="mt-0.5 truncate text-sm font-medium text-slate-900">
+              <p title={selectedTpl?.id} className="mt-0.5 truncate text-sm font-medium text-slate-900">
                 {selectedTpl?.id ?? "—"}
               </p>
             </div>
@@ -545,7 +545,7 @@ export function ComposePaperEditorPanel({
                                     : "border-slate-100 bg-slate-50 hover:bg-white",
                                 )}
                               >
-                                <span className="font-mono text-xs text-slate-800">{qid}</span>
+                                <span title={qid} className="font-mono text-xs text-slate-800 [overflow-wrap:anywhere]">{qid}</span>
                                 <QuestionHoverDetails id={qid}>
                                   <KatexPlainPreview
                                     text={questionMap.get(qid)?.content_preview ?? ""}
@@ -612,11 +612,11 @@ export function ComposePaperEditorPanel({
                                 <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-900">
                                   {t("compose:groupBadge", { count: slot.qids.length })}
                                 </span>
-                                <span className="font-mono text-[11px] text-slate-800">
+                                <span className="font-mono text-[11px] text-slate-800 [overflow-wrap:anywhere]">
                                   {slot.rep.group_id}
                                 </span>
                               </div>
-                              <p className="mt-0.5 font-mono text-[10px] leading-tight text-slate-500">
+                              <p className="mt-0.5 font-mono text-[10px] leading-tight text-slate-500 [overflow-wrap:anywhere]">
                                 {slot.qids.join(" · ")}
                               </p>
                               <QuestionHoverDetails id={headQid}>

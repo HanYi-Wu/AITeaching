@@ -85,7 +85,7 @@ export function ComposeHistorySidebar({
                       )
                     }
                     className={cn(
-                      "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs",
+                      "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs [overflow-wrap:anywhere]",
                       currentExamId === d.exam_id
                         ? "border-slate-900 bg-slate-100"
                         : "border-slate-200 bg-white hover:border-slate-300",
@@ -94,7 +94,7 @@ export function ComposeHistorySidebar({
                     onClick={() => onLoadDraftExam(d.exam_id)}
                   >
                     <span className="font-medium text-slate-900">{d.name || d.exam_id}</span>
-                    <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800">
+                    <span className="ml-1 inline-block whitespace-nowrap rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800">
                       临时
                     </span>
                     {(taggedItems[d.exam_id]?.length ?? 0) > 0 ? (
@@ -147,7 +147,7 @@ export function ComposeHistorySidebar({
                       )
                     }
                     className={cn(
-                      "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs",
+                      "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs [overflow-wrap:anywhere]",
                       currentExamId === ex.exam_id
                         ? "border-slate-900 bg-slate-100"
                         : "border-slate-200 bg-white hover:border-slate-300",
