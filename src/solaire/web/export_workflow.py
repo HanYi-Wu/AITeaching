@@ -49,15 +49,19 @@ def _export_destination(root: Path, body: ExamExportBody) -> Path:
     return exam_yaml_path(root, exam_id).parent.resolve()
 
 
-def _cleanup_plan(
+def _completion_plan(
     root: Path,
     body: ExamExportBody,
     destination: Path,
     teacher_id: str | None,
-) -> tuple[str, ...]:
-    """Authorize requested cleanup before any compiler or workspace writes."""
+) -> tuple[str, tuple[str, ...]]:
+    """Authorize status updates and cleanup before compiler/workspace writes."""
     candidates = []
     workspace_id = str(body.exam_workspace_id or "").strip()
+    mark_id = workspace_id or exam_id_from_labels(body.export_label, body.subject)
+    mark_path = exam_yaml_path(root, mark_id)
+    if mark_path.parent.resolve() != destination:
+        _assert_export_destination_owner(root, mark_path.parent, teacher_id)
     for raw_id in body.exam_ids_to_delete_on_success or []:
         exam_id = str(raw_id).strip()
         if not exam_id or exam_id == workspace_id or exam_id in candidates:
@@ -67,23 +71,21 @@ def _cleanup_plan(
             continue
         _assert_export_destination_owner(root, path.parent, teacher_id)
         candidates.append(exam_id)
-    return tuple(candidates)
+    return mark_id, tuple(candidates)
 
 
 def _complete_export(
     root: Path,
-    body: ExamExportBody,
+    mark_id: str,
     cleanup_ids: tuple[str, ...],
     teacher_id: str | None,
 ) -> None:
     log = logging.getLogger(__name__)
-    workspace_id = str(body.exam_workspace_id or "").strip()
-    try:
-        mark_id = workspace_id or exam_id_from_labels(body.export_label, body.subject)
-    except ValueError:
-        mark_id = ""
     if mark_id:
         try:
+            _assert_export_destination_owner(
+                root, exam_yaml_path(root, mark_id).parent, teacher_id
+            )
             mark_exported(root, mark_id)
         except Exception:
             log.warning(
@@ -140,7 +142,7 @@ def _export_locked(
     # Permissions are checked before writing the shared build configuration.
     _assert_export_destination_owner(root, destination, teacher_id)
     try:
-        cleanup_ids = _cleanup_plan(root, body, destination, teacher_id)
+        mark_id, cleanup_ids = _completion_plan(root, body, destination, teacher_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     metadata = {
@@ -182,7 +184,7 @@ def _export_locked(
         ) from exc
     else:
         discard_build_yaml_backup(backup)
-    _complete_export(root, body, cleanup_ids, teacher_id)
+    _complete_export(root, mark_id, cleanup_ids, teacher_id)
     return {
         "ok": True,
         "exam_dir": result_dir.relative_to(root).as_posix(),

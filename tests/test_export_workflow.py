@@ -63,7 +63,9 @@ def test_formats_use_one_ordered_workflow(export_case, monkeypatch, format):
         workflow, "export_" + ("pdfs" if format == "pdf" else "docx"), compile
     )
     result = workflow.export_exam(root, body, format=format)
-    assert events == ["authorize", "write", "validate", "compile", "complete"]
+    assert events == [
+        "authorize", "write", "validate", "compile", "authorize", "complete"
+    ]
     assert result == {
         "ok": True,
         "exam_dir": "exams/Quiz/Math",
@@ -136,7 +138,12 @@ def teacher_export_case(export_case, monkeypatch):
 def _owned_exam(root, exam_id, owner):
     path = root / "exams" / exam_id / "exam.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"metadata:\n  owner_teacher_id: {owner}\n", encoding="utf-8")
+    path.write_text(
+        f"exam_id: {exam_id}\ntemplate_ref: test\nselected_items: []\n"
+        f"metadata:\n  owner_teacher_id: {owner}\n"
+        "  export_label: Quiz\n  subject: Math\n",
+        encoding="utf-8",
+    )
     return path
 
 
@@ -212,3 +219,43 @@ def test_unreadable_ownership_metadata_is_rejected_before_build(
     assert existing.read_bytes() == original
     assert build.read_text(encoding="utf-8") == "previous valid configuration"
     assert events == []
+
+
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+def test_overwrite_cannot_change_another_teachers_workspace_status(
+    teacher_export_case, format
+):
+    root, body, build, events = teacher_export_case
+    _owned_exam(root, "Quiz/Math", "teacher-b")
+    foreign = _owned_exam(root, "Other/Math", "teacher-a")
+    original = foreign.read_bytes()
+    body.overwrite_existing = "Quiz/Math"
+    body.exam_workspace_id = "Other/Math"
+    with pytest.raises(HTTPException) as caught:
+        workflow.export_exam(root, body, format=format)
+    assert caught.value.status_code == 403
+    assert foreign.read_bytes() == original
+    assert build.read_text(encoding="utf-8") == "previous valid configuration"
+    assert events == []
+
+
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+def test_status_update_rechecks_owner_after_compilation(
+    teacher_export_case, monkeypatch, format
+):
+    root, body, build, events = teacher_export_case
+    _owned_exam(root, "Quiz/Math", "teacher-b")
+    previous = _owned_exam(root, "Old/Math", "teacher-b")
+    body.overwrite_existing = "Quiz/Math"
+    body.exam_workspace_id = "Old/Math"
+
+    def compile(root, **kwargs):
+        _owned_exam(root, "Old/Math", "teacher-a")
+        return kwargs["dest_dir"], f"student.{format}", f"teacher.{format}"
+
+    monkeypatch.setattr(
+        workflow, "export_" + ("pdfs" if format == "pdf" else "docx"), compile
+    )
+    assert workflow.export_exam(root, body, format=format)["ok"]
+    assert "complete" not in events
+    assert "teacher-a" in previous.read_text(encoding="utf-8")
