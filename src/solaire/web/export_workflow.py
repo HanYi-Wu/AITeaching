@@ -49,7 +49,33 @@ def _export_destination(root: Path, body: ExamExportBody) -> Path:
     return exam_yaml_path(root, exam_id).parent.resolve()
 
 
-def _complete_export(root: Path, body: ExamExportBody) -> None:
+def _cleanup_plan(
+    root: Path,
+    body: ExamExportBody,
+    destination: Path,
+    teacher_id: str | None,
+) -> tuple[str, ...]:
+    """Authorize requested cleanup before any compiler or workspace writes."""
+    candidates = []
+    workspace_id = str(body.exam_workspace_id or "").strip()
+    for raw_id in body.exam_ids_to_delete_on_success or []:
+        exam_id = str(raw_id).strip()
+        if not exam_id or exam_id == workspace_id or exam_id in candidates:
+            continue
+        path = exam_yaml_path(root, exam_id)
+        if path.parent.resolve() == destination:
+            continue
+        _assert_export_destination_owner(root, path.parent, teacher_id)
+        candidates.append(exam_id)
+    return tuple(candidates)
+
+
+def _complete_export(
+    root: Path,
+    body: ExamExportBody,
+    cleanup_ids: tuple[str, ...],
+    teacher_id: str | None,
+) -> None:
     log = logging.getLogger(__name__)
     workspace_id = str(body.exam_workspace_id or "").strip()
     try:
@@ -63,12 +89,12 @@ def _complete_export(root: Path, body: ExamExportBody) -> None:
             log.warning(
                 "mark exam workspace exported failed: %s", mark_id, exc_info=True
             )
-    for raw_id in body.exam_ids_to_delete_on_success or []:
-        exam_id = str(raw_id).strip()
-        if not exam_id or exam_id == workspace_id:
-            continue
+    for exam_id in cleanup_ids:
         try:
-            if exam_yaml_path(root, exam_id).is_file():
+            path = exam_yaml_path(root, exam_id)
+            if path.is_file():
+                # A long-running compiler must not grant stale cleanup permission.
+                _assert_export_destination_owner(root, path.parent, teacher_id)
                 delete_exam_workspace(root, exam_id)
         except Exception:
             log.warning(
@@ -113,6 +139,10 @@ def _export_locked(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Permissions are checked before writing the shared build configuration.
     _assert_export_destination_owner(root, destination, teacher_id)
+    try:
+        cleanup_ids = _cleanup_plan(root, body, destination, teacher_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     metadata = {
         "title": body.metadata_title or body.export_label,
         "subject": body.subject,
@@ -152,7 +182,7 @@ def _export_locked(
         ) from exc
     else:
         discard_build_yaml_backup(backup)
-    _complete_export(root, body)
+    _complete_export(root, body, cleanup_ids, teacher_id)
     return {
         "ok": True,
         "exam_dir": result_dir.relative_to(root).as_posix(),

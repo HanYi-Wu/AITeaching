@@ -76,7 +76,7 @@ def assert_destination_owner(
                 "metadata"
             ) or {}
             previous_owner = str(metadata.get("owner_teacher_id") or "").strip()
-        except (OSError, ValueError, AttributeError) as exc:
+        except (OSError, ValueError, AttributeError, yaml.YAMLError) as exc:
             raise HTTPException(
                 status_code=400, detail="现有试卷归属信息无法读取，拒绝覆盖"
             ) from exc
