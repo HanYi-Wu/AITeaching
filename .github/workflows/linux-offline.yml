@@ -14,6 +14,20 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - name: Protect existing release tag
+        if: ${{ inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          TARGET_TAG="${GITHUB_REF_NAME}"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            TARGET_TAG="v$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | tr -d '[:space:]')"
+          fi
+          git fetch --depth=1 origin "refs/tags/$TARGET_TAG:refs/tags/$TARGET_TAG"
+          TAG_COMMIT="$(git rev-parse "$TARGET_TAG^{commit}")"
+          if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+            echo "::error::Refusing to replace $TARGET_TAG assets with code from a different commit. Create the matching version tag or build with publish_release=false."
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -42,6 +56,7 @@ jobs:
         shell: micromamba-shell {0}
         run: |
           python scripts/build_linux_offline.py --runtime-prefix "$CONDA_PREFIX"
+          python -m tools.release_verify offline dist-offline/*.tar.gz --ref "$GITHUB_SHA"
           bash scripts/test-offline-install-linux.sh
       - uses: actions/upload-artifact@v4
         if: ${{ !inputs.publish_release }}
