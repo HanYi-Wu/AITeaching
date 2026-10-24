@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from solaire.web.host_dialogs import _pick_directory_dialog, _pick_executable_dialog
+
 from solaire.web.request_context import _require_root, bind_request_context
 
 import asyncio
@@ -525,30 +527,6 @@ def api_extension_manual_path_delete(ext_id: str) -> dict[str, Any]:
     return {"ok": True, "extensions": extension_registry.detect_all()["extensions"]}
 
 
-def _pick_executable_dialog() -> str | None:
-    """Native file picker for an executable (same machine as API)."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except ImportError as e:
-        raise RuntimeError("TKINTER_UNAVAILABLE") from e
-
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        root.attributes("-topmost", True)
-    except tk.TclError:
-        pass
-    try:
-        path = filedialog.askopenfilename(
-            title="选择程序文件",
-            filetypes=[("可执行文件", "*.exe"), ("所有文件", "*.*")],
-        )
-    finally:
-        root.destroy()
-    return path or None
-
-
 @app.post("/api/system/extensions/pick-path")
 async def api_extension_pick_path(body: ExtensionPickDialogBody) -> dict[str, Any]:
     """Open OS dialog on the machine running the API (browser + local backend)."""
@@ -646,30 +624,6 @@ def api_recent_projects_remove(body: RecentProjectRemoveBody) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="路径不能为空")
     removed = recent_projects.remove_recent_project(p)
     return {"ok": True, "removed": removed}
-
-
-def _pick_directory_dialog() -> str | None:
-    """
-    Open a native folder picker (Tk). Runs on the same machine as the API (localhost).
-    Returns None if user cancelled or closed dialog without selection.
-    """
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except ImportError as e:
-        raise RuntimeError("TKINTER_UNAVAILABLE") from e
-
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        root.attributes("-topmost", True)
-    except tk.TclError:
-        pass
-    try:
-        path = filedialog.askdirectory(mustexist=True)
-    finally:
-        root.destroy()
-    return path or None
 
 
 @app.post("/api/project/pick-open")
