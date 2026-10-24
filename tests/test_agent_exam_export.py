@@ -60,3 +60,23 @@ def test_tool_export_paper_calls_mark_exported(monkeypatch: pytest.MonkeyPatch, 
     assert tr.status == "succeeded"
     assert marked, "mark_exported should run after successful export"
     assert "测试卷" in marked[0] or "/" in marked[0]
+
+
+def test_teacher_ai_export_cannot_replace_another_teachers_exam(monkeypatch, tmp_path):
+    from solaire.web import platform_db
+
+    platform_db.init_platform_db(tmp_path)
+    monkeypatch.setattr(platform_db, "default_platform_root", lambda: tmp_path)
+    template = tmp_path / "templates/x.yaml"
+    template.parent.mkdir()
+    template.write_bytes(b"template_id: x\nsections: []\n")
+    existing = tmp_path / "exams/Quiz/Math/exam.yaml"
+    existing.parent.mkdir(parents=True)
+    original = b"metadata:\n  owner_teacher_id: teacher-a\n"
+    existing.write_bytes(original)
+    ctx = InvocationContext(project_root=tmp_path, session_id="owner-check", platform_user={"id": "teacher-b", "role": "teacher", "status": "active"})
+    result = exam_tools.tool_export_paper(ctx, {"template_ref": "x", "template_path": "templates/x.yaml", "export_label": "Quiz", "subject": "Math", "selected_items": []})
+    assert result.status == "failed"
+    assert result.error_code == "permission_denied"
+    assert existing.read_bytes() == original
+    assert not (tmp_path / ".solaire/build.yaml").exists()

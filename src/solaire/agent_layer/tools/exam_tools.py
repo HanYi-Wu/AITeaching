@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException
+
 from solaire.agent_layer.models import InvocationContext, ToolResult
 from solaire.common.security import assert_within_project
 from solaire.exam_compiler.facade import SelectedSection, load_template
@@ -31,6 +33,7 @@ from solaire.web.exam_workspace_service import (
     workspace_dir,
 )
 from solaire.web.export_lock import ExportBusyError, project_export_lock
+from solaire.web.export_policy import assert_destination_owner
 
 
 def _sections_from_args(args: dict[str, Any]) -> list[SelectedSection]:
@@ -218,6 +221,19 @@ def _export_paper_locked(ctx: InvocationContext, args: dict[str, Any]) -> ToolRe
     sections = _sections_from_args(args)
     snapshot_items = [s.model_dump(mode="json", exclude_none=True) for s in sections]
 
+    teacher_id = None
+    if ctx.platform_user and ctx.platform_user.get("role") == "teacher":
+        teacher_id = str(ctx.platform_user.get("id") or "").strip()
+        if not teacher_id:
+            return ToolResult(status="failed", error_code="permission_denied", error_message="教师身份缺失，不能导出试卷。")
+    try:
+        dest_dir = workspace_dir(root, mark_id)
+        assert_destination_owner(root, dest_dir, teacher_id)
+    except HTTPException as exc:
+        return ToolResult(status="failed", error_code="permission_denied" if exc.status_code == 403 else "invalid_arguments", error_message=str(exc.detail))
+    except (PermissionError, ValueError) as exc:
+        return ToolResult(status="failed", error_code="permission_denied", error_message=str(exc))
+
     def _failure_snapshot(exc: BaseException) -> None:
         try:
             save_exam_workspace_after_export_failure(
@@ -253,6 +269,8 @@ def _export_paper_locked(ctx: InvocationContext, args: dict[str, Any]) -> ToolRe
             "subject": subject,
             "export_label": export_label,
         }
+        if teacher_id:
+            metadata["owner_teacher_id"] = teacher_id
         exam_yaml = write_build_exam_yaml(
             root,
             exam_id="agent_export",
@@ -263,7 +281,6 @@ def _export_paper_locked(ctx: InvocationContext, args: dict[str, Any]) -> ToolRe
         )
         run_validate(root, exam_yaml)
         template = load_template(tpl)
-        dest_dir = workspace_dir(root, mark_id)
         exam_dir, s_name, t_name = export_pdfs(
             root,
             exam_yaml=exam_yaml,
