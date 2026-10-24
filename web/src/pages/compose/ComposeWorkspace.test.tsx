@@ -10,7 +10,7 @@ import type { TemplateRow } from "../../types/compose";
 import { ApiError } from "../../api/client";
 import { buildComposeDraftStorageKey } from "./composeDraftStorage";
 
-const mocks = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), download: vi.fn(), onError: vi.fn(), setPageContext: vi.fn() }));
+const mocks = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), download: vi.fn(), sync: vi.fn(), onError: vi.fn(), setPageContext: vi.fn() }));
 vi.mock("../../api/client", async (importOriginal) => ({ ...await importOriginal<typeof import("../../api/client")>(), apiGet: mocks.apiGet, apiPost: mocks.apiPost }));
 vi.mock("../../contexts/AgentContext", () => ({ useAgentContext: () => ({ setPageContext: mocks.setPageContext }) }));
 vi.mock("../../components/PdfPreview", () => ({ PdfPreview: () => null }));
@@ -18,7 +18,7 @@ vi.mock("./composeHelpers", async (original) => ({ ...await original<typeof impo
 vi.mock("../../platform/auth", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../platform/auth")>(),
   listContentFolders: async () => ({ folders: [] }), listFolderItems: async () => ({ items: {} }), listTaggedItems: async () => ({ items: {} }),
-  syncPlatformPaperFromExam: async () => ({}),
+  syncPlatformPaperFromExam: mocks.sync,
 }));
 
 function Toolbar() {
@@ -117,7 +117,7 @@ describe("export result integration", () => {
 
   beforeAll(async () => { await setupTestI18n("zh"); });
   beforeEach(() => {
-    vi.clearAllMocks(); localStorage.clear(); mocks.download.mockResolvedValue(undefined);
+    vi.clearAllMocks(); localStorage.clear(); mocks.download.mockResolvedValue(undefined); mocks.sync.mockResolvedValue({});
     mocks.apiGet.mockImplementation(async (path: string) => {
       if (path === "/api/templates") return { templates: [template("original")] };
       if (path === "/api/questions") return { questions: [{ id: "q1", qualified_id: "math/q1", namespace: "math", subject: "数学", type: "single_choice", answer: "A", content_preview: "Question", content: "Question", analysis: "" }] };
@@ -223,5 +223,52 @@ describe("export result integration", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "保存更改" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "保存更改" }));
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exams", expect.objectContaining({ export_label: "Quiz" })));
+  });
+
+  it.each(["pdf", "docx"] as const)("opening a historical %s success keeps local recovery and does not download or sync again", async (format) => {
+    const first = await loadedWorkspace();
+    first.unmount();
+    const before = localStorage.getItem(cacheKey);
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string) => path.startsWith("/api/exam/export-tasks?") ? { tasks: [completed(format)] } : normalGet(path));
+    renderWorkspace({ accountId: "teacher", projectRoot: "C:/project", openExamId: examId });
+    await waitFor(() => expect(screen.getByTestId("compose-export-task-banner")).toHaveAttribute("data-task-status", "succeeded"));
+    await act(async () => { await Promise.resolve(); });
+    expect(localStorage.getItem(cacheKey)).toBe(before);
+    expect(screen.getByTestId("compose-draft-recovery-banner")).toBeInTheDocument();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.sync).not.toHaveBeenCalled();
+    expect(mocks.apiPost).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a historical success matching the default scratch paper", async () => {
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string) => path.startsWith("/api/exam/export-tasks?") ? { tasks: [{ ...completed("pdf"), exam_workspace_id: null, export_label: "期中考试" }] } : normalGet(path));
+    renderWorkspace({ accountId: "teacher", projectRoot: "C:/project" });
+    await waitFor(() => expect(screen.getByTestId("compose-export-task-banner")).toHaveAttribute("data-task-status", "succeeded"));
+    await act(async () => { await Promise.resolve(); });
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.sync).not.toHaveBeenCalled();
+  });
+
+  it("keeps the recovery choice when a running task restored after refresh completes", async () => {
+    const first = await loadedWorkspace();
+    first.unmount();
+    const before = localStorage.getItem(cacheKey);
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    let finishTask!: (value: ReturnType<typeof completed>) => void;
+    const pending = new Promise<ReturnType<typeof completed>>((resolve) => { finishTask = resolve; });
+    mocks.apiGet.mockImplementation((path: string) => {
+      if (path.startsWith("/api/exam/export-tasks?")) return { tasks: [completed("pdf", "running")] };
+      if (path.startsWith("/api/exam/export-tasks/")) return pending;
+      return normalGet(path);
+    });
+    renderWorkspace({ accountId: "teacher", projectRoot: "C:/project", openExamId: examId });
+    await screen.findByTestId("compose-draft-recovery-banner");
+    await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledWith("/api/exam/export-tasks/export-task"));
+    await act(async () => { finishTask(completed("pdf")); });
+    await waitFor(() => expect(mocks.download).toHaveBeenCalledTimes(1));
+    expect(localStorage.getItem(cacheKey)).toBe(before);
+    expect(screen.getByTestId("compose-draft-recovery-banner")).toBeInTheDocument();
   });
 });

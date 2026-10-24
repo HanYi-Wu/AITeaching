@@ -32,7 +32,7 @@ export function useComposeExportTasks(params: {
   const handled = useRef(new Set<string>());
   const busy = useRef(false);
 
-  const apply = useCallback(async (task: ComposeExportTaskView, isCurrent: () => boolean, context?: Context) => {
+  const apply = useCallback(async (task: ComposeExportTaskView, isCurrent: () => boolean, context?: Context, notifySuccess = true) => {
     if (!isCurrent()) return;
     if (context) contexts.current.set(task.id, context);
     setView((previous) => ({ ...previous, task, pending: null, pollError: null }));
@@ -40,7 +40,7 @@ export function useComposeExportTasks(params: {
     if (handled.current.has(terminal)) return;
     if (task.status === "succeeded" && task.result) {
       handled.current.add(terminal);
-      await callbacks.current.onTaskSucceeded({ ...(contexts.current.get(task.id) ?? { idsToDelete: [], sourceAction: "recent_resume" }), task, format: task.format, result: task.result, isCurrent });
+      if (notifySuccess) await callbacks.current.onTaskSucceeded({ ...(contexts.current.get(task.id) ?? { idsToDelete: [], sourceAction: "recent_resume" }), task, format: task.format, result: task.result, isCurrent });
     } else if (task.status === "failed") {
       handled.current.add(terminal);
       callbacks.current.onTaskFailed({ task, format: task.format, sourceAction: contexts.current.get(task.id)?.sourceAction ?? "recent_resume", ...parseExportTaskErrorDetail(task.error) });
@@ -58,7 +58,9 @@ export function useComposeExportTasks(params: {
       const candidate = tasks.find((task) => paper.currentExamId
         ? task.exam_workspace_id === paper.currentExamId
         : !task.exam_workspace_id && task.export_label === paper.exportLabel.trim() && task.subject === paper.subject.trim());
-      if (candidate) return apply(candidate, isCurrent);
+      // Observing a past success must not replay its save, sync or download.
+      // A pending task resumed here still consumes its later poll completion.
+      if (candidate) return apply(candidate, isCurrent, undefined, false);
     }).catch((error) => {
       if (isCurrent() && !isExportTaskEndpointMissingError(error)) callbacks.current.onError(error instanceof Error ? error.message : String(error));
     });

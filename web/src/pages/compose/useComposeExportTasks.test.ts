@@ -83,6 +83,7 @@ describe("export task transport and recovery", () => {
     const { result } = mount();
     await act(async () => { await Promise.resolve(); });
     expect(result.current.activeTask?.id).toBe("new-success");
+    expect(mocks.success).not.toHaveBeenCalled();
     expect(mocks.failure).not.toHaveBeenCalled();
     await act(async () => { await result.current.retryExportTask(); });
     expect(mocks.retry).not.toHaveBeenCalled();

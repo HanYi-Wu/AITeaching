@@ -132,13 +132,31 @@ export function useComposePaperHistory(params: {
     const dirty = !arePaperStatesEqual(present, saved);
     const targetScope = nextScope === undefined ? scopeRef.current : nextScope;
     const targetKey = targetScope ? buildComposeDraftStorageKey(targetScope) : null;
-    const result = dirty ? writeScopedComposeDraft(targetScope, present) : null;
+    const pendingFor = (candidate: ComposeDraftScope | null) => {
+      if (!candidate) return null;
+      const key = buildComposeDraftStorageKey(candidate);
+      if (recoveryRef.current.key === key && recoveryRef.current.record) return recoveryRef.current.record;
+      if (current.dirtyKey === key) return null;
+      // A completion can arrive before the recovery effect has read storage.
+      return readScopedComposeDraft(candidate).record;
+    };
+    const targetRecovery = pendingFor(targetScope);
+    const sourceRecovery = pendingFor(scopeRef.current);
+    const preserveTarget = Boolean(targetRecovery && !arePaperStatesEqual(targetRecovery.paper, saved));
+    const preserveSource = Boolean(sourceRecovery && !arePaperStatesEqual(sourceRecovery.paper, saved));
+    const result = dirty && !preserveTarget ? writeScopedComposeDraft(targetScope, present) : null;
     if (!dirty || result?.ok) {
-      if (!dirty || keyRef.current !== targetKey) removeScopedComposeDraft(scopeRef.current);
-      if (!dirty) removeScopedComposeDraft(targetScope);
+      if (!preserveSource && (!dirty || keyRef.current !== targetKey)) removeScopedComposeDraft(scopeRef.current);
+      if (!dirty && !preserveTarget) removeScopedComposeDraft(targetScope);
     }
     update({ ...current, history, dirtyKey: dirty ? targetKey ?? "__unscoped_dirty__" : null });
-    setRecovery({ key: targetKey, record: null, status: result?.status ?? (targetScope ? "idle" : "scope_unavailable") });
+    const nextRecovery: Recovery = {
+      key: targetKey,
+      record: preserveTarget ? targetRecovery : null,
+      status: preserveTarget ? "saved" : result?.status ?? (targetScope ? "idle" : "scope_unavailable"),
+    };
+    recoveryRef.current = nextRecovery;
+    setRecovery(nextRecovery);
   }, [update]);
 
   const travel = useCallback((direction: "undo" | "redo") => {
@@ -154,12 +172,16 @@ export function useComposePaperHistory(params: {
     const record = recoverableDraft;
     if (!record || !scopeRef.current || buildComposeDraftStorageKey(record.scope) !== keyRef.current) return;
     commitEdit(record.paper);
-    setRecovery({ key: keyRef.current, record: null, status: "saved" });
+    const next: Recovery = { key: keyRef.current, record: null, status: "saved" };
+    recoveryRef.current = next;
+    setRecovery(next);
     callbacks.current.onRestoredMsg?.();
   }, [commitEdit, recoverableDraft]);
   const discardLocalDraft = useCallback(() => {
     removeScopedComposeDraft(scopeRef.current);
-    setRecovery({ key: keyRef.current, record: null, status: "idle" });
+    const next: Recovery = { key: keyRef.current, record: null, status: "idle" };
+    recoveryRef.current = next;
+    setRecovery(next);
     callbacks.current.onDiscardedMsg?.();
   }, []);
 

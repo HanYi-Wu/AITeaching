@@ -83,6 +83,53 @@ describe("paper history and recovery integration", () => {
     expect(readScopedComposeDraft(scope).record?.paper.exportLabel).toBe("Recovery first");
   });
 
+  it.each([false, true])("preserves an unconfirmed recovery draft when a background save completes, newer edits=%s", (edited) => {
+    const pending = createEmptyPaperState({ exportLabel: "Recover this work", bySection: { choice: ["q1"] } });
+    writeScopedComposeDraft(scope, pending);
+    const before = localStorage.getItem(buildComposeDraftStorageKey(scope));
+    const { result } = mount();
+    const saved = result.current.paperState;
+    if (edited) act(() => result.current.commitEdit((previous) => ({ ...previous, exportLabel: "Latest edit" })));
+    act(() => result.current.acceptSavedState(saved, saved));
+    expect(localStorage.getItem(buildComposeDraftStorageKey(scope))).toBe(before);
+    expect(result.current.recoverableDraft?.paper.exportLabel).toBe("Recover this work");
+    act(() => result.current.restoreLocalDraft());
+    expect(result.current.paperState.exportLabel).toBe("Recover this work");
+  });
+
+  it("removes the recovery record after its restored content is successfully saved", () => {
+    writeScopedComposeDraft(scope, createEmptyPaperState({ exportLabel: "Recover then save" }));
+    const { result } = mount();
+    act(() => result.current.restoreLocalDraft());
+    const submitted = result.current.paperState;
+    act(() => result.current.acceptSavedState(submitted, submitted));
+    expect(readScopedComposeDraft(scope).record).toBeNull();
+    expect(result.current.recoverableDraft).toBeNull();
+    expect(result.current.isDirty).toBe(false);
+  });
+
+  it("does not resurrect a discarded recovery when completion arrives in the same event", () => {
+    writeScopedComposeDraft(scope, createEmptyPaperState({ exportLabel: "Discard this" }));
+    const { result } = mount();
+    const saved = result.current.paperState;
+    act(() => { result.current.discardLocalDraft(); result.current.acceptSavedState(saved, saved); });
+    expect(readScopedComposeDraft(scope).record).toBeNull();
+    expect(result.current.recoverableDraft).toBeNull();
+  });
+
+  it("preserves unresolved drafts under both identities when a save changes the paper ID", () => {
+    const target = { ...scope, paperKey: "exam:Renamed/Math" };
+    writeScopedComposeDraft(scope, createEmptyPaperState({ exportLabel: "Original recovery" }));
+    writeScopedComposeDraft(target, createEmptyPaperState({ exportLabel: "Target recovery" }));
+    const { result, rerender } = mount();
+    const saved = result.current.paperState;
+    act(() => result.current.acceptSavedState(saved, saved, target));
+    rerender(props(target));
+    expect(readScopedComposeDraft(scope).record?.paper.exportLabel).toBe("Original recovery");
+    expect(readScopedComposeDraft(target).record?.paper.exportLabel).toBe("Target recovery");
+    expect(result.current.recoverableDraft?.paper.exportLabel).toBe("Target recovery");
+  });
+
   it("ignores undo in inputs and during IME, and handles it on the workspace", () => {
     const { result } = mount();
     act(() => result.current.commitEdit((previous) => ({ ...previous, exportLabel: "Changed" })));
