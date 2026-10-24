@@ -66,6 +66,8 @@ export default defineConfig({
 
   test: {
     environment: "jsdom",
+    // Keep jsdom workers bounded on high-core Windows hosts and CI runners.
+    maxWorkers: 2,
     setupFiles: "./src/test/setup.ts",
     globals: true,
   },
