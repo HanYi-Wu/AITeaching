@@ -139,6 +139,29 @@ describe("export result integration", () => {
     return mounted;
   }
 
+  it("refreshes knowledge bindings on return without losing edits or accepting an older response", async () => {
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    let finishOld!: (value: { index: Record<string, { id: string; canonical_name: string; node_kind: string }[]> }) => void;
+    const oldRequest = new Promise<{ index: Record<string, { id: string; canonical_name: string; node_kind: string }[]> }>((resolve) => { finishOld = resolve; });
+    let requests = 0;
+    mocks.apiGet.mockImplementation((path: string) => {
+      if (path === "/api/graph/question-bindings-index") {
+        return ++requests === 1 ? oldRequest : Promise.resolve({ index: { "math/q1": [{ id: "addition", canonical_name: "基础加法", node_kind: "knowledge_point" }] } });
+      }
+      return normalGet(path);
+    });
+    const mounted = await loadedWorkspace();
+    const workspace = (active: boolean) => <TestI18nProvider><ToolBarProvider><Toolbar /><ComposeWorkspace onError={mocks.onError} accountId="teacher" projectRoot="C:/project" openExamId={examId} toolBarActive={active} /></ToolBarProvider></TestI18nProvider>;
+    mounted.rerender(workspace(false));
+    mounted.rerender(workspace(true));
+    await screen.findByText("基础加法");
+    expect(screen.getByRole("spinbutton", { name: "每题分值" })).toHaveValue(6);
+    await act(async () => { finishOld({ index: { "math/q1": [{ id: "stale", canonical_name: "过期关联", node_kind: "knowledge_point" }] } }); });
+    expect(screen.getByText("基础加法")).toBeInTheDocument();
+    expect(screen.queryByText("过期关联")).not.toBeInTheDocument();
+    expect(localStorage.getItem(cacheKey)).toContain('"scoreBySection":{"选择":6}');
+  });
+
   it.each(["pdf", "docx"] as const)("closes the export menu when choosing %s and submits that format", async (format) => {
     mocks.apiPost.mockImplementation(async (path: string) => path.endsWith("check-conflict") ? { conflict: false } : completed(format));
     await loadedWorkspace();

@@ -484,10 +484,15 @@ export function ComposeWorkspace({
   }, [refreshExamSummaries, onError]);
 
   useEffect(() => {
+    let active = true;
+    setQuestionBindingsIndex({});
+    if (!toolBarActive) return;
+    const isCurrent = captureOwnerRequest();
     void apiGet<{ index: Record<string, GraphBindingNode[]> }>("/api/graph/question-bindings-index")
-      .then((r) => setQuestionBindingsIndex(r.index ?? {}))
-      .catch(() => setQuestionBindingsIndex({}));
-  }, []);
+      .then((r) => { if (active && isCurrent()) setQuestionBindingsIndex(r.index ?? {}); })
+      .catch(() => { if (active && isCurrent()) setQuestionBindingsIndex({}); });
+    return () => { active = false; };
+  }, [toolBarActive, captureOwnerRequest]);
 
   const knowledgeDistributionRows = useMemo(
     () => computeKnowledgeDistribution(bySection, questionBindingsIndex),
