@@ -24,6 +24,40 @@ from solaire.web.result_service import (
 _SUBJ = "数学"
 
 
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        ({}, ("自定义周测", "数学", "第一单元")),
+        ({"title": "", "subject": None, "export_label": ""}, ("自定义周测", "数学", "第一单元")),
+        ({"title": "旧标题", "subject": "物理", "export_label": "历史标签"}, ("旧标题", "物理", "历史标签")),
+    ],
+)
+def test_workspace_display_fields_are_visible_without_rewriting_legacy_metadata(tmp_path: Path, metadata, expected) -> None:
+    import yaml
+    from solaire.web.exam_workspace_service import save_exam_workspace, workspace_dir
+
+    saved = save_exam_workspace(
+        tmp_path, exam_id=None, name="自定义周测", subject="数学", export_label="第一单元",
+        template_ref="default", template_path="templates/default.yaml",
+        selected_items=[{"section_id": "s1", "question_ids": ["q1"], "score_per_item": 5}],
+    )
+    exam_id = saved["exam_id"]
+    path = workspace_dir(tmp_path, exam_id) / "exam.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document["metadata"] = {**document.get("metadata", {}), **metadata}
+    path.write_text(yaml.safe_dump(document, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    original = path.read_bytes()
+
+    listed = next(item for item in list_exam_results(tmp_path) if item["exam_id"] == exam_id)
+    detail = get_exam_summary(tmp_path, exam_id)
+    for item in (listed, detail):
+        assert (item["exam_title"], item["subject"], item["export_label"]) == expected
+        assert item["question_count"] == 1
+    from solaire.web.exam_service import find_export_conflict
+    assert not find_export_conflict(tmp_path, "第一单元", "数学")["conflict"]
+    assert path.read_bytes() == original
+
+
 def _exam_workspace(project_root: Path, label: str) -> Path:
     d = project_root / "exams" / label / _SUBJ
     d.mkdir(parents=True, exist_ok=True)

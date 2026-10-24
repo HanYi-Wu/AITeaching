@@ -108,6 +108,13 @@ def _paper_record_for_exam(
             "SELECT * FROM paper_records WHERE exam_id = ? AND subject = ?",
             (exam_id, subject),
         ).fetchone()
+        if row is None and subject != "通用":
+            # Older unspecialized workspaces were registered under the generic subject.
+            # Reuse their ID so publications and attempts survive corrected display data.
+            row = con.execute(
+                "SELECT * FROM paper_records WHERE exam_id = ? AND subject = '通用'",
+                (exam_id,),
+            ).fetchone()
         if row is None:
             paper_id = _new_id()
             con.execute(

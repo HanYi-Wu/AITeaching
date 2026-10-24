@@ -212,6 +212,59 @@ def test_teacher_lists_exported_papers_with_default_offline_mode(web_client: Tes
     assert relisted.json()["papers"][0]["delivery_mode"] == "online"
 
 
+def test_correcting_generic_subject_keeps_the_existing_publication_and_attempt(web_client: TestClient, tmp_path: Path) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _, _, class_id = _create_school_teacher_class(web_client, admin_token)
+    school_headers = _headers(web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"}).json()["token"])
+    imported = web_client.post("/api/school/students/import", headers=school_headers, json={"class_id": class_id, "students": [{"student_no": "S001", "display_name": "One"}]})
+    assert imported.status_code == 200
+    exam_id = _write_exam(tmp_path)
+    teacher_headers = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+    published = web_client.post(f"/api/papers/{paper['paper_id']}/publish", headers=teacher_headers, json={"class_ids": [class_id]})
+    assert published.status_code == 200
+    publication_id = published.json()["publication"]["id"]
+    platform_root = default_platform_root()
+    with connect(platform_root) as con:
+        attempt_id = con.execute("SELECT id FROM student_attempts WHERE publication_id = ?", (publication_id,)).fetchone()["id"]
+        previous = dict(con.execute("SELECT * FROM paper_records WHERE id = ?", (paper["paper_id"],)).fetchone())
+        con.execute("UPDATE paper_records SET subject = '通用' WHERE id = ?", (paper["paper_id"],))
+
+    listed = web_client.get("/api/papers", headers=teacher_headers).json()["papers"]
+    repaired = next(item for item in listed if item["exam_id"] == exam_id)
+    assert repaired["paper_id"] == paper["paper_id"]
+    assert repaired["subject"] == "Math"
+    assert repaired["publication_count"] == 1
+    assert repaired["total_student_count"] == 1
+    assert repaired["delivery_mode"] == previous["delivery_mode"]
+    assert repaired["folder_id"] == previous["folder_id"]
+    with connect(platform_root) as con:
+        assert con.execute("SELECT COUNT(*) FROM paper_records WHERE exam_id = ?", (exam_id,)).fetchone()[0] == 1
+        assert con.execute("SELECT paper_id FROM exam_publications WHERE id = ?", (publication_id,)).fetchone()["paper_id"] == paper["paper_id"]
+        assert con.execute("SELECT id FROM student_attempts WHERE publication_id = ?", (publication_id,)).fetchone()["id"] == attempt_id
+
+
+def test_generic_subject_record_cannot_be_claimed_by_another_teacher(web_client: TestClient, tmp_path: Path) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    _, teacher_id, _ = _create_school_teacher_class(web_client, admin_token)
+    exam_id = _write_exam(tmp_path)
+    first_headers = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers", headers=first_headers).json()["papers"][0]
+    with connect(default_platform_root()) as con:
+        con.execute("UPDATE paper_records SET subject = '通用' WHERE id = ?", (paper["paper_id"],))
+    school_headers = _headers(web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"}).json()["token"])
+    created = web_client.post("/api/school/teachers", headers=school_headers, json={"username": "other_teacher", "password": "secret123", "display_name": "Other", "subjects": ["Math"]})
+    assert created.status_code == 200
+    other_headers = _headers(web_client.post("/api/auth/login", json={"username": "other_teacher", "password": "secret123"}).json()["token"])
+    refused = web_client.post("/api/papers/from-exam", headers=other_headers, json={"exam_id": exam_id})
+    assert refused.status_code == 403
+    with connect(default_platform_root()) as con:
+        rows = con.execute("SELECT id, owner_teacher_id FROM paper_records WHERE exam_id = ?", (exam_id,)).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["id"] == paper["paper_id"]
+        assert rows[0]["owner_teacher_id"] == teacher_id
+
+
 def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClient, tmp_path: Path) -> None:
     admin_token = _bootstrap_admin(web_client)
     _, _, class_id = _create_school_teacher_class(web_client, admin_token)
