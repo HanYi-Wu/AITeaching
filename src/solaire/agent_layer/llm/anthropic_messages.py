@@ -163,7 +163,9 @@ class AnthropicMessagesAdapter:
             kwargs["api_key"] = api_key
         effective_url = base_url or os.environ.get('ANTHROPIC_BASE_URL') or 'https://api.anthropic.com'
         kwargs['base_url'] = effective_url
-        kwargs['http_client'] = DefaultAsyncHttpxClient(**ai_http_options(effective_url))
+        # Explicit transport selection keeps the SDK from installing system
+        # proxy mounts despite trust_env=False. HTTPX applies our opt-in proxy.
+        kwargs['http_client'] = DefaultAsyncHttpxClient(transport=None, **ai_http_options(effective_url))
         # Use the provider's native type: newer SDKs use httpx2, not httpx.
         self._client = AsyncAnthropic(**kwargs, **ai_sdk_options(Timeout))
 
