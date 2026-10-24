@@ -310,7 +310,11 @@ export async function apiGet<T>(path: string): Promise<T> {
 /** Fetch a protected binary resource through the same authenticated request path as JSON APIs. */
 export async function apiGetBlob(path: string): Promise<Blob> {
   const r = await fetchWithLog(path);
-  return r.blob();
+  const blob = await r.blob();
+  if (blob.size === 0) {
+    throw new ApiError(i18n.t("emptyFileResponse", { ns: "common" }), r.status);
+  }
+  return blob;
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {

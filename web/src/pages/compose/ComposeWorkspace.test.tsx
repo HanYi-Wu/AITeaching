@@ -139,6 +139,27 @@ describe("export result integration", () => {
     return mounted;
   }
 
+  it.each(["pdf", "docx"] as const)("closes the export menu when choosing %s and submits that format", async (format) => {
+    mocks.apiPost.mockImplementation(async (path: string) => path.endsWith("check-conflict") ? { conflict: false } : completed(format));
+    await loadedWorkspace();
+    expect(screen.getByText("导出 ▾").closest("details")).toHaveAttribute("open");
+    await userEvent.click(screen.getByRole("button", { name: format === "pdf" ? "导出 PDF" : "导出 Word" }));
+    expect(screen.getByText("导出 ▾").closest("details")).not.toHaveAttribute("open");
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exam/export-tasks", expect.objectContaining({ format })));
+    await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(examId, format));
+  });
+
+  it.each(["pdf", "docx"] as const)("keeps a completed %s export available when the browser receives no download content", async (format) => {
+    mocks.apiPost.mockImplementation(async (path: string) => path.endsWith("check-conflict") ? { conflict: false } : completed(format));
+    mocks.download.mockRejectedValueOnce(new Error("未收到文件内容"));
+    await loadedWorkspace();
+    await userEvent.click(screen.getByRole("button", { name: format === "pdf" ? "导出 PDF" : "导出 Word" }));
+    await screen.findByText(/文件已保存在服务器，但浏览器下载失败：未收到文件内容/);
+    expect(screen.getByTestId("compose-export-task-banner")).toHaveAttribute("data-task-status", "succeeded");
+    expect(screen.queryByRole("button", { name: "重试导出" })).not.toBeInTheDocument();
+    expect(mocks.apiPost.mock.calls.filter(([path]) => path === "/api/exam/export-tasks")).toHaveLength(1);
+  });
+
   it.each([{ format: "pdf" as const, legacy: false }, { format: "docx" as const, legacy: false }, { format: "pdf" as const, legacy: true }, { format: "docx" as const, legacy: true }])("clears a successfully saved local baseline for $format, legacy=$legacy", async ({ format, legacy }) => {
     mocks.apiPost.mockImplementation(async (path: string) => {
       if (path.endsWith("check-conflict")) return { conflict: false };
@@ -160,6 +181,7 @@ describe("export result integration", () => {
     await userEvent.click(screen.getByRole("button", { name: "导出 PDF" }));
     await waitFor(() => expect(mocks.onError).toHaveBeenCalledWith("Compile failed（已保存为草稿「恢复草稿」）"));
     expect(mocks.apiGet.mock.calls.filter(([path]) => path === "/api/exams").length).toBeGreaterThan(before);
+    await userEvent.click(screen.getByText("导出 ▾"));
     await userEvent.click(screen.getByRole("button", { name: "导出 PDF" }));
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exam/export-tasks", expect.objectContaining({ exam_ids_to_delete_on_success: ["Recovery/数学"] })));
   });
@@ -203,6 +225,7 @@ describe("export result integration", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "重试导出" })).not.toBeInTheDocument());
     mocks.apiPost.mockClear();
     mocks.apiPost.mockImplementation(async (path: string) => path.endsWith("check-conflict") ? { conflict: false } : { ...completed("pdf"), exam_workspace_id: otherId, result: { exam_dir: `exams/${otherId}` } });
+    await userEvent.click(screen.getByText("导出 ▾"));
     await userEvent.click(screen.getByRole("button", { name: "导出 PDF" }));
     await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(otherId, "pdf"));
     const payload = mocks.apiPost.mock.calls.find(([path]) => path === "/api/exam/export-tasks")![1];

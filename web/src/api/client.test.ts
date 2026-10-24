@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { apiAgentChatStream, apiGetBlob } from "./client";
+import { setupTestI18n } from "../test/i18nTestUtils";
 
 const PLATFORM_SESSION_STORAGE_KEY = "solaire.platform.session";
 
@@ -28,6 +29,7 @@ describe("apiAgentChatStream", () => {
 });
 
 describe("apiGetBlob", () => {
+  beforeAll(async () => { await setupTestI18n("zh"); });
   afterEach(() => {
     localStorage.clear();
     vi.unstubAllGlobals();
@@ -48,5 +50,17 @@ describe("apiGetBlob", () => {
     expect(await result.text()).toBe("pdf");
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(new Headers(init.headers).get("Authorization")).toBe("Bearer teacher-token");
+  });
+
+  it.each([
+    [200, "/api/exam/preview-pdf/preview-id/file?variant=student"],
+    [204, "/api/exam/preview-pdf/preview-id/file?variant=student"],
+    [200, "/api/exams/download/Quiz?format=docx"],
+    [204, "/api/exams/download/Quiz?format=docx"],
+  ] as const)("rejects an empty %s response for %s instead of returning an unusable file", async (status, path) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status })));
+    await expect(apiGetBlob(path)).rejects.toMatchObject({
+      name: "ApiError", status, message: expect.stringContaining("未收到文件内容"),
+    });
   });
 });

@@ -1242,8 +1242,14 @@ export function ComposeWorkspace({
         <details className="relative group">
           <summary className="list-none cursor-pointer rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50">导出 ▾</summary>
           <div className="absolute right-0 top-full z-30 mt-1 min-w-32 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
-            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={() => void exportExam()}>{t("compose:exportPdf")}</button>
-            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={() => void exportWord()}>{t("compose:exportWord")}</button>
+            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={(event) => {
+              event.currentTarget.closest("details")?.removeAttribute("open");
+              void exportExam();
+            }}>{t("compose:exportPdf")}</button>
+            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={(event) => {
+              event.currentTarget.closest("details")?.removeAttribute("open");
+              void exportWord();
+            }}>{t("compose:exportWord")}</button>
           </div>
         </details>
         <button

@@ -16,6 +16,7 @@
   "filter": "筛选",
   "networkError": "网络错误：{{detail}}",
   "noResponseStream": "无响应流",
+  "emptyFileResponse": "未收到文件内容，请重试；若仍失败，请检查浏览器下载扩展或网络代理。",
   "connectingLocalService": "正在连接本地服务…",
   "localServiceStartTimeout": "等待本地服务就绪超时，请稍后重试。若问题持续，可查看诊断日志。",
   "localServiceFailed": "本地服务未能启动",
