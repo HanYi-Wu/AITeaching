@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from solaire.web.routers.projects import router as projects_router
+
 from solaire.web.routers.system import router as system_router
 
 from solaire.web.host_dialogs import _pick_directory_dialog, _pick_executable_dialog
@@ -209,6 +211,8 @@ app.include_router(school_router, prefix="/api")
 app.include_router(paper_router, prefix="/api")
 app.include_router(student_router, prefix="/api")
 
+app.include_router(projects_router)
+
 app.include_router(system_router)
 
 app.add_middleware(
@@ -225,20 +229,6 @@ app.add_middleware(
 )
 
 app.middleware("http")(bind_request_context)
-
-
-class ProjectOpenBody(BaseModel):
-    root: str
-
-
-class ProjectCreateBody(BaseModel):
-    parent: str
-    name: str
-    template: Literal["empty", "math"] = "empty"
-
-
-class RecentProjectRemoveBody(BaseModel):
-    path: str
 
 
 class SelectedSectionIn(BaseModel):
@@ -480,131 +470,6 @@ def serve_resource_file(rel_path: str, request: Request) -> FileResponse:
     if is_svg:
         headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
     return FileResponse(target, media_type=mt, headers=headers)
-
-
-@app.get("/api/project/info")
-def project_info() -> dict[str, Any]:
-    r = state.get_content_root()
-    ensure_project_layout(r)
-    return redact_project_root({"bound": True, "root": str(r)})
-
-
-@app.get("/api/recent-projects")
-def api_recent_projects() -> dict[str, Any]:
-    items = recent_projects.load_recent_projects()
-    return {
-        "items": [
-            {"name": e.name, "path": e.path, "last_opened": e.last_opened}
-            for e in items
-        ]
-    }
-
-
-@app.post("/api/recent-projects/remove")
-def api_recent_projects_remove(body: RecentProjectRemoveBody) -> dict[str, Any]:
-    """Remove one entry from the persisted recent list (does not delete the project folder)."""
-    p = body.path.strip()
-    if not p:
-        raise HTTPException(status_code=400, detail="路径不能为空")
-    removed = recent_projects.remove_recent_project(p)
-    return {"ok": True, "removed": removed}
-
-
-@app.post("/api/project/pick-open")
-async def project_pick_open() -> dict[str, Any]:
-    """
-    Open OS folder dialog on the **server** machine, then bind that folder as project root.
-    The browser cannot read arbitrary disk paths; this delegates to the local backend process.
-    """
-    try:
-        path = await asyncio.to_thread(_pick_directory_dialog)
-    except RuntimeError as e:
-        if str(e) == "TKINTER_UNAVAILABLE":
-            raise HTTPException(
-                status_code=501,
-                detail="当前 Python 环境未提供 Tk（tkinter），无法弹出系统选文件夹。请使用下方手动输入路径，"
-                "或安装带 Tcl/Tk 的 Python；无图形界面环境（如部分 SSH）也不支持此功能。",
-            ) from e
-        raise HTTPException(status_code=500, detail=str(e)) from e
-    if not path:
-        raise HTTPException(status_code=400, detail="未选择文件夹或已取消")
-    root = Path(path).expanduser().resolve()
-    if not root.is_dir():
-        raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
-    ensure_project_layout(root)
-    init_platform_db(root)
-    state.set_root(root)
-    recent_projects.record_project_opened(root)
-    return {"ok": True, "root": str(root)}
-
-
-@app.post("/api/project/pick-parent")
-async def project_pick_parent() -> dict[str, Any]:
-    """Pick a parent directory for «新建项目» — same dialog as pick-open, returns path only."""
-    try:
-        path = await asyncio.to_thread(_pick_directory_dialog)
-    except RuntimeError as e:
-        if str(e) == "TKINTER_UNAVAILABLE":
-            raise HTTPException(
-                status_code=501,
-                detail="当前 Python 环境未提供 Tk（tkinter），无法弹出系统选文件夹。请手动输入父目录路径。",
-            ) from e
-        raise HTTPException(status_code=500, detail=str(e)) from e
-    if not path:
-        raise HTTPException(status_code=400, detail="未选择文件夹或已取消")
-    parent = Path(path).expanduser().resolve()
-    if not parent.is_dir():
-        raise HTTPException(status_code=400, detail=f"Not a directory: {parent}")
-    return {"ok": True, "path": str(parent)}
-
-
-@app.post("/api/project/close")
-def project_close() -> dict[str, Any]:
-    """取消显式内容目录绑定，之后回到默认内容目录。"""
-    state.clear_root()
-    return {"ok": True}
-
-
-@app.post("/api/project/open")
-def project_open(body: ProjectOpenBody) -> dict[str, Any]:
-    root = Path(body.root).expanduser().resolve()
-    if not root.is_dir():
-        raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
-    ensure_project_layout(root)
-    init_platform_db(root)
-    state.set_root(root)
-    recent_projects.record_project_opened(root)
-    return {"ok": True, "root": str(root)}
-
-
-@app.post("/api/project/create")
-def project_create(body: ProjectCreateBody) -> dict[str, Any]:
-    parent = Path(body.parent).expanduser().resolve()
-    if not parent.is_dir():
-        raise HTTPException(status_code=400, detail=f"Parent not a directory: {parent}")
-    name = safe_project_name(body.name)
-    root = unique_child_dir(parent, name)
-
-    if body.template == "math":
-        src = bundled_paths.resolve_math_project_template_dir()
-        if src is None:
-            raise HTTPException(
-                status_code=503,
-                detail="数学项目模板暂不可用，请使用完整安装包或联系管理员。",
-            )
-        shutil.copytree(src, root)
-        ensure_project_layout(root)
-        init_platform_db(root)
-    else:
-        root.mkdir(parents=False)
-        ensure_project_layout(root)
-        init_platform_db(root)
-        readme = root / "templates" / "README.txt"
-        readme.parent.mkdir(parents=True, exist_ok=True)
-        readme.write_text("在此目录放置 template.yaml 与 LaTeX 基架（与 exam 解耦）。\n", encoding="utf-8")
-    state.set_root(root)
-    recent_projects.record_project_opened(root)
-    return {"ok": True, "root": str(root)}
 
 
 def _subject_collection_from_qualified_id(qid: str) -> tuple[str, str, str]:
