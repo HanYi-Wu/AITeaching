@@ -17,7 +17,8 @@ from solaire.agent_layer.models import InvocationContext, SessionState
 from solaire.agent_layer.registry import invoke_registered_tool
 from solaire.exam_compiler.models import ExamConfig, QuestionLibraryRef, SelectedSection
 from solaire.web import recent_projects, state
-from solaire.web.app import _assert_export_destination_owner, ensure_project_layout
+from solaire.web.app import ensure_project_layout
+from solaire.web.routers.exams import _assert_export_destination_owner
 from solaire.web.platform_db import connect, default_platform_root
 from solaire.web.paper_service import _contains_grading_prompt_injection
 

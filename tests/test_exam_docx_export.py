@@ -10,7 +10,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-import solaire.web.app as app_module
+import solaire.web.routers.exams as app_module
 from solaire.exam_compiler.pipeline import docx as docx_pipeline
 from solaire.exam_compiler.pipeline.docx import PandocError, build_exam_docx
 from solaire.web.exam_service import export_docx

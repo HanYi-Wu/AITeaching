@@ -9,7 +9,7 @@ from solaire.common.actor_context import actor
 
 
 def test_teacher_analysis_list_is_owner_scoped(monkeypatch, tmp_path):
-    app_module = importlib.import_module("solaire.web.app")
+    app_module = importlib.import_module("solaire.web.routers.exams")
     platform_db = importlib.import_module("solaire.web.platform_db")
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
