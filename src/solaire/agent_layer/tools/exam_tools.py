@@ -30,6 +30,7 @@ from solaire.web.exam_workspace_service import (
     save_exam_workspace_after_export_failure,
     workspace_dir,
 )
+from solaire.web.export_lock import ExportBusyError, project_export_lock
 
 
 def _sections_from_args(args: dict[str, Any]) -> list[SelectedSection]:
@@ -181,6 +182,14 @@ def tool_validate_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolRes
 
 
 def tool_export_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    try:
+        with project_export_lock(ctx.project_root):
+            return _export_paper_locked(ctx, args)
+    except ExportBusyError as exc:
+        return ToolResult(status="failed", error_code="export_busy", error_message=str(exc))
+
+
+def _export_paper_locked(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     root = ctx.project_root
     template_ref = str(args.get("template_ref") or "").strip()
     template_path = str(args.get("template_path") or "").strip()

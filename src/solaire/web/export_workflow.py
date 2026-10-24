@@ -20,6 +20,7 @@ from solaire.web.exam_workspace_service import (
     resolve_template_under_project, save_exam_workspace_after_export_failure,
 )
 from solaire.web.security import assert_within_project
+from solaire.web.export_lock import ExportBusyError, project_export_lock
 
 ExportFormat = Literal["pdf", "docx"]
 
@@ -58,6 +59,14 @@ def _complete_export(root: Path, body: ExamExportBody) -> None:
 
 def export_exam(root: Path, body: ExamExportBody, *, format: ExportFormat) -> dict[str, Any]:
     """Run one format through the same permission, recovery and cleanup boundary."""
+    try:
+        with project_export_lock(root):
+            return _export_locked(root, body, format=format)
+    except ExportBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _export_locked(root: Path, body: ExamExportBody, *, format: ExportFormat) -> dict[str, Any]:
     if format not in {"pdf", "docx"}:
         raise ValueError("Unsupported export format")
     root = root.resolve()
