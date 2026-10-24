@@ -38,8 +38,37 @@
     "confirmDeleteDraft": "确定删除当前草稿？删除后无法恢复。",
     "confirmDeleteExportedExam": "确定删除该导出试卷及其文件夹？删除后不可恢复。",
     "exportedExamDeleted": "已删除导出试卷",
-    "multiAddSkipped": "已跳过 {{n}} 道与本节题型不一致的题目。"
+    "multiAddSkipped": "已跳过 {{n}} 道与本节题型不一致的题目。",
+    "localDraftRestored": "已恢复本地草稿（尚未覆盖服务端试卷，确认后请点击「保存更改」）",
+    "localDraftDiscarded": "已丢弃本地未保存草稿"
   },
+  "undo": "撤销",
+  "redo": "重做",
+  "undoShortcutTitle": "撤销上一步编辑 (Ctrl+Z)",
+  "redoShortcutTitle": "重做编辑 (Ctrl+Y / Ctrl+Shift+Z)",
+  "retryExportTask": "重试导出",
+  "exportTaskRetrying": "重试中…",
+  "exportTaskStatus": {
+    "queued": "导出任务已排队",
+    "running": "正在生成试卷",
+    "succeeded": "导出任务已完成",
+    "failed": "导出任务失败"
+  },
+  "moveUp": "上移选中项",
+  "moveDown": "下移选中项",
+  "draftRecoveryTitle": "未保存草稿恢复",
+  "draftRecoveryBanner": "检测到当前试卷有未保存的本地草稿，是否显式恢复到编辑区？",
+  "restoreLocalDraft": "恢复草稿",
+  "discardLocalDraft": "丢弃草稿",
+  "draftScopeUnavailableHint": "当前未识别到完整的账号与项目作用域，本地草稿暂不自动缓存；请直接点击「保存更改」保存到服务端。",
+  "draftCorruptedNotice": "检测到损坏的本地草稿缓存，已自动清理并降级为服务端当前内容。",
+  "draftQuotaNotice": "本地存储空间不足或受限，本地草稿自动缓存已降级关闭，不影响正常编辑与保存。",
+  "exportTaskQueued": "导出任务排队中（{{format}} · 第 {{attempt}} 次尝试）",
+  "exportTaskRunning": "正在后台生成试卷（{{format}} · 第 {{attempt}} 次尝试）…",
+  "exportTaskSucceeded": "导出任务已完成（{{format}}）",
+  "exportTaskFailed": "导出任务失败（{{format}}）：{{reason}}",
+  "exportTaskRetry": "重试导出",
+  "exportTaskDismiss": "关闭任务提示",
   "openPropsPanel": "打开属性与预览",
   "closeSidebar": "关闭侧栏",
   "bankSearchTitle": "题库检索",
@@ -150,5 +179,8 @@
   "pdfVariantTeacher": "教师版",
   "openPdfExternal": "用系统程序打开",
   "openWordExternal": "打开 Word",
-  "examPreviewEmpty": "请从左侧选择一份已导出试卷，或先导出试卷。"
+  "examPreviewEmpty": "请从左侧选择一份已导出试卷，或先导出试卷。",
+  "exportSubmissionUnconfirmed": "暂时无法确认 {{format}} 导出是否已提交：{{reason}}。重试会继续同一次导出。",
+  "exportPollingPaused": "连接中断，导出可能仍在进行：{{reason}}",
+  "exportResumePolling": "继续查询"
 }
