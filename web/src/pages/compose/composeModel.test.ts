@@ -90,4 +90,9 @@ describe("compose business operations", () => {
     expect(state.bySection.choice).toEqual(["q1"]);
     expect(resolveSelectedTemplate([template], state)).toBe(template);
   });
+
+  it("finds a renamed template by its stable template id", () => {
+    const state = { ...initial(), templatePath: "templates/deleted-name.yaml" };
+    expect(resolveSelectedTemplate([template], state)).toBe(template);
+  });
 });

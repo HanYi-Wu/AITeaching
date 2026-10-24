@@ -120,10 +120,8 @@ export function resolveSelectedTemplate(
   state: Pick<ComposePaperState, "templatePath" | "templateRef" | "bySection" | "scoreBySection">,
 ): TemplateRow | undefined {
   const tp = normTemplatePath(state.templatePath);
-  if (!tp) {
-    return undefined;
-  }
-  const found = templates.find((t) => normTemplatePath(t.path) === tp);
+  const found = templates.find((t) => tp && normTemplatePath(t.path) === tp) ??
+    templates.find((t) => state.templateRef && t.id === state.templateRef);
   if (found) {
     return found;
   }
@@ -206,7 +204,9 @@ export function syncPaperStateWithTemplate(
     scoreOverrides: nextScoreOverrides,
     perQuestionMode: nextPerQuestionMode,
   };
-  return arePaperStatesEqual(state, candidate) ? state : candidate;
+  const sameSections = Object.keys(state.bySection).length === template.sections.length &&
+    template.sections.every((section) => section.section_id in state.bySection);
+  return sameSections && arePaperStatesEqual(state, candidate) ? state : candidate;
 }
 
 export function resolveActiveSectionForTemplate(
