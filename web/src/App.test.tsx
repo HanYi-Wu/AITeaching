@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   logoutPlatform: vi.fn(), setPlatformProjectRoot: vi.fn(), setSidebarOpen: vi.fn(),
 }));
 const school: PlatformUser = { id: "school-user", username: "school", role: "school", display_name: "学校", status: "active" };
+const admin: PlatformUser = { ...school, id: "admin-user", username: "admin", role: "admin" };
 
 vi.mock("./api/client", () => ({ apiGet: mocks.apiGet }));
 vi.mock("./platform/auth", () => ({
@@ -26,16 +27,19 @@ vi.mock("./contexts/ToolBarContext", () => ({
   useToolBar: () => ({ left: null, right: null }),
 }));
 vi.mock("./components/DesktopTitleBar", () => ({ DesktopTitleBar: () => null }));
+vi.mock("./components/AgentSidebar", () => ({ AgentSidebar: () => null }));
 vi.mock("./components/TeacherFirstUseGuide", () => ({ TeacherFirstUseGuide: () => null }));
 vi.mock("./app/routes", () => ({
   BankRoute: () => null, ComposeRoute: () => null, GraphRoute: () => null, TemplateRoute: () => null,
 }));
 vi.mock("./pages/platform/school/SchoolWorkspace", () => ({ SchoolWorkspace: () => <div>学校工作区</div> }));
 vi.mock("./pages/platform/student/StudentWorkspace", () => ({ StudentWorkspace: () => <div>学生工作区</div> }));
-vi.mock("./pages/platform/admin/AdminWorkspace", () => ({ AdminWorkspace: () => <div>管理员工作区</div> }));
+vi.mock("./pages/platform/admin/AdminWorkspace", () => ({
+  AdminWorkspace: ({ onLogout }: { onLogout: () => void }) => <div>管理员工作区<button onClick={onLogout}>退出登录</button></div>,
+}));
 vi.mock("./pages/platform/login/PlatformLogin", () => ({
-  PlatformLogin: ({ onAuthenticated }: { onAuthenticated: (user: PlatformUser) => void }) => (
-    <div>登录页<button onClick={() => onAuthenticated(school)}>以学校身份登录</button></div>
+  PlatformLogin: ({ mode, onAuthenticated }: { mode: "bootstrap" | "login"; onAuthenticated: (user: PlatformUser) => void }) => (
+    <div>{mode === "bootstrap" ? "初始化页" : "登录页"}<button onClick={() => onAuthenticated(mode === "bootstrap" ? admin : school)}>{mode === "bootstrap" ? "创建管理员" : "以学校身份登录"}</button></div>
   ),
 }));
 
@@ -76,6 +80,20 @@ describe("role-specific project requests", () => {
     renderApp();
     await screen.findByText("登录页");
     expect(mocks.apiGet).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("returns to login after administrator initialization and logout (public mode: %s)", async (publicMode) => {
+    mocks.getPlatformStatus.mockResolvedValue({ admin_exists: false, public_mode: publicMode });
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "创建管理员" }));
+    await screen.findByText("管理员工作区");
+    await user.click(screen.getByRole("button", { name: "退出登录" }));
+    await screen.findByText("登录页");
+    expect(screen.queryByText("初始化页")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "以学校身份登录" }));
+    await screen.findByText("学校工作区");
+    expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith(null);
   });
 
   it("clears the teacher project when switching to a school account", async () => {

@@ -194,6 +194,7 @@ function AppShell() {
   }, [sidebarOpen, setSidebarOpen]);
 
   const onAuthenticated = useCallback((user: PlatformUser) => {
+    setPlatformStatus((status) => status ? { ...status, admin_exists: true } : status);
     setCurrentUser(user);
     setAdminProjectMode(false);
     setPage(user.role === "teacher" ? "papers" : user.role);
