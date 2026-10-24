@@ -483,46 +483,6 @@ def _resolve_folder_and_students(root: Path, actor: dict[str, Any], args: dict[s
     return folder_id, list(dict.fromkeys(student_ids)), None
 
 
-def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
-    actor = _platform_actor(ctx)
-    if actor is None:
-        return ToolResult(
-            status="failed",
-            error_code="platform_user_required",
-            error_message="需要先创建管理员或教师账号，才能通过 AI 发布线上试卷。",
-        )
-    paper_id = str(args.get("paper_id") or "").strip()
-    class_ids = [str(item).strip() for item in (args.get("class_ids") or []) if str(item).strip()]
-    if not paper_id or not class_ids:
-        return ToolResult(
-            status="failed",
-            error_code="invalid_arguments",
-            error_message="paper_id 和 class_ids 不能为空。",
-        )
-    try:
-        publication = publish_online_paper(
-            default_platform_root(),
-            paper_id=paper_id,
-            user=actor,
-            class_ids=class_ids,
-            project_root=ctx.project_root,
-            title=str(args.get("title") or "").strip() or None,
-            description=str(args.get("description") or "").strip() or None,
-            start_at=str(args.get("start_at") or "").strip() or None,
-            end_at=str(args.get("end_at") or "").strip() or None,
-            submission_mode=str(args.get("submission_mode") or "online"),
-            max_screen_switches=int(args.get("max_screen_switches") or 0),
-            time_limit_minutes=int(args.get("time_limit_minutes") or 0) or None,
-            show_results_immediately=bool(args.get("show_results_immediately")),
-            subject=str(args.get("subject") or "").strip() or None,
-        )
-    except (ValueError, PermissionError, FileNotFoundError) as e:
-        return ToolResult(status="failed", error_code="publish_failed", error_message=str(e))
-    return ToolResult(
-        status="succeeded",
-        data={"publication": publication},
-        summary_for_llm=f"已发布试卷到 {len(class_ids)} 个班级。",
-    )
 
 
 def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
