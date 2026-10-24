@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from solaire.web import export_tasks
 from solaire.web.schemas.exams import ExamExportBody
+from solaire.web.export_workflow import export_exam as run_export_workflow
 
 
 class ManualExecutor:
@@ -126,6 +127,61 @@ def test_failed_job_retries_once_and_completed_retry_is_idempotent(
     assert len(calls) == 1 and pool.pending == []
 
 
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+def test_successful_retry_cleans_all_failure_drafts_and_keeps_request_identity(
+    task_case, monkeypatch, format
+):
+    from solaire.web import export_workflow as workflow, platform_db
+
+    service, pool, user, body, calls = task_case
+    root = service.root
+    platform_db.init_platform_db(root)
+    monkeypatch.setattr(platform_db, "default_platform_root", lambda: root)
+    template = root / body.template_path
+    template.parent.mkdir(parents=True)
+    template.write_text("template_id: test\nsections: []\n", encoding="utf-8")
+    (root / "resource").mkdir()
+    monkeypatch.setattr(workflow, "export_exam", run_export_workflow)
+    monkeypatch.setattr(workflow, "run_validate", lambda *a: None)
+    attempts = []
+
+    def compile(root, **kwargs):
+        attempts.append(True)
+        if len(attempts) < 3:
+            raise RuntimeError("temporary compiler failure")
+        destination = kwargs["dest_dir"]
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "exam.yaml").write_bytes(kwargs["exam_yaml"].read_bytes())
+        return destination, "student." + format, "teacher." + format
+
+    monkeypatch.setattr(
+        workflow, "export_" + ("pdfs" if format == "pdf" else "docx"), compile
+    )
+    job = service.submit(body, format=format, user=user, request_key="stable-request")
+    recovery_ids = []
+    for _ in range(2):
+        pool.run()
+        failed = service.get(job["id"], user=user)
+        assert failed["status"] == "failed"
+        recovery_id = failed["error"]["detail"]["exam_saved"]["exam_id"]
+        recovery_ids.append(recovery_id)
+        assert (root / "exams" / recovery_id / "exam.yaml").is_file()
+        service = export_tasks.ExportTaskService(root, executor=pool)
+        service.retry(job["id"], user=user)
+    assert len(set(recovery_ids)) == 2
+    pool.run()
+    assert service.get(job["id"], user=user)["status"] == "succeeded"
+    assert all(not (root / "exams" / eid).exists() for eid in recovery_ids)
+    assert (root / "exams/Quiz/Math/exam.yaml").is_file()
+    assert (
+        service.submit(body, format=format, user=user, request_key="stable-request")[
+            "id"
+        ]
+        == job["id"]
+    )
+    assert len(attempts) == 3 and pool.pending == []
+
+
 def test_worker_rechecks_account_status_before_compiling(task_case, monkeypatch):
     service, pool, user, body, calls = task_case
     job = service.submit(body, format="pdf", user=user)
@@ -137,6 +193,36 @@ def test_worker_rechecks_account_status_before_compiling(task_case, monkeypatch)
     pool.run()
     assert service.get(job["id"], user=user)["error"]["status"] == 403
     assert calls == []
+
+
+def test_existing_task_database_retains_last_recovery_during_upgrade(
+    task_case, monkeypatch
+):
+    service, pool, user, body, calls = task_case
+    job = service.submit(body, format="pdf", user=user)
+    pool.run()
+    with service._connect() as db:
+        db.execute("ALTER TABLE export_tasks DROP COLUMN recovery_ids_json")
+        db.execute(
+            "UPDATE export_tasks SET status='failed', error_json=? WHERE id=?",
+            (
+                '{"status":500,"detail":{"exam_saved":{"exam_id":"Recovery/Math"}}}',
+                job["id"],
+            ),
+        )
+    upgraded = export_tasks.ExportTaskService(service.root, executor=pool)
+    received = []
+    monkeypatch.setattr(
+        export_tasks.export_workflow,
+        "export_exam",
+        lambda root, body, **kwargs: (
+            received.append(body.exam_ids_to_delete_on_success) or {"ok": True}
+        ),
+    )
+    upgraded.retry(job["id"], user=user)
+    pool.run()
+    assert received == [["Recovery/Math"]]
+    assert upgraded.get(job["id"], user=user)["status"] == "succeeded"
 
 
 def test_process_loss_becomes_a_retryable_failure(task_case):

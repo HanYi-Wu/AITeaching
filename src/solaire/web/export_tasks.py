@@ -51,13 +51,22 @@ class ExportTaskService:
         assert_within_project(self.root, self.db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("""CREATE TABLE IF NOT EXISTS export_tasks (
                 id TEXT PRIMARY KEY, owner TEXT NOT NULL, format TEXT NOT NULL,
                 request_json TEXT NOT NULL, request_key TEXT,
                 status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                 attempt INTEGER NOT NULL DEFAULT 1, result_json TEXT, error_json TEXT,
+                recovery_ids_json TEXT NOT NULL DEFAULT '[]',
                 UNIQUE(owner, request_key)
             )""")
+            columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(export_tasks)")
+            }
+            if "recovery_ids_json" not in columns:
+                db.execute(
+                    "ALTER TABLE export_tasks ADD COLUMN recovery_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS export_tasks_owner ON export_tasks(owner, created_at)"
             )
@@ -130,6 +139,23 @@ class ExportTaskService:
             raise HTTPException(
                 status_code=429, detail="待处理导出任务过多，请等待已有任务完成。"
             )
+
+    @staticmethod
+    def _recovery_ids(row, error=None):
+        ids = json.loads(row["recovery_ids_json"] or "[]")
+        if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
+            raise ValueError("Invalid recovery draft list")
+        previous_error = (
+            error if error is not None else json.loads(row["error_json"] or "null")
+        )
+        detail = (
+            previous_error.get("detail") if isinstance(previous_error, dict) else None
+        )
+        saved = detail.get("exam_saved") if isinstance(detail, dict) else None
+        exam_id = saved.get("exam_id") if isinstance(saved, dict) else None
+        if isinstance(exam_id, str) and exam_id.strip():
+            ids.append(exam_id.strip())
+        return list(dict.fromkeys(ids))
 
     def submit(
         self,
@@ -226,15 +252,21 @@ class ExportTaskService:
                     return self._public(row)
                 try:
                     body = ExamExportBody.model_validate_json(row["request_json"])
+                    recoveries = self._recovery_ids(row)
                 except ValueError as exc:
                     raise HTTPException(
                         status_code=409,
                         detail="任务配置已无法读取，请重新创建导出任务。",
                     ) from exc
+                body.exam_ids_to_delete_on_success = list(
+                    dict.fromkeys(
+                        [*(body.exam_ids_to_delete_on_success or []), *recoveries]
+                    )
+                )
                 self._check_capacity(db, owner)
                 db.execute(
-                    "UPDATE export_tasks SET status='queued', result_json=NULL, error_json=NULL, attempt=attempt+1, updated_at=? WHERE id=?",
-                    (_now(), task_id),
+                    "UPDATE export_tasks SET status='queued', result_json=NULL, error_json=NULL, recovery_ids_json=?, attempt=attempt+1, updated_at=? WHERE id=?",
+                    (json.dumps(recoveries, ensure_ascii=False), _now(), task_id),
                 )
         except BaseException:
             lease.close()
@@ -268,8 +300,12 @@ class ExportTaskService:
 
     def _finish(self, task_id, *, result=None, error=None):
         with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM export_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            recoveries = self._recovery_ids(row, error)
             db.execute(
-                "UPDATE export_tasks SET status=?,result_json=?,error_json=?,updated_at=? WHERE id=?",
+                "UPDATE export_tasks SET status=?,result_json=?,error_json=?,recovery_ids_json=?,updated_at=? WHERE id=?",
                 (
                     "failed" if error else "succeeded",
                     json.dumps(result, ensure_ascii=False)
@@ -278,6 +314,7 @@ class ExportTaskService:
                     json.dumps(error, ensure_ascii=False)
                     if error is not None
                     else None,
+                    json.dumps(recoveries, ensure_ascii=False),
                     _now(),
                     task_id,
                 ),
