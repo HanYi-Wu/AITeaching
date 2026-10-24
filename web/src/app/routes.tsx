@@ -56,10 +56,10 @@ export function ComposeRoute({
   }
   return (
     <ComposeWorkspace
-      key={info.root ?? "unbound"}
+      key={info.root || info.project_id || "unbound"}
       onError={onError}
       accountId={accountId}
-      projectRoot={info.root ?? null}
+      projectRoot={info.root || info.project_id || null}
       toolBarActive={toolBarActive}
       openExamId={openExamId}
       onOpenExamConsumed={onOpenExamConsumed}

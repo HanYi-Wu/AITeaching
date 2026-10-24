@@ -56,9 +56,9 @@ export function useComposeDraftScope(params: {
         return norm || null;
       }
       try {
-        const info = await apiGet<{ bound?: boolean; root?: string | null }>("/api/project/info");
-        if (info?.bound && typeof info.root === "string") {
-          const norm = normalizeProjectRootForScope(info.root);
+        const info = await apiGet<{ bound?: boolean; root?: string | null; project_id?: string }>("/api/project/info");
+        if (info?.bound) {
+          const norm = normalizeProjectRootForScope(info.root || info.project_id);
           return norm || null;
         }
       } catch {

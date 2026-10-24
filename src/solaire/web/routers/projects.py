@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from solaire.web import bundled_paths, recent_projects, state
 from solaire.web.public_access import redact_project_root
 from solaire.web.project_layout import ensure_project_layout
+from solaire.web.project_scope import project_scope_id
 from solaire.web.platform_db import init_platform_db
 from solaire.web.security import safe_project_name, unique_child_dir
 from fastapi import APIRouter
@@ -23,7 +24,7 @@ router = APIRouter()
 def project_info() -> dict[str, Any]:
     r = state.get_content_root()
     ensure_project_layout(r)
-    return redact_project_root({"bound": True, "root": str(r)})
+    return redact_project_root({"bound": True, "root": str(r), "project_id": project_scope_id(r)})
 
 
 @router.get("/api/recent-projects")
