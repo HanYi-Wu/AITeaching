@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from solaire.web.application import create_app
@@ -57,9 +58,46 @@ def test_legacy_export_and_draft_input_contracts():
         )
 
 
-def test_no_duplicate_api_method_and_path():
+def _api_endpoints(routes):
     endpoints = []
-    for route in create_app().routes:
-        for method in getattr(route, "methods", ()):
-            endpoints.append((method, route.path))
+    for route in routes:
+        effective_candidates = getattr(route, "effective_candidates", None)
+        if callable(effective_candidates):
+            endpoints.extend(_api_endpoints(effective_candidates()))
+        elif getattr(route, "path", "").startswith("/api/"):
+            path = getattr(route, "path_format", route.path)
+            endpoints.extend((method, path) for method in route.methods)
+    return endpoints
+
+
+def test_no_duplicate_api_method_and_path():
+    app = create_app()
+    endpoints = _api_endpoints(app.routes)
+    assert len(endpoints) >= 240
+    assert {
+        (method.upper(), path)
+        for path, operations in app.openapi()["paths"].items()
+        for method in operations
+    } <= set(endpoints)
     assert len(endpoints) == len(set(endpoints))
+
+
+def test_duplicate_guard_checks_nested_effective_prefixes_and_http_methods():
+    leaf = APIRouter()
+
+    def endpoint():
+        return {}
+
+    leaf.add_api_route("/item", endpoint, methods=["GET"])
+    leaf.add_api_route("/item", endpoint, methods=["GET", "POST"])
+    parent = APIRouter(prefix="/parent")
+    parent.include_router(leaf, prefix="/child")
+    app = FastAPI()
+    app.include_router(parent, prefix="/api")
+    app.include_router(leaf, prefix="/api/other")
+    endpoints = _api_endpoints(app.routes)
+    assert endpoints.count(("GET", "/api/parent/child/item")) == 2
+    assert endpoints.count(("POST", "/api/parent/child/item")) == 1
+    assert endpoints.count(("GET", "/api/other/item")) == 2
+    assert endpoints.count(("POST", "/api/other/item")) == 1
+    assert len(endpoints) != len(set(endpoints))
