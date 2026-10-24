@@ -131,6 +131,22 @@ def test_queue_is_bounded_per_owner(task_case):
     assert caught.value.status_code == 429
 
 
+def test_invalid_stored_retry_does_not_leave_a_queued_job_or_locked_lease(task_case):
+    service, pool, user, body, calls = task_case
+    job = service.submit(body, format="pdf", user=user)
+    pool.close()
+    pool.pending.clear()
+    assert service.get(job["id"], user=user)["status"] == "failed"
+    with service._connect() as db:
+        db.execute("UPDATE export_tasks SET request_json='invalid' WHERE id=?", (job["id"],))
+    with pytest.raises(HTTPException) as caught:
+        service.retry(job["id"], user=user)
+    assert caught.value.status_code == 409
+    assert service.get(job["id"], user=user)["status"] == "failed"
+    with service._lease(job["id"]):
+        pass
+
+
 def test_task_api_keeps_payload_private_and_validates_formats(task_case, monkeypatch, web_client):
     service, pool, user, body, calls = task_case
     monkeypatch.setattr(export_tasks, "_executor", pool)

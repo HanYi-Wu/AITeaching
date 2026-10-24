@@ -171,12 +171,16 @@ class ExportTaskService:
                 if row["status"] != "failed":
                     lease.close()
                     return self._public(row)
+                try:
+                    body = ExamExportBody.model_validate_json(row["request_json"])
+                except ValueError as exc:
+                    raise HTTPException(status_code=409, detail="任务配置已无法读取，请重新创建导出任务。") from exc
                 self._check_capacity(db, owner)
                 db.execute("UPDATE export_tasks SET status='queued', result_json=NULL, error_json=NULL, attempt=attempt+1, updated_at=? WHERE id=?", (_now(), task_id))
         except BaseException:
             lease.close()
             raise
-        self._dispatch(task_id, ExamExportBody.model_validate_json(row["request_json"]), row["format"], user, lease)
+        self._dispatch(task_id, body, row["format"], user, lease)
         return self._public(self._row(task_id, owner))
 
     def _dispatch(self, task_id, body, format, user, lease):
