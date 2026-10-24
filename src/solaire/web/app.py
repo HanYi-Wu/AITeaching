@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from solaire.web.request_context import _require_root, bind_request_context
+
 import asyncio
 import contextvars
 import json
@@ -174,21 +176,6 @@ from solaire.web.remediation_service import create_remediation_draft, plan_remed
 # 在模块加载时注入 edu_analysis 所需的数据访问实现，解除 edu_analysis 对 web 层的反向依赖
 _configure_edu_analysis(result_port=ResultServiceAdapter())
 
-_graph_request_user: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
-    "graph_request_user",
-    default=None,
-)
-
-
-def _teacher_graph_root(content_root: Path, user: dict[str, Any] | None) -> Path:
-    return teacher_graph_root(content_root, user)
-
-
-def _require_root() -> Path:
-    r = state.get_content_root()
-    ensure_project_layout(r)
-    return _teacher_graph_root(r, _graph_request_user.get())
-
 
 def _resolve_under_templates(root: Path, rel: str) -> Path:
     """Return resolved path; must live under project templates/."""
@@ -231,32 +218,7 @@ app.add_middleware(
     ],
 )
 
-
-@app.middleware("http")
-async def _graph_platform_context(request: Request, call_next):
-    rejection = await enforce_public_access(request)
-    if rejection is not None:
-        return rejection
-    token = None
-    user: dict[str, Any] | None = None
-    if request.url.path.startswith("/api/"):
-        token = extract_session_token(
-            authorization=request.headers.get("authorization"),
-            x_solaire_session=request.headers.get("x-solaire-session"),
-        )
-        if token:
-            try:
-                user = get_session_user(require_platform_root(), token)
-            except Exception:
-                user = None
-    ctx_token = _graph_request_user.set(user if request.url.path.startswith('/api/graph') else None)
-    from solaire.common.actor_context import actor
-    actor_token = actor.set(user or getattr(request.state, 'platform_user', None))
-    try:
-        return await call_next(request)
-    finally:
-        actor.reset(actor_token)
-        _graph_request_user.reset(ctx_token)
+app.middleware("http")(bind_request_context)
 
 
 class ProjectOpenBody(BaseModel):
@@ -1711,7 +1673,6 @@ def exam_export(body: ExamExportBody) -> dict[str, Any]:
     }
 
 
-
 @app.post("/api/exam/export-word")
 def exam_export_word(body: ExamExportBody) -> dict[str, Any]:
     root = _require_root()
@@ -2121,7 +2082,6 @@ def exams_open_pdf(
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"无法通过系统打开文件: {e}") from e
     return {"ok": True}
-
 
 
 @app.get("/api/exams/{exam_path:path}/docx-file")
