@@ -9,11 +9,11 @@ from solaire.web.auth_api import router as auth_router
 from solaire.web.paper_api import router as paper_router
 from solaire.web.school_api import router as school_router
 from solaire.web.student_api import router as student_router
-from solaire.web.routers import analysis, bank, exams, graph, projects, system, templates
+from solaire.web.routers import analysis, bank, exams, export_tasks, graph, projects, system, templates
 
 
 def register_routes(app: FastAPI) -> None:
     for router in (agent_router, auth_router, school_router, paper_router, student_router):
         app.include_router(router, prefix="/api")
-    for module in (system, projects, bank, templates, exams, graph, analysis):
+    for module in (system, projects, bank, templates, exams, graph, analysis, export_tasks):
         app.include_router(module.router)
