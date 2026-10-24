@@ -24,20 +24,37 @@ def test_routes_do_not_depend_on_application_entry_or_other_routers():
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.ImportFrom):
                 target = node.module or ""
-                assert target not in {"solaire.web.app", "solaire.web.application"}, path.name
+                assert target not in {"solaire.web.app", "solaire.web.application"}, (
+                    path.name
+                )
                 assert not target.startswith("solaire.web.routers"), path.name
 
 
 def test_legacy_export_and_draft_input_contracts():
     schema = create_app().openapi()
     models = schema["components"]["schemas"]
-    assert models["SelectedSectionIn"]["properties"]["required_count"]["anyOf"][0]["maximum"] == 500
+    assert (
+        models["SelectedSectionIn"]["properties"]["required_count"]["anyOf"][0][
+            "maximum"
+        ]
+        == 500
+    )
     assert models["ExamExportBody"]["required"] == [
-        "template_ref", "template_path", "selected_items", "export_label", "subject",
+        "template_ref",
+        "template_path",
+        "selected_items",
+        "export_label",
+        "subject",
     ]
-    for endpoint in ("/api/exam/export", "/api/exam/export-word", "/api/exam/preview-pdf"):
+    for endpoint in (
+        "/api/exam/export",
+        "/api/exam/export-word",
+        "/api/exam/preview-pdf",
+    ):
         body = schema["paths"][endpoint]["post"]["requestBody"]
-        assert body["content"]["application/json"]["schema"]["$ref"].endswith("/ExamExportBody")
+        assert body["content"]["application/json"]["schema"]["$ref"].endswith(
+            "/ExamExportBody"
+        )
 
 
 def test_no_duplicate_api_method_and_path():

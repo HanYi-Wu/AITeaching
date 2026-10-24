@@ -12,13 +12,11 @@ import uuid
 from pathlib import Path
 from threading import Lock
 from typing import Any
-import yaml
 from fastapi import Body, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
-from solaire.exam_compiler.facade import ExamConfig, SelectedSection, load_template
 from solaire.web.result_service import compute_statistics, delete_score_batch, find_exported_docx_path, find_exported_pdf_path, generate_score_template, get_exam_summary, get_score_analysis, import_scores, list_exam_results, open_docx_with_default_app, open_pdf_with_default_app
-from solaire.web.exam_workspace_service import create_workspace_from_exam, delete_exam_workspace, exam_id_from_labels, exam_yaml_path, list_exam_workspaces, load_exam_workspace, mark_exported, resolve_template_under_project, save_exam_workspace, save_exam_workspace_after_export_failure
-from solaire.web.exam_service import VALIDATE_EXAM_NAME, discard_build_yaml_backup, exam_export_error_detail_short, export_docx, export_pdfs, export_preview_pdfs, find_export_conflict, restore_build_yaml_from_backup, run_validate, snapshot_build_yaml_before_export, write_build_exam_yaml, write_exam_yaml, write_preview_exam_yaml
+from solaire.web.exam_workspace_service import create_workspace_from_exam, delete_exam_workspace, exam_yaml_path, list_exam_workspaces, load_exam_workspace, resolve_template_under_project, save_exam_workspace
+from solaire.web.exam_service import VALIDATE_EXAM_NAME, exam_export_error_detail_short, export_preview_pdfs, find_export_conflict, run_validate, write_exam_yaml, write_preview_exam_yaml
 from solaire.web.security import assert_within_project, content_disposition_attachment
 from fastapi import APIRouter
 from solaire.web.request_context import _require_root

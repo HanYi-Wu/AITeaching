@@ -27,15 +27,28 @@ class ManualExecutor:
 def task_case(tmp_path, monkeypatch):
     pool = ManualExecutor()
     user = {"id": "teacher-a", "role": "teacher", "status": "active"}
-    monkeypatch.setattr(export_tasks.auth_service, "get_user_profile", lambda *args: dict(user))
+    monkeypatch.setattr(
+        export_tasks.auth_service, "get_user_profile", lambda *args: dict(user)
+    )
     calls = []
 
     def compile(root, body, *, format):
         calls.append((root, body.export_label, format, export_tasks.actor.get()))
-        return {"ok": True, "exam_dir": "exams/Quiz/Math", f"student_{format}": "student." + format, f"teacher_{format}": "teacher." + format}
+        return {
+            "ok": True,
+            "exam_dir": "exams/Quiz/Math",
+            f"student_{format}": "student." + format,
+            f"teacher_{format}": "teacher." + format,
+        }
 
     monkeypatch.setattr(export_tasks.export_workflow, "export_exam", compile)
-    body = ExamExportBody(template_ref="test", template_path="templates/test.yaml", selected_items=[], export_label="Quiz", subject="Math")
+    body = ExamExportBody(
+        template_ref="test",
+        template_path="templates/test.yaml",
+        selected_items=[],
+        export_label="Quiz",
+        subject="Math",
+    )
     service = export_tasks.ExportTaskService(tmp_path, executor=pool)
     yield service, pool, user, body, calls
     pool.close()
@@ -61,7 +74,12 @@ def test_request_key_deduplicates_and_rejects_changed_payload(task_case):
     second = service.submit(body, format="pdf", user=user, request_key="one")
     assert second["id"] == first["id"] and len(pool.pending) == 1
     with pytest.raises(HTTPException) as caught:
-        service.submit(body.model_copy(update={"export_label": "Different"}), format="pdf", user=user, request_key="one")
+        service.submit(
+            body.model_copy(update={"export_label": "Different"}),
+            format="pdf",
+            user=user,
+            request_key="one",
+        )
     assert caught.value.status_code == 409
 
 
@@ -79,12 +97,20 @@ def test_other_teachers_cannot_list_read_or_retry_a_job(task_case):
     assert caught.value.status_code == 403
 
 
-def test_failed_job_retries_once_and_completed_retry_is_idempotent(task_case, monkeypatch):
+def test_failed_job_retries_once_and_completed_retry_is_idempotent(
+    task_case, monkeypatch
+):
     service, pool, user, body, calls = task_case
     original = export_tasks.export_workflow.export_exam
 
     def fail(*args, **kwargs):
-        raise HTTPException(status_code=400, detail={"message": "Fix template", "exam_saved": {"exam_id": "Recovery/Math"}})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Fix template",
+                "exam_saved": {"exam_id": "Recovery/Math"},
+            },
+        )
 
     monkeypatch.setattr(export_tasks.export_workflow, "export_exam", fail)
     job = service.submit(body, format="pdf", user=user)
@@ -103,7 +129,11 @@ def test_failed_job_retries_once_and_completed_retry_is_idempotent(task_case, mo
 def test_worker_rechecks_account_status_before_compiling(task_case, monkeypatch):
     service, pool, user, body, calls = task_case
     job = service.submit(body, format="pdf", user=user)
-    monkeypatch.setattr(export_tasks.auth_service, "get_user_profile", lambda *args: dict(user, status="disabled"))
+    monkeypatch.setattr(
+        export_tasks.auth_service,
+        "get_user_profile",
+        lambda *args: dict(user, status="disabled"),
+    )
     pool.run()
     assert service.get(job["id"], user=user)["error"]["status"] == 403
     assert calls == []
@@ -138,7 +168,9 @@ def test_invalid_stored_retry_does_not_leave_a_queued_job_or_locked_lease(task_c
     pool.pending.clear()
     assert service.get(job["id"], user=user)["status"] == "failed"
     with service._connect() as db:
-        db.execute("UPDATE export_tasks SET request_json='invalid' WHERE id=?", (job["id"],))
+        db.execute(
+            "UPDATE export_tasks SET request_json='invalid' WHERE id=?", (job["id"],)
+        )
     with pytest.raises(HTTPException) as caught:
         service.retry(job["id"], user=user)
     assert caught.value.status_code == 409
@@ -147,7 +179,9 @@ def test_invalid_stored_retry_does_not_leave_a_queued_job_or_locked_lease(task_c
         pass
 
 
-def test_task_api_keeps_payload_private_and_validates_formats(task_case, monkeypatch, web_client):
+def test_task_api_keeps_payload_private_and_validates_formats(
+    task_case, monkeypatch, web_client
+):
     service, pool, user, body, calls = task_case
     monkeypatch.setattr(export_tasks, "_executor", pool)
     request = dict(body.model_dump(), format="docx", request_key="http-one")
@@ -158,18 +192,29 @@ def test_task_api_keeps_payload_private_and_validates_formats(task_case, monkeyp
     pool.run()
     result = web_client.get(f"/api/exam/export-tasks/{job['id']}")
     assert result.json()["status"] == "succeeded"
-    assert web_client.get("/api/exam/export-tasks").json()["tasks"][0]["id"] == job["id"]
-    assert web_client.post("/api/exam/export-tasks", json=dict(request, format="exe")).status_code == 422
+    assert (
+        web_client.get("/api/exam/export-tasks").json()["tasks"][0]["id"] == job["id"]
+    )
+    assert (
+        web_client.post(
+            "/api/exam/export-tasks", json=dict(request, format="exe")
+        ).status_code
+        == 422
+    )
 
 
-def test_public_api_requires_login_and_preserves_teacher_isolation(task_case, monkeypatch, web_client):
+def test_public_api_requires_login_and_preserves_teacher_isolation(
+    task_case, monkeypatch, web_client
+):
     from solaire.web import public_access
 
     service, pool, user, body, calls = task_case
     monkeypatch.setenv("SOLAIRE_PUBLIC_MODE", "1")
     monkeypatch.setattr(export_tasks, "_executor", pool)
     authenticated = [None]
-    monkeypatch.setattr(public_access, "_authenticated_user", lambda request: authenticated[0])
+    monkeypatch.setattr(
+        public_access, "_authenticated_user", lambda request: authenticated[0]
+    )
     assert web_client.get("/api/exam/export-tasks").status_code == 401
     authenticated[0] = user
     response = web_client.post("/api/exam/export-tasks", json=body.model_dump())
@@ -181,4 +226,7 @@ def test_public_api_requires_login_and_preserves_teacher_isolation(task_case, mo
     for role in ("student", "school"):
         authenticated[0] = dict(user, role=role)
         assert web_client.get("/api/exam/export-tasks").status_code == 403
-        assert web_client.post(f"/api/exam/export-tasks/{task_id}/retry").status_code == 403
+        assert (
+            web_client.post(f"/api/exam/export-tasks/{task_id}/retry").status_code
+            == 403
+        )

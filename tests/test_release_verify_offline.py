@@ -27,7 +27,8 @@ def _package(tmp_path, *, tamper=None):
     repo.mkdir()
     files = {
         "pyproject.toml": b'[project]\nname="solaire-education"\nversion="1.6.7"\n',
-        "README.md": b"README\n", "LICENSE": b"LICENSE\n",
+        "README.md": b"README\n",
+        "LICENSE": b"LICENSE\n",
         "src/solaire/__init__.py": b'"""Package."""\n',
         "src/solaire/web/app.py": b"app = None\n",
         "scripts/offline/install.sh": b"#!/bin/sh\n",
@@ -39,27 +40,78 @@ def _package(tmp_path, *, tamper=None):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
     subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(repo), "config", "core.autocrlf", "false"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "core.autocrlf", "false"], check=True
+    )
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
     commit = git(repo, "rev-parse", "HEAD").decode().strip()
-    app = {name: files[name] for name in git_tree(repo, commit, "src", "pyproject.toml", "README.md", "LICENSE")}
+    app = {
+        name: files[name]
+        for name in git_tree(
+            repo, commit, "src", "pyproject.toml", "README.md", "LICENSE"
+        )
+    }
     app["web/dist/index.html"] = b"<html>App</html>"
-    runtime = {"lib/python3.12/site-packages/" + name.removeprefix("src/"): body for name, body in files.items() if name.startswith("src/")}
-    runtime["lib/python3.12/site-packages/solaire_education-1.6.7.dist-info/METADATA"] = b"Version: 1.6.7\n"
-    runtime.update({f"share/tessdata/{lang}.traineddata": b"x" * 100_001 for lang in ("eng", "chi_sim")})
+    runtime = {
+        "lib/python3.12/site-packages/" + name.removeprefix("src/"): body
+        for name, body in files.items()
+        if name.startswith("src/")
+    }
+    runtime[
+        "lib/python3.12/site-packages/solaire_education-1.6.7.dist-info/METADATA"
+    ] = b"Version: 1.6.7\n"
+    runtime.update(
+        {
+            f"share/tessdata/{lang}.traineddata": b"x" * 100_001
+            for lang in ("eng", "chi_sim")
+        }
+    )
     if tamper == "runtime":
-        runtime["lib/python3.12/site-packages/solaire/web/app.py"] = b"app = 'wrong version'\n"
+        runtime["lib/python3.12/site-packages/solaire/web/app.py"] = (
+            b"app = 'wrong version'\n"
+        )
     if tamper == "app":
         app["src/solaire/web/app.py"] = b"app = 'wrong version'\n"
     nested = {"app.tar.gz": _tar(app), "runtime.tar.gz": _tar(runtime)}
-    manifest = {"format": 1, "version": "1.6.7", "commit": commit, "arch": "x86_64", "sha256": {name: hashlib.sha256(body).hexdigest() for name, body in nested.items()}}
+    manifest = {
+        "format": 1,
+        "version": "1.6.7",
+        "commit": commit,
+        "arch": "x86_64",
+        "sha256": {
+            name: hashlib.sha256(body).hexdigest() for name, body in nested.items()
+        },
+    }
     if tamper == "manifest":
         manifest["version"] = "1.0.0"
-    outer = nested | {"manifest.json": json.dumps(manifest).encode(), "python-dependencies.txt": b"solaire-education==1.6.7\n", "install.sh": files["scripts/offline/install.sh"], "installer.py": files["scripts/offline/installer.py"], "使用说明.md": files["docs/linux-offline-install.md"]}
+    outer = nested | {
+        "manifest.json": json.dumps(manifest).encode(),
+        "python-dependencies.txt": b"solaire-education==1.6.7\n",
+        "install.sh": files["scripts/offline/install.sh"],
+        "installer.py": files["scripts/offline/installer.py"],
+        "使用说明.md": files["docs/linux-offline-install.md"],
+    }
     bundle = tmp_path / "offline.tar.gz"
     bundle.write_bytes(_tar({"bundle/" + name: body for name, body in outer.items()}))
-    bundle.with_suffix(".gz.sha256").write_text(hashlib.sha256(bundle.read_bytes()).hexdigest() + "  " + bundle.name, encoding="utf-8")
+    bundle.with_suffix(".gz.sha256").write_text(
+        hashlib.sha256(bundle.read_bytes()).hexdigest() + "  " + bundle.name,
+        encoding="utf-8",
+    )
     return bundle, repo
 
 

@@ -317,7 +317,6 @@ def graph_question_nodes(qualified_id: str = Query(..., min_length=1)) -> dict[s
 def graph_question_bindings_index(graph: str | None = Query(None)) -> dict[str, Any]:
     """单次返回「题目全限定 id → 已关联知识点节点」摘要，供题库列表展示标签。"""
     root = _require_root()
-    from solaire.knowledge_forge.service import _load_meta, _load_subject_state  # noqa: PLC0415
 
     _ensure_root_graph_loaded = lambda: None  # noqa: E731
     acc: dict[str, list[dict[str, Any]]] = {}

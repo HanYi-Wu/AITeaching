@@ -22,8 +22,21 @@ def main():
     parser.add_argument("--checksum", type=Path)
     args = parser.parse_args()
     try:
-        result = verify_source_archive(args.archive, args.repo, args.ref) if args.kind == "source" else verify_offline_bundle(args.archive, args.repo, args.ref, checksum=args.checksum)
-    except (VerificationError, OSError, ValueError, subprocess.CalledProcessError, tarfile.TarError, zipfile.BadZipFile) as exc:
+        result = (
+            verify_source_archive(args.archive, args.repo, args.ref)
+            if args.kind == "source"
+            else verify_offline_bundle(
+                args.archive, args.repo, args.ref, checksum=args.checksum
+            )
+        )
+    except (
+        VerificationError,
+        OSError,
+        ValueError,
+        subprocess.CalledProcessError,
+        tarfile.TarError,
+        zipfile.BadZipFile,
+    ) as exc:
         print(f"Verification failed: {exc}", file=sys.stderr)
         return 1
     document = json.dumps(result, ensure_ascii=False, indent=2)

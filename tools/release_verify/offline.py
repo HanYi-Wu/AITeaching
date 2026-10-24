@@ -9,7 +9,15 @@ import tarfile
 import tomllib
 from pathlib import Path
 
-from .source import TreeVerifier, VerificationError, blob_hash, git, git_tree, safe_archive_name, sha256
+from .source import (
+    TreeVerifier,
+    VerificationError,
+    blob_hash,
+    git,
+    git_tree,
+    safe_archive_name,
+    sha256,
+)
 
 
 class HashReader:
@@ -50,7 +58,11 @@ def _verify_app(body, expected, algorithm):
 
 def _verify_runtime(stream, expected, version, package_name, algorithm):
     reader = HashReader(stream)
-    python_files = {name.removeprefix("src/"): value for name, value in expected.items() if name.startswith("src/solaire/") and name.endswith(".py")}
+    python_files = {
+        name.removeprefix("src/"): value
+        for name, value in expected.items()
+        if name.startswith("src/solaire/") and name.endswith(".py")
+    }
     checked, languages = set(), set()
     metadata_ok = False
     with tarfile.open(fileobj=reader, mode="r|gz") as runtime:
@@ -61,11 +73,19 @@ def _verify_runtime(stream, expected, version, package_name, algorithm):
             installed = name.split("/site-packages/", 1)[-1]
             if installed in python_files:
                 blob, size, _ = python_files[installed]
-                if member.size != size or blob_hash(runtime.extractfile(member), size, algorithm) != blob:
-                    raise VerificationError("Installed runtime source mismatch: " + installed)
+                if (
+                    member.size != size
+                    or blob_hash(runtime.extractfile(member), size, algorithm) != blob
+                ):
+                    raise VerificationError(
+                        "Installed runtime source mismatch: " + installed
+                    )
                 checked.add(installed)
             for language in ("eng", "chi_sim"):
-                if name.endswith(f"share/tessdata/{language}.traineddata") and member.size > 100_000:
+                if (
+                    name.endswith(f"share/tessdata/{language}.traineddata")
+                    and member.size > 100_000
+                ):
                     languages.add(language)
             if installed == f"{package_name}-{version}.dist-info/METADATA":
                 data = runtime.extractfile(member).read().decode("utf-8")
@@ -73,21 +93,34 @@ def _verify_runtime(stream, expected, version, package_name, algorithm):
     for _ in iter(lambda: reader.read(1024 * 1024), b""):
         pass
     if checked != python_files.keys():
-        raise VerificationError("Installed Python sources missing: " + ", ".join(sorted(python_files.keys() - checked)[:10]))
+        raise VerificationError(
+            "Installed Python sources missing: "
+            + ", ".join(sorted(python_files.keys() - checked)[:10])
+        )
     if languages != {"eng", "chi_sim"} or not metadata_ok:
-        raise VerificationError("Runtime package version or OCR language data is missing")
+        raise VerificationError(
+            "Runtime package version or OCR language data is missing"
+        )
     return reader.hash.hexdigest(), len(checked)
 
 
-def verify_offline_bundle(bundle: Path, repo: Path, ref="HEAD", *, checksum: Path | None = None):
+def verify_offline_bundle(
+    bundle: Path, repo: Path, ref="HEAD", *, checksum: Path | None = None
+):
     commit = git(repo, "rev-parse", "--verify", ref + "^{commit}").decode().strip()
-    project = tomllib.loads(git(repo, "show", commit + ":pyproject.toml").decode("utf-8"))["project"]
+    project = tomllib.loads(
+        git(repo, "show", commit + ":pyproject.toml").decode("utf-8")
+    )["project"]
     version = project["version"]
     package_name = project["name"].replace("-", "_")
     checksum = checksum or Path(str(bundle) + ".sha256")
     fields = checksum.read_text(encoding="utf-8-sig").strip().split(maxsplit=1)
     outer_hash = sha256(bundle)
-    if len(fields) != 2 or fields[0].lower() != outer_hash or fields[1].lstrip("*") != bundle.name:
+    if (
+        len(fields) != 2
+        or fields[0].lower() != outer_hash
+        or fields[1].lstrip("*") != bundle.name
+    ):
         raise VerificationError("Offline bundle checksum or filename mismatch")
     algorithm = git(repo, "rev-parse", "--show-object-format").decode().strip()
     expected = git_tree(repo, commit, "src", "pyproject.toml", "README.md", "LICENSE")
@@ -96,7 +129,12 @@ def verify_offline_bundle(bundle: Path, repo: Path, ref="HEAD", *, checksum: Pat
         "installer.py": "scripts/offline/installer.py",
         "使用说明.md": "docs/linux-offline-install.md",
     }
-    allowed = set(ancillary) | {"manifest.json", "app.tar.gz", "runtime.tar.gz", "python-dependencies.txt"}
+    allowed = set(ancillary) | {
+        "manifest.json",
+        "app.tar.gz",
+        "runtime.tar.gz",
+        "python-dependencies.txt",
+    }
     seen, calculated = set(), {}
     manifest = None
     app_count = runtime_count = 0
@@ -109,7 +147,9 @@ def verify_offline_bundle(bundle: Path, repo: Path, ref="HEAD", *, checksum: Pat
                 raise VerificationError("Invalid offline bundle member: " + member.name)
             name = member.name.split("/", 1)[1]
             if name not in allowed or name in seen:
-                raise VerificationError("Unexpected or duplicate offline bundle member: " + name)
+                raise VerificationError(
+                    "Unexpected or duplicate offline bundle member: " + name
+                )
             seen.add(name)
             source = outer.extractfile(member)
             if name == "manifest.json":
@@ -118,19 +158,46 @@ def verify_offline_bundle(bundle: Path, repo: Path, ref="HEAD", *, checksum: Pat
                 manifest = json.load(source)
             elif name == "app.tar.gz":
                 if member.size > 256 * 1024 * 1024:
-                    raise VerificationError("Application source archive is unexpectedly large")
+                    raise VerificationError(
+                        "Application source archive is unexpectedly large"
+                    )
                 body = source.read()
                 calculated[name] = hashlib.sha256(body).hexdigest()
                 app_count = _verify_app(body, expected, algorithm)
             elif name == "runtime.tar.gz":
-                calculated[name], runtime_count = _verify_runtime(source, expected, version, package_name, algorithm)
+                calculated[name], runtime_count = _verify_runtime(
+                    source, expected, version, package_name, algorithm
+                )
             elif name in ancillary:
                 if source.read() != git(repo, "show", commit + ":" + ancillary[name]):
-                    raise VerificationError("Offline installer/document mismatch: " + name)
+                    raise VerificationError(
+                        "Offline installer/document mismatch: " + name
+                    )
     if seen != allowed:
-        raise VerificationError("Offline package members missing: " + ", ".join(sorted(allowed - seen)))
-    if not isinstance(manifest, dict) or any(manifest.get(key) != value for key, value in {"format": 1, "version": version, "commit": commit, "arch": "x86_64"}.items()):
-        raise VerificationError("Offline manifest does not match version, commit or architecture")
+        raise VerificationError(
+            "Offline package members missing: " + ", ".join(sorted(allowed - seen))
+        )
+    if not isinstance(manifest, dict) or any(
+        manifest.get(key) != value
+        for key, value in {
+            "format": 1,
+            "version": version,
+            "commit": commit,
+            "arch": "x86_64",
+        }.items()
+    ):
+        raise VerificationError(
+            "Offline manifest does not match version, commit or architecture"
+        )
     if manifest.get("sha256") != calculated:
         raise VerificationError("Nested application/runtime hash mismatch")
-    return {"bundle": str(bundle), "commit": commit, "version": version, "sha256": outer_hash, "bytes": bundle.stat().st_size, "app_sources_verified": app_count, "installed_python_sources_verified": runtime_count, "ocr_languages": ["eng", "chi_sim"]}
+    return {
+        "bundle": str(bundle),
+        "commit": commit,
+        "version": version,
+        "sha256": outer_hash,
+        "bytes": bundle.stat().st_size,
+        "app_sources_verified": app_count,
+        "installed_python_sources_verified": runtime_count,
+        "ocr_languages": ["eng", "chi_sim"],
+    }

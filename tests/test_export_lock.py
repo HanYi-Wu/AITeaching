@@ -48,9 +48,17 @@ try:
 except ExportBusyError:
     print('busy')
 """
-    env = dict(os.environ, PYTHONPATH=str(Path(__file__).parents[1] / "src"), PYTHONUTF8="1")
+    env = dict(
+        os.environ, PYTHONPATH=str(Path(__file__).parents[1] / "src"), PYTHONUTF8="1"
+    )
     with project_export_lock(tmp_path):
-        result = subprocess.run([sys.executable, "-c", code, str(tmp_path)], env=env, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "busy"
 

@@ -13,9 +13,11 @@ from solaire.web.auth_service import get_session_user
 from solaire.web.public_access import enforce_public_access
 from solaire.web.project_layout import ensure_project_layout
 
-_graph_request_user: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
-    "graph_request_user",
-    default=None,
+_graph_request_user: contextvars.ContextVar[dict[str, Any] | None] = (
+    contextvars.ContextVar(
+        "graph_request_user",
+        default=None,
+    )
 )
 
 
@@ -45,9 +47,12 @@ async def bind_request_context(request: Request, call_next):
                 user = get_session_user(require_platform_root(), token)
             except Exception:
                 user = None
-    ctx_token = _graph_request_user.set(user if request.url.path.startswith('/api/graph') else None)
+    ctx_token = _graph_request_user.set(
+        user if request.url.path.startswith("/api/graph") else None
+    )
     from solaire.common.actor_context import actor
-    actor_token = actor.set(user or getattr(request.state, 'platform_user', None))
+
+    actor_token = actor.set(user or getattr(request.state, "platform_user", None))
     try:
         return await call_next(request)
     finally:
