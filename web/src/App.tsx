@@ -393,6 +393,7 @@ function AppShell() {
                       <ComposeRoute
                         key={currentUser?.id ?? 'local'}
                         info={info}
+                        accountId={currentUser?.id ?? null}
                         onRefreshInfo={refreshInfo}
                         onError={setErr}
                         toolBarActive={page === "compose"}
