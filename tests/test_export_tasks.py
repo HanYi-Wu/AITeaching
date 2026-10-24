@@ -67,6 +67,8 @@ def test_jobs_are_durable_and_execute_in_the_request_actor_scope(task_case):
     assert calls[0][3] == user
     assert export_tasks.actor.get() is None
     assert "request_json" not in completed and "owner" not in completed
+    assert completed["export_label"] == "Quiz" and completed["subject"] == "Math"
+    assert completed["exam_workspace_id"] is None
 
 
 def test_request_key_deduplicates_and_rejects_changed_payload(task_case):
@@ -128,8 +130,9 @@ def test_failed_job_retries_once_and_completed_retry_is_idempotent(
 
 
 @pytest.mark.parametrize("format", ["pdf", "docx"])
+@pytest.mark.parametrize("change", [None, "save", "exported", "artifact"])
 def test_successful_retry_cleans_all_failure_drafts_and_keeps_request_identity(
-    task_case, monkeypatch, format
+    task_case, monkeypatch, format, change
 ):
     from solaire.web import export_workflow as workflow, platform_db
 
@@ -166,12 +169,26 @@ def test_successful_retry_cleans_all_failure_drafts_and_keeps_request_identity(
         recovery_id = failed["error"]["detail"]["exam_saved"]["exam_id"]
         recovery_ids.append(recovery_id)
         assert (root / "exams" / recovery_id / "exam.yaml").is_file()
+        if len(recovery_ids) == 1 and change:
+            from solaire.web import exam_workspace_service as workspaces
+
+            if change == "save":
+                document = workspaces.load_exam_workspace(root, recovery_id)
+                document["name"] = "User's new work"
+                workspaces.persist_exam_document(root, document)
+            elif change == "exported":
+                workspaces.mark_exported(root, recovery_id)
+            else:
+                (root / "exams" / recovery_id / "student.pdf").write_bytes(
+                    b"new export"
+                )
         service = export_tasks.ExportTaskService(root, executor=pool)
         service.retry(job["id"], user=user)
     assert len(set(recovery_ids)) == 2
     pool.run()
     assert service.get(job["id"], user=user)["status"] == "succeeded"
-    assert all(not (root / "exams" / eid).exists() for eid in recovery_ids)
+    assert (root / "exams" / recovery_ids[0]).exists() is bool(change)
+    assert not (root / "exams" / recovery_ids[1]).exists()
     assert (root / "exams/Quiz/Math/exam.yaml").is_file()
     assert (
         service.submit(body, format=format, user=user, request_key="stable-request")[
@@ -221,7 +238,8 @@ def test_existing_task_database_retains_last_recovery_during_upgrade(
     )
     upgraded.retry(job["id"], user=user)
     pool.run()
-    assert received == [["Recovery/Math"]]
+    # Without a recorded failure revision, legacy drafts may already be edited.
+    assert received == [[]]
     assert upgraded.get(job["id"], user=user)["status"] == "succeeded"
 
 

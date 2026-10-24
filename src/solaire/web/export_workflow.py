@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import HTTPException
+from solaire.web.export_cleanup import cleanup_revision
 from solaire.exam_compiler.facade import SelectedSection, load_template
 from solaire.web.schemas.exams import ExamDraftBody, ExamExportBody
 from solaire.web.exam_service import (
@@ -54,9 +55,9 @@ def _completion_plan(
     body: ExamExportBody,
     destination: Path,
     teacher_id: str | None,
-) -> tuple[str, tuple[str, ...]]:
+) -> tuple[str, dict[str, str]]:
     """Authorize status updates and cleanup before compiler/workspace writes."""
-    candidates = []
+    candidates = {}
     workspace_id = str(body.exam_workspace_id or "").strip()
     mark_id = workspace_id or exam_id_from_labels(body.export_label, body.subject)
     mark_path = exam_yaml_path(root, mark_id)
@@ -70,17 +71,20 @@ def _completion_plan(
         if path.parent.resolve() == destination:
             continue
         _assert_export_destination_owner(root, path.parent, teacher_id)
-        candidates.append(exam_id)
-    return mark_id, tuple(candidates)
+        revision = cleanup_revision(root, exam_id)
+        if revision is not None:
+            candidates[exam_id] = revision
+    return mark_id, candidates
 
 
 def _complete_export(
     root: Path,
     mark_id: str,
-    cleanup_ids: tuple[str, ...],
+    cleanup_ids: dict[str, str],
     teacher_id: str | None,
-) -> None:
+) -> list[str]:
     log = logging.getLogger(__name__)
+    deleted_ids = []
     if mark_id:
         try:
             _assert_export_destination_owner(
@@ -91,19 +95,22 @@ def _complete_export(
             log.warning(
                 "mark exam workspace exported failed: %s", mark_id, exc_info=True
             )
-    for exam_id in cleanup_ids:
+    for exam_id, revision in cleanup_ids.items():
         try:
             path = exam_yaml_path(root, exam_id)
             if path.is_file():
                 # A long-running compiler must not grant stale cleanup permission.
                 _assert_export_destination_owner(root, path.parent, teacher_id)
-                delete_exam_workspace(root, exam_id)
+                if cleanup_revision(root, exam_id) == revision:
+                    delete_exam_workspace(root, exam_id)
+                    deleted_ids.append(exam_id)
         except Exception:
             log.warning(
                 "delete exam workspace after export success failed: %s",
                 exam_id,
                 exc_info=True,
             )
+    return deleted_ids
 
 
 def export_exam(
@@ -184,12 +191,13 @@ def _export_locked(
         ) from exc
     else:
         discard_build_yaml_backup(backup)
-    _complete_export(root, mark_id, cleanup_ids, teacher_id)
+    deleted_ids = _complete_export(root, mark_id, cleanup_ids, teacher_id)
     return {
         "ok": True,
         "exam_dir": result_dir.relative_to(root).as_posix(),
         f"student_{format}": student_name,
         f"teacher_{format}": teacher_name,
+        "deleted_exam_ids": deleted_ids,
     }
 
 

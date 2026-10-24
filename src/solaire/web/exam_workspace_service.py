@@ -740,7 +740,7 @@ def save_exam_workspace_after_export_failure(
     candidates = [f"{base}（导出失败）"] + [f"{base}（导出失败{k}）" for k in range(2, 50)]
     for el in candidates:
         try:
-            return save_exam_workspace(
+            doc = save_exam_workspace(
                 project_root,
                 exam_id=None,
                 name=None,
@@ -752,6 +752,11 @@ def save_exam_workspace_after_export_failure(
             )
         except ValueError:
             continue
+        from solaire.web.export_cleanup import recovery_document
+
+        doc = recovery_document(doc)
+        _write_exam_yaml(project_root, doc)
+        return doc
     raise ValueError("无法为导出失败快照分配唯一的试卷说明")
 
 

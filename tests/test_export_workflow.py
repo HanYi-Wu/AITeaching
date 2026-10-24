@@ -64,13 +64,19 @@ def test_formats_use_one_ordered_workflow(export_case, monkeypatch, format):
     )
     result = workflow.export_exam(root, body, format=format)
     assert events == [
-        "authorize", "write", "validate", "compile", "authorize", "complete"
+        "authorize",
+        "write",
+        "validate",
+        "compile",
+        "authorize",
+        "complete",
     ]
     assert result == {
         "ok": True,
         "exam_dir": "exams/Quiz/Math",
         f"student_{format}": "student." + format,
         f"teacher_{format}": "teacher." + format,
+        "deleted_exam_ids": [],
     }
     assert not (build.parent / "build.yaml.before_export").exists()
 
@@ -203,6 +209,38 @@ def test_cleanup_rechecks_ownership_after_long_running_compile(
     )
     assert workflow.export_exam(root, body, format=format)["ok"]
     assert "teacher-a" in old.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+@pytest.mark.parametrize("change", ["edit", "exported", "artifact"])
+def test_cleanup_preserves_work_changed_while_the_compiler_runs(
+    teacher_export_case, monkeypatch, format, change
+):
+    import json
+
+    root, body, build, events = teacher_export_case
+    old = _owned_exam(root, "Old/Math", "teacher-b")
+    body.exam_ids_to_delete_on_success = ["Old/Math"]
+
+    def compile(root, **kwargs):
+        if change == "edit":
+            old.write_text(
+                old.read_text(encoding="utf-8") + "name: New work\n", encoding="utf-8"
+            )
+        elif change == "exported":
+            (old.parent / "config.json").write_text(
+                json.dumps({"status": "exported"}), encoding="utf-8"
+            )
+        else:
+            (old.parent / "student.pdf").write_bytes(b"new export")
+        return kwargs["dest_dir"], f"student.{format}", f"teacher.{format}"
+
+    monkeypatch.setattr(
+        workflow, "export_" + ("pdfs" if format == "pdf" else "docx"), compile
+    )
+    result = workflow.export_exam(root, body, format=format)
+    assert result["ok"] and result["deleted_exam_ids"] == []
+    assert old.is_file()
 
 
 @pytest.mark.parametrize("format", ["pdf", "docx"])

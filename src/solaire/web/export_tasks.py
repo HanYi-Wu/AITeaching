@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from solaire.common.actor_context import actor
 from solaire.web import auth_service, export_workflow
+from solaire.web.export_cleanup import cleanup_revision
 from solaire.web.export_lock import ExportBusyError, FileLease
 from solaire.web.platform_db import default_platform_root
 from solaire.web.schemas.exams import ExamExportBody
@@ -122,10 +123,19 @@ class ExportTaskService:
 
     @staticmethod
     def _public(row):
+        try:
+            payload = json.loads(row["request_json"])
+            if not isinstance(payload, dict):
+                payload = {}
+        except ValueError:
+            payload = {}
         return {
             key: row[key]
             for key in ("id", "format", "status", "created_at", "updated_at", "attempt")
         } | {
+            "exam_workspace_id": payload.get("exam_workspace_id"),
+            "export_label": payload.get("export_label"),
+            "subject": payload.get("subject"),
             "result": json.loads(row["result_json"]) if row["result_json"] else None,
             "error": json.loads(row["error_json"]) if row["error_json"] else None,
         }
@@ -260,7 +270,17 @@ class ExportTaskService:
                     ) from exc
                 body.exam_ids_to_delete_on_success = list(
                     dict.fromkeys(
-                        [*(body.exam_ids_to_delete_on_success or []), *recoveries]
+                        [
+                            *(body.exam_ids_to_delete_on_success or []),
+                            *(
+                                exam_id
+                                for exam_id in recoveries
+                                if cleanup_revision(
+                                    self.root, exam_id, require_recovery=True
+                                )
+                                is not None
+                            ),
+                        ]
                     )
                 )
                 self._check_capacity(db, owner)

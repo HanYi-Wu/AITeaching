@@ -19,6 +19,9 @@ class ExportTaskError(BaseModel):
 
 class ExportTaskView(BaseModel):
     id: str
+    exam_workspace_id: str | None = None
+    export_label: str | None = None
+    subject: str | None = None
     format: Literal["pdf", "docx"]
     status: Literal["queued", "running", "succeeded", "failed"]
     created_at: str
