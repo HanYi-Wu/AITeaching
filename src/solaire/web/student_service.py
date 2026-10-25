@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from solaire.web.auth_service import utc_now
+from solaire.web.papers.scoring import (
+    normalise_answer as _normalise_answer, question_score_map, rounded_total,
+    score_objective_answer,
+)
 from solaire.web.papers.answer_batches import (
     MAX_ANSWERS_PER_REQUEST, MAX_ANSWER_TEXT_LENGTH, MAX_IMAGES_PER_ANSWER,
     MAX_IMAGE_DATA_URL_LENGTH, MAX_ANSWER_BATCH_BYTES,
@@ -44,14 +48,7 @@ MAX_PROCTOR_EVENTS_PER_ATTEMPT = 1_000
 MAX_PROCTOR_EVENTS_PER_MINUTE = 120
 
 
-def _normalise_answer(value: object, qtype: str | None = None) -> str:
-    text = str(value or "").strip()
-    if qtype in {"single_choice", "multiple_choice", "choice", "judge"}:
-        chars = [ch for ch in text.upper() if ch.isalnum()]
-        if qtype in {"multiple_choice"}:
-            return "".join(sorted(dict.fromkeys(chars)))
-        return "".join(chars)
-    return " ".join(text.split()).lower()
+
 
 
 def ensure_student_resource_access(root: Path, project_root: Path, user: dict[str, Any], target: Path) -> None:
@@ -184,8 +181,8 @@ def submit_student_attempt(
     if answers is not None:
         _validate_answer_batch(answers, {str(item.get("question_id")) for item in questions})
     qtype_by_id = {str(q["question_id"]): str(q.get("type") or "") for q in questions}
-    score_by_id = {str(q["question_id"]): float(q.get("score_per_item") or 0) for q in questions}
-    max_score = round(sum(score_by_id.values()), 2)
+    score_by_id = question_score_map(questions)
+    max_score = rounded_total(score_by_id.values())
     auto_release = bool(questions) and str(attempt.get('submission_mode')) == 'online' and all(
         str(question.get('type')) in {'single_choice', 'multiple_choice', 'choice'}
         and valid_choice_key(answer_keys.get(str(question['question_id'])), question.get('options'), str(question.get('type')) == 'multiple_choice')
@@ -231,17 +228,11 @@ def submit_student_attempt(
         for qid, raw_answer in answers.items():
             expected = answer_keys.get(qid)
             qtype = qtype_by_id.get(qid)
-            if expected is None or raw_answer is None or str(raw_answer).strip() == "":
-                is_correct = 0 if auto_release else None
-                score = 0.0 if auto_release else None
-            else:
-                if str(expected).startswith(ANSWER_LOGIC_PREFIX) or str(raw_answer).startswith(ANSWER_LOGIC_PREFIX):
-                    is_correct_bool = matches_answer_logic(raw_answer, expected, choice=qtype in {'single_choice', 'multiple_choice', 'choice'})
-                else:
-                    is_correct_bool = _normalise_answer(raw_answer, qtype) == _normalise_answer(expected, qtype)
-                is_correct = 1 if is_correct_bool else 0
-                score = score_by_id.get(qid, 0.0) if is_correct_bool else 0.0
-                total += float(score)
+            is_correct, score = score_objective_answer(
+                raw_answer, expected, qtype, score_by_id.get(qid, 0.0), zero_unanswered=auto_release,
+            )
+            if score is not None:
+                total += score
                 scored_any = True
             con.execute(
                 "UPDATE student_answers SET is_correct = ?, score = ?, grading_status = ? WHERE attempt_id = ? AND question_id = ?",
@@ -256,7 +247,7 @@ def submit_student_attempt(
             time_limit_seconds = max(0, int(attempt.get("time_limit_minutes") or 0)) * 60
             if time_limit_seconds:
                 authoritative_time_spent = min(authoritative_time_spent, time_limit_seconds)
-        final_score: float | None = round(total, 2) if scored_any or auto_release else None
+        final_score: float | None = rounded_total([total]) if scored_any or auto_release else None
         if not attempt.get("started_at"):
             con.execute("UPDATE student_attempts SET started_at = ? WHERE id = ?", (now, attempt_id))
         con.execute(

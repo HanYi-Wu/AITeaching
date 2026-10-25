@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from solaire.web.auth_service import utc_now
+from solaire.web.papers.scoring import score_percent
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.papers.exam_timing import (
     _publication_availability, _time_limit_exceeded, _remaining_seconds,
@@ -39,16 +40,7 @@ def _student_for_user(root: Path, user: dict[str, Any]) -> dict[str, Any]:
     return student
 
 def _score_percent(score: object, max_score: object) -> float | None:
-    if score is None:
-        return None
-    try:
-        raw = float(score)
-        max_raw = float(max_score or 0)
-    except (TypeError, ValueError):
-        return None
-    if max_raw <= 0:
-        return round(raw, 2)
-    return round(raw / max_raw * 100, 2)
+    return score_percent(score, max_score, legacy_zero_max=True)
 
 def _saved_answer_payloads(root: Path, attempt_id: str) -> list[dict[str, Any]]:
     with connect(root) as con:

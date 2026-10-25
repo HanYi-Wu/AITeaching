@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from solaire.web.auth_service import utc_now
+from solaire.web.papers.scoring import (
+    clamp_suggested_score, question_score_map, score_percent, validate_manual_score,
+)
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.papers.repository import (
     clean_subject as _clean_subject,
@@ -400,19 +403,7 @@ def revoke_paper_publication(root: Path, *, paper_id: str, publication_id: str, 
 
 
 def _score_percent(score: object, max_score: object) -> float | None:
-    if score is None:
-        return None
-    try:
-        raw = float(score)
-    except (TypeError, ValueError):
-        return None
-    try:
-        max_raw = float(max_score)
-    except (TypeError, ValueError):
-        max_raw = 0
-    if max_raw > 0:
-        return round(raw / max_raw * 100, 2)
-    return round(raw, 2)
+    return score_percent(score, max_score, legacy_zero_max=True)
 
 
 def _risk_level(value: float | None) -> str:
@@ -1228,7 +1219,7 @@ def _paper_attempt_row(
 def _question_maps(project_root: Path, paper: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
     questions, _answer_keys = _paper_exam_question_payloads(project_root, paper)
     by_id = {str(item.get("question_id")): item for item in questions}
-    score_by_id = {qid: float(item.get("score_per_item") or 0) for qid, item in by_id.items()}
+    score_by_id = question_score_map(questions)
     return questions, by_id, score_by_id
 
 
@@ -1241,7 +1232,7 @@ def _question_maps_for_attempt(
     attempt_payload = attempt if attempt.get("exam_id") else {**attempt, "exam_id": paper.get("exam_id")}
     questions, _answer_keys = _load_attempt_question_payloads(project_root, attempt_payload, root=root)
     by_id = {str(item.get("question_id")): {**item, 'correct_answer': _answer_keys.get(str(item.get('question_id')))} for item in questions}
-    score_by_id = {qid: float(item.get("score_per_item") or 0) for qid, item in by_id.items()}
+    score_by_id = question_score_map(questions)
     return questions, by_id, score_by_id
 
 
@@ -1279,17 +1270,7 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
 
 
 def _clamp_score(value: object, max_score: float) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        raw = float(value)
-    except (TypeError, ValueError):
-        return None
-    if raw < 0:
-        return 0.0
-    if max_score > 0 and raw > max_score:
-        return max_score
-    return round(raw, 2)
+    return clamp_suggested_score(value, max_score)
 
 
 def _ocr_images(images: list[Any]) -> tuple[str, list[str]]:
@@ -2429,9 +2410,7 @@ def grade_paper_answer(
     if question_id not in by_id:
         raise ValueError("question not found in paper")
     max_score = float(score_by_id.get(question_id, 0.0))
-    clean_score = float(score)
-    if clean_score < 0 or (max_score > 0 and clean_score > max_score):
-        raise ValueError("score is out of range")
+    clean_score = validate_manual_score(score, max_score)
     clean_feedback = feedback.strip() if feedback and feedback.strip() else None
     resolved_is_correct = is_correct
     if resolved_is_correct is None and max_score > 0:
