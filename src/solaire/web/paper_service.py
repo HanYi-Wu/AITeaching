@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from solaire.web.auth_service import utc_now
+from solaire.web.papers.grading_versions import (
+    advance_answer_revision, answer_grading_version, check_grading_version, load_answer_revisions,
+)
 from solaire.web.papers.scoring import (
     clamp_suggested_score, question_score_map, score_percent, validate_manual_score,
 )
@@ -1619,6 +1622,7 @@ def list_paper_submissions(
     _ensure_paper_access(paper, user)
     access_clause, access_params = _attempt_access_clause(user)
     with connect(root) as con:
+        con.execute("BEGIN")
         attempt_rows = con.execute(
             f"""
             SELECT
@@ -1654,6 +1658,7 @@ def list_paper_submissions(
             """,
             (paper_id, *access_params),
         ).fetchall()
+        revisions = load_answer_revisions(con, [str(row["id"]) for row in attempt_rows])
 
     attempts = [row_to_dict(row) or {} for row in attempt_rows]
     maps_by_attempt: dict[str, tuple[dict[str, dict[str, Any]], dict[str, int]]] = {}
@@ -1673,9 +1678,11 @@ def list_paper_submissions(
         attempt_id = str(answer.get("attempt_id"))
         qid = str(answer.get("question_id") or "")
         by_id, _order_index = maps_by_attempt.get(attempt_id, ({}, {}))
-        answers_by_attempt.setdefault(attempt_id, []).append(
-            _answer_public_payload(answer, by_id.get(qid)),
+        public_answer = _answer_public_payload(answer, by_id.get(qid))
+        public_answer["grading_version"] = answer_grading_version(
+            attempt_id, qid, by_id.get(qid), answer, revisions.get((attempt_id, qid), 0),
         )
+        answers_by_attempt.setdefault(attempt_id, []).append(public_answer)
 
     submissions: list[dict[str, Any]] = []
     for attempt in attempts:
@@ -1687,12 +1694,12 @@ def list_paper_submissions(
             answered_ids = {str(item.get("question_id") or "") for item in attempt_answers}
             for question_id, question in by_id.items():
                 if question_id not in answered_ids:
-                    attempt_answers.append(
-                        _answer_public_payload(
-                            {"question_id": question_id, "answer_payload": "{}", "grading_status": "pending"},
-                            question,
-                        )
+                    missing = {"question_id": question_id, "answer_payload": "{}", "grading_status": "pending"}
+                    public_answer = _answer_public_payload(missing, question)
+                    public_answer["grading_version"] = answer_grading_version(
+                        attempt_id, question_id, question, missing, revisions.get((attempt_id, question_id), 0),
                     )
+                    attempt_answers.append(public_answer)
         attempt_answers.sort(key=lambda item: order_index.get(str(item.get("question_id")), 999999))
         submissions.append(
             {
@@ -2186,6 +2193,7 @@ def grade_paper_answer(
     score: float,
     feedback: str | None = None,
     is_correct: bool | None = None,
+    expected_version: str | None = None,
 ) -> dict[str, Any]:
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
@@ -2219,6 +2227,14 @@ def grade_paper_answer(
         )
         if question_id not in by_id:
             raise ValueError("question not found in paper")
+        previous_row = con.execute(
+            "SELECT * FROM student_answers WHERE attempt_id=? AND question_id=?", (attempt_id, question_id),
+        ).fetchone()
+        revisions = load_answer_revisions(con, [attempt_id])
+        check_grading_version(expected_version, answer_grading_version(
+            attempt_id, question_id, by_id.get(question_id), row_to_dict(previous_row),
+            revisions.get((attempt_id, question_id), 0),
+        ))
         max_score = float(score_by_id.get(question_id, 0.0))
         clean_score = validate_manual_score(score, max_score)
         resolved_is_correct = is_correct
@@ -2267,7 +2283,11 @@ def grade_paper_answer(
         answer_data = row_to_dict(answer_row)
         if answer_data is None:
             raise RuntimeError("failed to grade answer")
+        revision = advance_answer_revision(con, attempt_id, question_id)
         answer = _answer_public_payload(answer_data, by_id.get(question_id))
+        answer["grading_version"] = answer_grading_version(
+            attempt_id, question_id, by_id.get(question_id), answer_data, revision,
+        )
     if answer is None:
         raise RuntimeError("failed to grade answer")
     return answer

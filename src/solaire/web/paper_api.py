@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -32,6 +32,7 @@ from solaire.web.adaptive_practice_service import (
     publish_wrong_question_practice,
 )
 from solaire.web.auth_api import current_platform_user, require_platform_root
+from solaire.web.papers.grading_versions import GradingVersionConflict
 from solaire.web.paper_service import (
     analyze_paper,
     get_attempt_scan_image,
@@ -185,6 +186,8 @@ class ReinforcementPracticeBody(PracticePublishBase):
 
 
 def _raise_api_error(exc: Exception) -> None:
+    if isinstance(exc, GradingVersionConflict):
+        raise HTTPException(status_code=409, detail=str(exc), headers={"ETag": f'"{exc.current_version}"'}) from exc
     if isinstance(exc, PermissionError):
         logger.warning("paper api permission denied: %s", exc, exc_info=True)
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -497,6 +500,7 @@ def papers_attempt_answer_grade(
     question_id: str,
     body: PaperAnswerGradeBody,
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> dict[str, Any]:
     root = require_platform_root()
     project_root = require_content_project_root()
@@ -511,6 +515,7 @@ def papers_attempt_answer_grade(
             score=body.score,
             feedback=body.feedback,
             is_correct=body.is_correct,
+            expected_version=if_match,
         )
     except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)

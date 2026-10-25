@@ -215,6 +215,7 @@ export type PaperPublicationRecord = {
 };
 
 export type PaperSubmissionAnswerRecord = {
+  grading_version?: string;
   correct_answer?: string | null;
   question_id: string;
   header?: string | null;
@@ -1285,10 +1286,13 @@ export function gradePaperAnswer(
   attemptId: string,
   questionId: string,
   payload: { score: number; feedback?: string | null; is_correct?: boolean | null },
+  expectedVersion?: string,
 ): Promise<{ answer: PaperSubmissionAnswerRecord }> {
   return platformRequest(
     `/api/papers/${encodeURIComponent(paperId)}/attempts/${encodeURIComponent(attemptId)}/answers/${encodeURIComponent(questionId)}/grade`,
-    { method: "PATCH", body: JSON.stringify(payload) },
+    { method: "PATCH", body: JSON.stringify(payload),
+      ...(expectedVersion === undefined ? {} : { headers: { "If-Match": `"${expectedVersion}"` } }),
+    },
   );
 }
 
