@@ -1,6 +1,5 @@
 # Agent File Intelligence and Teacher Capability Parity Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Support common teaching files end to end and give authenticated teachers complete AI coverage for ordinary content operations, with actionable manual guides for host-level risks.
 
@@ -196,7 +195,7 @@ Expected: all nine requested accounts authenticate with the documented passwords
 ### Task 6: Real AI and browser end-to-end verification
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-08-01-agent-file-and-teacher-parity.md`
+- Modify: `docs/plans/2026-08-01-agent-file-and-teacher-parity.md`
 - Runtime artifacts only: `output/playwright/`, ignored upload/session data under `test/test/.solaire/`
 
 - [ ] **Step 1: Run complete automated verification**

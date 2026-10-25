@@ -19,6 +19,7 @@ const TemplateWorkspace = lazy(() =>
 
 export function ComposeRoute({
   info,
+  accountId,
   onRefreshInfo,
   onError,
   toolBarActive = true,
@@ -27,6 +28,7 @@ export function ComposeRoute({
   onOpenPapers,
 }: {
   info: ProjectInfo | null;
+  accountId?: string | null;
   onRefreshInfo: () => Promise<void>;
   onError: (s: string | null) => void;
   /** 为 false 时不向顶栏注册工具栏（例如组卷页被隐藏但仍挂载时，避免覆盖其它页） */
@@ -54,7 +56,10 @@ export function ComposeRoute({
   }
   return (
     <ComposeWorkspace
+      key={info.root || info.project_id || "unbound"}
       onError={onError}
+      accountId={accountId}
+      projectRoot={info.root || info.project_id || null}
       toolBarActive={toolBarActive}
       openExamId={openExamId}
       onOpenExamConsumed={onOpenExamConsumed}

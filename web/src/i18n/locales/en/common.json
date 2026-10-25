@@ -16,6 +16,7 @@
   "filter": "Filter",
   "networkError": "Network error: {{detail}}",
   "noResponseStream": "No response stream",
+  "emptyFileResponse": "No file content was received. Please retry; if this persists, check your browser download extensions or network proxy.",
   "connectingLocalService": "Connecting to local service…",
   "localServiceStartTimeout": "Timed out waiting for the local service. Please try again. If it persists, check the diagnostic log.",
   "localServiceFailed": "Could not start the local service",

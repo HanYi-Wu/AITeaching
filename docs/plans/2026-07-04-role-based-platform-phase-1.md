@@ -1,6 +1,5 @@
 # Role-Based Platform Phase 1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the first usable platform foundation: project-local SQLite platform state, admin bootstrap, login/session APIs, school/teacher/class/student management, and role-aware frontend shells without changing the existing exam authoring workflow.
 

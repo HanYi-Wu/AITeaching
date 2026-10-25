@@ -1,7 +1,3 @@
-import { fillSectionGaps } from "../../lib/manualPaperShortcuts";
-import { QuestionHoverDetails } from '../../components/QuestionHoverDetails';
-import { ContentFolderHelp, ContentFolders } from '../../components/ContentFolders';
-import { ContentTags, TagChips } from '../../components/ContentTags';
 import {
   useCallback,
   useDeferredValue,
@@ -13,22 +9,16 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../../api/client";
 import { useContentLibraryChanged } from "../../lib/contentEvents";
-import { AdaptivePracticeSelector } from "../../components/AdaptivePracticeSelector";
-import { KatexPlainPreview } from "../../components/KatexText";
-import { PdfPreview } from "../../components/PdfPreview";
-import { MetadataFilterControls } from "../../components/MetadataFilterControls";
 import { TexSetupNotice } from "../../components/TexSetupNotice";
 import { useAgentContext } from "../../contexts/AgentContext";
 import { useToolBar } from "../../contexts/ToolBarContext";
 import i18n from "../../i18n/i18n";
-import { collapseGroupRowsForList, clusterAdjacentGroupSlots, type SectionSlot } from "../../lib/groupQuestions";
+import { collapseGroupRowsForList, type SectionSlot } from "../../lib/groupQuestions";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { dispatchExamsChanged, SOLAIRE_EXAMS_CHANGED_EVENT, type ExamsChangedDetail } from "../../lib/examEvents";
-import { QUESTION_TYPE_OPTIONS, normalizeQuestionTypeForFilter } from "../../lib/questionTypes";
-import { cn } from "../../lib/utils";
+import { normalizeQuestionTypeForFilter } from "../../lib/questionTypes";
 import {
   buildMetadataFilterDefinitions,
   hasActiveMetadataFilters,
@@ -36,44 +26,70 @@ import {
   type MetadataFilters,
 } from "../../lib/metadataFilters";
 import { isTauriShell } from "../../lib/tauriEnv";
-import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../../lib/ime";
+import { isImeCompositionActive } from "../../lib/ime";
 import {
-  listTeacherAssignedClasses,
-  listTeacherClassStudents,
-  listClassPracticeHistory,
-  publishPlatformPaper,
-  publishReinforcementPractice,
-  publishWrongQuestionPractice,
   syncPlatformPaperFromExam,
   listContentFolders,
   listFolderItems,
   listTaggedItems,
   assignFolderItem,
-  createContentFolder,
-  updateContentFolder,
   type ContentFolder,
   type ContentTag,
-  type PracticeHistoryRecord,
-  type PracticePublishMode,
-  type PaperSubmissionMode,
-  type TeacherClassRecord,
-  type TeacherClassStudentRecord,
 } from "../../platform/auth";
-import type { ExamDoc, ExamWorkspaceSummary, QuestionRow, RightSelection, TemplateRow } from "../../types/compose";
+import type {
+  ComposeExportTaskFormat,
+  ExamDoc,
+  ExamWorkspaceSummary,
+  QuestionRow,
+  RightSelection,
+  TemplateRow,
+} from "../../types/compose";
 import {
   downloadExportedBundle,
   normTemplatePath,
   questionTypeMatchesSection,
-  sectionTypeToFilter,
 } from "./composeHelpers";
+import {
+  addQuestionsToSectionInModel,
+  clonePaperState,
+  buildSelectedItemsForApi as buildSelectedItemsFromModel,
+  computeKnowledgeDistribution,
+  computeTotalScore,
+  examDocToPaperState,
+  fillSectionGapsInModel,
+  moveQuestionsInSectionInModel,
+  removeQuestionsFromSectionInModel,
+  resolveActiveSectionForTemplate,
+  setPerQuestionScoreModeInModel,
+  setQuestionScoreOverrideInModel,
+  setSectionRequiredCountInModel,
+  setSectionScorePerItemInModel,
+} from "./composeModel";
+import { buildComposeDraftPaperKey } from "./composeDraftStorage";
+import { useComposeRequestScope } from "./useComposeRequestScope";
+import { useComposePaperHistory } from "./useComposePaperHistory";
+import { useComposeDraftScope } from "./useComposeDraftScope";
+import { ComposeHistorySidebar } from "./ComposeHistorySidebar";
+import { ComposeBankSearchPanel } from "./ComposeBankSearchPanel";
+import { ComposePaperEditorPanel } from "./ComposePaperEditorPanel";
+import { ComposePdfPreviewAside } from "./ComposePdfPreviewAside";
+import { NewPaperDialog } from "./NewPaperDialog";
+import { PublishOnlineDialog } from "./PublishOnlineDialog";
+import { useComposePublishing } from "./useComposePublishing";
+import { PreviewPdfModal } from "./ComposeDialogs";
+import { extractExamPathIdFromDir } from "./composeExportTasks";
+import { useComposeExportTasks, type ExportSuccess } from "./useComposeExportTasks";
+import { ComposeExportTaskBanner } from "./ComposeExportTaskBanner";
 
 type GraphBindingNode = { id: string; canonical_name: string; node_kind?: string };
 
 export function ComposeWorkspace({
-  onError,
+  onError: reportError,
   toolBarActive = true,
   openExamId = null,
   onOpenExamConsumed,
+  accountId,
+  projectRoot,
 }: {
   onError: (s: string | null) => void;
   /** 为 false 时不占用顶栏工具栏（父级隐藏组卷视图时使用） */
@@ -82,6 +98,9 @@ export function ComposeWorkspace({
   openExamId?: string | null;
   onOpenExamConsumed?: () => void;
   onOpenPapers?: () => void;
+  /** 由应用壳层传入，确保本地草稿按账号与项目隔离；缺省时 hook 才会尝试读取当前会话。 */
+  accountId?: string | null;
+  projectRoot?: string | null;
 }) {
   const { t } = useTranslation(["compose", "common", "lib"]);
   const { setPageContext } = useAgentContext();
@@ -91,11 +110,7 @@ export function ComposeWorkspace({
   const [pdfVariant, setPdfVariant] = useState<"student" | "teacher">("student");
 
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
-  const [exportLabel, setExportLabel] = useState(() => i18n.t("defaultExamLabel", { ns: "compose" }));
-  const [subject, setSubject] = useState(() => i18n.t("defaultSubject", { ns: "compose" }));
   const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
-  const [templatePath, setTemplatePath] = useState("");
-  const [templateRef, setTemplateRef] = useState("");
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [namespaceFilter, setNamespaceFilter] = useState<string>("__all__");
   const [typeFilter, setTypeFilter] = useState<string>("__all__");
@@ -104,7 +119,6 @@ export function ComposeWorkspace({
   const [search, setSearch] = useState("");
   const [composeFilterExpanded, setComposeFilterExpanded] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  const [bySection, setBySection] = useState<Record<string, string[]>>({});
   /** 左侧题库多选（qualified_id），顺序与列表一致；配合 Ctrl/⌘、Shift 桌面习惯 */
   const [selectedLeftIds, setSelectedLeftIds] = useState<string[]>([]);
   /** 用于 Shift+点击 范围选择的锚点（filteredQuestions 下标） */
@@ -118,14 +132,9 @@ export function ComposeWorkspace({
   const contentRequestIdRef = useRef(0);
   const templateRequestIdRef = useRef(0);
 
-  const [scoreBySection, setScoreBySection] = useState<Record<string, number | undefined>>({});
-  const [countBySection, setCountBySection] = useState<Record<string, number>>({});
-  const [scoreOverrides, setScoreOverrides] = useState<Record<string, Record<string, number>>>({});
-  const [perQuestionMode, setPerQuestionMode] = useState<Record<string, boolean>>({});
   const [currentExamId, setCurrentExamId] = useState<string | null>(null);
   /** 导出失败后服务端自动保存的考试工作区 id；下次导出成功时一并删除 */
   const [exportFailureExamIds, setExportFailureExamIds] = useState<string[]>([]);
-  const [draftName, setDraftName] = useState("");
   const [examSummaries, setExamSummaries] = useState<ExamWorkspaceSummary[]>([]);
   const [composeFolders, setComposeFolders] = useState<ContentFolder[]>([]);
   const [composeFolderItems, setComposeFolderItems] = useState<Record<string, string>>({});
@@ -154,29 +163,46 @@ export function ComposeWorkspace({
   /** 从历史复制时的新考试标签（学科沿用源导出） */
   const [dlgHistoryExportLabel, setDlgHistoryExportLabel] = useState("");
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
-  const [publishClasses, setPublishClasses] = useState<TeacherClassRecord[]>([]);
-  const [publishClassIds, setPublishClassIds] = useState<string[]>([]);
-  const [publishFolders, setPublishFolders] = useState<ContentFolder[]>([]);
-  const [publishFolderId, setPublishFolderId] = useState("");
-  const [publishRecipientScope, setPublishRecipientScope] = useState<"class" | "student">("class");
-  const [publishStudents, setPublishStudents] = useState<TeacherClassStudentRecord[]>([]);
-  const [publishStudentIds, setPublishStudentIds] = useState<string[]>([]);
-  const [publishStudentSearch, setPublishStudentSearch] = useState("");
-  const [publishNewFolderName, setPublishNewFolderName] = useState("");
-  const [publishSubmissionMode, setPublishSubmissionMode] = useState<PaperSubmissionMode>("online");
-  const [publishMaxScreenSwitches, setPublishMaxScreenSwitches] = useState(0);
-  const [publishStartAt, setPublishStartAt] = useState("");
-  const [publishEndAt, setPublishEndAt] = useState("");
-  const [publishTimeLimitMinutes, setPublishTimeLimitMinutes] = useState(0);
-  const [publishBusy, setPublishBusy] = useState(false);
-  const [publishMode, setPublishMode] = useState<PracticePublishMode>("current");
-  const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryRecord[]>([]);
-  const [practiceSourceIds, setPracticeSourceIds] = useState<string[]>([]);
-  const [practiceMaxQuestionsPerStudent, setPracticeMaxQuestionsPerStudent] = useState(20);
-  const [practiceHistoryLoading, setPracticeHistoryLoading] = useState(false);
-
+  const examLoadSequence = useRef(0);
   const currentExamIdRef = useRef<string | null>(null);
   currentExamIdRef.current = currentExamId;
+
+  const draftScope = useComposeDraftScope({ accountId, projectRoot, currentExamId });
+  useEffect(() => { setExportFailureExamIds([]); setBusy(false); }, [currentExamId]);
+  const captureOwnerRequest = useComposeRequestScope(draftScope.ownerKey);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const errorOwner = useRef(draftScope.ownerKey); errorOwner.current = draftScope.ownerKey;
+  const onError = useCallback((message: string | null) => {
+    if (mounted.current && errorOwner.current === draftScope.ownerKey) reportError(message);
+  }, [draftScope.ownerKey, reportError]);
+  const capturePaperRequest = useComposeRequestScope(`${draftScope.ownerKey}::${currentExamId ?? "scratch"}`);
+  const clearOwnerView = useCallback(() => {
+    currentExamIdRef.current = null;
+    setCurrentExamId(null); setPdfExamId(null); setWordExamId(null); setLastExportedExamId(null);
+    setPreviewPdfId(null); setPreviewOpen(false); setPreviewWarnings([]);
+    setSelectedLeftIds([]); setSelectedRight(null); setLeftListAnchorIndex(null); setRightListAnchor(null);
+    setExportFailureExamIds([]); setMsg(null); setNewPaperDialogOpen(false); setPublishDialogOpen(false);
+    setBusy(false);
+    setConflictTargetId(null); setConflictExportKind(null);
+  }, []);
+  const {
+    paperState: currentPaperState, selectedTpl, recoverableDraft, draftStorageStatus,
+    isDirty, canUndo, canRedo, commitEdit: commitPaperState,
+    resetPaperBaseline: resetPaperHistory, updateWithoutHistory, acceptSavedState,
+    undo: undoCompose, redo: redoCompose, restoreLocalDraft, discardLocalDraft,
+  } = useComposePaperHistory({
+    initialExportLabel: i18n.t("defaultExamLabel", { ns: "compose" }),
+    initialSubject: i18n.t("defaultSubject", { ns: "compose" }), templates,
+    scope: draftScope.scope, storageKey: draftScope.storageKey, ownerKey: draftScope.ownerKey,
+    shortcutsEnabled: toolBarActive && !newPaperDialogOpen && !publishDialogOpen && !conflictTargetId,
+    onOwnerIdentityChanged: clearOwnerView,
+    onRestoredMsg: () => setMsg(t("compose:messages.localDraftRestored")),
+    onDiscardedMsg: () => setMsg(t("compose:messages.localDraftDiscarded")),
+  });
+  const { exportLabel, subject, templatePath, templateRef, bySection, scoreBySection, countBySection, scoreOverrides } = currentPaperState;
+  const paperStateRef = useRef(currentPaperState);
+  paperStateRef.current = currentPaperState;
 
   useEffect(() => {
     let active = true;
@@ -237,44 +263,18 @@ export function ComposeWorkspace({
       window.open(url, "_blank", "noopener,noreferrer");
     }
   }, [examSummaries, pdfExamId, pdfVariant, wordExamId]);
-  const selectedTpl = useMemo(() => {
-    const tp = normTemplatePath(templatePath);
-    if (!tp) {
-      return undefined;
-    }
-    const found = templates.find((t) => normTemplatePath(t.path) === tp);
-    if (found) {
-      return found;
-    }
-    if (templateRef === "remediation_practice") {
-      const sectionIds = Object.keys(bySection);
-      const sectionId = sectionIds[0] ?? "练习题";
-      return {
-        id: "remediation_practice",
-        path: templatePath,
-        layout: "single_column",
-        sections: [
-          {
-            section_id: sectionId,
-            type: "practice",
-            required_count: bySection[sectionId]?.length ?? 0,
-            score_per_item: scoreBySection[sectionId] ?? 5,
-          },
-        ],
-      } satisfies TemplateRow;
-    }
-    return undefined;
-  }, [bySection, scoreBySection, templates, templatePath, templateRef]);
-
   const refreshTemplates = useCallback(async () => {
+    const isCurrent = captureOwnerRequest();
     const requestId = ++templateRequestIdRef.current;
     const r = await apiGet<{ templates: TemplateRow[] }>("/api/templates");
     const next = r.templates ?? [];
+    if (!isCurrent()) return [];
     if (requestId === templateRequestIdRef.current) setTemplates(next);
     return next;
-  }, []);
+  }, [captureOwnerRequest]);
 
   const refreshContentLibrary = useCallback(async () => {
+    const isCurrent = captureOwnerRequest();
     const requestId = ++contentRequestIdRef.current;
     const templateRequestId = ++templateRequestIdRef.current;
     const [templateData, questionData, subjectData] = await Promise.all([
@@ -282,7 +282,7 @@ export function ComposeWorkspace({
       apiGet<{ questions: QuestionRow[] }>("/api/questions"),
       apiGet<{ subjects: string[] }>("/api/bank/subjects"),
     ]);
-    if (requestId !== contentRequestIdRef.current) return false;
+    if (!isCurrent() || requestId !== contentRequestIdRef.current) return false;
     const nextTemplates = templateData.templates ?? [];
     if (templateRequestId === templateRequestIdRef.current) setTemplates(nextTemplates);
     setQuestions(questionData.questions);
@@ -291,13 +291,11 @@ export function ComposeWorkspace({
       : [...new Set(questionData.questions.map((item) => item.subject).filter(Boolean) as string[])];
     setSubjectOptions(list);
     if (!currentExamIdRef.current) {
-      setSubject((previous) => {
-        const value = previous.trim();
-        return list.length && !list.includes(value) ? list[0] ?? previous : previous;
-      });
+      updateWithoutHistory((previous) => list.length && !list.includes(previous.subject.trim())
+        ? { ...previous, subject: list[0] ?? previous.subject } : previous);
     }
     return true;
-  }, []);
+  }, [captureOwnerRequest, updateWithoutHistory]);
 
   useEffect(() => {
     const parts: string[] = [];
@@ -435,121 +433,24 @@ export function ComposeWorkspace({
       });
   });
 
-  /** 首屏默认模板：仅在尚未关联考试且未选模板时写入，避免与 loadExamById / applyExamDocument 竞态 */
-  useEffect(() => {
-    if (templates.length === 0) {
-      return;
-    }
-    if (currentExamId) {
-      return;
-    }
-    if (templatePath.trim()) {
-      return;
-    }
-    const first = templates[0];
-    if (!first) {
-      return;
-    }
-    setTemplatePath(first.path);
-    setTemplateRef(first.id);
-    const init: Record<string, string[]> = {};
-    for (const s of first.sections) {
-      init[s.section_id] = [];
-    }
-    setBySection(init);
-    setActiveSection(first.sections[0]?.section_id ?? null);
-  }, [templates, currentExamId, templatePath]);
-
-  /**
-   * 已保存的 exam.yaml 可能出现 template_ref 与 template_path 不一致（例如仅重命名了
-   * templates/ 下文件）。列表以 path 为准匹配 selectedTpl；此处按 ref 回退到实际文件路径，
-   * 避免「顶栏显示 — 却仍发出旧 path」或预览 400。
-   */
-  useEffect(() => {
-    if (templates.length === 0 || !templatePath.trim()) {
-      return;
-    }
-    const tp = normTemplatePath(templatePath);
-    if (templates.some((x) => normTemplatePath(x.path) === tp)) {
-      return;
-    }
-    const ref = templateRef.trim();
-    if (!ref) {
-      return;
-    }
-    const byRef = templates.find((x) => x.id === ref);
-    if (byRef && normTemplatePath(byRef.path) !== tp) {
-      setTemplatePath(byRef.path);
-    }
-  }, [templates, templatePath, templateRef]);
-
   useEffect(() => {
     setNamespaceFilter("__all__");
     setTypeFilter("__all__");
   }, [subject]);
 
   useEffect(() => {
-    const t = selectedTpl;
-    if (!t) {
-      return;
-    }
-    setTemplateRef(t.id);
-    setBySection((prev) => {
-      const next: Record<string, string[]> = {};
-      for (const s of t.sections) {
-        next[s.section_id] = prev[s.section_id] ?? [];
-      }
-      return next;
-    });
-    const sectionIds = new Set(t.sections.map((s) => s.section_id));
-    setActiveSection((prev) => {
-      if (prev && sectionIds.has(prev)) {
-        return prev;
-      }
-      return t.sections[0]?.section_id ?? null;
-    });
-  }, [templatePath, selectedTpl]);
-
-  useEffect(() => {
-    const t = selectedTpl;
-    if (!t) {
-      return;
-    }
-    setScoreBySection((prev) => {
-      const next: Record<string, number | undefined> = {};
-      for (const s of t.sections) {
-        next[s.section_id] = prev[s.section_id];
-      }
-      return next;
-    });
-    setScoreOverrides((prev) => {
-      const next: Record<string, Record<string, number>> = {};
-      for (const s of t.sections) {
-        if (prev[s.section_id]) {
-          next[s.section_id] = { ...prev[s.section_id] };
-        }
-      }
-      return next;
-    });
-    setPerQuestionMode((prev) => {
-      const next: Record<string, boolean> = {};
-      for (const s of t.sections) {
-        if (prev[s.section_id]) {
-          next[s.section_id] = prev[s.section_id]!;
-        }
-      }
-      return next;
-    });
+    setActiveSection((previous) => resolveActiveSectionForTemplate(previous, selectedTpl));
   }, [selectedTpl]);
 
   const refreshExamSummaries = useCallback(async () => {
+    const isCurrent = captureOwnerRequest();
     try {
       const r = await apiGet<{ exams: ExamWorkspaceSummary[] }>("/api/exams");
-      setExamSummaries(r.exams ?? []);
+      if (isCurrent()) setExamSummaries(r.exams ?? []);
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [captureOwnerRequest]);
 
   useEffect(() => {
     void refreshExamSummaries();
@@ -565,7 +466,7 @@ export function ComposeWorkspace({
       }
       if (currentExamIdRef.current === examId) {
         setCurrentExamId(null);
-        setDraftName("");
+        updateWithoutHistory((previous) => ({ ...previous, draftName: "" }));
         setPdfExamId(null);
         setPreviewPdfId(null);
       }
@@ -583,33 +484,20 @@ export function ComposeWorkspace({
   }, [refreshExamSummaries, onError]);
 
   useEffect(() => {
+    let active = true;
+    setQuestionBindingsIndex({});
+    if (!toolBarActive) return;
+    const isCurrent = captureOwnerRequest();
     void apiGet<{ index: Record<string, GraphBindingNode[]> }>("/api/graph/question-bindings-index")
-      .then((r) => setQuestionBindingsIndex(r.index ?? {}))
-      .catch(() => setQuestionBindingsIndex({}));
-  }, []);
+      .then((r) => { if (active && isCurrent()) setQuestionBindingsIndex(r.index ?? {}); })
+      .catch(() => { if (active && isCurrent()) setQuestionBindingsIndex({}); });
+    return () => { active = false; };
+  }, [toolBarActive, captureOwnerRequest]);
 
-  const knowledgeDistributionRows = useMemo(() => {
-    const counts = new Map<string, number>();
-    let unassigned = 0;
-    for (const ids of Object.values(bySection)) {
-      for (const qid of ids) {
-        const nodes = questionBindingsIndex[qid] ?? [];
-        if (nodes.length === 0) {
-          unassigned += 1;
-        } else {
-          for (const n of nodes) {
-            const name = (n.canonical_name || n.id).trim() || n.id;
-            counts.set(name, (counts.get(name) ?? 0) + 1);
-          }
-        }
-      }
-    }
-    const rows: [string, number][] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    if (unassigned > 0) {
-      rows.push(["__unassigned__", unassigned]);
-    }
-    return rows.slice(0, 14);
-  }, [bySection, questionBindingsIndex]);
+  const knowledgeDistributionRows = useMemo(
+    () => computeKnowledgeDistribution(bySection, questionBindingsIndex),
+    [bySection, questionBindingsIndex],
+  );
 
   const countsOk = useMemo(() => {
     if (!selectedTpl) {
@@ -626,24 +514,10 @@ export function ComposeWorkspace({
     });
   }, [selectedTpl, bySection, countBySection]);
 
-  const totalScore = useMemo(() => {
-    if (!selectedTpl) {
-      return 0;
-    }
-    let t = 0;
-    for (const s of selectedTpl.sections) {
-      if (s.type === "text") {
-        continue;
-      }
-      const ids = bySection[s.section_id] ?? [];
-      const base = scoreBySection[s.section_id] ?? s.score_per_item;
-      const ov = scoreOverrides[s.section_id] ?? {};
-      for (const qid of ids) {
-        t += ov[qid] !== undefined ? ov[qid]! : base;
-      }
-    }
-    return Math.round(t * 1000) / 1000;
-  }, [selectedTpl, bySection, scoreBySection, scoreOverrides]);
+  const totalScore = useMemo(
+    () => computeTotalScore(selectedTpl, bySection, scoreBySection, scoreOverrides),
+    [selectedTpl, bySection, scoreBySection, scoreOverrides],
+  );
 
   const questionMap = useMemo(() => {
     const m = new Map<string, QuestionRow>();
@@ -770,114 +644,128 @@ export function ComposeWorkspace({
   );
 
   const buildSelectedItemsForApi = useCallback(() => {
-    if (!selectedTpl) {
-      return [];
+    return buildSelectedItemsFromModel(selectedTpl, paperStateRef.current);
+  }, [selectedTpl]);
+
+  const consumeExportResult = useCallback(async ({ format, result, submitted, idsToDelete, isCurrent }: ExportSuccess) => {
+    if (!isCurrent()) return;
+    const examPathId = extractExamPathIdFromDir(result.exam_dir);
+    const deletedIds = result.deleted_exam_ids ?? idsToDelete;
+    let baselineWarning = "";
+    // Saving the submitted baseline must preserve edits made while the job ran.
+    if (submitted) acceptSavedState(submitted, submitted);
+    else if (examPathId && currentExamId === examPathId) {
+      try {
+        const response = await apiGet<{ exam: ExamDoc }>(`/api/exams/${encodeURIComponent(examPathId)}`);
+        if (!isCurrent()) return;
+        const saved = examDocToPaperState(response.exam).state;
+        acceptSavedState(saved, saved);
+      } catch (error) {
+        baselineWarning = `；已完成导出，但未能读取已保存试卷：${error instanceof Error ? error.message : String(error)}`;
+      }
     }
-    return selectedTpl.sections.map((s) => {
-      const def = s.score_per_item;
-      const spi = scoreBySection[s.section_id];
-      const score_per_item = spi !== undefined && spi !== def ? spi : null;
-      const rawOv = scoreOverrides[s.section_id];
-      const score_overrides =
-        rawOv && Object.keys(rawOv).length > 0 ? { ...rawOv } : null;
-      return {
-        section_id: s.section_id,
-        question_ids: bySection[s.section_id] ?? [],
-        score_per_item,
-        score_overrides,
-        required_count: countBySection[s.section_id] ?? null,
-      };
+    if (!isCurrent()) return;
+    setLastExportedExamId(examPathId);
+    if (examPathId) {
+      setPdfVariant("student");
+      if (format === "pdf") setPdfExamId(examPathId);
+      else { setWordExamId(examPathId); if (examSummaries.find((exam) => exam.exam_id === examPathId)?.has_pdf) setPdfExamId(examPathId); }
+    }
+    setExportFailureExamIds([]);
+    void refreshExamSummaries();
+    let message = t(format === "pdf" ? "compose:messages.exportOk" : "compose:messages.exportWordOk", {
+      student: result[format === "pdf" ? "student_pdf" : "student_docx"] ?? "",
+      teacher: result[format === "pdf" ? "teacher_pdf" : "teacher_docx"] ?? "", dir: result.exam_dir,
     });
-  }, [selectedTpl, bySection, scoreBySection, scoreOverrides, countBySection]);
+    message += baselineWarning;
+    if (deletedIds.length) message += t("compose:messages.draftRemovedAfterExport");
+    setMsg(message);
+    if (examPathId) {
+      try { await syncPlatformPaperFromExam(examPathId); }
+      catch (error) { message += `；试卷中心同步未完成：${error instanceof Error ? error.message : String(error)}`; }
+      if (!isCurrent()) return;
+      try { await downloadExportedBundle(examPathId, format); }
+      catch (error) { message += `；文件已保存在服务器，但浏览器下载失败：${error instanceof Error ? error.message : String(error)}`; }
+      if (isCurrent()) setMsg(message);
+    }
+    if (isCurrent() && currentExamId && deletedIds.includes(currentExamId)) {
+      // Older servers may remove the workspace that is still open locally.
+      // Keep its current content, but save future edits as a new workspace.
+      const nextScope = draftScope.scope && { ...draftScope.scope, paperKey: buildComposeDraftPaperKey(null) };
+      const baseline = submitted ?? paperStateRef.current;
+      acceptSavedState(baseline, baseline, nextScope);
+      currentExamIdRef.current = null;
+      setCurrentExamId(null);
+    }
+  }, [acceptSavedState, currentExamId, draftScope.scope, examSummaries, refreshExamSummaries, t]);
+
+  const exportTasks = useComposeExportTasks({
+    ownerKey: `${draftScope.ownerKey}::${currentExamId ?? "scratch"}`,
+    currentExamId, exportLabel, subject,
+    onTaskSucceeded: consumeExportResult,
+    onTaskFailed: ({ message, examSaved, sourceAction }) => {
+      if (examSaved) {
+        if (sourceAction !== "recent_resume") setExportFailureExamIds((previous) => [...new Set([...previous, examSaved.exam_id])]);
+        void refreshExamSummaries();
+        onError(t("compose:errors.exportWithDraftSaved", { name: examSaved.name, detail: message }));
+      } else onError(message);
+    },
+    onError,
+  });
+
+  const startExportTask = useCallback(async (
+    format: ComposeExportTaskFormat, overwriteExisting: string | null,
+    examIdToDelete: string | null, failureIds: string[], workspaceId: string | null,
+  ) => {
+    if (!selectedTpl) return;
+    const submitted = clonePaperState(paperStateRef.current);
+    const idsToDelete = [...new Set([examIdToDelete, ...failureIds].filter((id): id is string => Boolean(id)))];
+    await exportTasks.startExportTask({ format, submitted, idsToDelete, body: {
+      export_label: submitted.exportLabel.trim(), subject: submitted.subject.trim(), metadata_title: submitted.exportLabel.trim(),
+      template_ref: submitted.templateRef, template_path: submitted.templatePath,
+      selected_items: buildSelectedItemsFromModel(selectedTpl, submitted),
+      ...(overwriteExisting ? { overwrite_existing: overwriteExisting } : {}),
+      ...(workspaceId ? { exam_workspace_id: workspaceId } : {}),
+      ...(idsToDelete.length ? { exam_ids_to_delete_on_success: idsToDelete } : {}),
+    } });
+  }, [exportTasks.startExportTask, selectedTpl]);
 
   const applyExamDocument = useCallback((doc: ExamDoc) => {
     setPreviewPdfId(null);
     setPreviewWarnings([]);
-    setExportLabel(String(doc.export_label ?? ""));
-    setSubject(String(doc.subject ?? ""));
-    const tp = normTemplatePath(String(doc.template_path ?? ""));
-    if (tp) {
-      setTemplatePath(tp);
-    }
-    setTemplateRef(String(doc.template_ref ?? ""));
     const eid = String(doc.exam_id ?? "").trim();
     /** 同步 ref，避免首屏 subjects 请求的 `.then` 在 React 提交前读到陈旧 ref 而覆盖学科 */
     currentExamIdRef.current = eid || null;
     setCurrentExamId(eid || null);
-    setDraftName(String(doc.name ?? ""));
-    const items = doc.selected_items ?? [];
-    const by: Record<string, string[]> = {};
-    const sc: Record<string, number | undefined> = {};
-    const counts: Record<string, number> = {};
-    const ov: Record<string, Record<string, number>> = {};
-    const perQ: Record<string, boolean> = {};
-    for (const it of items) {
-      by[it.section_id] = [...(it.question_ids ?? [])];
-      if (it.score_per_item !== undefined && it.score_per_item !== null) {
-        sc[it.section_id] = Number(it.score_per_item);
-      }
-      if (it.required_count !== undefined && it.required_count !== null) counts[it.section_id] = Number(it.required_count);
-      if (it.score_overrides && Object.keys(it.score_overrides).length > 0) {
-        ov[it.section_id] = { ...it.score_overrides };
-        perQ[it.section_id] = true;
-      }
-    }
-    setBySection(by);
-    setScoreBySection(sc);
-    setCountBySection(counts);
-    setScoreOverrides(ov);
-    setPerQuestionMode(perQ);
+    const parsed = examDocToPaperState(doc, { templatePath });
+    resetPaperHistory(parsed.state);
     setSelectedLeftIds([]);
     setLeftListAnchorIndex(null);
     setSelectedRight(null);
     setRightListAnchor(null);
-  }, []);
+  }, [resetPaperHistory, templatePath]);
 
   function addQuestionsToSection(questionIds: string[], sectionId: string | null) {
-    if (!selectedTpl || !sectionId || questionIds.length === 0) {
-      onError(t("compose:errors.selectQuestionFirst"));
-      return;
-    }
-    const sec = selectedTpl.sections.find((s) => s.section_id === sectionId);
-    if (!sec) {
-      onError(t("compose:errors.sectionNotFound"));
-      return;
-    }
-    if (sec.type === "text") {
-      onError(t("compose:errors.textSectionNoPick"));
-      return;
-    }
-    const compatible = questionIds.filter((qid) => {
-      const row = questionMap.get(qid);
-      return row && questionTypeMatchesSection(row.type, sec.type, row.answer);
+    const result = addQuestionsToSectionInModel({
+      state: paperStateRef.current,
+      template: selectedTpl,
+      sectionId,
+      questionIds,
+      questionMap,
     });
-    const skippedType = questionIds.length - compatible.length;
-    if (compatible.length === 0) {
-      const first = questionMap.get(questionIds[0]);
-      onError(
-        t("compose:errors.typeMismatch", {
-          need: sectionTypeToFilter(sec),
-          got: first ? normalizeQuestionTypeForFilter(first.type, first.answer) : "?",
-        }),
-      );
+    if (!result.ok) {
+      if (result.errorCode === "typeMismatch") {
+        onError(t("compose:errors.typeMismatch", { need: result.need, got: result.got }));
+      } else {
+        onError(t(`compose:errors.${result.errorCode}`));
+      }
       return;
     }
-    const cur = bySection[sectionId] ?? [];
-    const newIds = compatible.filter((id) => !cur.includes(id));
-    if (newIds.length === 0) {
-      return;
-    }
-    if (sec.type !== "practice" && cur.length + newIds.length > (countBySection[sectionId] ?? sec.required_count)) {
-      onError(t("compose:errors.sectionFull"));
-      return;
-    }
+    if (!result.changed) return;
     onError(null);
-    setBySection((prev) => ({
-      ...prev,
-      [sectionId]: [...(prev[sectionId] ?? []), ...newIds],
-    }));
-    if (skippedType > 0) {
-      setMsg(t("compose:messages.multiAddSkipped", { n: skippedType }));
+    commitPaperState(result.nextState);
+    if (result.skippedTypeCount > 0) {
+      setMsg(t("compose:messages.multiAddSkipped", { n: result.skippedTypeCount }));
     }
   }
 
@@ -886,13 +774,9 @@ export function ComposeWorkspace({
   }
 
   function removeDraggedQuestion(sectionId: string, qid: string) {
-    setBySection((prev) => ({ ...prev, [sectionId]: (prev[sectionId] ?? []).filter((id) => id !== qid) }));
-    setScoreOverrides((prev) => {
-      if (!prev[sectionId] || !(qid in prev[sectionId])) return prev;
-      const nextSection = { ...prev[sectionId] };
-      delete nextSection[qid];
-      return { ...prev, [sectionId]: nextSection };
-    });
+    const result = removeQuestionsFromSectionInModel(paperStateRef.current, sectionId, [qid]);
+    if (!result.ok || !result.changed) return;
+    commitPaperState(result.nextState);
     setSelectedRight(null);
     onError(null);
   }
@@ -905,32 +789,30 @@ export function ComposeWorkspace({
     const removeIds = selectedRight.qids;
     const secId = selectedRight.sectionId;
     onError(null);
-    setBySection((prev) => ({
-      ...prev,
-      [secId]: (prev[secId] ?? []).filter((x) => !removeIds.includes(x)),
-    }));
-    setScoreOverrides((prev) => {
-      const so = prev[secId];
-      if (!so) {
-        return prev;
-      }
-      const next = { ...so };
-      for (const id of removeIds) {
-        delete next[id];
-      }
-      const out = { ...prev };
-      if (Object.keys(next).length === 0) {
-        delete out[secId];
-      } else {
-        out[secId] = next;
-      }
-      return out;
-    });
+    const result = removeQuestionsFromSectionInModel(paperStateRef.current, secId, removeIds);
+    if (result.ok && result.changed) commitPaperState(result.nextState);
     setSelectedRight(null);
     setRightListAnchor(null);
   }
 
+  function moveSelectedRight(direction: "up" | "down") {
+    if (!selectedRight || selectedRight.qids.length === 0) {
+      return;
+    }
+    const result = moveQuestionsInSectionInModel(
+      paperStateRef.current,
+      selectedRight.sectionId,
+      selectedRight.qids,
+      direction,
+      questionMap,
+    );
+    if (result.changed) {
+      commitPaperState(result.nextState);
+    }
+  }
+
   async function validate() {
+    const isCurrent = capturePaperRequest();
     if (!selectedTpl) {
       return;
     }
@@ -961,13 +843,15 @@ export function ComposeWorkspace({
           : t("compose:messages.previewPdfReady"),
       );
     } catch (e) {
+      if (!isCurrent()) return;
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
   async function confirmNewPaperDialog() {
+    const isCurrent = captureOwnerRequest();
     onError(null);
     if (dlgMode === "history") {
       if (!dlgHistorySourceExamId.trim()) {
@@ -984,7 +868,8 @@ export function ComposeWorkspace({
           `/api/exams/from-exam/${encodeURIComponent(dlgHistorySourceExamId.trim())}`,
           { export_label: dlgHistoryExportLabel.trim() },
         );
-        applyExamDocument(r.exam);
+        if (!isCurrent()) return;
+      applyExamDocument(r.exam);
         setPdfExamId(null);
         setNewPaperDialogOpen(false);
         const eid = String(r.exam.exam_id ?? "").trim();
@@ -995,6 +880,7 @@ export function ComposeWorkspace({
         );
         void refreshExamSummaries();
       } catch (e) {
+      if (!isCurrent()) return;
         onError(e instanceof Error ? e.message : String(e));
       } finally {
         setBusy(false);
@@ -1028,6 +914,7 @@ export function ComposeWorkspace({
         template_path: tpl.path,
         selected_items,
       });
+      if (!isCurrent()) return;
       applyExamDocument(r.exam);
       setPdfExamId(null);
       setNewPaperDialogOpen(false);
@@ -1039,144 +926,15 @@ export function ComposeWorkspace({
       );
       void refreshExamSummaries();
     } catch (e) {
+      if (!isCurrent()) return;
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
-  async function runExport(
-    overwriteExisting: string | null,
-    examIdToDeleteAfterSuccess: string | null,
-    failureExamIdsToDeleteAfterSuccess: string[],
-    examWorkspaceIdForExport: string | null,
-  ) {
-    if (!selectedTpl) {
-      return;
-    }
-    const selected_items = buildSelectedItemsForApi();
-    const idsToDelete = [
-      ...new Set(
-        [
-          ...(examIdToDeleteAfterSuccess ? [examIdToDeleteAfterSuccess] : []),
-          ...failureExamIdsToDeleteAfterSuccess,
-        ].filter(Boolean),
-      ),
-    ];
-    const res = await apiPost<{
-      ok: boolean;
-      exam_dir: string;
-      student_pdf: string;
-      teacher_pdf: string;
-    }>("/api/exam/export", {
-      export_label: exportLabel.trim(),
-      subject: subject.trim(),
-      metadata_title: exportLabel.trim(),
-      template_ref: templateRef,
-      template_path: templatePath,
-      selected_items,
-      overwrite_existing: overwriteExisting ?? undefined,
-      ...(examWorkspaceIdForExport ? { exam_workspace_id: examWorkspaceIdForExport } : {}),
-      ...(idsToDelete.length ? { exam_ids_to_delete_on_success: idsToDelete } : {}),
-    });
-    const dirNorm = res.exam_dir.replace(/\\/g, "/").replace(/^\/+/, "");
-    const m = /^exams\/(.+)$/.exec(dirNorm);
-    const examPathId = m ? m[1]! : null;
-    setLastExportedExamId(examPathId);
-    if (examPathId) {
-      setPdfExamId(examPathId);
-      setPdfVariant("student");
-    }
-    let successText = t("compose:messages.exportOk", {
-      student: res.student_pdf,
-      teacher: res.teacher_pdf,
-      dir: res.exam_dir,
-    });
-    if (examPathId) {
-      try {
-        await syncPlatformPaperFromExam(examPathId);
-        await downloadExportedBundle(examPathId, "pdf");
-      } catch (error) {
-        successText += `；文件已保存在服务器，但浏览器下载失败：${error instanceof Error ? error.message : String(error)}`;
-      }
-    }
-    if (idsToDelete.length) {
-      setCurrentExamId((cur) => (cur && idsToDelete.includes(cur) ? null : cur));
-      setExportFailureExamIds([]);
-      successText += t("compose:messages.draftRemovedAfterExport");
-    }
-    setMsg(successText);
-    void refreshExamSummaries();
-  }
-
-
-  async function runWordExport(
-    overwriteExisting: string | null,
-    examIdToDeleteAfterSuccess: string | null,
-    failureExamIdsToDeleteAfterSuccess: string[],
-    examWorkspaceIdForExport: string | null,
-  ) {
-    if (!selectedTpl) {
-      return;
-    }
-    const selected_items = buildSelectedItemsForApi();
-    const idsToDelete = [
-      ...new Set(
-        [
-          ...(examIdToDeleteAfterSuccess ? [examIdToDeleteAfterSuccess] : []),
-          ...failureExamIdsToDeleteAfterSuccess,
-        ].filter(Boolean),
-      ),
-    ];
-    const res = await apiPost<{
-      ok: boolean;
-      exam_dir: string;
-      student_docx: string;
-      teacher_docx: string;
-    }>("/api/exam/export-word", {
-      export_label: exportLabel.trim(),
-      subject: subject.trim(),
-      metadata_title: exportLabel.trim(),
-      template_ref: templateRef,
-      template_path: templatePath,
-      selected_items,
-      overwrite_existing: overwriteExisting ?? undefined,
-      ...(examWorkspaceIdForExport ? { exam_workspace_id: examWorkspaceIdForExport } : {}),
-      ...(idsToDelete.length ? { exam_ids_to_delete_on_success: idsToDelete } : {}),
-    });
-    const dirNorm = res.exam_dir.replace(/\\/g, "/").replace(/^\/+/, "");
-    const m = /^exams\/(.+)$/.exec(dirNorm);
-    const examPathId = m ? m[1]! : null;
-    setLastExportedExamId(examPathId);
-    setWordExamId(examPathId);
-    if (examPathId && examSummaries.find((ex) => ex.exam_id === examPathId)?.has_pdf) {
-      setPdfExamId(examPathId);
-    }
-    if (examPathId) {
-      setPdfVariant("student");
-    }
-    let successText = t("compose:messages.exportWordOk", {
-      student: res.student_docx,
-      teacher: res.teacher_docx,
-      dir: res.exam_dir,
-    });
-    if (examPathId) {
-      try {
-        await syncPlatformPaperFromExam(examPathId);
-        await downloadExportedBundle(examPathId, "docx");
-      } catch (error) {
-        successText += `；文件已保存在服务器，但浏览器下载失败：${error instanceof Error ? error.message : String(error)}`;
-      }
-    }
-    if (idsToDelete.length) {
-      setCurrentExamId((cur) => (cur && idsToDelete.includes(cur) ? null : cur));
-      setExportFailureExamIds([]);
-      successText += t("compose:messages.draftRemovedAfterExport");
-    }
-    setMsg(successText);
-    void refreshExamSummaries();
-  }
   async function exportExam() {
+    const isCurrent = capturePaperRequest();
     if (!selectedTpl) {
       return;
     }
@@ -1191,6 +949,7 @@ export function ComposeWorkspace({
         export_label: exportLabel.trim(),
         subject: subject.trim(),
       });
+      if (!isCurrent()) return;
       if (check.conflict && check.existing_exam_id) {
         setConflictExportKind("pdf");
         setConflictTargetId(check.existing_exam_id);
@@ -1199,13 +958,15 @@ export function ComposeWorkspace({
       }
       const examIdSnapshot = currentExamId;
       const hasWorkspace = Boolean(examIdSnapshot);
-      await runExport(
+      await startExportTask(
+        "pdf",
         null,
         hasWorkspace ? null : examIdSnapshot,
         exportFailureExamIds,
         hasWorkspace ? examIdSnapshot : null,
       );
     } catch (e) {
+      if (!isCurrent()) return;
       if (e instanceof ApiError && e.examSaved) {
         setExportFailureExamIds((prev) => [...new Set([...prev, e.examSaved!.exam_id])]);
         void refreshExamSummaries();
@@ -1216,12 +977,13 @@ export function ComposeWorkspace({
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
 
   async function exportWord() {
+    const isCurrent = capturePaperRequest();
     if (!selectedTpl) {
       return;
     }
@@ -1236,6 +998,7 @@ export function ComposeWorkspace({
         export_label: exportLabel.trim(),
         subject: subject.trim(),
       });
+      if (!isCurrent()) return;
       if (check.conflict && check.existing_exam_id) {
         setConflictExportKind("word");
         setConflictTargetId(check.existing_exam_id);
@@ -1244,13 +1007,15 @@ export function ComposeWorkspace({
       }
       const examIdSnapshot = currentExamId;
       const hasWorkspace = Boolean(examIdSnapshot);
-      await runWordExport(
+      await startExportTask(
+        "docx",
         null,
         hasWorkspace ? null : examIdSnapshot,
         exportFailureExamIds,
         hasWorkspace ? examIdSnapshot : null,
       );
     } catch (e) {
+      if (!isCurrent()) return;
       if (e instanceof ApiError && e.examSaved) {
         setExportFailureExamIds((prev) => [...new Set([...prev, e.examSaved!.exam_id])]);
         void refreshExamSummaries();
@@ -1261,10 +1026,11 @@ export function ComposeWorkspace({
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
   async function confirmOverwriteExport() {
+    const isCurrent = capturePaperRequest();
     if (!selectedTpl || !conflictTargetId) {
       return;
     }
@@ -1279,14 +1045,16 @@ export function ComposeWorkspace({
     try {
       const hasWorkspace = Boolean(examIdSnapshot);
       if (kind === "word") {
-        await runWordExport(
+        await startExportTask(
+          "docx",
           overwriteId,
           hasWorkspace ? null : examIdSnapshot,
           exportFailureExamIds,
           hasWorkspace ? examIdSnapshot : null,
         );
       } else {
-        await runExport(
+        await startExportTask(
+          "pdf",
           overwriteId,
           hasWorkspace ? null : examIdSnapshot,
           exportFailureExamIds,
@@ -1294,6 +1062,7 @@ export function ComposeWorkspace({
         );
       }
     } catch (e) {
+      if (!isCurrent()) return;
       if (e instanceof ApiError && e.examSaved) {
         setExportFailureExamIds((prev) => [...new Set([...prev, e.examSaved!.exam_id])]);
         void refreshExamSummaries();
@@ -1304,252 +1073,56 @@ export function ComposeWorkspace({
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
-
-  const saveDraftToServer = useCallback(async () => {
-    if (isImeCompositionActive()) return;
-    if (!selectedTpl || !templatePath.trim()) {
-      onError(t("compose:errors.selectTemplateForDraft"));
-      return;
-    }
-    onError(null);
-    setBusy(true);
-    try {
-      const selected_items = buildSelectedItemsForApi();
-      const body = {
-        name: draftName.trim() || undefined,
-        subject: subject.trim(),
-        export_label: exportLabel.trim(),
-        template_ref: templateRef,
-        template_path: templatePath,
-        selected_items,
-      };
-      if (currentExamId) {
-        const r = await apiPut<{ exam: ExamDoc }>(`/api/exams/${encodeURIComponent(currentExamId)}`, {
-          ...body,
-        });
-        applyExamDocument(r.exam);
-        setMsg(t("compose:messages.draftUpdated"));
-      } else {
-        const r = await apiPost<{ exam: ExamDoc }>("/api/exams", body);
-        applyExamDocument(r.exam);
-        const eid = String(r.exam.exam_id ?? "").trim();
-        setMsg(
-          eid
-            ? t("compose:messages.draftSavedWithPath", { path: `exams/${eid.replace(/\\/g, "/")}` })
-            : t("compose:messages.draftSaved"),
-        );
-      }
-      void refreshExamSummaries();
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [
-    applyExamDocument,
-    buildSelectedItemsForApi,
-    currentExamId,
-    draftName,
-    exportLabel,
-    onError,
-    refreshExamSummaries,
-    selectedTpl,
-    subject,
-    t,
-    templatePath,
-    templateRef,
-  ]);
 
   const persistDraftForPublish = useCallback(async (): Promise<ExamDoc | null> => {
     if (isImeCompositionActive()) return null;
     if (!selectedTpl || !templatePath.trim()) {
-      onError(t("compose:errors.selectTemplateForDraft"));
-      return null;
+      onError(t("compose:errors.selectTemplateForDraft")); return null;
     }
-    onError(null);
+    const isCurrent = capturePaperRequest();
+    const submitted = clonePaperState(paperStateRef.current);
+    const body = {
+      name: submitted.draftName.trim() || undefined, subject: submitted.subject.trim(),
+      export_label: submitted.exportLabel.trim(), template_ref: submitted.templateRef,
+      template_path: submitted.templatePath, selected_items: buildSelectedItemsFromModel(selectedTpl, submitted),
+    };
     try {
-      const selected_items = buildSelectedItemsForApi();
-      const body = {
-        name: draftName.trim() || undefined,
-        subject: subject.trim(),
-        export_label: exportLabel.trim(),
-        template_ref: templateRef,
-        template_path: templatePath,
-        selected_items,
-      };
       const response = currentExamId
         ? await apiPut<{ exam: ExamDoc }>(`/api/exams/${encodeURIComponent(currentExamId)}`, body)
         : await apiPost<{ exam: ExamDoc }>("/api/exams", body);
-      applyExamDocument(response.exam);
+      if (!isCurrent()) return null;
+      const parsed = examDocToPaperState(response.exam, submitted);
+      const nextScope = draftScope.scope && { ...draftScope.scope, paperKey: buildComposeDraftPaperKey(parsed.examId) };
+      acceptSavedState(parsed.state, submitted, nextScope);
+      currentExamIdRef.current = parsed.examId;
+      setCurrentExamId(parsed.examId);
       void refreshExamSummaries();
       return response.exam;
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+    } catch (error) {
+      if (isCurrent()) onError(error instanceof Error ? error.message : String(error));
       return null;
     }
-  }, [
-    applyExamDocument,
-    buildSelectedItemsForApi,
-    currentExamId,
-    draftName,
-    exportLabel,
-    onError,
-    refreshExamSummaries,
-    selectedTpl,
-    subject,
-    t,
-    templatePath,
-    templateRef,
-  ]);
+  }, [acceptSavedState, capturePaperRequest, currentExamId, draftScope.scope, onError, refreshExamSummaries, selectedTpl, t, templatePath]);
 
-  async function openPublishDialog() {
-    setPublishBusy(true);
-    onError(null);
+  const saveDraftToServer = useCallback(async () => {
+    const isCurrent = captureOwnerRequest();
+    const updating = Boolean(currentExamId);
+    onError(null); setBusy(true);
     try {
-      const [data, folderData] = await Promise.all([listTeacherAssignedClasses(), listContentFolders("paper")]);
-      setPublishClasses(data.classes);
-      setPublishFolders(folderData.folders);
-      setPublishFolderId("");
-      setPublishRecipientScope("class");
-      setPublishStudentIds([]);
-      setPublishClassIds([]);
-      setPublishSubmissionMode("online");
-      setPublishMaxScreenSwitches(0);
-      setPublishStartAt("");
-      setPublishEndAt("");
-      setPublishTimeLimitMinutes(0);
-      setPublishMode("current");
-      setPracticeHistory([]);
-      setPracticeSourceIds([]);
-      setPracticeMaxQuestionsPerStudent(20);
-      setPublishDialogOpen(true);
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      const doc = await persistDraftForPublish();
+      if (!isCurrent() || !doc) return;
+      setMsg(updating ? t("compose:messages.draftUpdated") : t("compose:messages.draftSavedWithPath", { path: `exams/${doc.exam_id}` }));
     } finally {
-      setPublishBusy(false);
+      if (isCurrent()) setBusy(false);
     }
-  }
+  }, [captureOwnerRequest, currentExamId, onError, persistDraftForPublish, t]);
 
-  useEffect(() => {
-    if (!publishDialogOpen || publishClassIds.length !== 1) {
-      setPracticeHistory([]);
-      setPracticeSourceIds([]);
-      if (publishClassIds.length > 1) setPublishMode("current");
-      return;
-    }
-    let cancelled = false;
-    setPracticeHistoryLoading(true);
-    void listClassPracticeHistory(publishClassIds[0])
-      .then((data) => {
-        if (!cancelled) setPracticeHistory(data.publications);
-      })
-      .catch((error) => {
-        if (!cancelled) onError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        if (!cancelled) setPracticeHistoryLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [onError, publishClassIds, publishDialogOpen]);
-
-  useEffect(() => {
-    if (!publishDialogOpen || publishRecipientScope !== "student" || publishClassIds.length !== 1) { setPublishStudents([]); return; }
-    let active = true;
-    void listTeacherClassStudents(publishClassIds[0]).then(({ students }) => { if (active) setPublishStudents(students); }).catch((error) => onError(error instanceof Error ? error.message : String(error)));
-    return () => { active = false; };
-  }, [publishDialogOpen, publishRecipientScope, publishClassIds, onError]);
-
-  function togglePublishClass(classId: string) {
-    if (publishRecipientScope === "student") { setPublishClassIds([classId]); setPublishStudentIds([]); return; }
-    setPublishClassIds((current) =>
-      current.includes(classId) ? current.filter((id) => id !== classId) : [...current, classId],
-    );
-  }
-
-  async function publishCurrentPaperOnline() {
-    if (publishClassIds.length === 0) {
-      onError("请先选择要发布的班级");
-      return;
-    }
-    if (!publishFolderId) { onError("发布前请选择试卷文件夹或归类文件夹"); return; }
-    if (publishRecipientScope === "student" && (publishStudentIds.length === 0 || publishFolders.find((folder) => folder.id === publishFolderId)?.kind !== "paper")) { onError("指定学生发布须选择学生和试卷文件夹"); return; }
-    setPublishBusy(true);
-    onError(null);
-    try {
-      const adaptiveSettings = {
-        class_id: publishClassIds[0],
-        title:
-          exportLabel.trim() ||
-          (publishMode === "wrong_questions" ? "历史错题巩固" : publishMode === "reinforcement" ? "专项巩固" : "在线试卷"),
-        start_at: publishStartAt || null,
-        end_at: publishEndAt || null,
-        submission_mode: publishSubmissionMode,
-        max_screen_switches: publishMaxScreenSwitches,
-        time_limit_minutes: publishTimeLimitMinutes > 0 ? publishTimeLimitMinutes : null,
-      };
-      if (publishMode === "wrong_questions") {
-        if (publishClassIds.length !== 1 || practiceSourceIds.length !== 1) {
-          throw new Error("历史错题卷需要选择一个班级和一份历史试卷");
-        }
-        const result = await publishWrongQuestionPractice({
-          ...adaptiveSettings,
-          source_publication_id: practiceSourceIds[0],
-          max_questions_per_student: practiceMaxQuestionsPerStudent,
-        });
-        setMsg(`历史错题卷已发布：${result.assigned_student_count} 人收到，${result.skipped_student_count} 人无错题`);
-        setPublishDialogOpen(false);
-        return;
-      }
-      if (publishMode === "reinforcement") {
-        if (publishClassIds.length !== 1 || practiceSourceIds.length < 3) {
-          throw new Error("专项巩固卷需要选择一个班级和至少 3 份历史试卷");
-        }
-        const result = await publishReinforcementPractice({
-          ...adaptiveSettings,
-          source_publication_ids: practiceSourceIds,
-          questions_per_student: practiceMaxQuestionsPerStudent,
-        });
-        setMsg(
-          `专项巩固卷已发布：${result.assigned_student_count} 人收到，AI 使用 ${result.generation.total_tokens} tokens`,
-        );
-        setPublishDialogOpen(false);
-        return;
-      }
-      if (!countsOk) {
-        throw new Error("当前试卷题量尚未满足模板要求；可改选历史错题卷或专项巩固卷");
-      }
-      const saved = await persistDraftForPublish();
-      const examId = String(saved?.exam_id ?? currentExamIdRef.current ?? "").trim();
-      if (!examId) {
-        throw new Error("保存试卷失败，无法取得试卷编号");
-      }
-      const synced = await syncPlatformPaperFromExam(examId);
-      await publishPlatformPaper(synced.paper.paper_id, {
-        class_ids: publishClassIds,
-        student_ids: publishRecipientScope === "student" ? publishStudentIds : [],
-        folder_id: publishFolderId,
-        title: exportLabel.trim() || synced.paper.title,
-        start_at: publishStartAt || null,
-        end_at: publishEndAt || null,
-        submission_mode: publishSubmissionMode,
-        max_screen_switches: publishMaxScreenSwitches,
-        time_limit_minutes: publishTimeLimitMinutes > 0 ? publishTimeLimitMinutes : null,
-      });
-      setMsg("已发布为线上答题试卷");
-      setPublishDialogOpen(false);
-      setPublishClassIds([]);
-      dispatchExamsChanged({ examId });
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPublishBusy(false);
-    }
-  }
+  const publishing = useComposePublishing({ open: publishDialogOpen, setOpen: setPublishDialogOpen,
+    ownerKey: draftScope.ownerKey, exportLabel, countsOk, persistDraftForPublish, onError, setMsg });
+  const { openPublishDialog, publishBusy } = publishing;
 
   async function deleteExamById(examId: string, opts?: { exported?: boolean }) {
     const ok = opts?.exported
@@ -1564,7 +1137,7 @@ export function ComposeWorkspace({
       await apiDelete<{ ok: boolean }>(`/api/exams/${encodeURIComponent(examId)}`);
       if (currentExamId === examId) {
         setCurrentExamId(null);
-        setDraftName("");
+        updateWithoutHistory((previous) => ({ ...previous, draftName: "" }));
         setPdfExamId(null);
         setPreviewPdfId(null);
       }
@@ -1582,11 +1155,14 @@ export function ComposeWorkspace({
   }
 
   async function loadExamById(examId: string, pdfForViewer: string | null, wordForViewer: string | null = null) {
+    const isCurrent = captureOwnerRequest();
+    const sequence = ++examLoadSequence.current;
     onError(null);
     setBusy(true);
     try {
       const r = await apiGet<{ exam: ExamDoc }>(`/api/exams/${encodeURIComponent(examId)}`);
       await refreshTemplates();
+      if (!isCurrent() || sequence !== examLoadSequence.current) return;
       applyExamDocument(r.exam);
       setNamespaceFilter("__all__");
       setTypeFilter("__all__");
@@ -1604,9 +1180,9 @@ export function ComposeWorkspace({
       setPdfVariant("student");
       setMsg(t("compose:messages.draftLoaded"));
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrent()) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isCurrent() && sequence === examLoadSequence.current) setBusy(false);
     }
   }
 
@@ -1671,8 +1247,14 @@ export function ComposeWorkspace({
         <details className="relative group">
           <summary className="list-none cursor-pointer rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50">导出 ▾</summary>
           <div className="absolute right-0 top-full z-30 mt-1 min-w-32 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
-            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk} onClick={() => void exportExam()}>{t("compose:exportPdf")}</button>
-            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk} onClick={() => void exportWord()}>{t("compose:exportWord")}</button>
+            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={(event) => {
+              event.currentTarget.closest("details")?.removeAttribute("open");
+              void exportExam();
+            }}>{t("compose:exportPdf")}</button>
+            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={(event) => {
+              event.currentTarget.closest("details")?.removeAttribute("open");
+              void exportWord();
+            }}>{t("compose:exportWord")}</button>
           </div>
         </details>
         <button
@@ -1703,6 +1285,8 @@ export function ComposeWorkspace({
     templates,
     exportedExamRows,
     publishBusy,
+    exportTasks.isPollingOrRunning,
+    startExportTask,
     previewPdfId,
     pdfExamId,
   ]);
@@ -1733,300 +1317,18 @@ export function ComposeWorkspace({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
-      {newPaperDialogOpen ? (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="new-paper-dialog-title"
-        >
-          <div className="max-w-lg w-full rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <h2 id="new-paper-dialog-title" className="text-base font-semibold text-slate-900">
-              {t("compose:newPaperDialogTitle")}
-            </h2>
-            <p className="mt-1 text-sm text-slate-600">{t("compose:newPaperDialogHint")}</p>
-            <div className="mt-4 flex gap-4 text-sm">
-              <label className="flex cursor-pointer items-center gap-2">
-                <input
-                  type="radio"
-                  name="np-mode"
-                  checked={dlgMode === "scratch"}
-                  onChange={() => setDlgMode("scratch")}
-                />
-                {t("compose:newPaperModeScratch")}
-              </label>
-              <label className="flex cursor-pointer items-center gap-2">
-                <input
-                  type="radio"
-                  name="np-mode"
-                  checked={dlgMode === "history"}
-                  onChange={() => setDlgMode("history")}
-                />
-                {t("compose:newPaperModeHistory")}
-              </label>
-            </div>
-            {dlgMode === "history" ? (
-              <>
-                <label className="mt-4 block text-xs font-medium text-slate-600">
-                  {t("compose:newPaperPickHistory")}
-                  <select
-                    className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                    value={dlgHistorySourceExamId}
-                    onChange={(e) => setDlgHistorySourceExamId(e.target.value)}
-                  >
-                    <option value="">{t("compose:newPaperPickHistoryPlaceholder")}</option>
-                    {exportedExamRows.map((ex) => (
-                        <option key={ex.exam_id} value={ex.exam_id}>
-                          {ex.export_label || ex.name || ex.exam_id}
-                          {ex.subject ? ` · ${ex.subject}` : ""}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <label className="mt-4 block text-xs font-medium text-slate-600">
-                  {t("compose:examLabel")}
-                  <input
-                    className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                    value={dlgHistoryExportLabel}
-                    onChange={(e) => setDlgHistoryExportLabel(e.target.value)}
-                    placeholder={t("compose:newPaperHistoryExamLabelPlaceholder")}
-                    autoComplete="off"
-                  />
-                </label>
-                <div className="mt-4">
-                  <div className="text-xs font-medium text-slate-600">
-                    {t("compose:subjectFromHistoryReadonly")}
-                  </div>
-                  <div className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-800">
-                    {dlgSelectedPastExam?.subject?.trim() || "—"}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                <label className="mt-4 block text-xs font-medium text-slate-600">
-                  {t("compose:examLabel")}
-                  <input
-                    className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                    value={dlgExportLabel}
-                    onChange={(e) => setDlgExportLabel(e.target.value)}
-                  />
-                </label>
-                <label className="mt-4 block text-xs font-medium text-slate-600">
-                  {t("compose:subjectPdf")}
-                  <select
-                    className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                    value={dlgSubject}
-                    onChange={(e) => setDlgSubject(e.target.value)}
-                  >
-                    {subjectOptionsForSelect.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="mt-4 block text-xs font-medium text-slate-600">
-                  {t("compose:template")}
-                  <select
-                    className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                    value={dialogTemplate?.path ?? ""}
-                    onChange={(e) => setDlgTemplatePath(e.target.value)}
-                  >
-                    {templates.length === 0 && <option value="">{t("compose:templatesMissing")}</option>}
-                    {templates.map((tp) => (
-                      <option key={tp.path} value={tp.path}>
-                        {tp.id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </>
-            )}
-            <div className="mt-6 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800"
-                disabled={busy}
-                onClick={() => setNewPaperDialogOpen(false)}
-              >
-                {t("common:cancel")}
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                disabled={busy || (dlgMode === "scratch" && !dialogTemplate)}
-                onClick={() => void confirmNewPaperDialog()}
-              >
-                {t("compose:newPaperDialogConfirm")}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {publishDialogOpen ? (
-        <div
-          className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="publish-online-dialog-title"
-        >
-          <div className="max-h-[92vh] w-full max-w-3xl overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <h2 id="publish-online-dialog-title" className="text-base font-semibold text-slate-900">
-              发布线上答题试卷
-            </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              将当前组卷保存为试卷，并发布给选中的班级。线上发布不依赖 PDF 编译。
-            </p>
-            <div className="mt-3 flex gap-2"><button type="button" onClick={() => { setPublishRecipientScope("class"); setPublishStudentIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${publishRecipientScope === "class" ? "bg-slate-900 text-white" : ""}`}>发布到班级</button><button type="button" onClick={() => { setPublishRecipientScope("student"); setPublishClassIds([]); setPublishMode("current"); }} className={`rounded border px-3 py-1.5 text-sm ${publishRecipientScope === "student" ? "bg-slate-900 text-white" : ""}`}>指定学生</button></div>
-            <ContentFolderHelp paper /><label className="mt-3 block text-sm">试卷归类（必选）<select aria-label="组卷发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-2 py-2"><option value="">请选择文件夹</option>{publishFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
-            {publishRecipientScope === "student" && publishFolderId && publishFolders.find((folder) => folder.id === publishFolderId)?.kind === "category" ? <button type="button" className="mt-2 rounded border border-violet-300 px-2 py-1 text-xs text-violet-700" onClick={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setPublishFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch((error) => onError(error instanceof Error ? error.message : String(error)))}>将空文件夹转为试卷文件夹</button> : null}
-            <div className="mt-2 flex gap-2"><input aria-label="组卷新建文件夹名称" value={publishNewFolderName} onChange={(event) => setPublishNewFolderName(event.target.value)} placeholder="新文件夹名称" className="min-w-0 flex-1 rounded border px-2 py-1 text-sm" /><button type="button" disabled={!publishNewFolderName.trim()} onClick={() => { const parent = publishFolders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? publishFolders.find((folder) => folder.kind === "category" && !folder.parent_id); void createContentFolder({ scope: "paper", name: publishNewFolderName.trim(), kind: publishRecipientScope === "student" ? "paper" : "category", parent_id: publishRecipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => { setPublishFolders((current) => [...current, folder]); setPublishFolderId(folder.id); setPublishNewFolderName(""); }).catch((error) => onError(error instanceof Error ? error.message : String(error))); }} className="rounded border px-2 py-1 text-xs disabled:opacity-50">新建并选择</button></div>
-            <div className="mt-4 max-h-72 space-y-2 overflow-auto rounded-lg border border-slate-200 p-2">
-              {publishClasses.map((klass) => (
-                <label
-                  key={klass.id}
-                  className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-slate-50"
-                >
-                  <input
-                    type={publishRecipientScope === "student" ? "radio" : "checkbox"}
-                    name={publishRecipientScope === "student" ? "compose-personal-class" : undefined}
-                    checked={publishClassIds.includes(klass.id)}
-                    onChange={() => togglePublishClass(klass.id)}
-                    className="h-4 w-4"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium text-slate-900">{klass.name}</span>
-                    <span className="block truncate text-xs text-slate-500">
-                      {[klass.grade, klass.subject ?? klass.subject_hint].filter(Boolean).join(" · ") || "未分组"}
-                    </span>
-                  </span>
-                </label>
-              ))}
-              {publishClasses.length === 0 ? (
-                <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
-                  暂无可发布班级，请先在学校端给教师分配班级。
-                </p>
-              ) : null}
-            </div>
-            {publishRecipientScope === "student" && publishClassIds.length === 1 ? <div className="mt-3 rounded border p-3"><input aria-label="组卷搜索指定学生" value={publishStudentSearch} onChange={(event) => setPublishStudentSearch(event.target.value)} placeholder="搜索姓名或学号" className="mb-2 w-full rounded border px-2 py-1.5 text-sm" /><div className="max-h-32 overflow-auto">{publishStudents.filter((student) => `${student.display_name} ${student.student_no}`.toLowerCase().includes(publishStudentSearch.toLowerCase())).map((student) => <label key={student.id} className="flex gap-2 p-1 text-sm"><input type="checkbox" checked={publishStudentIds.includes(student.id)} onChange={() => setPublishStudentIds((ids) => ids.includes(student.id) ? ids.filter((id) => id !== student.id) : [...ids, student.id])} />{student.display_name} · {student.student_no}</label>)}</div></div> : null}
-            <AdaptivePracticeSelector
-              mode={publishMode}
-              history={practiceHistory}
-              selectedIds={practiceSourceIds}
-              maxQuestionsPerStudent={practiceMaxQuestionsPerStudent}
-              loading={practiceHistoryLoading}
-              disabled={publishClassIds.length !== 1}
-              onModeChange={(mode) => {
-                setPublishMode(mode);
-                setPracticeMaxQuestionsPerStudent(mode === "reinforcement" ? 5 : 20);
-              }}
-              onSelectionChange={setPracticeSourceIds}
-              onMaxQuestionsChange={setPracticeMaxQuestionsPerStudent}
-            />
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              {[
-                ["online", "网页答题"],
-                ["image_manual", "图片人工批改"],
-                ["image_ai", "图片 OCR+AI"],
-              ].map(([mode, label]) => (
-                <label
-                  key={mode}
-                  className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${
-                    publishSubmissionMode === mode ? "border-emerald-700 bg-emerald-50" : "border-slate-200 bg-white"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="compose-publish-submission-mode"
-                    value={mode}
-                    checked={publishSubmissionMode === mode}
-                    onChange={() => setPublishSubmissionMode(mode as PaperSubmissionMode)}
-                  />
-                  <span>{label}</span>
-                </label>
-              ))}
-            </div>
-            <label className="mt-4 block text-sm font-medium text-slate-700">
-              允许切屏次数
-              <input
-                type="number"
-                min={0}
-                max={999}
-                value={publishMaxScreenSwitches}
-                onChange={(event) => setPublishMaxScreenSwitches(Math.max(0, Number(event.target.value || 0)))}
-                className="mt-1 w-36 rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-700"
-              />
-            </label>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
-              <label className="block text-sm font-medium text-slate-700">
-                开始时间
-                <input
-                  type="datetime-local"
-                  value={publishStartAt}
-                  onChange={(event) => setPublishStartAt(event.target.value)}
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-700"
-                />
-              </label>
-              <label className="block text-sm font-medium text-slate-700">
-                结束时间
-                <input
-                  type="datetime-local"
-                  value={publishEndAt}
-                  onChange={(event) => setPublishEndAt(event.target.value)}
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-700"
-                />
-              </label>
-              <label className="block text-sm font-medium text-slate-700">
-                做题时长
-                <input
-                  type="number"
-                  min={0}
-                  max={1440}
-                  value={publishTimeLimitMinutes}
-                  onChange={(event) => setPublishTimeLimitMinutes(Math.max(0, Number(event.target.value || 0)))}
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-700"
-                />
-              </label>
-            </div>
-            <div className="mt-6 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800"
-                disabled={publishBusy}
-                onClick={() => setPublishDialogOpen(false)}
-              >
-                {t("common:cancel")}
-              </button>
-              <button
-                type="button"
-                data-testid="compose-publish-online-confirm"
-                className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
-                disabled={
-                  publishBusy ||
-                  publishClassIds.length === 0 ||
-                  !publishFolderId ||
-                  (publishRecipientScope === "student" && (publishStudentIds.length === 0 || publishFolders.find((folder) => folder.id === publishFolderId)?.kind !== "paper")) ||
-                  (publishMode === "current" && !countsOk) ||
-                  (publishMode === "wrong_questions" && (publishClassIds.length !== 1 || practiceSourceIds.length !== 1)) ||
-                  (publishMode === "reinforcement" && (publishClassIds.length !== 1 || practiceSourceIds.length < 3))
-                }
-                onClick={() => void publishCurrentPaperOnline()}
-              >
-                {publishBusy
-                  ? publishMode === "reinforcement"
-                    ? "AI 正在生成每位学生的专项题…"
-                    : "发布中..."
-                  : publishMode === "wrong_questions"
-                    ? "发布历史错题卷"
-                    : publishMode === "reinforcement"
-                      ? "生成并发布专项巩固卷"
-                      : "发布线上试卷"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <NewPaperDialog
+        open={newPaperDialogOpen} busy={busy} mode={dlgMode} onModeChange={setDlgMode}
+        exportLabel={dlgExportLabel} onExportLabelChange={setDlgExportLabel}
+        subject={dlgSubject} onSubjectChange={setDlgSubject} subjectOptions={subjectOptionsForSelect}
+        templates={templates} selectedTemplate={dialogTemplate} onTemplatePathChange={setDlgTemplatePath}
+        exportedExamRows={exportedExamRows} historySourceExamId={dlgHistorySourceExamId}
+        onHistorySourceExamIdChange={setDlgHistorySourceExamId}
+        historyExportLabel={dlgHistoryExportLabel} onHistoryExportLabelChange={setDlgHistoryExportLabel}
+        selectedPastExam={dlgSelectedPastExam} onCancel={() => setNewPaperDialogOpen(false)}
+        onConfirm={() => void confirmNewPaperDialog()}
+      />
+      <PublishOnlineDialog {...publishing.dialogProps} />
       <TexSetupNotice onError={onError} />
       {msg ? (
         <div
@@ -2054,741 +1356,130 @@ export function ComposeWorkspace({
           {t("common:processing")}
         </div>
       ) : null}
-
+      <ComposeExportTaskBanner task={exportTasks.activeTask} pendingSubmissionFailure={exportTasks.pendingSubmissionFailure}
+        busy={exportTasks.taskBusy} pollError={exportTasks.pollError}
+        onRetry={() => void exportTasks.retryExportTask()} onResume={() => void exportTasks.resumePolling()}
+        onDismiss={exportTasks.dismissExportTask} />
       <div className="flex min-h-0 flex-1 flex-row">
-        <aside className="flex w-48 shrink-0 flex-col border-r border-slate-200 bg-slate-50 xl:w-56">
-          <div className="shrink-0 p-2"><ContentFolders scope="compose" folders={composeFolders} selectedId={selectedComposeFolderId} onSelect={setSelectedComposeFolderId} onCreated={(folder) => setComposeFolders((current) => [...current, folder])} onUpdated={(folder) => setComposeFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDeleted={(result) => { setComposeFolders(result.folders); setComposeFolderItems(result.items); }} onDropItem={(id, folderId) => void assignFolderItem("compose", id, folderId).then(() => setComposeFolderItems((items) => ({ ...items, [id]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error)))} onError={onError} /></div>
-          <div className="shrink-0 border-b border-slate-200 bg-white px-2 py-2">
-            <h2 className="text-[10px] font-semibold uppercase leading-tight tracking-wide text-slate-500">
-              {t("compose:historySidebarTitle")}
-            </h2>
-          </div>
-          <div className="min-h-0 flex-1 space-y-3 overflow-auto p-2">
-            <div>
-              <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                {t("compose:draftsGroup")}
-              </p>
-              {draftExamRows.length === 0 ? (
-                <p className="px-1 text-xs text-slate-500">{t("compose:historyDraftEmpty")}</p>
-              ) : (
-                <ul className="space-y-1">
-                  {draftExamRows.map((d) => (
-                    <li key={d.exam_id} className="flex min-w-0 items-stretch gap-0.5">
-                      <button
-                        type="button"
-                        draggable
-                        onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "compose", id: d.exam_id }))}
-                        className={cn(
-                          "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs",
-                          currentExamId === d.exam_id
-                            ? "border-slate-900 bg-slate-100"
-                            : "border-slate-200 bg-white hover:border-slate-300",
-                        )}
-                        disabled={busy}
-                        onClick={() => {
-                          void loadExamById(d.exam_id, null);
-                        }}
-                      >
-                        <span className="font-medium text-slate-900">{d.name || d.exam_id}</span>
-                        <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800">临时</span>
-                        {(taggedItems[d.exam_id]?.length ?? 0) > 0 ? <TagChips tags={taggedItems[d.exam_id]} /> : null}
-                        <span className="mt-0.5 block text-[10px] text-slate-500">
-                          {t("compose:examStatusEditing")}
-                        </span>
-                        {d.export_label ? (
-                          <span className="mt-0.5 block text-[10px] text-slate-500">{d.export_label}</span>
-                        ) : null}
-                      </button>
-                      <button
-                        type="button"
-                        className="flex w-5 shrink-0 items-center justify-center self-stretch rounded text-[14px] leading-none text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
-                        disabled={busy}
-                        title={t("compose:deleteDraft")}
-                        aria-label={t("compose:deleteDraft")}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void deleteExamById(d.exam_id);
-                        }}
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div>
-              <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                {t("compose:historyGroup")}
-              </p>
-              {exportedExamRows.length === 0 ? (
-                <p className="px-1 text-xs text-slate-500">{t("compose:historyExamEmpty")}</p>
-              ) : (
-                <ul className="space-y-1">
-                  {exportedExamRows.map((ex) => (
-                    <li key={ex.exam_id} className="flex min-w-0 items-stretch gap-0.5">
-                      <button
-                        type="button"
-                        draggable
-                        onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "compose", id: ex.exam_id }))}
-                        className={cn(
-                          "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs",
-                          currentExamId === ex.exam_id
-                            ? "border-slate-900 bg-slate-100"
-                            : "border-slate-200 bg-white hover:border-slate-300",
-                        )}
-                        disabled={busy}
-                        onClick={() => {
-                          setLastExportedExamId(ex.exam_id);
-                          void loadExamById(
-                            ex.exam_id,
-                            ex.has_pdf ? ex.exam_id : null,
-                            ex.has_docx ? ex.exam_id : null,
-                          );
-                        }}
-                      >
-                        <span className="font-medium text-slate-900">
-                          {ex.export_label || ex.name || ex.exam_id}
-                        </span>
-                        {(taggedItems[ex.exam_id]?.length ?? 0) > 0 ? <TagChips tags={taggedItems[ex.exam_id]} /> : null}
-                        {ex.subject ? (
-                          <span className="mt-0.5 block text-[10px] text-slate-500">{ex.subject}</span>
-                        ) : null}
-                      </button>
-                      <button
-                        type="button"
-                        className="flex w-5 shrink-0 items-center justify-center self-stretch rounded text-[14px] leading-none text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
-                        disabled={busy}
-                        title={t("compose:deleteExportedExam")}
-                        aria-label={t("compose:deleteExportedExam")}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void deleteExamById(ex.exam_id, { exported: true });
-                        }}
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </aside>
+        <ComposeHistorySidebar
+          busy={busy}
+          currentExamId={currentExamId}
+          composeFolders={composeFolders}
+          selectedComposeFolderId={selectedComposeFolderId}
+          onSelectComposeFolder={setSelectedComposeFolderId}
+          onFolderCreated={(folder) => setComposeFolders((current) => [...current, folder])}
+          onFolderUpdated={(folder) => setComposeFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
+          onFolderDeleted={(result) => { setComposeFolders(result.folders); setComposeFolderItems(result.items); }}
+          onDropItemToFolder={(itemId, folderId) => { void assignFolderItem("compose", itemId, folderId).then(() => setComposeFolderItems((items) => { const next = { ...items }; if (folderId) next[itemId] = folderId; else delete next[itemId]; return next; })).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}
+          draftExamRows={draftExamRows}
+          exportedExamRows={exportedExamRows}
+          taggedItems={taggedItems}
+          onLoadDraftExam={(examId) => { void loadExamById(examId, null); }}
+          onLoadExportedExam={(exam) => { setLastExportedExamId(exam.exam_id); void loadExamById(exam.exam_id, exam.has_pdf ? exam.exam_id : null, exam.has_docx ? exam.exam_id : null); }}
+          onDeleteExam={(examId, opts) => { void deleteExamById(examId, opts); }}
+          onError={onError}
+        />
+
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 md:flex-row">
-        <section className="hidden w-full min-w-0 shrink-0 flex-col border-slate-200 bg-white md:flex md:w-56 md:border-r xl:w-72" onDragOver={(event) => { if (event.dataTransfer.types.includes('application/x-originreach-paper-item')) event.preventDefault(); }} onDrop={(event) => { const raw = event.dataTransfer.getData('application/x-originreach-paper-item'); if (!raw) return; event.preventDefault(); try { const item = JSON.parse(raw) as { sectionId: string; qid: string }; removeDraggedQuestion(item.sectionId, item.qid); } catch { onError('无法读取拖动的题目'); } }}>
-          <div className="border-b border-slate-100 px-3 py-2">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("compose:bankSearchTitle")}</h2>
-            <button
-              type="button"
-              className="mt-2 flex w-full items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left text-xs font-medium text-slate-800 hover:bg-slate-100"
-              onClick={() => setComposeFilterExpanded((v) => !v)}
-            >
-              <span>{t("compose:filter")} · {Number(namespaceFilter !== "__all__") + Number(typeFilter !== "__all__") + Number(Boolean(search.trim())) + Number(hasActiveMetadataFilters(metadataFilters))} 项</span>
-              <span className="truncate pl-2 text-[10px] font-normal text-slate-500">
-                {composeFilterExpanded
-                  ? t("common:collapseHint")
-                  : t("compose:filterSummary", {
-                      subject,
-                      collection: namespaceFilter === "__all__" ? t("compose:allCollections") : namespaceFilter,
-                      type:
-                        typeFilter === "__all__"
-                          ? t("compose:allTypes")
-                          : typeFilter === "group"
-                            ? t("compose:groupOption")
-                            : t(`lib:questionTypes.${typeFilter}`, { defaultValue: typeFilter }),
-                      search: `${search.trim() ? t("common:searchingSuffix") : ""}${hasActiveMetadataFilters(metadataFilters) ? " · metadata" : ""}`,
-                    })}
-              </span>
-            </button>
-            {composeFilterExpanded && (
-              <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-label="组卷筛选" onClick={() => setComposeFilterExpanded(false)}><div className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="mb-4 flex items-center justify-between"><h3 className="font-semibold">筛选题目</h3><button type="button" aria-label="关闭组卷筛选" onClick={() => setComposeFilterExpanded(false)}>×</button></div><div className="space-y-2">
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("compose:subjectForExport")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                  >
-                    {subjectOptionsForSelect.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("compose:collection")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
-                    value={namespaceFilter}
-                    onChange={(e) => setNamespaceFilter(e.target.value)}
-                  >
-                    <option value="__all__">{t("common:all")}</option>
-                    {namespaces.map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("compose:questionType")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
-                    value={typeFilter}
-                    onChange={(e) => setTypeFilter(e.target.value)}
-                  >
-                    <option value="__all__">{t("common:all")}</option>
-                    <option value="group">{t("compose:groupOption")}</option>
-                    {QUESTION_TYPE_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {t(`lib:questionTypes.${o.value}`)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("compose:search")}
-                  <input
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm placeholder:text-slate-400"
-                    placeholder={t("compose:searchPlaceholder")}
-                    value={searchInput}
-                    onChange={(e) => setSearchInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter" || isImeComposingKeyboardEvent(e)) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      commitSearch(e.currentTarget.value);
-                    }}
-                    onBlur={(e) => commitSearch(e.currentTarget.value)}
-                  />
-                </label>
-                <MetadataFilterControls
-                  definitions={metadataFilterDefinitions}
-                  filters={metadataFilters}
-                  onChange={setMetadataFilters}
-                />
-              </div><div className="mt-4 flex justify-end"><button type="button" onClick={() => setComposeFilterExpanded(false)} className="rounded bg-slate-900 px-4 py-2 text-sm text-white">查看结果</button></div></div></div>
-            )}
-            <p className="mt-2 text-[10px] leading-snug text-slate-500">可将题目拖入右侧小节；多选后也可用箭头加入。</p>
-          </div>
-          <ul className="min-h-0 flex-1 overflow-auto p-2">
-            {contentSyncing ? (
-              <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-700">正在更新内容库...</div>
-            ) : questions.length === 0 ? (
-              <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
-                <p className="font-medium text-slate-800">{t("compose:emptyBank")}</p>
-                <p className="mt-2 text-xs leading-relaxed text-slate-500">{t("compose:emptyBankHint")}</p>
-              </li>
-            ) : filteredQuestions.length === 0 ? (
-              <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
-                <p className="font-medium text-slate-800">{t("compose:emptyFilter")}</p>
-                <p className="mt-2 text-xs text-slate-500">{t("compose:emptyFilterHint")}</p>
-              </li>
-            ) : (
-              filteredQuestions.map((q, index) => {
-                const isBundle = q.type === "group";
-                return (
-                  <li key={q.qualified_id}>
-                    <button
-                      type="button"
-                      draggable
-                      onDragStart={(event) => event.dataTransfer.setData('application/x-originreach-bank-qids', JSON.stringify(selectedLeftIdsSet.has(q.qualified_id) ? selectedLeftIds : [q.qualified_id]))}
-                      onClick={(e) => handleLeftBankClick(q, index, e)}
-                      className={cn(
-                        "mb-1 w-full rounded-lg border px-2 py-2 text-left text-sm transition-colors",
-                        selectedLeftIdsSet.has(q.qualified_id)
-                          ? "border-slate-900 bg-slate-100"
-                          : "border-transparent bg-slate-50 hover:border-slate-200 hover:bg-white",
-                      )}
-                    >
-                      <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
-                        {t(`lib:questionTypes.${q.type}`, { defaultValue: q.type })}
-                      </span>
-                      {isBundle ? (
-                        <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-900">
-                          {t("compose:bundleBadge")}
-                        </span>
-                      ) : null}
-                      <span className="ml-1 font-mono text-[11px] text-slate-800">{q.qualified_id}</span>
-                      <QuestionHoverDetails id={q.qualified_id}><KatexPlainPreview
-                        text={q.content_preview}
-                        className="mt-1 line-clamp-3 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
-                      /></QuestionHoverDetails>
-                      {Object.keys(q.metadata ?? {}).length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {Object.entries(q.metadata ?? {}).map(([k, v]) => (
-                            <span key={k} className="rounded-full bg-slate-200/80 px-1.5 py-0.5 text-[10px] text-slate-600">
-                              {k}:{String(v)}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </button>
-                  </li>
-                );
-              })
-            )}
-          </ul>
-        </section>
+        <ComposeBankSearchPanel
+          subject={subject}
+          onSubjectChange={(value) => commitPaperState({ ...paperStateRef.current, subject: value })}
+          subjectOptions={subjectOptionsForSelect}
+          namespaceFilter={namespaceFilter}
+          onNamespaceFilterChange={setNamespaceFilter}
+          namespaces={namespaces}
+          typeFilter={typeFilter}
+          onTypeFilterChange={setTypeFilter}
+          searchInput={searchInput}
+          onSearchInputChange={setSearchInput}
+          search={search}
+          onCommitSearch={commitSearch}
+          metadataFilterDefinitions={metadataFilterDefinitions}
+          metadataFilters={metadataFilters}
+          onMetadataFiltersChange={setMetadataFilters}
+          filterExpanded={composeFilterExpanded}
+          onFilterExpandedChange={setComposeFilterExpanded}
+          contentSyncing={contentSyncing}
+          totalQuestionCount={questions.length}
+          filteredQuestions={filteredQuestions}
+          selectedLeftIds={selectedLeftIds}
+          selectedLeftIdsSet={selectedLeftIdsSet}
+          onLeftBankClick={handleLeftBankClick}
+          onDropPaperItemToRemove={removeDraggedQuestion}
+          onError={onError}
+        />
 
-        <div className="flex w-full shrink-0 flex-row items-center justify-center gap-2 border-y border-slate-200 bg-slate-100/90 py-2 md:w-11 md:flex-col md:justify-start md:gap-3 md:border-x md:border-y-0 md:py-4">
-          <button type="button" disabled={!selectedTpl} className="rounded border bg-white p-1 text-xs" title="按当前筛选题目补齐各大题空缺；保留已选题目，不重复添加" onClick={() => {
+
+        <ComposePaperEditorPanel
+          busy={busy}
+          contentSyncing={contentSyncing}
+          templatesCount={templates.length}
+          selectedTpl={selectedTpl}
+          paperState={currentPaperState}
+          activeSection={activeSection}
+          onActiveSectionChange={setActiveSection}
+          onSelectSectionAndFilter={(sectionId, filterType) => { setActiveSection(sectionId); setTypeFilter(filterType); }}
+          countsOk={countsOk}
+          totalScore={totalScore}
+          knowledgeDistributionRows={knowledgeDistributionRows}
+          questionMap={questionMap}
+          selectedRight={selectedRight}
+          onFillSectionGaps={() => {
             if (!selectedTpl) return;
-            const next = fillSectionGaps(selectedTpl.sections.map((section) => ({ ...section, required_count: countBySection[section.section_id] ?? section.required_count })), bySection, filteredQuestions, questionTypeMatchesSection);
-            const added = Object.values(next).flat().length - Object.values(bySection).flat().length;
-            setBySection(next);
-            setMsg(`已补入 ${added} 题；不足时请放宽左侧筛选条件。`);
-          }}>补齐空缺</button>
-          <button
-            type="button"
-            title={t("compose:addToSection")}
-            onClick={addFromLeft}
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50"
-          >
-            <ChevronRight className="h-5 w-5" />
-          </button>
-          <button
-            type="button"
-            title={t("compose:removeFromPaper")}
-            onClick={removeFromRight}
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-        </div>
+            const filled = fillSectionGapsInModel({ state: paperStateRef.current, template: selectedTpl, candidateQuestions: filteredQuestions });
+            if (filled.changed) commitPaperState(filled.nextState);
+            setMsg(`已补入 ${filled.addedCount} 题；不足时请放宽左侧筛选条件。`);
+          }}
+          onAddFromLeft={addFromLeft}
+          onRemoveFromRight={removeFromRight}
+          onMoveSelectedRight={moveSelectedRight}
+          onDropBankQuestionsToSection={(questionIds, sectionId) => addQuestionsToSection(questionIds, sectionId)}
+          onRightPaperSlotClick={handleRightPaperSlotClick}
+          onSectionRequiredCountChange={(sectionId, rawValue) => commitPaperState(setSectionRequiredCountInModel(paperStateRef.current, sectionId, rawValue))}
+          onSectionScorePerItemChange={(sectionId, rawValue) => commitPaperState(setSectionScorePerItemInModel(paperStateRef.current, sectionId, rawValue))}
+          onPerQuestionModeChange={(sectionId, enabled) => commitPaperState(setPerQuestionScoreModeInModel(paperStateRef.current, sectionId, enabled))}
+          onQuestionScoreOverrideChange={(sectionId, qid, rawValue) => commitPaperState(setQuestionScoreOverrideInModel(paperStateRef.current, sectionId, qid, rawValue))}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={undoCompose}
+          onRedo={redoCompose}
+          isDirty={isDirty}
+          draftScopeReady={draftScope.scopeReady}
+          draftStorageStatus={draftStorageStatus}
+          recoverableDraft={recoverableDraft}
+          onRestoreLocalDraft={restoreLocalDraft}
+          onDiscardLocalDraft={discardLocalDraft}
+          currentExamId={currentExamId}
+          composeFolders={composeFolders}
+          composeFolderItems={composeFolderItems}
+          onAssignCurrentExamFolder={(examId, folderId) => { void assignFolderItem("compose", examId, folderId || null).then(() => setComposeFolderItems((items) => ({ ...items, [examId]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}
+          onRefreshTaggedItems={() => { void listTaggedItems("compose").then(({ items }) => setTaggedItems(items)); }}
+          conflictOpen={Boolean(conflictTargetId)}
+          onCancelConflictOverwrite={() => { setConflictTargetId(null); setConflictExportKind(null); }}
+          onConfirmConflictOverwrite={() => void confirmOverwriteExport()}
+          onError={onError}
+        />
 
-        <section className="min-h-0 min-w-0 flex-1 basis-0 overflow-auto bg-slate-50 p-4 lg:min-w-0">
-          {currentExamId ? <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-white p-2 text-xs"><span>当前试卷归类</span><select aria-label="组卷所在文件夹" value={composeFolderItems[currentExamId] ?? ""} onChange={(event) => { const folderId = event.target.value; void assignFolderItem("compose", currentExamId, folderId || null).then(() => setComposeFolderItems((items) => ({ ...items, [currentExamId]: folderId }))).catch((error) => onError(error instanceof Error ? error.message : String(error))); }} className="rounded border px-2 py-1"><option value="">未归类</option>{composeFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><ContentTags scope="compose" itemId={currentExamId} onError={onError} onChange={() => void listTaggedItems("compose").then(({ items }) => setTaggedItems(items))} /></div> : null}
-          {conflictTargetId ? (
-            <div
-              className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="overwrite-dialog-title"
-            >
-              <div className="max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-                <h2 id="overwrite-dialog-title" className="text-base font-semibold text-slate-900">
-                  {t("compose:overwriteTitle")}
-                </h2>
-                <p className="mt-2 text-sm text-slate-600">{t("compose:overwriteBody")}</p>
-                <div className="mt-4 flex flex-wrap justify-end gap-2">
-                  <button
-                    type="button"
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800"
-                    onClick={() => {
-                      setConflictTargetId(null);
-                      setConflictExportKind(null);
-                    }}
-                  >
-                    {t("common:cancel")}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700"
-                    disabled={busy}
-                    onClick={() => void confirmOverwriteExport()}
-                  >
-                    {t("compose:overwriteExport")}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
+        <ComposePdfPreviewAside
+          busy={busy}
+          pdfVariant={pdfVariant}
+          onPdfVariantChange={setPdfVariant}
+          pdfExamId={pdfExamId}
+          previewPdfId={previewPdfId}
+          wordOpenExamId={wordOpenExamId}
+          composeRightPdfPath={composeRightPdfPath}
+          viewPdfBusy={viewPdfBusy}
+          viewWordBusy={viewWordBusy}
+          onDownloadPdfBundle={(examId) => { void downloadExportedBundle(examId, "pdf").catch((error) => onError(error instanceof Error ? error.message : String(error))); }}
+          onDownloadWordBundle={(examId) => { void downloadExportedBundle(examId, "docx").catch((error) => onError(error instanceof Error ? error.message : String(error))); }}
+          onOpenPdfExternally={() => void openViewPdfExternally()}
+          onOpenWordExternally={() => void openViewWordExternally()}
+        />
 
-          <div className="mb-4 space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">{t("compose:examLabel")}</p>
-                <p className="mt-0.5 text-sm font-medium text-slate-900">{exportLabel.trim() || "—"}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">{t("compose:subjectPdf")}</p>
-                <p className="mt-0.5 text-sm font-medium text-slate-900">{subject.trim() || "—"}</p>
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">{t("compose:template")}</p>
-                <p className="mt-0.5 truncate text-sm font-medium text-slate-900">{selectedTpl?.id ?? "—"}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">{t("compose:totalScoreLabel")}</p>
-                <p className="mt-0.5 text-lg font-semibold text-slate-900">{totalScore}</p>
-              </div>
-            </div>
-            <div className="border-t border-slate-100 pt-3">
-              <p className="text-xs font-medium text-slate-700">{t("compose:knowledgeDistributionTitle")}</p>
-              {knowledgeDistributionRows.length === 0 ? (
-                <p className="mt-1 text-xs text-slate-500">{t("compose:knowledgeDistributionEmpty")}</p>
-              ) : (
-                <ul className="mt-2 flex flex-wrap gap-2">
-                  {knowledgeDistributionRows.map(([name, n]) => (
-                    <li
-                      key={name}
-                      className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-800"
-                    >
-                      {name === "__unassigned__" ? t("compose:knowledgeUnassigned") : name}
-                      <span className="text-slate-500"> · {n}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-
-          {contentSyncing ? null : templates.length === 0 && (
-            <p className="text-sm text-red-600">{t("compose:templatesMissing")}</p>
-          )}
-
-          <div className="space-y-4">
-            <p className="text-xs text-slate-500">
-              {t("compose:activeSection")}
-              <select
-                className="ml-2 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
-                value={activeSection ?? ""}
-                onChange={(e) => setActiveSection(e.target.value || null)}
-              >
-                {selectedTpl?.sections.map((s) => (
-                  <option key={s.section_id} value={s.section_id}>
-                    {s.section_id}
-                    {s.type === "text"
-                      ? t("compose:sectionOptionText")
-                      : s.type === "practice"
-                        ? t("compose:sectionOptionPractice")
-                      : t("compose:sectionOptionNeed", { n: countBySection[s.section_id] ?? s.required_count })}
-                  </option>
-                ))}
-              </select>
-            </p>
-            <p className="text-[10px] leading-snug text-slate-500">拖回左侧题库可从试卷移除；点击题目可多选后用箭头移除。</p>
-
-            {selectedTpl?.sections.map((s) => {
-              const n = bySection[s.section_id]?.length ?? 0;
-              const isText = s.type === "text";
-              const isPractice = s.type === "practice";
-              const ok = isText || (isPractice ? n > 0 : n === (countBySection[s.section_id] ?? s.required_count));
-              const sectionBaseScore = scoreBySection[s.section_id] ?? s.score_per_item;
-              const slots = clusterAdjacentGroupSlots(bySection[s.section_id] ?? [], questionMap);
-              return (
-                <div
-                  key={s.section_id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => {
-                    setActiveSection(s.section_id);
-                    setSubject(subject);
-                    if (s.type === "text") {
-                      setTypeFilter("__all__");
-                    } else {
-                      setTypeFilter(sectionTypeToFilter(s));
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      setActiveSection(s.section_id);
-                      setSubject(subject);
-                      if (s.type === "text") {
-                        setTypeFilter("__all__");
-                      } else {
-                        setTypeFilter(sectionTypeToFilter(s));
-                      }
-                    }
-                  }}
-                  onDragOver={(event) => { if (event.dataTransfer.types.includes('application/x-originreach-bank-qids')) event.preventDefault(); }}
-                  onDrop={(event) => { const raw = event.dataTransfer.getData('application/x-originreach-bank-qids'); if (!raw) return; event.preventDefault(); event.stopPropagation(); try { addQuestionsToSection(JSON.parse(raw) as string[], s.section_id); setActiveSection(s.section_id); } catch { onError('无法读取拖动的题目'); } }}
-                  className={cn(
-                    "rounded-xl border bg-white shadow-sm transition-shadow",
-                    activeSection === s.section_id ? "border-slate-900 ring-1 ring-slate-900/10" : "border-slate-200 hover:border-slate-300",
-                  )}
-                >
-                  <div className="border-b border-slate-100 px-3 py-2">
-                    <div className="min-w-0">
-                      <h3 className="text-sm font-semibold text-slate-900">{s.section_id}</h3>
-                      <p className="text-[11px] text-slate-500">
-                        {isText ? (
-                          <>
-                            {t("compose:textSectionLine")}
-                            {ok && <span className="ml-2 text-emerald-600">{t("compose:configured")}</span>}
-                          </>
-                        ) : isPractice ? (
-                          <>
-                            {t("compose:practicePickedCount", { n })}
-                            {ok && <span className="ml-2 text-emerald-600">{t("compose:satisfied")}</span>}
-                          </>
-                        ) : (
-                          <>
-                            {t("compose:pickedCount", { n, need: countBySection[s.section_id] ?? s.required_count })}
-                            {ok && <span className="ml-2 text-emerald-600">{t("compose:satisfied")}</span>}
-                          </>
-                        )}
-                      </p>
-                      {s.describe ? (
-                        <p className="mt-1 line-clamp-3 text-[11px] text-slate-600">{s.describe}</p>
-                      ) : null}
-                      {!isText ? (
-                        <div
-                          className="mt-2 flex flex-wrap items-center gap-3 border-t border-slate-50 pt-2"
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => e.stopPropagation()}
-                        >
-                          {s.type !== "practice" ? <label className="flex items-center gap-1 text-[11px] font-medium text-slate-600">题目数量<input aria-label={`${s.section_id}题目数量`} type="number" min={0} max={500} value={countBySection[s.section_id] ?? s.required_count} onChange={(event) => setCountBySection((current) => ({ ...current, [s.section_id]: Math.max(0, Math.min(500, Number(event.target.value) || 0)) }))} className="w-16 rounded-md border border-slate-300 px-1.5 py-1 text-sm" /></label> : null}
-                          <label className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
-                            {t("compose:scorePerItem")}
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.5}
-                              className="w-20 rounded-md border border-slate-300 px-1.5 py-1 text-sm"
-                              value={scoreBySection[s.section_id] ?? s.score_per_item}
-                              onChange={(e) => {
-                                const v = parseFloat(e.target.value);
-                                setScoreBySection((prev) => ({
-                                  ...prev,
-                                  [s.section_id]: Number.isFinite(v) ? v : undefined,
-                                }));
-                              }}
-                            />
-                          </label>
-                          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-600">
-                            <input
-                              type="checkbox"
-                              className="rounded border-slate-300"
-                              checked={perQuestionMode[s.section_id] ?? false}
-                              onChange={(e) =>
-                                setPerQuestionMode((p) => ({
-                                  ...p,
-                                  [s.section_id]: e.target.checked,
-                                }))
-                              }
-                            />
-                            {t("compose:perQuestionScores")}
-                          </label>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                  <ul className="space-y-1 p-3">
-                    {isText ? (
-                      <li className="text-center text-xs text-slate-500">{t("compose:textSectionNoPickHere")}</li>
-                    ) : (
-                      <>
-                        {slots.map((slot, si) => {
-                          if (slot.kind === "single") {
-                            const qid = slot.qid;
-                            const selectedHere =
-                              selectedRight?.sectionId === s.section_id && selectedRight.qids.includes(qid);
-                            return (
-                              <li key={qid}>
-                                <button
-                                  type="button"
-                                  draggable
-                                  onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData('application/x-originreach-paper-item', JSON.stringify({ sectionId: s.section_id, qid })); }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRightPaperSlotClick(s.section_id, slots, si, slot, e);
-                                    setLeftListAnchorIndex(null);
-                                  }}
-                                  className={cn(
-                                    "w-full rounded-md border px-2 py-2 text-left text-sm",
-                                    selectedHere ? "border-slate-900 bg-slate-100" : "border-slate-100 bg-slate-50 hover:bg-white",
-                                  )}
-                                >
-                                  <span className="font-mono text-xs text-slate-800">{qid}</span>
-                                  <QuestionHoverDetails id={qid}><KatexPlainPreview
-                                    text={questionMap.get(qid)?.content_preview ?? ""}
-                                    className="line-clamp-2 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
-                                  /></QuestionHoverDetails>
-                                  {perQuestionMode[s.section_id] ? (
-                                    <div
-                                      className="mt-1 flex items-center gap-1 border-t border-slate-100 pt-1"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <span className="text-[10px] text-slate-500">{t("compose:scoreThisQuestion")}</span>
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        step={0.5}
-                                        className="w-16 rounded border border-slate-200 px-1 py-0.5 text-xs"
-                                        value={
-                                          scoreOverrides[s.section_id]?.[qid] !== undefined
-                                            ? scoreOverrides[s.section_id]![qid]
-                                            : ""
-                                        }
-                                        placeholder={String(sectionBaseScore)}
-                                        onChange={(e) => {
-                                          const raw = e.target.value.trim();
-                                          setScoreOverrides((prev) => {
-                                            const cur = { ...(prev[s.section_id] ?? {}) };
-                                            if (raw === "") {
-                                              delete cur[qid];
-                                            } else {
-                                              const v = parseFloat(raw);
-                                              if (Number.isFinite(v)) {
-                                                cur[qid] = v;
-                                              }
-                                            }
-                                            const next = { ...prev };
-                                            if (Object.keys(cur).length === 0) {
-                                              delete next[s.section_id];
-                                            } else {
-                                              next[s.section_id] = cur;
-                                            }
-                                            return next;
-                                          });
-                                        }}
-                                      />
-                                    </div>
-                                  ) : null}
-                                </button>
-                              </li>
-                            );
-                          }
-                          const headQid = slot.qids[0];
-                          const mat = slot.rep.group_material?.trim();
-                          const prevText = mat
-                            ? mat.replace(/\s+/g, " ").slice(0, 120) + (mat.length > 120 ? "…" : "")
-                            : questionMap.get(headQid)?.content_preview;
-                          const selectedHere =
-                            selectedRight?.sectionId === s.section_id &&
-                            slot.qids.every((q) => selectedRight.qids.includes(q));
-                          return (
-                            <li key={`grp-${slot.rep.group_id}-${si}`}>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRightPaperSlotClick(s.section_id, slots, si, slot, e);
-                                  setLeftListAnchorIndex(null);
-                                }}
-                                className={cn(
-                                  "w-full rounded-md border px-2 py-2 text-left text-sm",
-                                  selectedHere ? "border-slate-900 bg-slate-100" : "border-slate-100 bg-slate-50 hover:bg-white",
-                                )}
-                              >
-                                <div className="flex flex-wrap items-center gap-1">
-                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-900">
-                                    {t("compose:groupBadge", { count: slot.qids.length })}
-                                  </span>
-                                  <span className="font-mono text-[11px] text-slate-800">{slot.rep.group_id}</span>
-                                </div>
-                                <p className="mt-0.5 font-mono text-[10px] leading-tight text-slate-500">{slot.qids.join(" · ")}</p>
-                                <QuestionHoverDetails id={headQid}><KatexPlainPreview
-                                  text={prevText ?? ""}
-                                  className="line-clamp-2 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
-                                /></QuestionHoverDetails>
-                                {perQuestionMode[s.section_id] ? (
-                                  <div
-                                    className="mt-1 flex items-center gap-1 border-t border-slate-100 pt-1"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <span className="text-[10px] text-slate-500">{t("compose:groupScore")}</span>
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      step={0.5}
-                                      className="w-16 rounded border border-slate-200 px-1 py-0.5 text-xs"
-                                      value={
-                                        scoreOverrides[s.section_id]?.[headQid] !== undefined
-                                          ? scoreOverrides[s.section_id]![headQid]
-                                          : ""
-                                      }
-                                      placeholder={String(sectionBaseScore)}
-                                      onChange={(e) => {
-                                        const raw = e.target.value.trim();
-                                        setScoreOverrides((prev) => {
-                                          const cur = { ...(prev[s.section_id] ?? {}) };
-                                          if (raw === "") {
-                                            delete cur[headQid];
-                                          } else {
-                                            const v = parseFloat(raw);
-                                            if (Number.isFinite(v)) {
-                                              cur[headQid] = v;
-                                            }
-                                          }
-                                          const next = { ...prev };
-                                          if (Object.keys(cur).length === 0) {
-                                            delete next[s.section_id];
-                                          } else {
-                                            next[s.section_id] = cur;
-                                          }
-                                          return next;
-                                        });
-                                      }}
-                                    />
-                                  </div>
-                                ) : null}
-                              </button>
-                            </li>
-                          );
-                        })}
-                        {(bySection[s.section_id] ?? []).length === 0 && (
-                          <li className="text-center text-xs text-slate-400">{t("compose:emptySlotHint")}</li>
-                        )}
-                      </>
-                    )}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-
-          {!countsOk && selectedTpl && (
-            <p className="mt-2 text-xs text-slate-500">{t("compose:exportWhenReady")}</p>
-          )}
-        </section>
-        <aside className="hidden min-h-0 w-full flex-col border-slate-200 bg-white shadow-xl xl:relative xl:z-auto xl:flex xl:translate-x-0 xl:shadow-none xl:static xl:h-auto xl:w-auto xl:min-w-0 xl:flex-1 xl:basis-0">
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
-            <span className="text-xs font-medium text-slate-600">{t("compose:pdfVariantLabel")}</span>
-            <select
-              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-              value={pdfVariant}
-              onChange={(e) => setPdfVariant(e.target.value === "teacher" ? "teacher" : "student")}
-            >
-              <option value="student">{t("compose:pdfVariantStudent")}</option>
-              <option value="teacher">{t("compose:pdfVariantTeacher")}</option>
-            </select>
-            {pdfExamId && !previewPdfId ? (
-              <button type="button" className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800" onClick={() => void downloadExportedBundle(pdfExamId, "pdf").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>下载正式 PDF</button>
-            ) : null}
-            {pdfExamId && !previewPdfId ? (
-              <button
-                type="button"
-                className="ml-auto rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-800 disabled:opacity-50"
-                disabled={busy || viewPdfBusy}
-                onClick={() => void openViewPdfExternally()}
-              >
-                {t("compose:openPdfExternal")}
-              </button>
-            ) : null}
-            {wordOpenExamId && !previewPdfId ? (
-              <button type="button" className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800" onClick={() => void downloadExportedBundle(wordOpenExamId, "docx").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>下载正式 Word</button>
-            ) : null}
-            {wordOpenExamId && !previewPdfId ? (
-              <button
-                type="button"
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-800 disabled:opacity-50"
-                disabled={busy || viewWordBusy}
-                onClick={() => void openViewWordExternally()}
-              >
-                {t("compose:openWordExternal")}
-              </button>
-            ) : null}
-          </div>
-          <div className="min-h-0 flex-1 overflow-auto p-3">
-            {composeRightPdfPath ? (
-              <PdfPreview apiPath={composeRightPdfPath} className="min-h-[min(70vh,560px)]" />
-            ) : (
-              <p className="text-xs text-slate-500">{t("compose:previewPdfEmptyHint")}</p>
-            )}
-          </div>
-        </aside>
-        </div>
       </div>
-      {previewOpen && composeRightPdfPath ? <div className="fixed inset-0 z-[80] flex flex-col bg-slate-900/70 p-3 sm:p-8" role="dialog" aria-modal="true" aria-label="试卷预览">
-        <div className="mx-auto flex w-full max-w-5xl items-center justify-between rounded-t-lg bg-white px-4 py-2"><h2 className="text-sm font-semibold">试卷预览</h2><button type="button" className="rounded border border-slate-300 px-3 py-1 text-sm" onClick={() => setPreviewOpen(false)}>关闭</button></div>
-        <div className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-auto rounded-b-lg bg-white p-3"><PdfPreview apiPath={composeRightPdfPath} className="min-h-full" /></div>
-      </div> : null}
+      </div>
+      <PreviewPdfModal open={previewOpen} pdfPath={composeRightPdfPath} onClose={() => setPreviewOpen(false)} />
     </div>
   );
 }

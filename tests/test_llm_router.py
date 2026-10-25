@@ -46,14 +46,17 @@ def test_anthropic_timeout_uses_sdk_native_type(monkeypatch):
     assert captured['max_retries'] == 0
 
 
-def test_anthropic_adapter_sends_a_request_with_the_installed_sdk():
+@pytest.mark.parametrize("use_allowed_proxy", [False, True])
+def test_anthropic_adapter_sends_a_request_with_the_installed_sdk(monkeypatch, use_allowed_proxy):
     received = []
+    received_paths = []
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
 
         def do_POST(self):
+            received_paths.append(self.path)
             received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
             body = json.dumps({
                 "id": "test-message", "type": "message", "role": "assistant", "model": "test-model",
@@ -67,12 +70,22 @@ def test_anthropic_adapter_sends_a_request_with_the_installed_sdk():
             self.wfile.write(body)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    # A proxy request uses an absolute URL. Serve both at this local endpoint
+    # so accidental proxy use fails the assertion immediately, without a timeout.
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(name, f"http://127.0.0.1:{server.server_port}")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("EH_PROXY_HOSTS", "provider.example")
+    monkeypatch.setenv("EH_EXTERNAL_PROXY_URL", f"http://127.0.0.1:{server.server_port}")
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
 
     async def request():
         adapter = AnthropicMessagesAdapter(
-            api_key="test-only", base_url=f"http://127.0.0.1:{server.server_port}/v1", model="test-model",
+            api_key="test-only",
+            base_url="http://provider.example" if use_allowed_proxy else f"http://127.0.0.1:{server.server_port}",
+            model="test-model",
         )
         try:
             return await adapter.chat([{"role": "user", "content": "hello"}])
@@ -82,6 +95,7 @@ def test_anthropic_adapter_sends_a_request_with_the_installed_sdk():
     try:
         response = asyncio.run(request())
         assert response.content == "local response"
+        assert received_paths == ["http://provider.example/v1/messages" if use_allowed_proxy else "/v1/messages"]
         assert received[0]["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
     finally:
         server.shutdown()

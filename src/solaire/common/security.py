@@ -7,12 +7,25 @@ web 层可在异常处理器中将 ValueError 转换为 HTTPException(400)。
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import quote
 
 
 class PathEscapesProjectRoot(ValueError):
     """Path is outside the allowed project root."""
+
+
+def _resolved_project_path(path: Path) -> Path:
+    resolved = path.resolve()
+    if isinstance(resolved, PureWindowsPath):
+        value = str(resolved)
+        # Windows can retain the extended namespace when resolving a file
+        # currently held by another process. Compare both sides consistently.
+        if value[:8].upper() == "\\\\?\\UNC\\":
+            return type(resolved)("\\\\" + value[8:])
+        if value.startswith("\\\\?\\") and re.fullmatch(r"[A-Za-z]:", value[4:6]):
+            return type(resolved)(value[4:])
+    return resolved
 
 
 def assert_within_project(project_root: Path, path: Path) -> Path:
@@ -21,8 +34,8 @@ def assert_within_project(project_root: Path, path: Path) -> Path:
     Raises:
         PathEscapesProjectRoot: if the resolved path is outside the project root.
     """
-    root = project_root.resolve()
-    resolved = path.resolve()
+    root = _resolved_project_path(project_root)
+    resolved = _resolved_project_path(path)
     try:
         resolved.relative_to(root)
     except ValueError as e:
@@ -30,6 +43,7 @@ def assert_within_project(project_root: Path, path: Path) -> Path:
             f"Path {resolved!r} escapes project root {root!r}"
         ) from e
     from solaire.common.actor_context import assert_private_bank_path
+
     assert_private_bank_path(root, resolved)
     return resolved
 
@@ -64,15 +78,15 @@ def content_disposition_attachment(filename: str) -> str:
         ascii_name = "bank-export.bank.zip"
     else:
         ascii_name = "".join(
-            c if 32 <= ord(c) < 127 and c not in '\\"<>;'
-            else "_"
-            for c in filename
+            c if 32 <= ord(c) < 127 and c not in '\\"<>;' else "_" for c in filename
         )
-        ascii_name = re.sub(r"_+", "_", ascii_name).strip("._") or "bank-export.bank.zip"
+        ascii_name = (
+            re.sub(r"_+", "_", ascii_name).strip("._") or "bank-export.bank.zip"
+        )
         if not ascii_name.lower().endswith(".zip"):
             ascii_name = f"{ascii_name}.bank.zip"
     q = quote(filename, safe="")
-    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{q}'
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{q}"
 
 
 def export_slug(label: str) -> str:

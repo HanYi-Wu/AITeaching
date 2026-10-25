@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException
+
 from solaire.agent_layer.models import InvocationContext, ToolResult
 from solaire.common.security import assert_within_project
 from solaire.exam_compiler.facade import SelectedSection, load_template
@@ -30,6 +32,8 @@ from solaire.web.exam_workspace_service import (
     save_exam_workspace_after_export_failure,
     workspace_dir,
 )
+from solaire.web.export_lock import ExportBusyError, project_export_lock
+from solaire.web.export_policy import assert_destination_owner
 
 
 def _sections_from_args(args: dict[str, Any]) -> list[SelectedSection]:
@@ -181,6 +185,14 @@ def tool_validate_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolRes
 
 
 def tool_export_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
+    try:
+        with project_export_lock(ctx.project_root):
+            return _export_paper_locked(ctx, args)
+    except ExportBusyError as exc:
+        return ToolResult(status="failed", error_code="export_busy", error_message=str(exc))
+
+
+def _export_paper_locked(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     root = ctx.project_root
     template_ref = str(args.get("template_ref") or "").strip()
     template_path = str(args.get("template_path") or "").strip()
@@ -208,6 +220,19 @@ def tool_export_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResul
 
     sections = _sections_from_args(args)
     snapshot_items = [s.model_dump(mode="json", exclude_none=True) for s in sections]
+
+    teacher_id = None
+    if ctx.platform_user and ctx.platform_user.get("role") == "teacher":
+        teacher_id = str(ctx.platform_user.get("id") or "").strip()
+        if not teacher_id:
+            return ToolResult(status="failed", error_code="permission_denied", error_message="教师身份缺失，不能导出试卷。")
+    try:
+        dest_dir = workspace_dir(root, mark_id)
+        assert_destination_owner(root, dest_dir, teacher_id)
+    except HTTPException as exc:
+        return ToolResult(status="failed", error_code="permission_denied" if exc.status_code == 403 else "invalid_arguments", error_message=str(exc.detail))
+    except (PermissionError, ValueError) as exc:
+        return ToolResult(status="failed", error_code="permission_denied", error_message=str(exc))
 
     def _failure_snapshot(exc: BaseException) -> None:
         try:
@@ -244,6 +269,8 @@ def tool_export_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResul
             "subject": subject,
             "export_label": export_label,
         }
+        if teacher_id:
+            metadata["owner_teacher_id"] = teacher_id
         exam_yaml = write_build_exam_yaml(
             root,
             exam_id="agent_export",
@@ -254,7 +281,6 @@ def tool_export_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResul
         )
         run_validate(root, exam_yaml)
         template = load_template(tpl)
-        dest_dir = workspace_dir(root, mark_id)
         exam_dir, s_name, t_name = export_pdfs(
             root,
             exam_yaml=exam_yaml,
@@ -474,46 +500,6 @@ def _resolve_folder_and_students(root: Path, actor: dict[str, Any], args: dict[s
     return folder_id, list(dict.fromkeys(student_ids)), None
 
 
-def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
-    actor = _platform_actor(ctx)
-    if actor is None:
-        return ToolResult(
-            status="failed",
-            error_code="platform_user_required",
-            error_message="需要先创建管理员或教师账号，才能通过 AI 发布线上试卷。",
-        )
-    paper_id = str(args.get("paper_id") or "").strip()
-    class_ids = [str(item).strip() for item in (args.get("class_ids") or []) if str(item).strip()]
-    if not paper_id or not class_ids:
-        return ToolResult(
-            status="failed",
-            error_code="invalid_arguments",
-            error_message="paper_id 和 class_ids 不能为空。",
-        )
-    try:
-        publication = publish_online_paper(
-            default_platform_root(),
-            paper_id=paper_id,
-            user=actor,
-            class_ids=class_ids,
-            project_root=ctx.project_root,
-            title=str(args.get("title") or "").strip() or None,
-            description=str(args.get("description") or "").strip() or None,
-            start_at=str(args.get("start_at") or "").strip() or None,
-            end_at=str(args.get("end_at") or "").strip() or None,
-            submission_mode=str(args.get("submission_mode") or "online"),
-            max_screen_switches=int(args.get("max_screen_switches") or 0),
-            time_limit_minutes=int(args.get("time_limit_minutes") or 0) or None,
-            show_results_immediately=bool(args.get("show_results_immediately")),
-            subject=str(args.get("subject") or "").strip() or None,
-        )
-    except (ValueError, PermissionError, FileNotFoundError) as e:
-        return ToolResult(status="failed", error_code="publish_failed", error_message=str(e))
-    return ToolResult(
-        status="succeeded",
-        data={"publication": publication},
-        summary_for_llm=f"已发布试卷到 {len(class_ids)} 个班级。",
-    )
 
 
 def tool_publish_online_paper(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:

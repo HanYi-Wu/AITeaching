@@ -10,7 +10,8 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-import solaire.web.app as app_module
+import solaire.web.routers.exams as app_module
+import solaire.web.export_workflow as export_workflow
 from solaire.exam_compiler.pipeline import docx as docx_pipeline
 from solaire.exam_compiler.pipeline.docx import PandocError, build_exam_docx
 from solaire.web.exam_service import export_docx
@@ -321,17 +322,17 @@ def test_export_word_api_returns_docx_names(
     fake_yaml.parent.mkdir(parents=True, exist_ok=True)
     fake_yaml.write_text("exam_id: web_export\ntemplate_ref: t1\nselected_items: []\n", encoding="utf-8")
 
-    monkeypatch.setattr(app_module, "write_build_exam_yaml", lambda project_root, **kwargs: fake_yaml)
-    monkeypatch.setattr(app_module, "run_validate", lambda *args, **kwargs: None)
-    monkeypatch.setattr(app_module, "load_template", lambda p: MagicMock(sections=[]))
+    monkeypatch.setattr(export_workflow, "write_build_exam_yaml", lambda project_root, **kwargs: fake_yaml)
+    monkeypatch.setattr(export_workflow, "run_validate", lambda *args, **kwargs: None)
+    monkeypatch.setattr(export_workflow, "load_template", lambda p: MagicMock(sections=[]))
     monkeypatch.setattr(
-        app_module,
+        export_workflow,
         "export_docx",
         lambda project_root, **kwargs: (kwargs["dest_dir"], "stu.docx", "tea.docx"),
     )
-    monkeypatch.setattr(app_module, "snapshot_build_yaml_before_export", lambda root: None)
-    monkeypatch.setattr(app_module, "discard_build_yaml_backup", lambda backup: None)
-    monkeypatch.setattr(app_module, "mark_exported", lambda *args, **kwargs: None)
+    monkeypatch.setattr(export_workflow, "snapshot_build_yaml_before_export", lambda root: None)
+    monkeypatch.setattr(export_workflow, "discard_build_yaml_backup", lambda backup: None)
+    monkeypatch.setattr(export_workflow, "mark_exported", lambda *args, **kwargs: None)
 
     r = web_client.post(
         "/api/exam/export-word",

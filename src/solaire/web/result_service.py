@@ -155,6 +155,22 @@ def _flatten_questions(exam: ExamConfig) -> list[ExamQuestion]:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _display_exam_metadata(exam: ExamConfig, exam_yaml_path: Path) -> dict[str, Any]:
+    """Read workspace display fields without changing compiler or conflict metadata."""
+    metadata = dict(exam.metadata or {})
+    fields = (("title", "name"), ("subject", "subject"), ("export_label", "export_label"))
+    missing = [(key, source) for key, source in fields if not str(metadata.get(key) or "").strip()]
+    if not missing:
+        return metadata
+    raw = yaml.safe_load(exam_yaml_path.read_text(encoding="utf-8"))
+    if isinstance(raw, dict):
+        for key, source in missing:
+            value = raw.get(source)
+            if isinstance(value, str) and value.strip():
+                metadata[key] = value.strip()
+    return metadata
+
+
 def list_exam_results(project_root: Path) -> list[dict[str, Any]]:
     """Return list of past exams (newest first) with basic metadata."""
     exams: list[dict[str, Any]] = []
@@ -162,7 +178,7 @@ def list_exam_results(project_root: Path) -> list[dict[str, Any]]:
         mtime = datetime.fromtimestamp(dir_path.stat().st_mtime, tz=timezone.utc)
         try:
             exam = _load_exam_config(exam_yaml_path)
-            meta = exam.metadata or {}
+            meta = _display_exam_metadata(exam, exam_yaml_path)
             questions = _flatten_questions(exam)
             score_batches = _list_score_batches(dir_path)
             exams.append({
@@ -215,7 +231,7 @@ def get_exam_summary(project_root: Path, exam_id: str) -> dict[str, Any]:
         raise FileNotFoundError(f"exam.yaml not found for: {exam_id}")
 
     exam = _load_exam_config(exam_yaml)
-    meta = exam.metadata or {}
+    meta = _display_exam_metadata(exam, exam_yaml)
     questions = _flatten_questions(exam)
     score_batches = _list_score_batches(dir_path)
 
