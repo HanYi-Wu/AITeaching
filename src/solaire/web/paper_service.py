@@ -30,13 +30,21 @@ from solaire.web.papers.visibility import (
     publication_access_clause as _publication_access_clause,
     publication_stats as _publication_stats,
 )
+from solaire.web.papers.publication_policy import (
+    DELIVERY_MODES,
+    PUBLICATION_STATUSES,
+    SUBMISSION_MODES,
+    ensure_publication_status_transition,
+    normalize_delivery_mode,
+    normalize_publication_status,
+    normalize_schedule,
+    normalize_submission_mode,
+    normalize_time_limit,
+)
 from solaire.web.result_service import list_exam_results
 from solaire.web.student_service import _load_attempt_question_payloads, _load_exam_question_payloads
 from solaire.web.student_service import _publication_datetime
 
-DELIVERY_MODES = {"offline", "online"}
-PUBLICATION_STATUSES = {"draft", "published", "paused", "closed", "revoked"}
-SUBMISSION_MODES = {"online", "image_manual", "image_ai"}
 MAX_PAGE_SIZE = 100
 
 
@@ -45,10 +53,7 @@ def _new_id() -> str:
 
 
 def _normalized_schedule(start_at, end_at):
-    start, end = _publication_datetime(start_at), _publication_datetime(end_at)
-    if start and end and end <= start:
-        raise ValueError('结束时间必须晚于开始时间')
-    return start.isoformat() if start else None, end.isoformat() if end else None
+    return normalize_schedule(start_at, end_at)
 
 
 def _page(items: list[dict[str, Any]], *, page: int = 1, page_size: int = 10) -> dict[str, Any]:
@@ -242,9 +247,7 @@ def update_paper_delivery_mode(root: Path, paper_id: str, delivery_mode: str, us
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("Only teachers and admins can update paper delivery mode")
-    clean_mode = delivery_mode.strip()
-    if clean_mode not in DELIVERY_MODES:
-        raise ValueError("delivery_mode must be offline or online")
+    clean_mode = normalize_delivery_mode(delivery_mode)
     now = utc_now()
     with connect(root) as con:
         existing = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
@@ -347,14 +350,12 @@ def update_paper_publication(
         params.append(_normalized_schedule(None, end_at)[1])
     if time_limit_minutes is not None:
         updates.append("time_limit_minutes = ?")
-        params.append(max(0, int(time_limit_minutes)) or None)
+        params.append(normalize_time_limit(time_limit_minutes))
     if show_results_immediately is not None:
         updates.append("show_results_immediately = ?")
         params.append(1 if show_results_immediately else 0)
     if status is not None:
-        clean_status = status.strip() or "published"
-        if clean_status not in PUBLICATION_STATUSES:
-            raise ValueError("invalid publication status")
+        clean_status = normalize_publication_status(status)
         updates.append("status = ?")
         params.append(clean_status)
     params.extend([publication_id, paper_id])
@@ -367,8 +368,7 @@ def update_paper_publication(
             raise ValueError("publication not found")
         if user.get("role") == "teacher" and str(publication["teacher_id"]) != str(user.get("id")):
             raise PermissionError("Teacher can only manage own publications")
-        if status is not None and publication["status"] == "revoked" and status != "revoked":
-            raise ValueError("已撤回的发布不能直接恢复，请重新发布并重新校验接收人")
+        ensure_publication_status_transition(publication["status"], status)
         _normalized_schedule(start_at if start_at is not None else publication['start_at'],
                              end_at if end_at is not None else publication['end_at'])
         con.execute(
@@ -1447,11 +1447,9 @@ def publish_online_paper(
     _ensure_publishable_paper(project_root, paper)
     if not selected_student_ids:
         _ensure_class_not_already_published(root, paper_id=paper_id, class_ids=selected_class_ids)
-    clean_submission_mode = submission_mode.strip() or "online"
-    if clean_submission_mode not in SUBMISSION_MODES:
-        raise ValueError("submission_mode must be online, image_manual, or image_ai")
+    clean_submission_mode = normalize_submission_mode(submission_mode)
     clean_max_screen_switches = max(0, int(max_screen_switches or 0))
-    clean_time_limit_minutes = max(0, int(time_limit_minutes or 0)) or None
+    clean_time_limit_minutes = normalize_time_limit(time_limit_minutes, empty_as_zero=True)
     clean_subject = str(subject or "").strip()
     if user.get("role") == "teacher":
         with connect(root) as con:

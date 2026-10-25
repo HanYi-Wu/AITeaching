@@ -586,6 +586,13 @@ def test_teacher_filters_papers_and_manages_publication_history(web_client: Test
     )
     assert revoked.status_code == 200
     assert revoked.json()["publication"]["status"] == "revoked"
+    reopen = web_client.patch(
+        f"/api/papers/{paper['paper_id']}/publications/{publication_id}",
+        json={"status": "published"},
+        headers=teacher_headers,
+    )
+    assert reopen.status_code == 400
+    assert reopen.json()["detail"] == "已撤回的发布不能直接恢复，请重新发布并重新校验接收人"
     refreshed = web_client.get("/api/papers?subject=Math", headers=teacher_headers).json()["papers"][0]
     assert refreshed["publication_count"] == 0
 
