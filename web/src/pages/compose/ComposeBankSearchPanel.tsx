@@ -72,7 +72,7 @@ export function ComposeBankSearchPanel({
 
   return (
     <section
-      className="hidden w-full min-w-0 shrink-0 flex-col border-slate-200 bg-white md:flex md:w-56 md:border-r xl:w-72"
+      className="flex max-h-[35vh] w-full min-w-0 shrink-0 flex-col border-slate-200 bg-white md:max-h-none md:w-56 md:border-r xl:w-72"
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/x-originreach-paper-item")) {
           event.preventDefault();

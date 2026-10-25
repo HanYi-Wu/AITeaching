@@ -122,6 +122,8 @@ def export_exam(
             return _export_locked(root, body, format=format)
     except ExportBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _export_locked(

@@ -41,10 +41,13 @@ def assert_destination_owner(
         return
     from solaire.web.platform_db import connect, default_platform_root
 
-    exam_id = dest_dir.relative_to(root / "exams").as_posix()
+    try:
+        exam_id = dest_dir.resolve().relative_to((root / "exams").resolve()).as_posix()
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="导出目录必须位于试卷目录下") from exc
     with connect(default_platform_root()) as con:
         row = con.execute(
-            "SELECT id, owner_teacher_id FROM paper_records WHERE exam_id=?", (exam_id,)
+            "SELECT id, owner_teacher_id FROM paper_records WHERE exam_id=? COLLATE NOCASE", (exam_id,)
         ).fetchone()
         publishers = (
             {

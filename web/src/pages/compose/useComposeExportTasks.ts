@@ -4,12 +4,14 @@ import type { ComposeExportTaskCreateRequest, ComposeExportTaskFormat, ComposeEx
 import { createStableExportRequestKey, getExportTaskApi, isExportTaskEndpointMissingError, listExportTasksApi, parseExportTaskErrorDetail, retryExportTaskApi, submitExportTaskApi } from "./composeExportTasks";
 import { clonePaperState } from "./composeModel";
 import { useComposeRequestScope } from "./useComposeRequestScope";
+import i18n from "../../i18n/i18n";
+import { forgetExportSubmission, readExportSubmission, retainExportSubmission, type ExportSubmissionContext, type PendingExportSubmissionFailure } from "./composeExportSubmissionStorage";
+export type { PendingExportSubmissionFailure } from "./composeExportSubmissionStorage";
 
-type Context = { submitted?: ComposePaperState; idsToDelete: string[]; sourceAction: "live_submit" | "retry" | "recent_resume" };
-export type PendingExportSubmissionFailure = { requestPayload: ComposeExportTaskCreateRequest; context: Context; reason: string };
+type Context = ExportSubmissionContext;
 export type ExportSuccess = Context & { task?: ComposeExportTaskView; format: ComposeExportTaskFormat; result: ComposeExportTaskResult; isCurrent: () => boolean };
-type View = { scope: string; task: ComposeExportTaskView | null; pending: PendingExportSubmissionFailure | null; pollError: string | null; busy: boolean };
-const empty = (scope: string): View => ({ scope, task: null, pending: null, pollError: null, busy: false });
+type View = { scope: string; task: ComposeExportTaskView | null; pending: PendingExportSubmissionFailure | null; pollError: string | null; busy: boolean; historical: boolean; pollFailures: number };
+const empty = (scope: string): View => ({ scope, task: null, pending: null, pollError: null, busy: false, historical: false, pollFailures: 0 });
 
 export function useComposeExportTasks(params: {
   ownerKey: string; pollIntervalMs?: number;
@@ -31,11 +33,13 @@ export function useComposeExportTasks(params: {
   const contexts = useRef(new Map<string, Context>());
   const handled = useRef(new Set<string>());
   const busy = useRef(false);
+  const pollBusy = useRef(false);
 
   const apply = useCallback(async (task: ComposeExportTaskView, isCurrent: () => boolean, context?: Context, notifySuccess = true) => {
     if (!isCurrent()) return;
     if (context) contexts.current.set(task.id, context);
-    setView((previous) => ({ ...previous, task, pending: null, pollError: null }));
+    forgetExportSubmission(ownerKey);
+    setView((previous) => ({ ...previous, task, pending: null, pollError: null, pollFailures: 0, historical: !notifySuccess && task.status === "succeeded" }));
     const terminal = `${task.id}:${task.attempt}:${task.status}`;
     if (handled.current.has(terminal)) return;
     if (task.status === "succeeded" && task.result) {
@@ -45,17 +49,25 @@ export function useComposeExportTasks(params: {
       handled.current.add(terminal);
       callbacks.current.onTaskFailed({ task, format: task.format, sourceAction: contexts.current.get(task.id)?.sourceAction ?? "recent_resume", ...parseExportTaskErrorDetail(task.error) });
     }
-  }, []);
+  }, [ownerKey]);
 
   useEffect(() => {
-    busy.current = false; contexts.current.clear(); handled.current.clear(); setView(empty(ownerKey));
+    busy.current = false; pollBusy.current = false; contexts.current.clear(); handled.current.clear(); setView(empty(ownerKey));
     const isCurrent = capture();
-    void listExportTasksApi(20).then((tasks) => {
+    const pending = readExportSubmission(ownerKey);
+    if (pending) {
+      setView({ ...empty(ownerKey), pending });
+      return;
+    }
+    void listExportTasksApi(100).then((tasks) => {
       if (!isCurrent()) return;
       const paper = callbacks.current;
       // The list is newest first. A newer success must hide an older failure,
       // and another paper's task must never affect this editor or its cleanup.
-      const candidate = tasks.find((task) => paper.currentExamId
+      const candidate = [...tasks].sort((left, right) => {
+        const timestamp = (task: ComposeExportTaskView) => Date.parse(task.updated_at) || Date.parse(task.created_at) || 0;
+        return timestamp(right) - timestamp(left);
+      }).find((task) => paper.currentExamId
         ? task.exam_workspace_id === paper.currentExamId
         : !task.exam_workspace_id && task.export_label === paper.exportLabel.trim() && task.subject === paper.subject.trim());
       // Observing a past success must not replay its save, sync or download.
@@ -67,24 +79,21 @@ export function useComposeExportTasks(params: {
   }, [apply, capture, ownerKey]);
 
   const resumePolling = useCallback(async () => {
-    if (!view.task || busy.current) return;
+    if (!view.task || busy.current || pollBusy.current) return;
     const isCurrent = capture();
-    busy.current = true; setView((previous) => ({ ...previous, busy: true }));
+    pollBusy.current = true; setView((previous) => ({ ...previous, busy: true }));
     try { await apply(await getExportTaskApi(view.task.id), isCurrent); }
-    catch (error) { if (isCurrent()) setView((previous) => ({ ...previous, pollError: error instanceof Error ? error.message : String(error) })); }
-    finally { if (isCurrent()) { busy.current = false; setView((previous) => ({ ...previous, busy: false })); } }
+    catch (error) { if (isCurrent()) setView((previous) => ({ ...previous, pollError: error instanceof Error ? error.message : String(error), pollFailures: error instanceof ApiError && [401, 403].includes(error.status) ? 3 : previous.pollFailures + 1 })); }
+    finally { if (isCurrent()) { pollBusy.current = false; setView((previous) => ({ ...previous, busy: false })); } }
   }, [apply, capture, view.task]);
 
   useEffect(() => {
-    if (!view.task || !["queued", "running"].includes(view.task.status) || view.pollError) return;
-    const isCurrent = capture(), taskId = view.task.id;
+    if (!view.task || !["queued", "running"].includes(view.task.status) || view.pollFailures >= 3 || view.busy) return;
     const timer = window.setTimeout(() => {
-      void getExportTaskApi(taskId).then((task) => apply(task, isCurrent)).catch((error) => {
-        if (isCurrent()) setView((previous) => ({ ...previous, pollError: error instanceof Error ? error.message : String(error) }));
-      });
-    }, pollIntervalMs);
+      void resumePolling();
+    }, Math.min(5000, pollIntervalMs * 2 ** view.pollFailures));
     return () => window.clearTimeout(timer);
-  }, [apply, capture, pollIntervalMs, view.pollError, view.task]);
+  }, [pollIntervalMs, resumePolling, view.busy, view.pollFailures, view.task]);
 
   useEffect(() => {
     if (!view.pollError) return;
@@ -96,8 +105,10 @@ export function useComposeExportTasks(params: {
   const submit = useCallback(async (payload: ComposeExportTaskCreateRequest, context: Context) => {
     if (busy.current) return;
     revision.current += 1;
+    pollBusy.current = false;
     const isCurrent = capture(); busy.current = true;
-    setView((previous) => ({ ...previous, busy: true, pollError: null })); callbacks.current.onError(null);
+    setView((previous) => ({ ...previous, task: null, pending: null, historical: false, busy: true, pollError: null, pollFailures: 0 })); callbacks.current.onError(null);
+    retainExportSubmission(ownerKey, { requestPayload: payload, context, reason: i18n.t("compose:exportSubmissionRestored") });
     let legacy = false;
     try {
       let task: ComposeExportTaskView;
@@ -106,6 +117,7 @@ export function useComposeExportTasks(params: {
         if (!isCurrent()) return;
         if (!isExportTaskEndpointMissingError(error)) throw error;
         legacy = true;
+        forgetExportSubmission(ownerKey);
         const { format, request_key: _key, ...body } = payload;
         const result = await apiPost<ComposeExportTaskResult>(format === "pdf" ? "/api/exam/export" : "/api/exam/export-word", body);
         if (isCurrent()) {
@@ -120,17 +132,21 @@ export function useComposeExportTasks(params: {
       const status = error instanceof ApiError ? error.status : 0;
       const reason = error instanceof Error ? error.message : String(error);
       const uncertain = !legacy && (status === 0 || status >= 500);
-      setView((previous) => ({ ...previous, pending: uncertain ? { requestPayload: payload, context, reason } : null }));
+      const pending = uncertain ? { requestPayload: payload, context, reason } : null;
+      if (pending) retainExportSubmission(ownerKey, pending); else forgetExportSubmission(ownerKey);
+      setView((previous) => ({ ...previous, task: null, historical: false, pending }));
       callbacks.current.onTaskFailed({ format: payload.format, sourceAction: context.sourceAction, message: reason, status, examSaved: error instanceof ApiError ? error.examSaved : undefined });
     } finally {
       if (isCurrent()) { busy.current = false; setView((previous) => ({ ...previous, busy: false })); }
     }
-  }, [apply, capture]);
+  }, [apply, capture, ownerKey]);
 
   const startExportTask = useCallback(async (input: { format: ComposeExportTaskFormat; body: Omit<ComposeExportTaskCreateRequest, "format" | "request_key">; idsToDelete: string[]; submitted: ComposePaperState }) => {
+    const pending = view.pending ?? readExportSubmission(ownerKey);
+    if (pending) { setView((previous) => ({ ...previous, task: null, pending })); return; }
     const payload = JSON.parse(JSON.stringify({ ...input.body, format: input.format, request_key: createStableExportRequestKey(input.format) })) as ComposeExportTaskCreateRequest;
     await submit(payload, { submitted: clonePaperState(input.submitted), idsToDelete: [...input.idsToDelete], sourceAction: "live_submit" });
-  }, [submit]);
+  }, [ownerKey, submit, view.pending]);
 
   const retryExportTask = useCallback(async () => {
     if (view.pending) { await submit(view.pending.requestPayload, { ...view.pending.context, sourceAction: "retry" }); return; }
@@ -146,6 +162,9 @@ export function useComposeExportTasks(params: {
     finally { if (isCurrent()) { busy.current = false; setView((previous) => ({ ...previous, busy: false })); } }
   }, [apply, capture, submit, view.pending, view.task]);
 
-  const dismissExportTask = useCallback(() => { revision.current += 1; busy.current = false; setView(empty(ownerKey)); }, [ownerKey]);
-  return { activeTask: view.task, pendingSubmissionFailure: view.pending, pollError: view.pollError, taskBusy: view.busy, isPollingOrRunning: view.busy || Boolean(view.pending) || Boolean(view.task && ["queued", "running"].includes(view.task.status)), startExportTask, retryExportTask, resumePolling, dismissExportTask };
+  const dismissExportTask = useCallback(() => {
+    if (view.pending) return;
+    revision.current += 1; busy.current = false; setView(empty(ownerKey));
+  }, [ownerKey, view.pending]);
+  return { activeTask: view.task, historical: view.historical, pendingSubmissionFailure: view.pending, pollError: view.pollError, taskBusy: view.busy, isPollingOrRunning: view.busy || Boolean(view.pending) || Boolean(view.task && ["queued", "running"].includes(view.task.status)), startExportTask, retryExportTask, resumePolling, dismissExportTask };
 }

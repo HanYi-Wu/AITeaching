@@ -38,6 +38,7 @@ import {
 } from "../../platform/auth";
 import type {
   ComposeExportTaskFormat,
+  ComposePaperState,
   ExamDoc,
   ExamWorkspaceSummary,
   QuestionRow,
@@ -80,6 +81,7 @@ import { PreviewPdfModal } from "./ComposeDialogs";
 import { extractExamPathIdFromDir } from "./composeExportTasks";
 import { useComposeExportTasks, type ExportSuccess } from "./useComposeExportTasks";
 import { ComposeExportTaskBanner } from "./ComposeExportTaskBanner";
+import { ComposeDraftRecoveryDialog } from "./ComposeDraftRecoveryDialog";
 
 type GraphBindingNode = { id: string; canonical_name: string; node_kind?: string };
 
@@ -142,6 +144,7 @@ export function ComposeWorkspace({
   const [selectedComposeFolderId, setSelectedComposeFolderId] = useState<string | null>(null);
   const [conflictTargetId, setConflictTargetId] = useState<string | null>(null);
   const [conflictExportKind, setConflictExportKind] = useState<"pdf" | "word" | null>(null);
+  const [exportPreflightFailure, setExportPreflightFailure] = useState<{ format: ComposeExportTaskFormat; reason: string } | null>(null);
   /** 最近一次导出成功后的考试目录标识（用于在未打开侧栏项时仍可从右侧打开 PDF） */
   const [lastExportedExamId, setLastExportedExamId] = useState<string | null>(null);
   const [viewPdfBusy, setViewPdfBusy] = useState(false);
@@ -168,7 +171,7 @@ export function ComposeWorkspace({
   currentExamIdRef.current = currentExamId;
 
   const draftScope = useComposeDraftScope({ accountId, projectRoot, currentExamId });
-  useEffect(() => { setExportFailureExamIds([]); setBusy(false); }, [currentExamId]);
+  useEffect(() => { setExportFailureExamIds([]); setExportPreflightFailure(null); setBusy(false); }, [currentExamId]);
   const captureOwnerRequest = useComposeRequestScope(draftScope.ownerKey);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -185,6 +188,7 @@ export function ComposeWorkspace({
     setExportFailureExamIds([]); setMsg(null); setNewPaperDialogOpen(false); setPublishDialogOpen(false);
     setBusy(false);
     setConflictTargetId(null); setConflictExportKind(null);
+    setExportPreflightFailure(null);
   }, []);
   const {
     paperState: currentPaperState, selectedTpl, recoverableDraft, draftStorageStatus,
@@ -716,9 +720,10 @@ export function ComposeWorkspace({
   const startExportTask = useCallback(async (
     format: ComposeExportTaskFormat, overwriteExisting: string | null,
     examIdToDelete: string | null, failureIds: string[], workspaceId: string | null,
+    snapshot?: ComposePaperState,
   ) => {
     if (!selectedTpl) return;
-    const submitted = clonePaperState(paperStateRef.current);
+    const submitted = clonePaperState(snapshot ?? paperStateRef.current);
     const idsToDelete = [...new Set([examIdToDelete, ...failureIds].filter((id): id is string => Boolean(id)))];
     await exportTasks.startExportTask({ format, submitted, idsToDelete, body: {
       export_label: submitted.exportLabel.trim(), subject: submitted.subject.trim(), metadata_title: submitted.exportLabel.trim(),
@@ -933,102 +938,41 @@ export function ComposeWorkspace({
     }
   }
 
-  async function exportExam() {
+  async function exportWithConflictCheck(format: ComposeExportTaskFormat) {
     const isCurrent = capturePaperRequest();
-    if (!selectedTpl) {
-      return;
-    }
+    if (!selectedTpl || exportTasks.isPollingOrRunning) return;
+    const submitted = clonePaperState(paperStateRef.current);
+    exportTasks.dismissExportTask();
+    setExportPreflightFailure(null);
     onError(null);
     setBusy(true);
     setMsg(null);
     try {
-      const check = await apiPost<{
-        conflict: boolean;
-        existing_exam_id: string | null;
-      }>("/api/exam/export/check-conflict", {
-        export_label: exportLabel.trim(),
-        subject: subject.trim(),
-      });
+      const check = await apiPost<{ conflict: boolean; existing_exam_id: string | null }>(
+        "/api/exam/export/check-conflict", {
+          export_label: submitted.exportLabel.trim(), subject: submitted.subject.trim(),
+        },
+      );
       if (!isCurrent()) return;
       if (check.conflict && check.existing_exam_id) {
-        setConflictExportKind("pdf");
+        setConflictExportKind(format === "pdf" ? "pdf" : "word");
         setConflictTargetId(check.existing_exam_id);
-        setBusy(false);
         return;
       }
-      const examIdSnapshot = currentExamId;
-      const hasWorkspace = Boolean(examIdSnapshot);
-      await startExportTask(
-        "pdf",
-        null,
-        hasWorkspace ? null : examIdSnapshot,
-        exportFailureExamIds,
-        hasWorkspace ? examIdSnapshot : null,
-      );
-    } catch (e) {
+      await startExportTask(format, null, null, exportFailureExamIds, currentExamId, submitted);
+    } catch (error) {
       if (!isCurrent()) return;
-      if (e instanceof ApiError && e.examSaved) {
-        setExportFailureExamIds((prev) => [...new Set([...prev, e.examSaved!.exam_id])]);
-        void refreshExamSummaries();
-        onError(
-          t("compose:errors.exportWithDraftSaved", { name: e.examSaved.name, detail: e.message }),
-        );
-      } else {
-        onError(e instanceof Error ? e.message : String(e));
-      }
+      const reason = error instanceof Error ? error.message : String(error);
+      setExportPreflightFailure({ format, reason });
+      onError(reason);
     } finally {
       if (isCurrent()) setBusy(false);
     }
   }
 
+  const exportExam = () => exportWithConflictCheck("pdf");
+  const exportWord = () => exportWithConflictCheck("docx");
 
-  async function exportWord() {
-    const isCurrent = capturePaperRequest();
-    if (!selectedTpl) {
-      return;
-    }
-    onError(null);
-    setBusy(true);
-    setMsg(null);
-    try {
-      const check = await apiPost<{
-        conflict: boolean;
-        existing_exam_id: string | null;
-      }>("/api/exam/export/check-conflict", {
-        export_label: exportLabel.trim(),
-        subject: subject.trim(),
-      });
-      if (!isCurrent()) return;
-      if (check.conflict && check.existing_exam_id) {
-        setConflictExportKind("word");
-        setConflictTargetId(check.existing_exam_id);
-        setBusy(false);
-        return;
-      }
-      const examIdSnapshot = currentExamId;
-      const hasWorkspace = Boolean(examIdSnapshot);
-      await startExportTask(
-        "docx",
-        null,
-        hasWorkspace ? null : examIdSnapshot,
-        exportFailureExamIds,
-        hasWorkspace ? examIdSnapshot : null,
-      );
-    } catch (e) {
-      if (!isCurrent()) return;
-      if (e instanceof ApiError && e.examSaved) {
-        setExportFailureExamIds((prev) => [...new Set([...prev, e.examSaved!.exam_id])]);
-        void refreshExamSummaries();
-        onError(
-          t("compose:errors.exportWithDraftSaved", { name: e.examSaved.name, detail: e.message }),
-        );
-      } else {
-        onError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      if (isCurrent()) setBusy(false);
-    }
-  }
   async function confirmOverwriteExport() {
     const isCurrent = capturePaperRequest();
     if (!selectedTpl || !conflictTargetId) {
@@ -1255,6 +1199,8 @@ export function ComposeWorkspace({
               event.currentTarget.closest("details")?.removeAttribute("open");
               void exportWord();
             }}>{t("compose:exportWord")}</button>
+            {!previewPdfId && pdfExamId ? <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100" onClick={() => void downloadExportedBundle(pdfExamId, "pdf").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>{t("compose:downloadFinalPdf")}</button> : null}
+            {!previewPdfId && (wordExamId || (pdfExamId && examSummaries.some((exam) => exam.exam_id === pdfExamId && exam.has_docx))) ? <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100" onClick={() => void downloadExportedBundle((wordExamId || pdfExamId)!, "docx").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>{t("compose:downloadFinalWord")}</button> : null}
           </div>
         </details>
         <button
@@ -1289,6 +1235,8 @@ export function ComposeWorkspace({
     startExportTask,
     previewPdfId,
     pdfExamId,
+    wordExamId,
+    examSummaries,
   ]);
 
   useEffect(() => {
@@ -1329,6 +1277,7 @@ export function ComposeWorkspace({
         onConfirm={() => void confirmNewPaperDialog()}
       />
       <PublishOnlineDialog {...publishing.dialogProps} />
+      <ComposeDraftRecoveryDialog record={recoverableDraft} busy={busy} onRestore={restoreLocalDraft} onDiscard={discardLocalDraft} />
       <TexSetupNotice onError={onError} />
       {msg ? (
         <div
@@ -1357,9 +1306,14 @@ export function ComposeWorkspace({
         </div>
       ) : null}
       <ComposeExportTaskBanner task={exportTasks.activeTask} pendingSubmissionFailure={exportTasks.pendingSubmissionFailure}
+        historical={exportTasks.historical}
         busy={exportTasks.taskBusy} pollError={exportTasks.pollError}
         onRetry={() => void exportTasks.retryExportTask()} onResume={() => void exportTasks.resumePolling()}
         onDismiss={exportTasks.dismissExportTask} />
+      {exportPreflightFailure ? <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+        <span>{t("compose:exportPreflightFailed", { format: exportPreflightFailure.format === "pdf" ? "PDF" : "Word", reason: exportPreflightFailure.reason })}</span>
+        <button type="button" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={() => void exportWithConflictCheck(exportPreflightFailure.format)} className="rounded border bg-white px-2.5 py-1 disabled:opacity-50">{t("compose:exportPreflightRetry")}</button>
+      </div> : null}
       <div className="flex min-h-0 flex-1 flex-row">
         <ComposeHistorySidebar
           busy={busy}

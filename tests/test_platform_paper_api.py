@@ -775,7 +775,9 @@ def test_paper_analysis_includes_publicq_summary_and_screen_switch_risk(
         con.execute("UPDATE paper_records SET owner_teacher_id = NULL, school_id = NULL WHERE id = ?", (paper["paper_id"],))
     other_login = web_client.post("/api/auth/login", json={"username": "teacher_other", "password": "teacher123"})
     other_headers = _headers(str(other_login.json()["token"]))
-    assert web_client.get("/api/papers?delivery_mode=online", headers=other_headers).json()["papers"] == []
+    other_papers = web_client.get("/api/papers?delivery_mode=online", headers=other_headers)
+    assert other_papers.status_code == 200, other_papers.text
+    assert other_papers.json()["papers"] == []
     assert web_client.get(f"/api/papers/{paper['paper_id']}/publications", headers=other_headers).status_code == 403
     assert web_client.get(f"/api/papers/{paper['paper_id']}/submissions", headers=other_headers).status_code == 403
     isolated = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=other_headers)

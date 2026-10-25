@@ -230,9 +230,9 @@ def test_export_docx_names_files_and_keeps_existing_pdf(
     (dest / "keep.pdf").write_bytes(b"pdf")
 
     def fake_build(exam_yaml: Path, out_dir: Path | None, *, clean_workdir: bool = False):
-        assert out_dir == dest
-        s = dest / "student_paper.docx"
-        t = dest / "teacher_paper.docx"
+        assert out_dir is not None and out_dir.parent == dest
+        s = out_dir / "student_paper.docx"
+        t = out_dir / "teacher_paper.docx"
         s.write_bytes(b"student")
         t.write_bytes(b"teacher")
         return s, t

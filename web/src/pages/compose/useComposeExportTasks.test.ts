@@ -12,10 +12,47 @@ const task = (status: ComposeExportTaskView["status"], attempt = 1): ComposeExpo
 const input = () => ({ format: "pdf" as const, body: { export_label: "Quiz", subject: "Math", template_ref: "math", template_path: "templates/math.yaml", selected_items: [{ section_id: "s", question_ids: ["q1"] }] }, idsToDelete: [], submitted: createEmptyPaperState({ bySection: { s: ["q1"] } }) });
 const mount = () => renderHook(({ scope }) => useComposeExportTasks({ ownerKey: scope, currentExamId: scope.split("/").at(-1)!, exportLabel: "Quiz", subject: "Math", pollIntervalMs: 100, onTaskSucceeded: mocks.success, onTaskFailed: mocks.failure, onError: mocks.error }), { initialProps: { scope: "a/project/paper" } });
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
-beforeEach(() => { vi.useFakeTimers(); vi.resetAllMocks(); mocks.list.mockResolvedValue([]); mocks.submit.mockResolvedValue(task("running")); mocks.get.mockResolvedValue(task("running")); mocks.retry.mockResolvedValue(task("running", 2)); });
+beforeEach(() => { sessionStorage.clear(); vi.useFakeTimers(); vi.resetAllMocks(); mocks.list.mockResolvedValue([]); mocks.submit.mockResolvedValue(task("running")); mocks.get.mockResolvedValue(task("running")); mocks.retry.mockResolvedValue(task("running", 2)); });
 afterEach(() => vi.useRealTimers());
 
 describe("export task transport and recovery", () => {
+  it("retains the original request across refresh and retries it with the same key", async () => {
+    mocks.submit.mockRejectedValueOnce(new TypeError("Network timeout"));
+    const first = mount();
+    await act(async () => { await first.result.current.startExportTask(input()); });
+    const original = mocks.submit.mock.calls[0]![0];
+    first.unmount();
+    const resumed = mount();
+    await act(async () => { await Promise.resolve(); });
+    expect(resumed.result.current.pendingSubmissionFailure?.requestPayload).toEqual(original);
+    await act(async () => { await resumed.result.current.retryExportTask(); });
+    expect(mocks.submit.mock.calls[1]![0]).toEqual(original);
+    expect(resumed.result.current.pendingSubmissionFailure).toBeNull();
+  });
+
+  it("does not discard an unconfirmed request or create a new key for another export click", async () => {
+    mocks.submit.mockRejectedValueOnce(new TypeError("Network timeout"));
+    const { result } = mount();
+    await act(async () => { await result.current.startExportTask(input()); });
+    const key = result.current.pendingSubmissionFailure?.requestPayload.request_key;
+    act(() => result.current.dismissExportTask());
+    await act(async () => { await result.current.startExportTask(input()); });
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(result.current.pendingSubmissionFailure?.requestPayload.request_key).toBe(key);
+  });
+
+  it("automatically resumes a transient server lookup failure while the browser stays online", async () => {
+    mocks.get.mockRejectedValueOnce(new ApiError("Server restarting", 503)).mockResolvedValue(task("succeeded"));
+    const { result } = mount();
+    await act(async () => { await result.current.startExportTask(input()); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(110); });
+    expect(result.current.pollError).toBe("Server restarting");
+    await act(async () => { await vi.advanceTimersByTimeAsync(210); });
+    expect(result.current.activeTask?.status).toBe("succeeded");
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.success).toHaveBeenCalledTimes(1);
+  });
+
   it("reuses the original immutable request and key after an uncertain submission", async () => {
     mocks.submit.mockRejectedValueOnce(new TypeError("Network timeout"));
     const { result } = mount(); const request = input();

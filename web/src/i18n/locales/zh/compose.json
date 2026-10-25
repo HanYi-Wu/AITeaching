@@ -19,7 +19,8 @@
     "exportWithDraftSaved": "{{detail}}（已保存为草稿「{{name}}」）",
     "pickHistoryExam": "请先选择一份历史试卷。",
     "historyExamLabelRequired": "请先填写考试标签。",
-    "examLabelAndSubjectRequired": "请填写试卷说明并选择学科。"
+    "examLabelAndSubjectRequired": "请填写试卷说明并选择学科。",
+    "invalidExportBundle": "导出文件内容无效，请稍后从历史试卷重新下载。"
   },
   "messages": {
     "validateOk": "校验通过",
@@ -182,5 +183,13 @@
   "examPreviewEmpty": "请从左侧选择一份已导出试卷，或先导出试卷。",
   "exportSubmissionUnconfirmed": "暂时无法确认 {{format}} 导出是否已提交：{{reason}}。重试会继续同一次导出。",
   "exportPollingPaused": "连接中断，导出可能仍在进行：{{reason}}",
-  "exportResumePolling": "继续查询"
+  "exportResumePolling": "继续查询",
+  "exportSubmissionRestored": "上次提交结果尚未确认，请继续确认同一次导出，避免重复生成。",
+  "exportTaskHistoricalSucceeded": "历史导出任务已完成（{{format}}），不代表当前编辑内容已导出。",
+  "draftRecoveryChoiceRequired": "检测到未保存的本地草稿。请先选择恢复或丢弃，再继续编辑，以免新旧内容互相覆盖。",
+  "draftRecoverySavedAt": "本地保存时间：{{time}}",
+  "exportPreflightFailed": "{{format}} 导出尚未提交：{{reason}}",
+  "exportPreflightRetry": "重新检查并导出",
+  "downloadFinalPdf": "下载正式 PDF",
+  "downloadFinalWord": "下载正式 Word"
 }
