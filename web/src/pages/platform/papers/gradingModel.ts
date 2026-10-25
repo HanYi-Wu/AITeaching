@@ -68,6 +68,7 @@ export function updateGradingDraft(
 export function reconcileGradingDrafts(
   drafts: GradingDrafts,
   sources: GradingDraftSourceEntry[],
+  canReplaceField: (key: string, field: keyof GradingDraft) => boolean = () => true,
 ): GradingDrafts {
   const next = { ...drafts };
   sources.forEach(({ key, source }) => {
@@ -75,8 +76,8 @@ export function reconcileGradingDrafts(
     const refreshed = createGradingDraft(source);
     next[key] = current
       ? {
-          score: reconcileField(current.score, refreshed.score),
-          feedback: reconcileField(current.feedback, refreshed.feedback),
+          score: canReplaceField(key, "score") ? reconcileField(current.score, refreshed.score) : current.score,
+          feedback: canReplaceField(key, "feedback") ? reconcileField(current.feedback, refreshed.feedback) : current.feedback,
         }
       : refreshed;
   });
@@ -109,10 +110,14 @@ export function gradingFeedbackForSave(field: GradingDraftField): string | null 
   return field.value;
 }
 
-export function markGradingDraftSaved(saved: { score: string; feedback: string }): GradingDraft {
+export function markGradingDraftSaved(
+  current: GradingDraft,
+  saved: { score: string; feedback: string },
+  fields: readonly (keyof GradingDraft)[] = ["score", "feedback"],
+): GradingDraft {
   return {
-    score: cleanField(saved.score),
-    feedback: cleanField(saved.feedback),
+    score: fields.includes("score") ? cleanField(saved.score) : rebaseField(current.score, saved.score),
+    feedback: fields.includes("feedback") ? cleanField(saved.feedback) : rebaseField(current.feedback, saved.feedback),
   };
 }
 
@@ -122,4 +127,8 @@ function cleanField(value: string): GradingDraftField {
 
 function reconcileField(current: GradingDraftField, refreshed: GradingDraftField): GradingDraftField {
   return current.dirty ? current : refreshed;
+}
+
+function rebaseField(current: GradingDraftField, savedValue: string): GradingDraftField {
+  return { value: current.value, baseline: savedValue, dirty: current.value !== savedValue };
 }

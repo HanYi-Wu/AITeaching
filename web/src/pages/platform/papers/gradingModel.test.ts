@@ -54,6 +54,13 @@ describe("gradingModel", () => {
     expect(refreshed["a1:q1"].feedback).toEqual({ value: "教师评语", baseline: "原评语", dirty: true });
   });
 
+  it("protects a clean field edited after the refresh started", () => {
+    const current = updateGradingDraft({}, "a1:q1", { score: 1 }, "score", "1");
+    const refreshed = reconcileGradingDrafts(current, [{ key: "a1:q1", source: { score: 3 } }], (_key, field) => field !== "score");
+
+    expect(refreshed["a1:q1"].score).toEqual({ value: "1", baseline: "1", dirty: false });
+  });
+
   it("uses returned AI suggestions as the current grading draft", () => {
     const suggested = applyGradingSuggestions({}, [{
       key: "a1:q1",
@@ -70,11 +77,11 @@ describe("gradingModel", () => {
   it("cleans the saved values and retains empty-versus-zero score semantics", () => {
     const edited = updateGradingDraft({}, "a1:q1", { score: null }, "score", "0");
     expect(parseGradingScore(edited["a1:q1"].score.value)).toBe(0);
-    const saved = markGradingDraftSaved({ score: "0", feedback: "已保存" });
+    const saved = markGradingDraftSaved(edited["a1:q1"], { score: "0", feedback: "已保存" }, ["score"]);
 
     expect(saved.score).toEqual({ value: "0", baseline: "0", dirty: false });
-    expect(saved.feedback).toEqual({ value: "已保存", baseline: "已保存", dirty: false });
+    expect(saved.feedback).toEqual({ value: "", baseline: "已保存", dirty: true });
     expect(gradingFeedbackForSave(createGradingDraft({}).feedback)).toBeNull();
-    expect(gradingFeedbackForSave(saved.feedback)).toBe("已保存");
+    expect(gradingFeedbackForSave(createGradingDraft({ feedback: "已保存" }).feedback)).toBe("已保存");
   });
 });

@@ -69,6 +69,7 @@ import {
   type GradingDraftSource,
   type GradingDrafts,
 } from "./gradingModel";
+import { usePaperGrading } from "./usePaperGrading";
 import {
   type PaperQuery,
   type PageMeta,
@@ -93,6 +94,15 @@ type Props = {
   onError?: (message: string | null) => void;
   assignStudent?: { classId: string; studentId: string; name: string } | null;
   onAssignStudentConsumed?: () => void;
+};
+
+type AcceptedAiSuggestion = {
+  attemptId: string;
+  questionId: string;
+  status?: string;
+  suggestedScore?: number | null;
+  feedback?: string | null;
+  fields: Array<"score" | "feedback">;
 };
 
 export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError, assignStudent, onAssignStudentConsumed }: Props) {
@@ -180,6 +190,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     () => papers.find((paper) => paper.paper_id === selectedPaperId) ?? papers[0] ?? null,
     [papers, selectedPaperId],
   );
+  const gradingRequests = usePaperGrading(selectedPaper?.paper_id ?? selectedPaperId);
   const activePublishedClassIds = useMemo(() => {
     const ids = new Set<string>();
     publications
@@ -260,6 +271,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
   useEffect(() => {
     submissionRequestIdRef.current += 1;
+    setBusy((current) => current?.startsWith("grade:") || current?.startsWith("ai-grade:") || current?.startsWith("submissions:") ? null : current);
     if (selectedPaperId) {
       void loadPublications(selectedPaperId);
     } else {
@@ -512,19 +524,32 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   async function loadSelectedSubmissions() {
     if (!selectedPaper) return;
     const requestId = ++submissionRequestIdRef.current;
+    const gradingRefresh = gradingRequests.beginRefresh();
     clearScanObjectUrls();
     setBusy(`submissions:${selectedPaper.paper_id}`);
     setMessage(null);
     try {
       const result = await listPaperSubmissions(selectedPaper.paper_id);
-      if (submissionRequestIdRef.current === requestId) {
-        setSubmissions(result.submissions);
-        setGradingDrafts((current) => reconcileGradingDrafts(current, result.submissions.flatMap((submission) =>
+      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) {
+        const sources = result.submissions.flatMap((submission) =>
           submission.answers.map((answer) => ({
             key: gradeKey(submission.attempt_id, answer.question_id),
             source: toGradingDraftSource(answer),
           })),
-        )));
+        );
+        const refreshableFields = new Map<string, { score: boolean; feedback: boolean }>();
+        sources.forEach(({ key }) => {
+          refreshableFields.set(key, {
+            score: gradingRequests.acceptRefreshField(gradingRefresh, key, "score"),
+            feedback: gradingRequests.acceptRefreshField(gradingRefresh, key, "feedback"),
+          });
+        });
+        setSubmissions((current) => reconcileSubmissionSnapshot(current, result.submissions, refreshableFields));
+        setGradingDrafts((current) => reconcileGradingDrafts(
+          current,
+          sources,
+          (key, field) => refreshableFields.get(key)?.[field] ?? true,
+        ));
         setSelectedGradingAttemptId((current) => {
           if (result.submissions.some((item) => item.attempt_id === current)) return current;
           return (
@@ -535,9 +560,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         });
       }
     } catch (e) {
-      if (submissionRequestIdRef.current === requestId) reportError(e);
+      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) reportError(e);
     } finally {
-      setBusy(null);
+      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) {
+        setBusy((current) => current === `submissions:${selectedPaper.paper_id}` ? null : current);
+      }
     }
   }
 
@@ -565,14 +592,22 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       return;
     }
     const feedback = gradingFeedbackForSave(draft.feedback);
+    const gradingSave = gradingRequests.beginSave(key);
     setBusy(`grade:${key}`);
     setMessage(null);
     try {
-      const result = await gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, {
+      const payload = {
         score,
         feedback,
         is_correct: null,
-      });
+      };
+      const queuedSave = await gradingRequests.enqueueSave(gradingSave, () =>
+        gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, payload),
+      );
+      if (!queuedSave.started) return;
+      const result = queuedSave.value;
+      const accepted = gradingRequests.acceptSave(gradingSave);
+      if (!accepted.current) return;
       setSubmissions((current) =>
         current.map((item) =>
           item.attempt_id === submission.attempt_id
@@ -587,17 +622,22 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       );
       setGradingDrafts((current) => ({
         ...current,
-        [key]: markGradingDraftSaved({
-          score: String(result.answer.score ?? score),
-          feedback: result.answer.feedback ?? feedback ?? "",
-        }),
+        [key]: markGradingDraftSaved(
+          current[key] ?? draft,
+          {
+            score: String(result.answer.score ?? score),
+            feedback: result.answer.feedback ?? feedback ?? "",
+          },
+          (Object.keys(accepted.fields) as Array<keyof typeof accepted.fields>).filter((field) => accepted.fields[field]),
+        ),
       }));
       await loadSelectedSubmissions();
-      setMessage("已保存批改结果");
+      if (gradingRequests.isCurrentSave(gradingSave)) setMessage(gradingSaveMessage(accepted.fields));
     } catch (e) {
-      reportError(e);
+      gradingRequests.finishSave(gradingSave);
+      if (gradingRequests.isCurrentSave(gradingSave)) reportError(e);
     } finally {
-      setBusy(null);
+      if (gradingRequests.isCurrentSave(gradingSave)) setBusy((current) => current === `grade:${key}` ? null : current);
     }
   }
 
@@ -630,11 +670,37 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       return;
     }
     const questionIds = pendingQuestionIds.slice(0, 50);
+    const gradingAiRequest = gradingRequests.beginAiRequest(questionIds.map((id) => gradeKey(submission.attempt_id, id)));
     setBusy(`ai-grade:${submission.attempt_id}`);
     setMessage(null);
     try {
       const result = await suggestAiGradesForAttempt(selectedPaper.paper_id, submission.attempt_id, questionIds);
-      const suggestions = new Map(result.suggestions.map((item) => [item.question_id, item]));
+      let filteredSuggestionFieldCount = 0;
+      let fullyFilteredSuggestionCount = 0;
+      const acceptedSuggestions: AcceptedAiSuggestion[] = result.suggestions.flatMap((suggestion) => {
+        const key = gradeKey(submission.attempt_id, suggestion.question_id);
+        const offeredFields = [
+          ...(suggestion.suggested_score != null ? ["score" as const] : []),
+          ...(suggestion.feedback ? ["feedback" as const] : []),
+        ];
+        if (offeredFields.length === 0) return [];
+        const fields = gradingRequests.isCurrentAiRequest(gradingAiRequest, key)
+          ? gradingRequests.acceptAiFields(gradingAiRequest, key, offeredFields)
+          : [];
+        filteredSuggestionFieldCount += offeredFields.length - fields.length;
+        if (fields.length === 0) fullyFilteredSuggestionCount += 1;
+        return fields.length > 0
+          ? [{
+              attemptId: submission.attempt_id,
+              questionId: suggestion.question_id,
+              status: suggestion.status,
+              suggestedScore: suggestion.suggested_score,
+              feedback: suggestion.feedback,
+              fields,
+            }]
+          : [];
+      });
+      const suggestions = new Map(acceptedSuggestions.map((item) => [item.questionId, item]));
       setSubmissions((current) =>
         current.map((item) =>
           item.attempt_id === submission.attempt_id
@@ -646,8 +712,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                     ? {
                         ...answer,
                         grading_status: suggestion.status || "needs_review",
-                        ai_suggested_score: suggestion.suggested_score ?? null,
-                        ai_feedback: suggestion.feedback ?? null,
+                        ...(suggestion.fields.includes("score") ? { ai_suggested_score: suggestion.suggestedScore ?? null } : {}),
+                        ...(suggestion.fields.includes("feedback") ? { ai_feedback: suggestion.feedback ?? null } : {}),
                       }
                     : answer;
                 }),
@@ -655,23 +721,29 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
             : item,
         ),
       );
-      setGradingDrafts((current) => applyGradingSuggestions(current, result.suggestions.map((suggestion) => ({
-        key: gradeKey(submission.attempt_id, suggestion.question_id),
-        score: suggestion.suggested_score,
-        feedback: suggestion.feedback,
+      setGradingDrafts((current) => applyGradingSuggestions(current, acceptedSuggestions.map((suggestion) => ({
+        key: gradeKey(suggestion.attemptId, suggestion.questionId),
+        score: suggestion.fields.includes("score") ? suggestion.suggestedScore : null,
+        feedback: suggestion.fields.includes("feedback") ? suggestion.feedback : null,
       }))));
-      const generatedCount = result.suggestions.filter((item) => item.status === "needs_review" || !item.status).length;
-      const retryableCount = result.suggestions.length - generatedCount;
+      const generatedCount = acceptedSuggestions.filter((item) => item.status === "needs_review" || !item.status).length;
+      const retryableCount = acceptedSuggestions.filter((item) => item.status === "pending").length;
       const remainingCount = Math.max(0, pendingQuestionIds.length - questionIds.length);
-      setMessage(
-        generatedCount > 0
-          ? `已生成 ${generatedCount} 条 AI 预批改建议；${retryableCount + remainingCount} 题仍待处理，请教师复核后保存。`
-          : `本次未生成有效 AI 建议，${retryableCount + remainingCount} 题仍保持待处理，可检查模型/OCR 后重试。`,
-      );
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) {
+        const filteredNotice = filteredSuggestionFieldCount > 0 ? `；忽略了 ${filteredSuggestionFieldCount} 个过期字段` : "";
+        const message = acceptedSuggestions.length === 0 && fullyFilteredSuggestionCount > 0
+          ? "AI 预批改结果已过期，当前分数和评语未被覆盖；请重新发起预批改。"
+          : generatedCount > 0
+            ? `已生成 ${generatedCount} 条 AI 预批改建议${filteredNotice}；${retryableCount + remainingCount} 题仍待处理，请教师复核后保存。`
+            : `本次未生成有效 AI 建议${filteredNotice}，${retryableCount + remainingCount} 题仍保持待处理，可检查模型/OCR 后重试。`;
+        setMessage(message);
+      }
     } catch (e) {
-      reportError(e);
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) reportError(e);
     } finally {
-      setBusy(null);
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) {
+        setBusy((current) => current === `ai-grade:${submission.attempt_id}` ? null : current);
+      }
     }
   }
 
@@ -701,6 +773,9 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       .filter((item) => item.questionIds.length > 0);
     const plannedQuestionCount = batchPlan.reduce((total, item) => total + item.questionIds.length, 0);
     if (!window.confirm(`将为 ${batchPlan.length} 份答卷的 ${plannedQuestionCount} 道题生成 AI 建议（本次最多 50 题），是否继续？`)) return;
+    const gradingAiRequest = gradingRequests.beginAiRequest(batchPlan.flatMap(({ submission, questionIds }) =>
+      questionIds.map((questionId) => gradeKey(submission.attempt_id, questionId)),
+    ));
     setBusy("ai-grade:batch");
     setMessage(null);
     const completed: Array<{
@@ -708,8 +783,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       suggestions: Array<{ question_id: string; suggested_score?: number | null; feedback?: string | null; status: string }>;
     }> = [];
     let failed = 0;
+    let filteredSuggestionFieldCount = 0;
+    let fullyFilteredSuggestionCount = 0;
     try {
       for (const { submission, questionIds } of batchPlan) {
+        if (!gradingRequests.isCurrentAiBatch(gradingAiRequest)) break;
         try {
           const result = await suggestAiGradesForAttempt(selectedPaper.paper_id, submission.attempt_id, questionIds);
           completed.push({ attemptId: submission.attempt_id, suggestions: result.suggestions });
@@ -717,7 +795,37 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           failed += 1;
         }
       }
-      const byAttempt = new Map(completed.map((item) => [item.attemptId, new Map(item.suggestions.map((s) => [s.question_id, s]))]));
+      const acceptedSuggestions: AcceptedAiSuggestion[] = completed.flatMap(({ attemptId, suggestions }) =>
+        suggestions.flatMap((suggestion) => {
+          const key = gradeKey(attemptId, suggestion.question_id);
+          const offeredFields = [
+            ...(suggestion.suggested_score != null ? ["score" as const] : []),
+            ...(suggestion.feedback ? ["feedback" as const] : []),
+          ];
+          if (offeredFields.length === 0) return [];
+          const fields = gradingRequests.isCurrentAiRequest(gradingAiRequest, key)
+            ? gradingRequests.acceptAiFields(gradingAiRequest, key, offeredFields)
+            : [];
+          filteredSuggestionFieldCount += offeredFields.length - fields.length;
+          if (fields.length === 0) fullyFilteredSuggestionCount += 1;
+          return fields.length > 0
+            ? [{
+                attemptId,
+                questionId: suggestion.question_id,
+                status: suggestion.status,
+                suggestedScore: suggestion.suggested_score,
+                feedback: suggestion.feedback,
+                fields,
+              }]
+            : [];
+        }),
+      );
+      const byAttempt = new Map<string, Map<string, AcceptedAiSuggestion>>();
+      acceptedSuggestions.forEach((suggestion) => {
+        const byQuestion = byAttempt.get(suggestion.attemptId) ?? new Map<string, AcceptedAiSuggestion>();
+        byQuestion.set(suggestion.questionId, suggestion);
+        byAttempt.set(suggestion.attemptId, byQuestion);
+      });
       setSubmissions((current) =>
         current.map((submission) => {
           const suggestions = byAttempt.get(submission.attempt_id);
@@ -730,32 +838,32 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                 ? {
                     ...answer,
                     grading_status: suggestion.status || "needs_review",
-                    ai_suggested_score: suggestion.suggested_score ?? null,
-                    ai_feedback: suggestion.feedback ?? null,
+                    ...(suggestion.fields.includes("score") ? { ai_suggested_score: suggestion.suggestedScore ?? null } : {}),
+                    ...(suggestion.fields.includes("feedback") ? { ai_feedback: suggestion.feedback ?? null } : {}),
                   }
                 : answer;
             }),
           };
         }),
       );
-      setGradingDrafts((current) => applyGradingSuggestions(current, completed.flatMap(({ attemptId, suggestions }) =>
-        suggestions.map((suggestion) => ({
-          key: gradeKey(attemptId, suggestion.question_id),
-          score: suggestion.suggested_score,
-          feedback: suggestion.feedback,
-        })),
-      )));
-      const generatedCount = completed.reduce(
-        (total, item) => total + item.suggestions.filter((suggestion) => suggestion.status === "needs_review" || !suggestion.status).length,
-        0,
-      );
-      const retryableCount = completed.reduce(
-        (total, item) => total + item.suggestions.filter((suggestion) => suggestion.status === "pending").length,
-        0,
-      );
-      setMessage(`AI 批量预批改完成：生成 ${generatedCount} 条建议，${retryableCount} 题可重试${failed ? `，${failed} 份处理失败` : ""}。请教师逐题复核。`);
+      setGradingDrafts((current) => applyGradingSuggestions(current, acceptedSuggestions.map((suggestion) => ({
+        key: gradeKey(suggestion.attemptId, suggestion.questionId),
+        score: suggestion.fields.includes("score") ? suggestion.suggestedScore : null,
+        feedback: suggestion.fields.includes("feedback") ? suggestion.feedback : null,
+      }))));
+      const generatedCount = acceptedSuggestions.filter((suggestion) => suggestion.status === "needs_review" || !suggestion.status).length;
+      const retryableCount = acceptedSuggestions.filter((suggestion) => suggestion.status === "pending").length;
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) {
+        const filteredNotice = filteredSuggestionFieldCount > 0 ? `，忽略 ${filteredSuggestionFieldCount} 个过期字段` : "";
+        const message = acceptedSuggestions.length === 0 && fullyFilteredSuggestionCount > 0
+          ? `AI 批量预批改结果已过期，当前批改内容未被覆盖${failed ? `，${failed} 份处理失败` : ""}。`
+          : `AI 批量预批改完成：生成 ${generatedCount} 条建议，${retryableCount} 题可重试${filteredNotice}${failed ? `，${failed} 份处理失败` : ""}。请教师逐题复核。`;
+        setMessage(message);
+      }
     } finally {
-      setBusy(null);
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) {
+        setBusy((current) => current === "ai-grade:batch" ? null : current);
+      }
     }
   }
 
@@ -1403,18 +1511,20 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                                     className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                                     value={value}
                                     placeholder="分数"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      gradingRequests.beginEdit(key, "score");
                                       setGradingDrafts((current) => updateGradingDraft(current, key, source, "score", event.target.value))
-                                    }
+                                    }}
                                   />
                                   <input
                                     data-testid={`paper-feedback-${answer.question_id}`}
                                     className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                                     value={feedback}
                                     placeholder="批改反馈"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      gradingRequests.beginEdit(key, "feedback");
                                       setGradingDrafts((current) => updateGradingDraft(current, key, source, "feedback", event.target.value))
-                                    }
+                                    }}
                                   />
                                   <button
                                     type="button"
@@ -1557,6 +1667,40 @@ function toGradingDraftSource(answer: PaperSubmissionRecord["answers"][number]):
     feedback: answer.feedback,
     aiFeedback: answer.ai_feedback,
   };
+}
+
+function reconcileSubmissionSnapshot(
+  current: PaperSubmissionRecord[],
+  incoming: PaperSubmissionRecord[],
+  refreshableFields: Map<string, { score: boolean; feedback: boolean }>,
+): PaperSubmissionRecord[] {
+  const currentByAttempt = new Map(current.map((submission) => [submission.attempt_id, submission]));
+  return incoming.map((submission) => {
+    const existing = currentByAttempt.get(submission.attempt_id);
+    if (!existing) return submission;
+    const existingAnswers = new Map(existing.answers.map((answer) => [answer.question_id, answer]));
+    return {
+      ...submission,
+      answers: submission.answers.map((answer) => {
+        const previous = existingAnswers.get(answer.question_id);
+        const refreshable = refreshableFields.get(`${submission.attempt_id}:${answer.question_id}`);
+        if (!previous || !refreshable) return answer;
+        return {
+          ...answer,
+          ...(refreshable.score ? {} : { score: previous.score, ai_suggested_score: previous.ai_suggested_score }),
+          ...(refreshable.feedback ? {} : { feedback: previous.feedback, ai_feedback: previous.ai_feedback }),
+          ...(!refreshable.score || !refreshable.feedback ? { grading_status: previous.grading_status } : {}),
+        };
+      }),
+    };
+  });
+}
+
+function gradingSaveMessage(fields: Record<"score" | "feedback", boolean>): string {
+  if (fields.score && fields.feedback) return "已保存批改结果";
+  if (!fields.score && !fields.feedback) return "已保存发出时的分数和评语；当前有更新的分数和评语未保存。";
+  if (!fields.score) return "已保存发出时的评语；当前有更新的分数未保存。";
+  return "已保存发出时的分数；当前有更新的评语未保存。";
 }
 
 function Panel({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
