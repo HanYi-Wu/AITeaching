@@ -228,11 +228,15 @@ def test_correcting_generic_subject_keeps_the_existing_publication_and_attempt(w
     with connect(platform_root) as con:
         attempt_id = con.execute("SELECT id FROM student_attempts WHERE publication_id = ?", (publication_id,)).fetchone()["id"]
         previous = dict(con.execute("SELECT * FROM paper_records WHERE id = ?", (paper["paper_id"],)).fetchone())
-        con.execute("UPDATE paper_records SET subject = '通用' WHERE id = ?", (paper["paper_id"],))
+        con.execute(
+            "UPDATE paper_records SET title = ' ', subject = '通用' WHERE id = ?",
+            (paper["paper_id"],),
+        )
 
     listed = web_client.get("/api/papers", headers=teacher_headers).json()["papers"]
     repaired = next(item for item in listed if item["exam_id"] == exam_id)
     assert repaired["paper_id"] == paper["paper_id"]
+    assert repaired["title"] == "Midterm"
     assert repaired["subject"] == "Math"
     assert repaired["publication_count"] == 1
     assert repaired["total_student_count"] == 1

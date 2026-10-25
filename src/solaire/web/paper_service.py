@@ -15,6 +15,21 @@ from typing import Any
 
 from solaire.web.auth_service import utc_now
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
+from solaire.web.papers.repository import (
+    clean_subject as _clean_subject,
+    clean_title as _clean_title,
+    get_or_create_exam_paper,
+    get_paper_record,
+    list_adaptive_paper_records,
+)
+from solaire.web.papers.visibility import (
+    adaptive_paper_summary as _adaptive_paper_summary,
+    attempt_access_clause as _attempt_access_clause,
+    ensure_paper_access as _ensure_paper_access,
+    paper_visible_to_user as _paper_visible_to_user,
+    publication_access_clause as _publication_access_clause,
+    publication_stats as _publication_stats,
+)
 from solaire.web.result_service import list_exam_results
 from solaire.web.student_service import _load_attempt_question_payloads, _load_exam_question_payloads
 from solaire.web.student_service import _publication_datetime
@@ -27,15 +42,6 @@ MAX_PAGE_SIZE = 100
 
 def _new_id() -> str:
     return uuid.uuid4().hex
-
-
-def _clean_subject(value: object) -> str:
-    clean = str(value or "").strip()
-    return "通用" if not clean or clean == "未分科" else clean
-
-
-def _clean_title(value: object, fallback: str) -> str:
-    return str(value or "").strip() or fallback
 
 
 def _normalized_schedule(start_at, end_at):
@@ -77,160 +83,55 @@ def _paper_record_for_exam(
     *,
     claim: bool = False,
 ) -> dict[str, Any]:
-    exam_id = str(exam.get("exam_id") or "").strip()
-    if not exam_id:
-        raise ValueError("exam_id is required")
-    subject = _clean_subject(exam.get("subject"))
-    title = _clean_title(exam.get("exam_title"), exam_id)
-    now = utc_now()
-    user_role = str(user.get("role") or "")
-    owner_teacher_id = str(exam.get("owner_teacher_id") or "").strip() or None
-    school_id = str(user.get("school_id")) if user.get("school_id") else None
-
-    with connect(root) as con:
-        if not owner_teacher_id and user_role == "teacher" and claim:
-            owner_teacher_id = str(user.get("id"))
-        elif not owner_teacher_id:
-            candidates = con.execute(
-                "SELECT id FROM users WHERE role='teacher'",
-            ).fetchall()
-            if len(candidates) == 1:
-                owner_teacher_id = str(candidates[0]["id"])
-        if user_role == "teacher" and owner_teacher_id and owner_teacher_id != str(user.get("id")):
-            raise PermissionError("No permission for this exam")
-        if owner_teacher_id:
-            teacher_school = con.execute(
-                "SELECT school_id FROM users WHERE id=? AND role='teacher'", (owner_teacher_id,)
-            ).fetchone()
-            if teacher_school is not None:
-                school_id = str(teacher_school["school_id"]) if teacher_school["school_id"] else None
-        row = con.execute(
-            "SELECT * FROM paper_records WHERE exam_id = ? AND subject = ?",
-            (exam_id, subject),
-        ).fetchone()
-        if row is None and subject != "通用":
-            # Older unspecialized workspaces were registered under the generic subject.
-            # Reuse their ID so publications and attempts survive corrected display data.
-            row = con.execute(
-                "SELECT * FROM paper_records WHERE exam_id = ? AND subject = '通用'",
-                (exam_id,),
-            ).fetchone()
-        if row is None:
-            paper_id = _new_id()
-            con.execute(
-                """
-                INSERT INTO paper_records (
-                  id, exam_id, title, subject, delivery_mode, owner_teacher_id, school_id, status, created_at, updated_at, folder_id
-                )
-                VALUES (?, ?, ?, ?, 'offline', ?, ?, 'draft', ?, ?, ?)
-                """,
-                (paper_id, exam_id, title, subject, owner_teacher_id, school_id, now, now,
-                 f"paper-default-{owner_teacher_id}" if owner_teacher_id else None),
-            )
-        else:
-            paper_id = str(row["id"])
-            existing_owner = str(row["owner_teacher_id"] or "").strip() or None
-            publishers = {str(item[0]) for item in con.execute(
-                "SELECT DISTINCT teacher_id FROM exam_publications WHERE paper_id=?", (paper_id,)
-            ) if item[0]}
-            if len(publishers) > 1:
-                raise PermissionError("历史发布的教师归属不一致，无法修改试卷")
-            if not existing_owner and publishers:
-                existing_owner = next(iter(publishers))
-            if user_role == "teacher" and existing_owner and existing_owner != str(user.get("id")):
-                raise PermissionError("No permission for this exam")
-            if existing_owner and owner_teacher_id and existing_owner != owner_teacher_id:
-                raise PermissionError("Exam owner conflicts with existing paper record")
-            owner_teacher_id = existing_owner or owner_teacher_id
-            updates: list[str] = ["title = ?", "subject = ?", "updated_at = ?"]
-            params: list[object] = [title, subject, now]
-            if owner_teacher_id and row["owner_teacher_id"] is None:
-                updates.append("owner_teacher_id = ?")
-                params.append(owner_teacher_id)
-            if school_id and row["school_id"] is None:
-                updates.append("school_id = ?")
-                params.append(school_id)
-            if row["folder_id"] is None and owner_teacher_id:
-                updates.append("folder_id = ?")
-                params.append(f"paper-default-{owner_teacher_id}")
-            params.append(paper_id)
-            con.execute(f"UPDATE paper_records SET {', '.join(updates)} WHERE id = ?", params)
-        stored = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
-    paper = row_to_dict(stored)
-    if paper is None:
-        raise RuntimeError("failed to sync paper record")
-    return paper
+    return get_or_create_exam_paper(root, exam, user, claim=claim, id_factory=_new_id)
 
 
-def _publication_stats(root: Path, paper_id: str, user: dict[str, Any]) -> dict[str, int]:
-    access_clause, access_params = _publication_access_clause(user)
-    with connect(root) as con:
-        row = con.execute(
-            f"""
-            SELECT
-              COUNT(DISTINCT ep.id) AS publication_count,
-              COUNT(DISTINCT pc.class_id) AS published_class_count,
-              COUNT(DISTINCT sa.id) AS total_student_count,
-              COUNT(DISTINCT CASE
-                WHEN sa.status IN ('submitted', 'completed') OR sa.submitted_at IS NOT NULL THEN sa.id
-              END) AS submitted_student_count,
-              COUNT(DISTINCT CASE
-                WHEN sa.status = 'in_progress' AND sa.submitted_at IS NULL THEN sa.id
-              END) AS in_progress_student_count,
-              COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS graded_student_count,
-              COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS published_student_count
-            FROM exam_publications ep
-            LEFT JOIN publication_classes pc ON pc.publication_id = ep.id
-            LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
-            WHERE ep.paper_id = ? AND ep.status <> 'revoked' AND {access_clause}
-            """,
-            (paper_id, *access_params),
-        ).fetchone()
+def _paper_summary(
+    record: dict[str, Any],
+    stats: dict[str, int],
+    *,
+    exam: dict[str, Any] | None = None,
+    question_count: int = 0,
+    section_count: int = 0,
+    score_batch_count: int = 0,
+    has_score: bool = False,
+    has_pdf: bool = False,
+    has_docx: bool = False,
+    latest_batch_id: str | None = None,
+    exam_dir: str | None = None,
+    mtime: str | None = None,
+) -> dict[str, Any]:
+    if exam is not None:
+        question_count = int(exam.get("question_count") or 0)
+        section_count = int(exam.get("section_count") or 0)
+        score_batch_count = int(exam.get("score_batch_count") or 0)
+        has_score = bool(exam.get("has_score"))
+        has_pdf = bool(exam.get("has_pdf"))
+        has_docx = bool(exam.get("has_docx"))
+        latest_batch_id = exam.get("latest_batch_id")
+        exam_dir = exam.get("exam_dir")
+        mtime = exam.get("mtime")
     return {
-        "publication_count": int(row["publication_count"] or 0),
-        "published_class_count": int(row["published_class_count"] or 0),
-        "total_student_count": int(row["total_student_count"] or 0),
-        "submitted_student_count": int(row["submitted_student_count"] or 0),
-        "in_progress_student_count": int(row["in_progress_student_count"] or 0),
-        "graded_student_count": int(row["graded_student_count"] or 0),
-        "published_student_count": int(row["published_student_count"] or 0),
+        "paper_id": record["id"],
+        "exam_id": record["exam_id"],
+        "title": record["title"],
+        "subject": record["subject"],
+        "delivery_mode": record["delivery_mode"],
+        "status": record["status"],
+        "owner_teacher_id": record["owner_teacher_id"],
+        "school_id": record["school_id"],
+        "folder_id": record.get("folder_id"),
+        "question_count": question_count,
+        "section_count": section_count,
+        "score_batch_count": score_batch_count,
+        "has_score": has_score,
+        "has_pdf": has_pdf,
+        "has_docx": has_docx,
+        "latest_batch_id": latest_batch_id,
+        "exam_dir": exam_dir,
+        "mtime": mtime,
+        **stats,
     }
-
-
-def _paper_visible_to_user(paper: dict[str, Any], user: dict[str, Any]) -> bool:
-    role = str(user.get("role") or "")
-    if role == "admin":
-        return True
-    if role == "school":
-        return paper.get("school_id") == user.get("school_id")
-    if role == "teacher":
-        return paper.get("owner_teacher_id") == user.get("id")
-    return False
-
-
-def _adaptive_paper_summary(root: Path, paper_id: str, user: dict[str, Any]) -> tuple[int, bool]:
-    access_clause, access_params = _attempt_access_clause(user)
-    with connect(root) as con:
-        rows = con.execute(
-            f"""
-            SELECT sa.question_payload_json, sa.score
-            FROM student_attempts sa
-            JOIN exam_publications ep ON ep.id = sa.publication_id
-            WHERE ep.paper_id = ? AND {access_clause}
-            """,
-            (paper_id, *access_params),
-        ).fetchall()
-    question_count = 0
-    has_score = False
-    for row in rows:
-        has_score = has_score or row["score"] is not None
-        try:
-            payload = json.loads(str(row["question_payload_json"] or "[]"))
-        except json.JSONDecodeError:
-            payload = []
-        if isinstance(payload, list):
-            question_count = max(question_count, len(payload))
-    return question_count, has_score
 
 
 def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -245,62 +146,23 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
         if not _paper_visible_to_user(record, user):
             continue
         stats = _publication_stats(platform_root, str(record["id"]), user)
-        papers.append(
-            {
-                "paper_id": record["id"],
-                "exam_id": record["exam_id"],
-                "title": record["title"],
-                "subject": record["subject"],
-                "delivery_mode": record["delivery_mode"],
-                "status": record["status"],
-                "owner_teacher_id": record["owner_teacher_id"],
-                "school_id": record["school_id"],
-                "folder_id": record.get("folder_id"),
-                "question_count": int(exam.get("question_count") or 0),
-                "section_count": int(exam.get("section_count") or 0),
-                "score_batch_count": int(exam.get("score_batch_count") or 0),
-                "has_score": bool(exam.get("has_score")),
-                "has_pdf": bool(exam.get("has_pdf")),
-                "has_docx": bool(exam.get("has_docx")),
-                "latest_batch_id": exam.get("latest_batch_id"),
-                "exam_dir": exam.get("exam_dir"),
-                "mtime": exam.get("mtime"),
-                **stats,
-            }
-        )
-    with connect(platform_root) as con:
-        adaptive_rows = con.execute(
-            "SELECT * FROM paper_records WHERE exam_id LIKE 'adaptive/%' ORDER BY updated_at DESC"
-        ).fetchall()
+        papers.append(_paper_summary(record, stats, exam=exam))
+    adaptive_records = list_adaptive_paper_records(platform_root)
     existing_ids = {str(item["paper_id"]) for item in papers}
-    for row in adaptive_rows:
-        record = row_to_dict(row) or {}
+    for record in adaptive_records:
         paper_id = str(record.get("id") or "")
         if not paper_id or paper_id in existing_ids or not _paper_visible_to_user(record, user):
             continue
         question_count, has_score = _adaptive_paper_summary(platform_root, paper_id, user)
         papers.append(
-            {
-                "paper_id": paper_id,
-                "exam_id": record.get("exam_id"),
-                "title": record.get("title"),
-                "subject": record.get("subject"),
-                "delivery_mode": record.get("delivery_mode"),
-                "status": record.get("status"),
-                "owner_teacher_id": record.get("owner_teacher_id"),
-                "school_id": record.get("school_id"),
-                "folder_id": record.get("folder_id"),
-                "question_count": question_count,
-                "section_count": 1 if question_count else 0,
-                "score_batch_count": 0,
-                "has_score": has_score,
-                "has_pdf": False,
-                "has_docx": False,
-                "latest_batch_id": None,
-                "exam_dir": None,
-                "mtime": record.get("updated_at"),
-                **_publication_stats(platform_root, paper_id, user),
-            }
+            _paper_summary(
+                record,
+                _publication_stats(platform_root, paper_id, user),
+                question_count=question_count,
+                section_count=1 if question_count else 0,
+                has_score=has_score,
+                mtime=record.get("updated_at"),
+            )
         )
     return papers
 
@@ -327,27 +189,7 @@ def sync_paper_for_exam(
     record = _paper_record_for_exam(platform_root, matched, user, claim=True)
     _ensure_paper_access(record, user)
     stats = _publication_stats(platform_root, str(record["id"]), user)
-    return {
-        "paper_id": record["id"],
-        "exam_id": record["exam_id"],
-        "title": record["title"],
-        "subject": record["subject"],
-        "delivery_mode": record["delivery_mode"],
-        "status": record["status"],
-        "owner_teacher_id": record["owner_teacher_id"],
-        "school_id": record["school_id"],
-        "folder_id": record.get("folder_id"),
-        "question_count": int(matched.get("question_count") or 0),
-        "section_count": int(matched.get("section_count") or 0),
-        "score_batch_count": int(matched.get("score_batch_count") or 0),
-        "has_score": bool(matched.get("has_score")),
-        "has_pdf": bool(matched.get("has_pdf")),
-        "has_docx": bool(matched.get("has_docx")),
-        "latest_batch_id": matched.get("latest_batch_id"),
-        "exam_dir": matched.get("exam_dir"),
-        "mtime": matched.get("mtime"),
-        **stats,
-    }
+    return _paper_summary(record, stats, exam=matched)
 
 
 def query_papers(
@@ -390,24 +232,10 @@ def query_papers(
 
 
 def get_paper(root: Path, paper_id: str) -> dict[str, Any]:
-    init_platform_db(root)
-    with connect(root) as con:
-        row = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
-    paper = row_to_dict(row)
+    paper = get_paper_record(root, paper_id)
     if paper is None:
         raise ValueError("paper not found")
     return paper
-
-
-def _ensure_paper_access(paper: dict[str, Any], user: dict[str, Any]) -> None:
-    role = str(user.get("role") or "")
-    if role == "admin":
-        return
-    if role == "school" and paper.get("school_id") == user.get("school_id"):
-        return
-    if role == "teacher" and paper.get("owner_teacher_id") == user.get("id"):
-        return
-    raise PermissionError("No permission for this paper")
 
 
 def update_paper_delivery_mode(root: Path, paper_id: str, delivery_mode: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -1358,42 +1186,6 @@ def _answer_public_payload(row: dict[str, Any], question: dict[str, Any] | None 
         "section_id": (question or {}).get("section_id"),
         "tags": (question or {}).get("tags") or [],
     }
-
-
-def _attempt_access_clause(user: dict[str, Any], *, attempt_alias: str = "sa") -> tuple[str, list[str]]:
-    role = str(user.get("role") or "")
-    if role == "admin":
-        return "1 = 1", []
-    if role == "teacher":
-        return (
-            f"EXISTS (SELECT 1 FROM exam_publications owner_ep "
-            f"WHERE owner_ep.id = {attempt_alias}.publication_id AND owner_ep.teacher_id = ?)",
-            [str(user.get("id") or "")],
-        )
-    if role == "school":
-        return (
-            f"EXISTS (SELECT 1 FROM publication_classes pac "
-            f"JOIN classes ac ON ac.id = pac.class_id "
-            f"WHERE pac.publication_id = {attempt_alias}.publication_id AND ac.school_id = ?)",
-            [str(user.get("school_id") or "")],
-        )
-    return "0 = 1", []
-
-
-def _publication_access_clause(user: dict[str, Any], *, publication_alias: str = "ep") -> tuple[str, list[str]]:
-    role = str(user.get("role") or "")
-    if role == "admin":
-        return "1 = 1", []
-    if role == "teacher":
-        return f"{publication_alias}.teacher_id = ?", [str(user.get("id") or "")]
-    if role == "school":
-        return (
-            f"EXISTS (SELECT 1 FROM publication_classes pac "
-            f"JOIN classes ac ON ac.id = pac.class_id "
-            f"WHERE pac.publication_id = {publication_alias}.id AND ac.school_id = ?)",
-            [str(user.get("school_id") or "")],
-        )
-    return "0 = 1", []
 
 
 def _paper_attempt_row(
