@@ -9,6 +9,7 @@ import base64
 import binascii
 import io
 import re
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,11 @@ from solaire.web.papers.publication_policy import (
     normalize_time_limit,
 )
 from solaire.web.papers import publication_service
+from solaire.web.papers.grading import (
+    paper_attempt_row_in_connection,
+    recompute_attempt_score,
+    recompute_attempt_score_in_connection,
+)
 from solaire.web.result_service import list_exam_results
 from solaire.web.student_service import _load_attempt_question_payloads, _load_exam_question_payloads
 from solaire.web.student_service import _publication_datetime
@@ -1139,34 +1145,13 @@ def _paper_attempt_row(
     attempt_id: str,
     user: dict[str, Any],
 ) -> dict[str, Any]:
-    access_clause, access_params = _attempt_access_clause(user)
     with connect(root) as con:
-        row = con.execute(
-            f"""
-            SELECT
-              sa.*,
-              ep.paper_id,
-              ep.title AS publication_title,
-              ep.submission_mode,
-              pr.exam_id,
-              COALESCE(ep.subject, pr.subject) AS subject,
-              pr.title AS paper_title,
-              s.student_no,
-              s.display_name AS student_name,
-              u.username AS account_username
-            FROM student_attempts sa
-            JOIN exam_publications ep ON ep.id = sa.publication_id
-            JOIN paper_records pr ON pr.id = ep.paper_id
-            JOIN students s ON s.id = sa.student_id
-            LEFT JOIN users u ON u.id = s.user_id
-            WHERE sa.id = ? AND ep.paper_id = ? AND {access_clause}
-            """,
-            (attempt_id, paper_id, *access_params),
-        ).fetchone()
-    data = row_to_dict(row)
-    if data is None:
-        raise ValueError("attempt not found for this paper")
-    return data
+        return paper_attempt_row_in_connection(
+            con,
+            paper_id=paper_id,
+            attempt_id=attempt_id,
+            user=user,
+        )
 
 
 def _question_maps(project_root: Path, paper: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
@@ -1177,13 +1162,20 @@ def _question_maps(project_root: Path, paper: dict[str, Any]) -> tuple[list[dict
 
 
 def _question_maps_for_attempt(
-    root: Path,
+    root: Path | None,
     project_root: Path,
     paper: dict[str, Any],
     attempt: dict[str, Any],
+    *,
+    connection: sqlite3.Connection | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
     attempt_payload = attempt if attempt.get("exam_id") else {**attempt, "exam_id": paper.get("exam_id")}
-    questions, _answer_keys = _load_attempt_question_payloads(project_root, attempt_payload, root=root)
+    questions, _answer_keys = _load_attempt_question_payloads(
+        project_root,
+        attempt_payload,
+        root=root,
+        connection=connection,
+    )
     by_id = {str(item.get("question_id")): {**item, 'correct_answer': _answer_keys.get(str(item.get('question_id')))} for item in questions}
     score_by_id = question_score_map(questions)
     return questions, by_id, score_by_id
@@ -2180,36 +2172,7 @@ def suggest_ai_grades_for_pending_attempts(
 
 
 def _recompute_attempt_score(root: Path, *, attempt_id: str, score_by_id: dict[str, float]) -> dict[str, Any]:
-    with connect(root) as con:
-        rows = con.execute(
-            "SELECT question_id, score FROM student_answers WHERE attempt_id = ?",
-            (attempt_id,),
-        ).fetchall()
-        scores_by_question = {str(row["question_id"]): row["score"] for row in rows}
-        expected_ids = set(score_by_id)
-        fully_graded = bool(expected_ids) and all(
-            qid in scores_by_question and scores_by_question[qid] is not None
-            for qid in expected_ids
-        )
-        final_score = (
-            round(sum(float(scores_by_question[qid]) for qid in expected_ids), 2)
-            if fully_graded
-            else None
-        )
-        final_max = (
-            round(sum(float(score_by_id.get(qid, 0.0)) for qid in expected_ids), 2)
-            if expected_ids
-            else None
-        )
-        con.execute(
-            "UPDATE student_attempts SET score = ?, max_score = ? WHERE id = ?",
-            (final_score, final_max, attempt_id),
-        )
-        row = con.execute("SELECT * FROM student_attempts WHERE id = ?", (attempt_id,)).fetchone()
-    attempt = row_to_dict(row)
-    if attempt is None:
-        raise RuntimeError("failed to update attempt score")
-    return attempt
+    return recompute_attempt_score(root, attempt_id=attempt_id, score_by_id=score_by_id)
 
 
 def grade_paper_answer(
@@ -2227,23 +2190,40 @@ def grade_paper_answer(
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("只有教师或管理员可以保存最终批改结果")
-    paper = get_paper(root, paper_id)
-    _ensure_paper_access(paper, user)
-    attempt = _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id, user=user)
-    if _attempt_status_group(attempt) != "completed":
-        raise ValueError("只能批改已提交的答卷")
-    _questions, by_id, score_by_id = _question_maps_for_attempt(root, project_root, paper, attempt)
-    if question_id not in by_id:
-        raise ValueError("question not found in paper")
-    max_score = float(score_by_id.get(question_id, 0.0))
-    clean_score = validate_manual_score(score, max_score)
     clean_feedback = feedback.strip() if feedback and feedback.strip() else None
-    resolved_is_correct = is_correct
-    if resolved_is_correct is None and max_score > 0:
-        resolved_is_correct = clean_score >= max_score
     now = utc_now()
     answer_id = _new_id()
+    answer: dict[str, Any] | None = None
     with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
+        paper_row = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
+        paper = row_to_dict(paper_row)
+        if paper is None:
+            raise ValueError("paper not found")
+        _ensure_paper_access(paper, user)
+        attempt = paper_attempt_row_in_connection(
+            con,
+            paper_id=paper_id,
+            attempt_id=attempt_id,
+            user=user,
+        )
+        if _attempt_status_group(attempt) != "completed":
+            raise ValueError("只能批改已提交的答卷")
+        # Keep legacy snapshot repair in the same transaction as the answer update.
+        _questions, by_id, score_by_id = _question_maps_for_attempt(
+            None,
+            project_root,
+            paper,
+            attempt,
+            connection=con,
+        )
+        if question_id not in by_id:
+            raise ValueError("question not found in paper")
+        max_score = float(score_by_id.get(question_id, 0.0))
+        clean_score = validate_manual_score(score, max_score)
+        resolved_is_correct = is_correct
+        if resolved_is_correct is None and max_score > 0:
+            resolved_is_correct = clean_score >= max_score
         con.execute(
             """
             INSERT INTO student_answers (
@@ -2271,7 +2251,7 @@ def grade_paper_answer(
                 now,
             ),
         )
-        row = con.execute(
+        answer_row = con.execute(
             "SELECT * FROM student_answers WHERE attempt_id = ? AND question_id = ?",
             (attempt_id, question_id),
         ).fetchone()
@@ -2279,11 +2259,18 @@ def grade_paper_answer(
             "UPDATE student_attempts SET grading_completed_at = NULL, grading_completed_by = NULL WHERE id = ?",
             (attempt_id,),
         )
-    _recompute_attempt_score(root, attempt_id=str(attempt["id"]), score_by_id=score_by_id)
-    answer = row_to_dict(row)
+        recompute_attempt_score_in_connection(
+            con,
+            attempt_id=str(attempt["id"]),
+            score_by_id=score_by_id,
+        )
+        answer_data = row_to_dict(answer_row)
+        if answer_data is None:
+            raise RuntimeError("failed to grade answer")
+        answer = _answer_public_payload(answer_data, by_id.get(question_id))
     if answer is None:
         raise RuntimeError("failed to grade answer")
-    return _answer_public_payload(answer, by_id.get(question_id))
+    return answer
 
 
 def complete_paper_attempt_grading(

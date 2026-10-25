@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +118,7 @@ def _load_attempt_question_payloads(
     attempt: dict[str, Any],
     *,
     root: Path | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     raw_questions = attempt.get("question_payload_json")
     raw_answers = attempt.get("answer_key_json")
@@ -182,18 +184,26 @@ def _load_attempt_question_payloads(
                 or (attempt.get("status") == "submitted" and current_max != canonical_max)
                 or payload_version < 3
             )
-            if root is not None and attempt.get("id") and needs_update:
-                with connect(root) as con:
-                    con.execute(
-                        """
-                        UPDATE student_attempts
-                        SET question_payload_json = ?, answer_key_json = ?,
-                            max_score = CASE WHEN status = 'submitted' THEN ? ELSE max_score END,
-                            question_payload_version = 3
-                        WHERE id = ? AND question_payload_json = ?
-                        """,
-                        (repaired_json, answers_json, canonical_max, str(attempt["id"]), str(raw_questions)),
-                    )
+            if attempt.get("id") and needs_update:
+                update_sql = """
+                    UPDATE student_attempts
+                    SET question_payload_json = ?, answer_key_json = ?,
+                        max_score = CASE WHEN status = 'submitted' THEN ? ELSE max_score END,
+                        question_payload_version = 3
+                    WHERE id = ? AND question_payload_json = ?
+                    """
+                update_params = (
+                    repaired_json,
+                    answers_json,
+                    canonical_max,
+                    str(attempt["id"]),
+                    str(raw_questions),
+                )
+                if connection is not None:
+                    connection.execute(update_sql, update_params)
+                elif root is not None:
+                    with connect(root) as con:
+                        con.execute(update_sql, update_params)
             return repaired_questions, repaired_answers
         return questions, normalized_answers
     return _load_exam_question_payloads(project_root, str(attempt["exam_id"]))
