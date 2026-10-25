@@ -389,13 +389,18 @@ def _dedupe_active_publication_classes(con: sqlite3.Connection) -> None:
             "DELETE FROM publication_classes WHERE publication_id = ? AND class_id = ?",
             duplicate_links,
         )
+        affected = sorted({publication_id for publication_id, _ in duplicate_links})
+        placeholders = ",".join("?" for _ in affected)
         con.execute(
-            """
+            f"""
             UPDATE exam_publications
             SET status = 'revoked', updated_at = datetime('now')
             WHERE status <> 'revoked'
+              AND recipient_scope = 'class'
+              AND id IN ({placeholders})
               AND id NOT IN (SELECT DISTINCT publication_id FROM publication_classes)
-            """
+            """,
+            affected,
         )
 
 
