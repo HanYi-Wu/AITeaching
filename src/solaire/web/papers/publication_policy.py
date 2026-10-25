@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from solaire.web.student_service import _publication_datetime
+from solaire.web.papers.exam_timing import _publication_datetime
 
 
 DELIVERY_MODES = {"offline", "online"}
