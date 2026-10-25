@@ -1,6 +1,5 @@
 # Student Integrity and Adaptive Practice Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver reliable student answering, explainable anti-cheating telemetry, per-student historical wrong-question papers, and AI-generated 10-paper reinforcement practices.
 
