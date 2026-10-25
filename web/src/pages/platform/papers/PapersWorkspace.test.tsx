@@ -512,6 +512,59 @@ describe("PapersWorkspace", () => {
     );
   });
 
+  it("keeps edited grading comments dirty through submission refresh and saves a zero score", async () => {
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: 0,
+      max_score: 5,
+      answers: [
+        {
+          question_id: "math/q1",
+          header: "1.1",
+          score_per_item: 5,
+          score: 0,
+          grading_status: "reviewed",
+          feedback: "服务器原评语",
+          ai_suggested_score: null,
+          ai_feedback: null,
+          images: [],
+        },
+      ],
+    };
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [submission] });
+    mocks.listPaperSubmissions.mockResolvedValueOnce({ submissions: [submission] });
+    mocks.listPaperSubmissions.mockResolvedValueOnce({ submissions: [submission] });
+    mocks.gradePaperAnswer.mockResolvedValue({
+      answer: { question_id: "math/q1", score: 0, feedback: "教师调整后的评语", grading_status: "reviewed" },
+    });
+
+    render(<PapersWorkspace />);
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    const feedbackInput = await screen.findByTestId("paper-feedback-math/q1");
+    await userEvent.clear(feedbackInput);
+    await userEvent.type(feedbackInput, "教师调整后的评语");
+
+    await userEvent.click(screen.getByTestId("paper-load-submissions"));
+    await waitFor(() => expect(mocks.listPaperSubmissions).toHaveBeenCalledTimes(2));
+    expect(feedbackInput).toHaveValue("教师调整后的评语");
+    expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("0");
+
+    await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
+    await waitFor(() =>
+      expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "math/q1", {
+        score: 0,
+        feedback: "教师调整后的评语",
+        is_correct: null,
+      }),
+    );
+  });
+
   it("shows one selected student's real answer at a time", async () => {
     mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
     mocks.listPaperSubmissions.mockResolvedValue({

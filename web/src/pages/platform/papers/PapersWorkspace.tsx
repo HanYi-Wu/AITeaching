@@ -59,6 +59,17 @@ import {
 import { PlatformPaperAnalysisCharts } from "../AnalysisCharts";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import {
+  applyGradingSuggestions,
+  getGradingDraft,
+  gradingFeedbackForSave,
+  markGradingDraftSaved,
+  parseGradingScore,
+  reconcileGradingDrafts,
+  updateGradingDraft,
+  type GradingDraftSource,
+  type GradingDrafts,
+} from "./gradingModel";
+import {
   type PaperQuery,
   type PageMeta,
   deliveryLabel,
@@ -106,8 +117,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const [publishStartAt, setPublishStartAt] = useState("");
   const [publishEndAt, setPublishEndAt] = useState("");
   const [paperDetailView, setPaperDetailView] = useState<"manage" | "grading">("manage");
-  const [gradeDrafts, setGradeDrafts] = useState<Record<string, string>>({});
-  const [feedbackDrafts, setFeedbackDrafts] = useState<Record<string, string>>({});
+  const [gradingDrafts, setGradingDrafts] = useState<GradingDrafts>({});
   const [selectedPaperId, setSelectedPaperId] = useState("");
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
   const [folders, setFolders] = useState<ContentFolder[]>([]);
@@ -257,8 +267,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     }
     setSubmissions([]);
     setSelectedGradingAttemptId("");
-    setGradeDrafts({});
-    setFeedbackDrafts({});
+    setGradingDrafts({});
     clearScanObjectUrls();
     setSelectedClassIds(assignStudent && selectedPaperId ? [assignStudent.classId] : []);
     setPublishFolderId("");
@@ -510,6 +519,12 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       const result = await listPaperSubmissions(selectedPaper.paper_id);
       if (submissionRequestIdRef.current === requestId) {
         setSubmissions(result.submissions);
+        setGradingDrafts((current) => reconcileGradingDrafts(current, result.submissions.flatMap((submission) =>
+          submission.answers.map((answer) => ({
+            key: gradeKey(submission.attempt_id, answer.question_id),
+            source: toGradingDraftSource(answer),
+          })),
+        )));
         setSelectedGradingAttemptId((current) => {
           if (result.submissions.some((item) => item.attempt_id === current)) return current;
           return (
@@ -542,13 +557,14 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     if (!selectedPaper) return;
     const key = gradeKey(submission.attempt_id, questionId);
     const answer = submission.answers.find((item) => item.question_id === questionId);
-    const rawScore = gradeDrafts[key] ?? String(answer?.score ?? answer?.ai_suggested_score ?? "");
-    const score = Number(rawScore);
-    if (!rawScore.trim() || !Number.isFinite(score)) {
+    const source = answer ? toGradingDraftSource(answer) : {};
+    const draft = getGradingDraft(gradingDrafts, key, source);
+    const score = parseGradingScore(draft.score.value);
+    if (score === null) {
       setMessage("请输入有效分数。");
       return;
     }
-    const feedback = feedbackDrafts[key] ?? null;
+    const feedback = gradingFeedbackForSave(draft.feedback);
     setBusy(`grade:${key}`);
     setMessage(null);
     try {
@@ -569,7 +585,13 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
             : item,
         ),
       );
-      setGradeDrafts((current) => ({ ...current, [key]: String(result.answer.score ?? "") }));
+      setGradingDrafts((current) => ({
+        ...current,
+        [key]: markGradingDraftSaved({
+          score: String(result.answer.score ?? score),
+          feedback: result.answer.feedback ?? feedback ?? "",
+        }),
+      }));
       await loadSelectedSubmissions();
       setMessage("已保存批改结果");
     } catch (e) {
@@ -633,24 +655,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
             : item,
         ),
       );
-      setGradeDrafts((current) => {
-        const next = { ...current };
-        result.suggestions.forEach((suggestion) => {
-          if (suggestion.suggested_score != null) {
-            next[gradeKey(submission.attempt_id, suggestion.question_id)] = String(suggestion.suggested_score);
-          }
-        });
-        return next;
-      });
-      setFeedbackDrafts((current) => {
-        const next = { ...current };
-        result.suggestions.forEach((suggestion) => {
-          if (suggestion.feedback) {
-            next[gradeKey(submission.attempt_id, suggestion.question_id)] = suggestion.feedback;
-          }
-        });
-        return next;
-      });
+      setGradingDrafts((current) => applyGradingSuggestions(current, result.suggestions.map((suggestion) => ({
+        key: gradeKey(submission.attempt_id, suggestion.question_id),
+        score: suggestion.suggested_score,
+        feedback: suggestion.feedback,
+      }))));
       const generatedCount = result.suggestions.filter((item) => item.status === "needs_review" || !item.status).length;
       const retryableCount = result.suggestions.length - generatedCount;
       const remainingCount = Math.max(0, pendingQuestionIds.length - questionIds.length);
@@ -729,24 +738,13 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           };
         }),
       );
-      setGradeDrafts((current) => {
-        const next = { ...current };
-        completed.forEach(({ attemptId, suggestions }) =>
-          suggestions.forEach((suggestion) => {
-            if (suggestion.suggested_score != null) next[gradeKey(attemptId, suggestion.question_id)] = String(suggestion.suggested_score);
-          }),
-        );
-        return next;
-      });
-      setFeedbackDrafts((current) => {
-        const next = { ...current };
-        completed.forEach(({ attemptId, suggestions }) =>
-          suggestions.forEach((suggestion) => {
-            if (suggestion.feedback) next[gradeKey(attemptId, suggestion.question_id)] = suggestion.feedback;
-          }),
-        );
-        return next;
-      });
+      setGradingDrafts((current) => applyGradingSuggestions(current, completed.flatMap(({ attemptId, suggestions }) =>
+        suggestions.map((suggestion) => ({
+          key: gradeKey(attemptId, suggestion.question_id),
+          score: suggestion.suggested_score,
+          feedback: suggestion.feedback,
+        })),
+      )));
       const generatedCount = completed.reduce(
         (total, item) => total + item.suggestions.filter((suggestion) => suggestion.status === "needs_review" || !suggestion.status).length,
         0,
@@ -1342,8 +1340,10 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                         <div className="mt-4 space-y-4">
                           {submission.answers.map((answer) => {
                             const key = gradeKey(submission.attempt_id, answer.question_id);
-                            const value = gradeDrafts[key] ?? String(answer.score ?? answer.ai_suggested_score ?? "");
-                            const feedback = feedbackDrafts[key] ?? answer.feedback ?? answer.ai_feedback ?? "";
+                            const source = toGradingDraftSource(answer);
+                            const draft = getGradingDraft(gradingDrafts, key, source);
+                            const value = draft.score.value;
+                            const feedback = draft.feedback.value;
                             return (
                               <div key={answer.question_id} className="rounded-md bg-slate-50 p-3">
                                 <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -1404,7 +1404,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                                     value={value}
                                     placeholder="分数"
                                     onChange={(event) =>
-                                      setGradeDrafts((current) => ({ ...current, [key]: event.target.value }))
+                                      setGradingDrafts((current) => updateGradingDraft(current, key, source, "score", event.target.value))
                                     }
                                   />
                                   <input
@@ -1413,7 +1413,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                                     value={feedback}
                                     placeholder="批改反馈"
                                     onChange={(event) =>
-                                      setFeedbackDrafts((current) => ({ ...current, [key]: event.target.value }))
+                                      setGradingDrafts((current) => updateGradingDraft(current, key, source, "feedback", event.target.value))
                                     }
                                   />
                                   <button
@@ -1548,6 +1548,15 @@ function Pager({ meta, onPage, onPageSize }: { meta: PageMeta; onPage: (page: nu
       </div>
     </div>
   );
+}
+
+function toGradingDraftSource(answer: PaperSubmissionRecord["answers"][number]): GradingDraftSource {
+  return {
+    score: answer.score,
+    aiSuggestedScore: answer.ai_suggested_score,
+    feedback: answer.feedback,
+    aiFeedback: answer.ai_feedback,
+  };
 }
 
 function Panel({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
