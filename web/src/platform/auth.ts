@@ -488,6 +488,7 @@ export type StudentQuestionRecord = {
 
 export type StudentAttemptRecord = Omit<StudentPaperRecord, "attempt_id" | "question_count"> & {
   id: string;
+  snapshot_version?: string;
 };
 
 export type StudentResultRecord = StudentAttemptRecord & {
