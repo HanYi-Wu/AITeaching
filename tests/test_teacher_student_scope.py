@@ -4,6 +4,80 @@ from tests.test_platform_paper_api import _bootstrap_admin, _create_school_teach
 from solaire.web.platform_db import connect, default_platform_root
 
 
+def test_two_schools_cannot_read_or_change_each_others_paper_attempts(web_client, tmp_path):
+    admin = _bootstrap_admin(web_client)
+    _, teacher_id, class_id = _create_school_teacher_class(web_client, admin)
+    first_school = _headers(web_client.post(
+        "/api/auth/login", json={"username": "school_a", "password": "secret123"}
+    ).json()["token"])
+    imported = web_client.post(
+        "/api/school/students/import", headers=first_school,
+        json={"class_id": class_id, "students": [{"student_no": "P01", "display_name": "First"}]},
+    )
+    assert imported.status_code == 200
+    _write_exam(tmp_path)
+    exam_path = tmp_path / "exams/midterm/Math/exam.yaml"
+    exam = yaml.safe_load(exam_path.read_text(encoding="utf-8"))
+    exam["metadata"]["owner_teacher_id"] = teacher_id
+    exam_path.write_text(yaml.safe_dump(exam, allow_unicode=True), encoding="utf-8")
+    first_teacher = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers", headers=first_teacher).json()["papers"][0]
+    paper_id = paper["paper_id"]
+    published = web_client.post(
+        f"/api/papers/{paper_id}/publish", headers=first_teacher, json={"class_ids": [class_id]},
+    )
+    assert published.status_code == 200
+    publication_id = published.json()["publication"]["id"]
+    with connect(default_platform_root()) as con:
+        attempt_before = dict(con.execute(
+            "SELECT * FROM student_attempts WHERE publication_id = ?", (publication_id,)
+        ).fetchone())
+        attempt_id = attempt_before["id"]
+
+    second_school = web_client.post(
+        "/api/schools", headers=_headers(admin), json={"name": "Second School"}
+    )
+    assert second_school.status_code == 200
+    second_school_id = second_school.json()["school"]["id"]
+    account = web_client.post(
+        f"/api/schools/{second_school_id}/school-users", headers=_headers(admin),
+        json={"username": "school_b", "password": "secret123", "display_name": "Second school"},
+    )
+    assert account.status_code == 200
+    second_admin = _headers(web_client.post(
+        "/api/auth/login", json={"username": "school_b", "password": "secret123"}
+    ).json()["token"])
+    teacher = web_client.post(
+        "/api/school/teachers", headers=second_admin,
+        json={"username": "teacher_b", "password": "secret123", "display_name": "Second", "subjects": ["Math"]},
+    )
+    assert teacher.status_code == 200
+    second_teacher = _headers(web_client.post(
+        "/api/auth/login", json={"username": "teacher_b", "password": "secret123"}
+    ).json()["token"])
+    assert web_client.get("/api/papers", headers=second_teacher).json()["papers"] == []
+    for suffix in ("publications", "submissions", "analysis"):
+        assert web_client.get(f"/api/papers/{paper_id}/{suffix}", headers=second_teacher).status_code == 403
+    base = f"/api/papers/{paper_id}/attempts/{attempt_id}"
+    assert web_client.patch(
+        f"{base}/answers/math/q1/grade", headers=second_teacher, json={"score": 1}
+    ).status_code == 403
+    assert web_client.post(f"{base}/complete-grading", headers=second_teacher).status_code == 403
+    assert web_client.post(
+        f"/api/papers/{paper_id}/publish", headers=second_teacher, json={"class_ids": [class_id]}
+    ).status_code == 403
+    publication_url = f"/api/papers/{paper_id}/publications/{publication_id}"
+    assert web_client.patch(publication_url, headers=second_teacher, json={"status": "paused"}).status_code == 403
+    assert web_client.delete(publication_url, headers=second_teacher).status_code == 403
+    with connect(default_platform_root()) as con:
+        attempt = dict(con.execute("SELECT * FROM student_attempts WHERE id = ?", (attempt_id,)).fetchone())
+        assert attempt["publication_id"] == publication_id
+        assert attempt == attempt_before
+        assert con.execute("SELECT COUNT(*) FROM student_answers WHERE attempt_id = ?", (attempt_id,)).fetchone()[0] == 0
+        publications = con.execute("SELECT id, status FROM exam_publications WHERE paper_id = ?", (paper_id,)).fetchall()
+        assert [(row["id"], row["status"]) for row in publications] == [(publication_id, "published")]
+
+
 def test_shared_class_student_profile_excludes_other_teacher_exams(web_client, tmp_path):
     admin = _bootstrap_admin(web_client)
     _, teacher_id, class_id = _create_school_teacher_class(web_client, admin)
