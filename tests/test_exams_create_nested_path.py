@@ -190,3 +190,80 @@ def test_teacher_duplicate_name_conflict_does_not_overwrite_private_exam(
     assert response.status_code == 400, response.text
     assert "已存在" in response.json()["detail"]
     assert source.read_bytes() == original
+
+
+def test_unsynced_workspace_uses_creator_identity_for_all_access_paths(
+    web_client, tmp_path, other_teacher_exam
+):
+    from tests.test_platform_paper_api import _headers, _teacher_token
+    from solaire.web.platform_db import connect, default_platform_root
+
+    _, other_headers, _ = other_teacher_exam
+    creator_headers = _headers(_teacher_token(web_client))
+    payload = {"export_label": "尚未发布", "subject": "数学", "template_path": "templates/minimal.yaml", "selected_items": []}
+    response = web_client.post("/api/exams", headers=creator_headers, json=payload)
+    assert response.status_code == 200, response.text
+    document = response.json()["exam"]
+    exam_id = document["exam_id"]
+    directory = tmp_path / "exams" / exam_id
+    (directory / "尚未发布-数学-教师版.pdf").write_bytes(b"private teacher answers")
+    (directory / "尚未发布-数学-教师版.docx").write_bytes(b"private teacher answers")
+    original = (directory / "exam.yaml").read_bytes()
+    assert document["metadata"]["owner_teacher_id"]
+    with connect(default_platform_root()) as con:
+        assert con.execute("SELECT id FROM paper_records WHERE exam_id=?", (exam_id,)).fetchone() is None
+
+    url = "/api/exams/" + exam_id
+    for method, suffix, options in [
+        ("get", "", {}), ("get", "/pdf-file?variant=teacher", {}),
+        ("get", "/docx-file?variant=teacher", {}), ("get", "/scores", {}),
+        ("put", "", {"json": payload}), ("delete", "", {}),
+    ]:
+        result = getattr(web_client, method)(url + suffix, headers=other_headers, **options)
+        assert result.status_code == 403, (method, suffix, result.text)
+        assert (directory / "exam.yaml").read_bytes() == original
+    summaries = web_client.get("/api/exams", headers=other_headers)
+    assert summaries.status_code == 200, summaries.text
+    assert all(item["exam_id"] != exam_id for item in summaries.json()["exams"])
+    assert web_client.get(url, headers=creator_headers).status_code == 200
+    assert web_client.get(url + "/pdf-file?variant=teacher", headers=creator_headers).content == b"private teacher answers"
+
+
+def test_rename_does_not_move_a_workspace_inside_an_existing_destination(tmp_path, monkeypatch):
+    from solaire.web import exam_workspace_service as service
+
+    body = {"name": None, "subject": "Math", "template_ref": "t1", "template_path": "templates/t1.yaml", "selected_items": []}
+    created = service.save_exam_workspace(tmp_path, exam_id=None, export_label="Original", **body)
+    original = tmp_path / "exams" / created["exam_id"]
+    contents = (original / "exam.yaml").read_bytes()
+    target = tmp_path / "exams" / "Occupied" / "Math"
+
+    def occupy(*args, **kwargs):
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "existing.txt").write_text("another workspace", encoding="utf-8")
+
+    monkeypatch.setattr(service, "assert_unique_exam_identity", occupy)
+    with pytest.raises(ValueError, match="目录已存在"):
+        service.save_exam_workspace(tmp_path, exam_id=created["exam_id"], export_label="Occupied", **body)
+    assert (original / "exam.yaml").read_bytes() == contents
+    assert not (target / "Math").exists()
+    assert (target / "existing.txt").read_text(encoding="utf-8") == "another workspace"
+
+
+def test_workspace_write_failure_preserves_previous_document(tmp_path, monkeypatch):
+    from solaire.web import exam_workspace_service as service
+    from solaire.common import atomic_files
+
+    body = {"name": None, "subject": "Math", "template_ref": "t1", "template_path": "templates/t1.yaml", "selected_items": [], "export_label": "Original"}
+    created = service.save_exam_workspace(tmp_path, exam_id=None, **body)
+    document = tmp_path / "exams" / created["exam_id"] / "exam.yaml"
+    original = document.read_bytes()
+
+    def fail_replace(*args):
+        raise OSError("write failed")
+
+    monkeypatch.setattr(atomic_files.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="write failed"):
+        service.save_exam_workspace(tmp_path, exam_id=created["exam_id"], **{**body, "name": "Changed"})
+    assert document.read_bytes() == original
+    assert list(document.parent.glob("*.tmp")) == []

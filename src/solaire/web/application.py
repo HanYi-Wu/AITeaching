@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from solaire.common.runtime_config import load_runtime_config
 
@@ -34,6 +35,11 @@ def create_app() -> FastAPI:
     """Build an independent ASGI application with the standard API contract."""
     configure(result_port=ResultServiceAdapter())
     app = FastAPI(title="OriginReach API", version=__version__, lifespan=lifespan)
+
+    @app.exception_handler(PermissionError)
+    async def permission_denied(_request, exc: PermissionError):
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
+
     register_routes(app)
     app.add_middleware(
         CORSMiddleware,

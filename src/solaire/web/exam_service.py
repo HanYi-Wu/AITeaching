@@ -28,6 +28,7 @@ from solaire.exam_compiler.facade import (
     validate_exam,
 )
 from solaire.exam_compiler.loaders.questions import LoadedQuestions
+from solaire.common.security import assert_within_project as assert_content_path
 
 from solaire.web.library_discovery import discover_question_library_refs
 from solaire.web.project_layout import ensure_project_layout
@@ -87,6 +88,10 @@ def _iter_exam_workspace_dirs(project_root: Path):
                 continue
             ey = subj_dir / "exam.yaml"
             if ey.is_file():
+                try:
+                    assert_content_path(project_root, ey)
+                except (PermissionError, ValueError):
+                    continue
                 eid = f"{label_dir.name}/{subj_dir.name}"
                 yield eid, subj_dir, ey
 

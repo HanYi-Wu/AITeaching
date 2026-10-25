@@ -130,16 +130,21 @@ def _paper_record_for_exam(
         else:
             paper_id = str(row["id"])
             existing_owner = str(row["owner_teacher_id"] or "").strip() or None
+            publishers = {str(item[0]) for item in con.execute(
+                "SELECT DISTINCT teacher_id FROM exam_publications WHERE paper_id=?", (paper_id,)
+            ) if item[0]}
+            if len(publishers) > 1:
+                raise PermissionError("历史发布的教师归属不一致，无法修改试卷")
+            if not existing_owner and publishers:
+                existing_owner = next(iter(publishers))
             if user_role == "teacher" and existing_owner and existing_owner != str(user.get("id")):
                 raise PermissionError("No permission for this exam")
             if existing_owner and owner_teacher_id and existing_owner != owner_teacher_id:
                 raise PermissionError("Exam owner conflicts with existing paper record")
+            owner_teacher_id = existing_owner or owner_teacher_id
             updates: list[str] = ["title = ?", "subject = ?", "updated_at = ?"]
             params: list[object] = [title, subject, now]
-            if claim and user_role == "teacher" and row["owner_teacher_id"] is None:
-                updates.append("owner_teacher_id = ?")
-                params.append(str(user.get("id")))
-            elif owner_teacher_id and row["owner_teacher_id"] is None:
+            if owner_teacher_id and row["owner_teacher_id"] is None:
                 updates.append("owner_teacher_id = ?")
                 params.append(owner_teacher_id)
             if school_id and row["school_id"] is None:
@@ -313,6 +318,8 @@ def sync_paper_for_exam(
         raise ValueError("exam_id is required")
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("Only teachers and admins can sync papers")
+    from solaire.web.exam_workspace_service import workspace_dir
+    workspace_dir(project_root, clean_exam_id)
     exams = list_exam_results(project_root)
     matched = next((exam for exam in exams if str(exam.get("exam_id") or "") == clean_exam_id), None)
     if matched is None:

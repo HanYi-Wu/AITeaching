@@ -12,6 +12,7 @@ from typing import Any, Literal
 import yaml
 
 from solaire.common.security import assert_within_project
+from solaire.common.atomic_files import write_text_atomic
 from solaire.exam_compiler.facade import SelectedSection
 from solaire.exam_compiler.loaders.template_loader import load_template
 
@@ -209,8 +210,7 @@ def _read_config(project_root: Path, exam_id: str) -> dict[str, Any] | None:
 def _write_config(project_root: Path, exam_id: str, cfg: dict[str, Any]) -> None:
     p = config_json_path(project_root, exam_id)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    write_text_atomic(p, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 
 def _default_config(
@@ -275,7 +275,7 @@ def label_subject_taken(
                 continue
             try:
                 cfg = _read_config(project_root, eid)
-            except PermissionError:
+            except (PermissionError, ValueError):
                 # 不读取其他教师的内容；仍保留其目录名，避免同名创建覆盖已有试卷。
                 if subj_dir.resolve() == target_dir:
                     return True
@@ -323,8 +323,11 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
             eid = f"{label_dir.name}/{subj_dir.name}"
             if eid.casefold() in hidden:
                 continue
-            cfg = _read_config(project_root, eid)
-            yp = exam_yaml_path(project_root, eid)
+            try:
+                cfg = _read_config(project_root, eid)
+                yp = exam_yaml_path(project_root, eid)
+            except (PermissionError, ValueError):
+                continue
             if not yp.is_file():
                 continue
             try:
@@ -490,7 +493,12 @@ def save_exam_workspace(
             new_dir = workspace_dir(project_root, new_eid)
             if new_dir.resolve() != old_dir.resolve():
                 new_dir.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old_dir), str(new_dir))
+                if new_dir.exists():
+                    raise ValueError("目标试卷目录已存在，请重新命名")
+                try:
+                    old_dir.rename(new_dir)
+                except FileExistsError as exc:
+                    raise ValueError("目标试卷目录已存在，请重新命名") from exc
             eid = new_eid
 
         wdir = workspace_dir(project_root, eid)
@@ -598,8 +606,7 @@ def _write_exam_yaml(project_root: Path, doc: dict[str, Any]) -> None:
     assert_within_project(project_root, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     to_store = {k: v for k, v in doc.items() if k != "draft_id"}
-    with path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(to_store, f, allow_unicode=True, sort_keys=False)
+    write_text_atomic(path, yaml.safe_dump(to_store, allow_unicode=True, sort_keys=False))
 
 
 def persist_exam_document(project_root: Path, doc: dict[str, Any]) -> dict[str, Any]:
@@ -715,13 +722,10 @@ def mark_exported(project_root: Path, exam_id: str) -> None:
                 raw = yaml.safe_load(f)
             if isinstance(raw, dict):
                 raw["updated_at"] = now
-                with yp.open("w", encoding="utf-8") as f:
-                    yaml.safe_dump(
-                        {k: v for k, v in raw.items() if k != "draft_id"},
-                        f,
-                        allow_unicode=True,
-                        sort_keys=False,
-                    )
+                write_text_atomic(yp, yaml.safe_dump(
+                    {k: v for k, v in raw.items() if k != "draft_id"},
+                    allow_unicode=True, sort_keys=False,
+                ))
         except OSError:
             pass
 
@@ -770,6 +774,14 @@ def import_legacy_draft_yaml(project_root: Path, draft_yaml: Path, *, suffix: st
         raw = yaml.safe_load(f)
     if not isinstance(raw, dict):
         raise ValueError("invalid draft yaml")
+    from solaire.common.actor_context import actor
+    metadata = dict(raw.get("metadata") or {}) if isinstance(raw.get("metadata"), dict) else {}
+    user = actor.get()
+    if user and user.get("role") == "teacher":
+        previous_owner = str(metadata.get("owner_teacher_id") or "").strip()
+        if previous_owner and previous_owner != str(user["id"]):
+            raise PermissionError("无权迁移其他教师的草稿")
+        metadata["owner_teacher_id"] = str(user["id"])
     export_label = str(raw.get("export_label") or "").strip()
     subject = str(raw.get("subject") or "").strip()
     if suffix:
@@ -799,6 +811,8 @@ def import_legacy_draft_yaml(project_root: Path, draft_yaml: Path, *, suffix: st
         "created_at": created,
         "updated_at": str(raw.get("updated_at") or now),
     }
+    if metadata:
+        doc["metadata"] = metadata
     workspace_dir(project_root, new_id).mkdir(parents=True, exist_ok=True)
     _write_exam_yaml(project_root, doc)
     _write_config(

@@ -354,6 +354,8 @@ def exams_open_pdf(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"无法通过系统打开文件: {e}") from e
     return {"ok": True}
@@ -400,6 +402,8 @@ def exams_open_docx(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"无法通过系统打开文件: {e}") from e
     return {"ok": True}
