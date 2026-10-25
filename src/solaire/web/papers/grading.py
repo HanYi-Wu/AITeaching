@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
-from solaire.web.papers.scoring import rounded_total
+from solaire.web.papers.scoring import rounded_total, validate_manual_score
 from solaire.web.papers.visibility import attempt_access_clause
 from solaire.web.platform_db import connect, row_to_dict
 
@@ -82,6 +82,31 @@ def recompute_attempt_score_in_connection(
     if attempt is None:
         raise RuntimeError("failed to update attempt score")
     return attempt
+
+
+def completed_attempt_scores_in_connection(
+    con: sqlite3.Connection,
+    *,
+    attempt_id: str,
+    score_by_id: dict[str, float],
+) -> tuple[float, float]:
+    rows = con.execute(
+        "SELECT question_id, score FROM student_answers WHERE attempt_id = ?",
+        (attempt_id,),
+    ).fetchall()
+    scores_by_question = {str(row["question_id"]): row["score"] for row in rows}
+    missing = [qid for qid in score_by_id if scores_by_question.get(qid) is None]
+    if missing:
+        raise ValueError(f"仍有 {len(missing)} 道题未完成批改，不能发布成绩")
+
+    clean_scores = {
+        qid: validate_manual_score(scores_by_question[qid], maximum)
+        for qid, maximum in score_by_id.items()
+    }
+    return (
+        rounded_total(clean_scores[qid] for qid in score_by_id),
+        rounded_total(score_by_id.values()),
+    )
 
 
 def recompute_attempt_score(

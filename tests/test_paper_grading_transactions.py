@@ -23,6 +23,9 @@ from tests.test_platform_paper_api import (
 
 def _submitted_attempt(client: TestClient, project_root: Path) -> dict[str, str]:
     admin_token = _bootstrap_admin(client)
+    admin_profile = client.get("/api/auth/me", headers=_headers(admin_token))
+    assert admin_profile.status_code == 200
+    admin_id = str(admin_profile.json()["user"]["id"])
     school_id, teacher_id, class_id = _create_school_teacher_class(client, admin_token)
     school_login = client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"})
     school_headers = _headers(str(school_login.json()["token"]))
@@ -61,6 +64,7 @@ def _submitted_attempt(client: TestClient, project_root: Path) -> dict[str, str]
         "paper_id": str(paper["paper_id"]),
         "attempt_id": attempt_id,
         "teacher_id": teacher_id,
+        "admin_id": admin_id,
         "school_id": school_id,
         "class_id": class_id,
         "exam_id": exam_id,

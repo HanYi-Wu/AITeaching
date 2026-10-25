@@ -50,6 +50,7 @@ from solaire.web.papers.publication_policy import (
 )
 from solaire.web.papers import publication_service
 from solaire.web.papers.grading import (
+    completed_attempt_scores_in_connection,
     paper_attempt_row_in_connection,
     recompute_attempt_score,
     recompute_attempt_score_in_connection,
@@ -2305,32 +2306,48 @@ def complete_paper_attempt_grading(
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("只有教师或管理员可以完成并发布批改结果")
-    paper = get_paper(root, paper_id)
-    _ensure_paper_access(paper, user)
-    attempt = _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id, user=user)
-    if _attempt_status_group(attempt) != "completed":
-        raise ValueError("只能发布已提交答卷的批改结果")
-    _questions, _by_id, score_by_id = _question_maps_for_attempt(root, project_root, paper, attempt)
     with connect(root) as con:
-        rows = con.execute(
-            "SELECT question_id, score FROM student_answers WHERE attempt_id = ?",
-            (attempt_id,),
-        ).fetchall()
-        score_by_question = {str(row["question_id"]): row["score"] for row in rows}
-        missing = [qid for qid in score_by_id if score_by_question.get(qid) is None]
-        if missing:
-            raise ValueError(f"仍有 {len(missing)} 道题未完成批改，不能发布成绩")
-        total = round(sum(float(score_by_question[qid]) for qid in score_by_id), 2)
-        maximum = round(sum(float(value) for value in score_by_id.values()), 2)
-        now = utc_now()
-        con.execute(
-            """
-            UPDATE student_attempts
-            SET score = ?, max_score = ?, grading_completed_at = ?, grading_completed_by = ?
-            WHERE id = ?
-            """,
-            (total, maximum, now, str(user.get("id") or ""), attempt_id),
+        con.execute("BEGIN IMMEDIATE")
+        paper_row = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
+        paper = row_to_dict(paper_row)
+        if paper is None:
+            raise ValueError("paper not found")
+        _ensure_paper_access(paper, user)
+        attempt = paper_attempt_row_in_connection(
+            con,
+            paper_id=paper_id,
+            attempt_id=attempt_id,
+            user=user,
         )
+        if _attempt_status_group(attempt) != "completed":
+            raise ValueError("只能发布已提交答卷的批改结果")
+        _questions, _by_id, score_by_id = _question_maps_for_attempt(
+            None,
+            project_root,
+            paper,
+            attempt,
+            connection=con,
+        )
+        total, maximum = completed_attempt_scores_in_connection(
+            con,
+            attempt_id=attempt_id,
+            score_by_id=score_by_id,
+        )
+        try:
+            same_score = float(attempt["score"]) == total
+            same_maximum = float(attempt["max_score"]) == maximum
+        except (TypeError, ValueError, OverflowError):
+            same_score = same_maximum = False
+        already_published = bool(attempt.get("grading_completed_at")) and same_score and same_maximum
+        if not already_published:
+            con.execute(
+                """
+                UPDATE student_attempts
+                SET score = ?, max_score = ?, grading_completed_at = ?, grading_completed_by = ?
+                WHERE id = ?
+                """,
+                (total, maximum, utc_now(), str(user.get("id") or ""), attempt_id),
+            )
         stored = con.execute("SELECT * FROM student_attempts WHERE id = ?", (attempt_id,)).fetchone()
     result = row_to_dict(stored)
     if result is None:
