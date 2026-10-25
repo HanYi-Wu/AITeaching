@@ -43,7 +43,7 @@ describe("new paper template selection", () => {
   beforeAll(async () => { await setupTestI18n("zh"); });
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.clear();
+    localStorage.clear(); sessionStorage.clear();
     templates = [template("original")];
     mocks.apiGet.mockImplementation(async (path: string) => {
       if (path === "/api/templates") return { templates };
@@ -117,7 +117,7 @@ describe("export result integration", () => {
 
   beforeAll(async () => { await setupTestI18n("zh"); });
   beforeEach(() => {
-    vi.clearAllMocks(); localStorage.clear(); mocks.download.mockResolvedValue(undefined); mocks.sync.mockResolvedValue({});
+    vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); mocks.download.mockResolvedValue(undefined); mocks.sync.mockResolvedValue({});
     mocks.apiGet.mockImplementation(async (path: string) => {
       if (path === "/api/templates") return { templates: [template("original")] };
       if (path === "/api/questions") return { questions: [{ id: "q1", qualified_id: "math/q1", namespace: "math", subject: "数学", type: "single_choice", answer: "A", content_preview: "Question", content: "Question", analysis: "" }] };
@@ -138,6 +138,28 @@ describe("export result integration", () => {
     await userEvent.click(screen.getByText("导出 ▾"));
     return mounted;
   }
+
+  it("offers a fresh conflict check after an offline preflight and removes the old success banner", async () => {
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string) => path.startsWith("/api/exam/export-tasks?") ? { tasks: [completed("docx")] } : normalGet(path));
+    let checks = 0;
+    mocks.apiPost.mockImplementation(async (path: string) => {
+      if (path === "/api/exam/export/check-conflict") {
+        if (++checks === 1) throw new TypeError("Network offline");
+        return { conflict: false, existing_exam_id: null };
+      }
+      return { ...completed("pdf"), id: "fresh-export" };
+    });
+    await loadedWorkspace();
+    await userEvent.click(screen.getByRole("button", { name: "导出 PDF" }));
+    const retry = await screen.findByRole("button", { name: "重新检查并导出" });
+    expect(screen.queryByText(/历史导出任务已完成/)).not.toBeInTheDocument();
+    expect(mocks.apiPost.mock.calls.filter(([path]) => path === "/api/exam/export-tasks")).toHaveLength(0);
+    await userEvent.click(retry);
+    await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(examId, "pdf"));
+    expect(mocks.apiPost.mock.calls.filter(([path]) => path === "/api/exam/export-tasks")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "重新检查并导出" })).not.toBeInTheDocument();
+  });
 
   it("refreshes knowledge bindings on return without losing edits or accepting an older response", async () => {
     const normalGet = mocks.apiGet.getMockImplementation()!;

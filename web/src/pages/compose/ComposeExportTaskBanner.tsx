@@ -11,6 +11,7 @@ export function ComposeExportTaskBanner({
   onResume,
   onRetry,
   onDismiss,
+  historical = false,
 }: {
   task: ComposeExportTaskView | null;
   pendingSubmissionFailure: PendingExportSubmissionFailure | null;
@@ -19,6 +20,7 @@ export function ComposeExportTaskBanner({
   onResume: () => void;
   onRetry: () => void;
   onDismiss: () => void;
+  historical?: boolean;
 }) {
   const { t } = useTranslation(["compose", "common"]);
 
@@ -45,14 +47,6 @@ export function ComposeExportTaskBanner({
             className="rounded border border-red-300 bg-white px-2.5 py-0.5 text-xs font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
           >
             {t("compose:exportTaskRetry")}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onDismiss}
-            className="rounded px-1.5 py-0.5 text-xs text-red-700 hover:bg-red-100"
-          >
-            {t("compose:exportTaskDismiss")}
           </button>
         </div>
       </div>
@@ -88,7 +82,7 @@ export function ComposeExportTaskBanner({
             ? t("compose:exportTaskRunning", { format: formatLabel, attempt: task.attempt })
             : task.status === "failed"
               ? t("compose:exportTaskFailed", { format: formatLabel, reason: failureDetail })
-              : t("compose:exportTaskSucceeded", { format: formatLabel })}
+              : t(historical ? "compose:exportTaskHistoricalSucceeded" : "compose:exportTaskSucceeded", { format: formatLabel })}
       </span>
       {pollError ? <span role="alert">{t("compose:exportPollingPaused", { reason: pollError })}</span> : null}
       <div className="flex items-center gap-2">

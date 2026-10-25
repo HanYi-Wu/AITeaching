@@ -183,5 +183,13 @@
   "examPreviewEmpty": "Pick an exported paper on the left, or export one first.",
   "exportSubmissionUnconfirmed": "Could not confirm the {{format}} export submission: {{reason}}. Retry continues the same export.",
   "exportPollingPaused": "Connection interrupted. The export may still be running: {{reason}}",
-  "exportResumePolling": "Resume status checks"
+  "exportResumePolling": "Resume status checks",
+  "exportSubmissionRestored": "The previous submission is unconfirmed. Continue that export to avoid duplicates.",
+  "exportTaskHistoricalSucceeded": "A previous {{format}} export completed. This does not mean the current edits were exported.",
+  "draftRecoveryChoiceRequired": "An unsaved local draft was found. Restore or discard it before editing so neither version is silently lost.",
+  "draftRecoverySavedAt": "Saved locally: {{time}}",
+  "exportPreflightFailed": "The {{format}} export has not been submitted: {{reason}}",
+  "exportPreflightRetry": "Check again and export",
+  "downloadFinalPdf": "Download final PDFs",
+  "downloadFinalWord": "Download final Word files"
 }
