@@ -19,7 +19,8 @@
     "exportWithDraftSaved": "{{detail}}（已保存为草稿「{{name}}」）",
     "pickHistoryExam": "请先选择一份历史试卷。",
     "historyExamLabelRequired": "请先填写考试标签。",
-    "examLabelAndSubjectRequired": "请填写试卷说明并选择学科。"
+    "examLabelAndSubjectRequired": "请填写试卷说明并选择学科。",
+    "invalidExportBundle": "导出文件内容无效，请稍后从历史试卷重新下载。"
   },
   "messages": {
     "validateOk": "校验通过",
