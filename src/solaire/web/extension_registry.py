@@ -83,7 +83,7 @@ _LINUX_PACKAGES: dict[str, dict[str, list[str]]] = {
 
 # Regex per executable name (applied to stdout+stderr, first match wins)
 _VERSION_PATTERNS: dict[str, re.Pattern[str]] = {
-    "latexmk": re.compile(r"Latexmk.*?(\d[\d.]+)", re.IGNORECASE | re.DOTALL),
+    "latexmk": re.compile(r"\bLatexmk[^\r\n]*?\bVersion\s+(\d+(?:\.\d+)+(?:[a-z][\w.-]*)?)", re.IGNORECASE),
     "xelatex": re.compile(r"XeTeX\s+(\d[\d.]+)", re.IGNORECASE),
     "pandoc": re.compile(r"pandoc\s+(\d[\d.]+)", re.IGNORECASE),
     "tesseract": re.compile(r"tesseract\s+(\d[\d.]+)", re.IGNORECASE),

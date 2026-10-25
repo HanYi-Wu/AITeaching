@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from solaire.web import extension_preferences
+from solaire.web import extension_preferences, extension_registry
 from solaire.web.app import app
 from solaire.web.extension_registry import resolve_exe
 
@@ -189,3 +190,45 @@ def test_tex_status_matches_latex_extension() -> None:
     assert tex["latexmk_on_path"] == latex["executables"][0]["on_path"]
     assert tex["xelatex_on_path"] == latex["executables"][1]["on_path"]
     assert tex["pdf_engine_ready"] == latex["ready"]
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("Latexmk, John Collins, 31 Jan. 2024. Version 4.83", "4.83"),
+        ("Latexmk, John Collins, 14 Dec. 2024. Version 4.86a", "4.86a"),
+        ("Perl v5.40.0\nLatexmk, John Collins, 31 Jan. 2024. Version 4.83", "4.83"),
+        ("Latexmk 4.83", "4.83"),
+        ("Latexmk, John Collins, 31 Jan. 2024.", None),
+    ],
+)
+def test_latexmk_version_uses_release_number_instead_of_banner_date(
+    monkeypatch: pytest.MonkeyPatch, output: str, expected: str | None,
+) -> None:
+    monkeypatch.setattr(
+        extension_registry.subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout=output, stderr=""),
+    )
+    assert extension_registry._run_version("latexmk", "latexmk") == expected
+
+
+def test_extensions_show_latexmk_release_without_changing_engine_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        extension_registry.shutil, "which",
+        lambda name: f"/tools/{name}" if name in {"latexmk", "xelatex"} else None,
+    )
+
+    def version_output(command, **kwargs):
+        output = "Latexmk, John Collins, 31 Jan. 2024. Version 4.83" if command[0].endswith("latexmk") else "XeTeX 0.999995 (TeX Live 2023)"
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr=output)
+
+    monkeypatch.setattr(extension_registry.subprocess, "run", version_output)
+    client = TestClient(app)
+    latex = next(item for item in client.get("/api/system/extensions").json()["extensions"] if item["id"] == "latex")
+    executables = {item["name"]: item for item in latex["executables"]}
+    assert executables["latexmk"]["version"] == "4.83"
+    assert executables["xelatex"]["version"] == "0.999995"
+    assert latex["ready"] is True
+    assert client.get("/api/system/tex-status").json()["pdf_engine_ready"] is True
