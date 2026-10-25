@@ -36,6 +36,11 @@ import {
 import { PlatformShell } from "../PlatformShell";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import { StudentNavButton, StudentAnalysisVisual, StudentResultDetails, QuestionAnswer } from "./StudentPanels";
+import {
+  acknowledgeStudentTextDraft, markStudentTextDraftSent, pendingStudentTextDraft, retainUnconfirmedStudentText,
+  persistStudentTextDraft, restoreStudentTextDraft, studentDraftKey,
+  type StudentDraftScope, type TextDraftIssue,
+} from "./studentTextDraft";
 
 type Props = {
   user: PlatformUser;
@@ -105,6 +110,14 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const answerRevisionRef = useRef(0);
   const draftSaveInFlightRef = useRef(false);
   const filePickerActiveRef = useRef(false);
+  const textScopeRef = useRef<StudentDraftScope | null>(null);
+  const textBaselineRef = useRef<Record<string, string>>({});
+  const textSentRef = useRef<Record<string, string>>({});
+  const textConflictsRef = useRef<Record<string, string>>({});
+  const [textConflicts, setTextConflicts] = useState<Record<string, string>>({});
+  const [textDraftIssue, setTextDraftIssue] = useState<TextDraftIssue>(null);
+  const [localTextRestored, setLocalTextRestored] = useState(false);
+  const [unconfirmedTexts, setUnconfirmedTexts] = useState<Record<string, { title: string; answers: Record<string, string>; issue: TextDraftIssue }>>({});
 
   const pendingPapers = useMemo(
     () => papers.filter((paper) => paper.status !== "submitted" && paper.status !== "completed"),
@@ -295,8 +308,12 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       const revision = answerRevisionRef.current;
       setSaveStatus("saving");
       const payload = buildAnswerPayload(questionsRef.current, answersRef.current, imageAnswersRef.current);
+      const localSave = beginTextSave(questionsRef.current, answersRef.current);
       void saveStudentAnswers(attempt.id, payload)
-        .then(() => setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty"))
+        .then(() => {
+          confirmTextSave(localSave);
+          setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty");
+        })
         .catch(() => setSaveStatus("error"))
         .finally(() => {
           draftSaveInFlightRef.current = false;
@@ -367,9 +384,25 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         if (item.answer !== null && item.answer !== undefined) restoredAnswers[item.question_id] = String(item.answer);
         if (item.images?.length) restoredImages[item.question_id] = item.images;
       }
-      setAnswers(restoredAnswers);
+      const scope: StudentDraftScope = {
+        accountId: user.id, projectScope: data.attempt.project_scope ?? "",
+        publicationId: data.attempt.publication_id, attemptId: data.attempt.id,
+        snapshotVersion: data.attempt.snapshot_version ?? "",
+      };
+      textScopeRef.current = studentDraftKey(scope) ? scope : null;
+      textBaselineRef.current = restoredAnswers;
+      textSentRef.current = {};
+      const local = textScopeRef.current && data.attempt.status === "in_progress"
+        ? restoreStudentTextDraft(scope, restoredAnswers, data.questions.map((item) => item.question_id))
+        : { answers: restoredAnswers, conflicts: {}, restored: false, issue: textScopeRef.current ? null : "unavailable" as const };
+      textConflictsRef.current = local.conflicts;
+      setTextConflicts(local.conflicts);
+      setTextDraftIssue(local.issue);
+      setLocalTextRestored(local.restored);
+      answersRef.current = local.answers;
+      setAnswers(local.answers);
       setImageAnswers(restoredImages);
-      setSaveStatus((data.saved_answers?.length ?? 0) > 0 ? "restored" : "saved");
+      setSaveStatus(local.restored ? "dirty" : (data.saved_answers?.length ?? 0) > 0 ? "restored" : "saved");
       setSubmitReviewOpen(false);
       answerRevisionRef.current = 0;
       autoSubmitTriggeredRef.current = false;
@@ -386,7 +419,51 @@ export function StudentWorkspace({ user, onLogout }: Props) {
 
   function setAnswer(questionId: string, value: string) {
     answerRevisionRef.current += 1;
-    setAnswers((current) => ({ ...current, [questionId]: value }));
+    const next = { ...answersRef.current, [questionId]: value };
+    const conflicts = { ...textConflictsRef.current };
+    delete conflicts[questionId];
+    textConflictsRef.current = conflicts;
+    setTextConflicts(conflicts);
+    answersRef.current = next;
+    setAnswers(next);
+    persistTextAnswers(next);
+    setSaveStatus("dirty");
+  }
+
+  function persistTextAnswers(next: Record<string, string>) {
+    const scope = textScopeRef.current;
+    if (scope) setTextDraftIssue(persistStudentTextDraft(scope, next, textBaselineRef.current, textSentRef.current, undefined, Object.keys(textConflictsRef.current)));
+  }
+
+  function beginTextSave(sourceQuestions: StudentQuestionRecord[], sourceAnswers: Record<string, string>) {
+    const scope = textScopeRef.current;
+    const sent = Object.fromEntries(sourceQuestions.filter((item) => !Object.prototype.hasOwnProperty.call(textConflictsRef.current, item.question_id))
+      .map((item) => [item.question_id, sourceAnswers[item.question_id] ?? ""]));
+    textSentRef.current = sent;
+    if (scope) setTextDraftIssue(markStudentTextDraftSent(scope, sent));
+    return { scope, sent };
+  }
+
+  function confirmTextSave(localSave: ReturnType<typeof beginTextSave>) {
+    if (!localSave.scope) return;
+    const issue = acknowledgeStudentTextDraft(localSave.scope, localSave.sent);
+    if (textScopeRef.current && studentDraftKey(textScopeRef.current) === studentDraftKey(localSave.scope)) {
+      textBaselineRef.current = { ...textBaselineRef.current, ...localSave.sent };
+      textSentRef.current = {};
+      setTextDraftIssue(issue);
+      if (Object.entries(answersRef.current).every(([id, value]) => localSave.sent[id] === value)) setLocalTextRestored(false);
+    }
+  }
+
+  function recoverConflictingText() {
+    const next = { ...answersRef.current, ...textConflictsRef.current };
+    textConflictsRef.current = {};
+    setTextConflicts({});
+    answersRef.current = next;
+    setAnswers(next);
+    answerRevisionRef.current += 1;
+    persistTextAnswers(next);
+    setLocalTextRestored(true);
     setSaveStatus("dirty");
   }
 
@@ -429,6 +506,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       Authorization: `Bearer ${token}`,
     };
     const payload = buildAnswerPayload(questionsRef.current, answersRef.current, imageAnswersRef.current);
+    beginTextSave(questionsRef.current, answersRef.current);
     void fetch(answersUrl, {
       method: "POST",
       headers,
@@ -441,9 +519,11 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     if (!activeAttempt || draftSaveInFlightRef.current) return;
     draftSaveInFlightRef.current = true;
     const revision = answerRevisionRef.current;
+    const localSave = beginTextSave(questions, answers);
     setSaveStatus("saving");
     try {
       await saveStudentAnswers(activeAttempt.id, buildAnswerPayload(questions, answers, imageAnswers));
+      confirmTextSave(localSave);
       setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty");
     } catch (e) {
       setSaveStatus("error");
@@ -459,9 +539,51 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     submitInFlightRef.current = true;
     setBusy("submit");
     setMessage(null);
+    const submittedScope = textScopeRef.current;
+    const submittedText = Object.fromEntries(questions.map((question) => [question.question_id, answers[question.question_id] ?? ""]));
+    const submittedConflicts = { ...textConflictsRef.current };
     try {
       const payload = buildAnswerPayload(questions, answers, imageAnswers);
-      await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsedSeconds(), answers: payload });
+      const result = await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsedSeconds(), answers: payload });
+      let retained = false;
+      if (submittedScope) {
+        let issue: TextDraftIssue;
+        if (result.attempt.submitted_answers_accepted === true) {
+          const confirmedText = Object.fromEntries(Object.entries(submittedText).filter(([id]) => !Object.prototype.hasOwnProperty.call(submittedConflicts, id)));
+          issue = acknowledgeStudentTextDraft(submittedScope, confirmedText);
+        } else {
+          issue = retainUnconfirmedStudentText(submittedScope, submittedText);
+        }
+        const latest = textScopeRef.current && studentDraftKey(textScopeRef.current) === studentDraftKey(submittedScope)
+          ? answersRef.current : submittedText;
+        const unsent = result.attempt.submitted_answers_accepted === true
+          ? Object.fromEntries(Object.entries(latest).filter(([id, value]) => value !== submittedText[id]))
+          : latest;
+        const pending = { ...pendingStudentTextDraft(submittedScope), ...unsent, ...submittedConflicts };
+        const scopeKey = studentDraftKey(submittedScope)!;
+        retained = Object.keys(pending).length > 0;
+        setUnconfirmedTexts((current) => {
+          const next = { ...current };
+          if (retained) next[scopeKey] = { title: activeAttempt.title, answers: pending, issue };
+          else delete next[scopeKey];
+          return next;
+        });
+      } else {
+        const latest = activeAttemptRef.current?.id === activeAttempt.id ? answersRef.current : submittedText;
+        const pending = result.attempt.submitted_answers_accepted === true
+          ? Object.fromEntries(Object.entries(latest).filter(([id, value]) => value !== submittedText[id]))
+          : latest;
+        retained = Object.keys(pending).length > 0;
+        if (retained) setUnconfirmedTexts((current) => ({
+          ...current,
+          [`unscoped:${user.id}:${activeAttempt.id}`]: { title: activeAttempt.title, answers: pending, issue: "unavailable" },
+        }));
+      }
+      textScopeRef.current = null;
+      setTextConflicts({});
+      textConflictsRef.current = {};
+      setLocalTextRestored(false);
+      setTextDraftIssue(null);
       setActiveAttempt(null);
       setQuestions([]);
       setAnswers({});
@@ -471,7 +593,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setSubmitReviewOpen(false);
       startedAtRef.current = null;
       await refresh();
-      setMessage("试卷已提交");
+      setMessage(retained ? "试卷已提交；未确认的本机文本仍保留，可在下方查看。" : "试卷已提交");
       setActiveView("results");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -522,6 +644,12 @@ export function StudentWorkspace({ user, onLogout }: Props) {
               </div>
             </div>
           </div>
+          {localTextRestored ? <p className="mb-3 text-sm text-amber-800" role="status">已恢复本机文本草稿，等待保存到服务器。</p> : null}
+          {Object.keys(textConflicts).length ? <div className="mb-3 text-sm text-amber-800" role="status">
+            服务器答案已有其他更新，本机文本草稿仍保留。
+            <button type="button" onClick={recoverConflictingText} className="ml-2 underline">恢复本机文本草稿</button>
+          </div> : null}
+          {textDraftIssue ? <p className="mb-3 text-sm text-amber-800" role="status">本机文本草稿暂不可用，请及时保存到服务器。</p> : null}
           <nav className="mb-4 flex flex-wrap gap-2" aria-label="答题导航">
             {questions.map((question, index) => (
               <a
@@ -773,6 +901,11 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         {activeView === "results" && !mustChangePassword ? (
           <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              {Object.entries(unconfirmedTexts).map(([key, entry]) => <details key={key} className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+                <summary>查看未确认的本机文本：{entry.title}</summary>
+                {entry.issue ? <p className="mt-2">本机存储暂不可用，请在离开本页前复制以下文本。</p> : null}
+                <pre className="mt-2 whitespace-pre-wrap break-words">{Object.entries(entry.answers).map(([id, value]) => `${id}: ${value || "（空答案）"}`).join("\n")}</pre>
+              </details>)}
               <div className="mb-3 flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-slate-600" />
                 <h2 className="font-semibold text-slate-950">成绩与分析</h2>

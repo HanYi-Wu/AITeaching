@@ -219,3 +219,8 @@ def public_snapshot_identity(questions: list[dict[str, Any]]) -> str:
     canonical = json.dumps(public_questions, ensure_ascii=False, sort_keys=True,
                            separators=(",", ":"), allow_nan=False)
     return "questions-v1:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def project_scope_identity(project_root: Path) -> str:
+    canonical = os.path.normcase(str(project_root.resolve()))
+    return "project-v1:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()

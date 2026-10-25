@@ -14,7 +14,7 @@ from solaire.web.papers.exam_timing import (
     _publication_availability, _time_limit_exceeded, _remaining_seconds,
     _ensure_attempt_can_collect, _ensure_attempt_can_submit,
 )
-from solaire.web.papers.snapshots import _load_attempt_question_payloads, public_snapshot_identity
+from solaire.web.papers.snapshots import _load_attempt_question_payloads, public_snapshot_identity, project_scope_identity
 
 
 def _new_id() -> str:
@@ -264,6 +264,7 @@ def start_student_publication(
     ]
     attempt_payload = _attempt_payload(attempt)
     attempt_payload["snapshot_version"] = public_snapshot_identity(public_questions)
+    attempt_payload["project_scope"] = project_scope_identity(project_root)
     return {
         "attempt": attempt_payload,
         "questions": public_questions,

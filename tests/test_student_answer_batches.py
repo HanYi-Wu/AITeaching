@@ -105,3 +105,20 @@ def test_invalid_batch_keeps_saved_answers_unchanged(web_client, opened_attempt,
     assert cleared.status_code == 200
     assert cleared.json()["answer_count"] == 0
     assert _answer_rows(attempt_id) == []
+
+
+def test_submission_receipt_does_not_confirm_answers_ignored_after_another_submission(web_client, opened_attempt):
+    headers, attempt_id = opened_attempt
+    url = f"/api/student/attempts/{attempt_id}/submit"
+    first = web_client.post(url, headers=headers, json={"answers": [
+        {"question_id": "math/q1", "answer": "A"}, {"question_id": "math/q2", "answer": "B"}
+    ]})
+    assert first.status_code == 200
+    assert first.json()["attempt"]["submitted_answers_accepted"] is True
+    before = _answer_rows(attempt_id)
+    stale = web_client.post(url, headers=headers, json={"answers": [
+        {"question_id": "math/q1", "answer": "B"}, {"question_id": "math/q2", "answer": "A"}
+    ]})
+    assert stale.status_code == 200
+    assert stale.json()["attempt"]["submitted_answers_accepted"] is False
+    assert _answer_rows(attempt_id) == before

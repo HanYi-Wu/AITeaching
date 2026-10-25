@@ -173,7 +173,7 @@ def submit_student_attempt(
     student = _student_for_user(root, user)
     attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
     if str(attempt.get("status")) == "submitted":
-        return _attempt_payload(attempt)
+        return {**_attempt_payload(attempt), "submitted_answers_accepted": False}
     # An expired timer blocks further answer edits, but the client must still be
     # able to finalize the saved answers when its countdown reaches zero.
     _ensure_attempt_can_submit(attempt)
@@ -195,7 +195,7 @@ def submit_student_attempt(
         con.execute("BEGIN IMMEDIATE")
         attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
         if str(attempt.get("status")) == "submitted":
-            return _attempt_payload(attempt)
+            return {**_attempt_payload(attempt), "submitted_answers_accepted": False}
         _ensure_attempt_can_submit(attempt)
         if answers is not None:
             _write_answer_mutations(con, attempt_id, submitted_rows, cleared_question_ids)
@@ -261,7 +261,7 @@ def submit_student_attempt(
         if auto_release:
             con.execute('UPDATE student_attempts SET grading_completed_at = ?, grading_completed_by = ? WHERE id = ?',
                         (now, None, attempt_id))
-    return _attempt_payload(_attempt_for_student(root, attempt_id, str(student["id"])))
+    return {**_attempt_payload(_attempt_for_student(root, attempt_id, str(student["id"]))), "submitted_answers_accepted": True}
 
 
 def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:

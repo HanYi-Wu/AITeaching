@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StudentWorkspace } from "./StudentWorkspace";
+import { studentDraftKey } from "./studentTextDraft";
 
 const mocks = vi.hoisted(() => ({
   updateStudentAccount: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
 describe("StudentWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     localStorage.setItem("solaire.platform.session", "test-token");
     mocks.listStudentPapers.mockResolvedValue({
       papers: [
@@ -514,6 +516,68 @@ describe("StudentWorkspace", () => {
     await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
     await waitFor(() => expect(mocks.submitStudentAttempt).toHaveBeenCalledTimes(1));
     fetchSpy.mockRestore();
+  });
+
+  it("recovers newer text after a late save and retains it until submission succeeds", async () => {
+    const user = { id: "s1", role: "student" as const, username: "student", display_name: "Student", status: "active" };
+    const scope = { accountId: "s1", projectScope: "project-1", publicationId: "pub1", attemptId: "attempt1", snapshotVersion: "snapshot-1" };
+    const data = {
+      attempt: { id: "attempt1", publication_id: "pub1", exam_id: "midterm/Math", title: "Text Paper", status: "in_progress",
+        project_scope: scope.projectScope, snapshot_version: scope.snapshotVersion },
+      questions: [{ question_id: "math/q1", header: "1", section_id: "Work", score_per_item: 5, type: "fill", content: "Explain" }],
+      saved_answers: [] as Array<{ question_id: string; answer: string }>,
+    };
+    mocks.startStudentPaper.mockResolvedValue(data);
+    let finishSave!: (result: { answer_count: number }) => void;
+    mocks.saveStudentAnswers.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    const first = render(<StudentWorkspace user={user} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId("student-page-papers"));
+    await userEvent.click(screen.getByTestId("student-start-pub1"));
+    await userEvent.type(await screen.findByTestId("student-answer-math/q1"), "first");
+    await userEvent.click(screen.getByTestId("student-save-draft"));
+    await userEvent.type(screen.getByTestId("student-answer-math/q1"), " newest");
+    await act(async () => finishSave({ answer_count: 1 }));
+    expect(localStorage.getItem(studentDraftKey(scope)!)).toContain("first newest");
+    first.unmount();
+
+    mocks.startStudentPaper.mockResolvedValue({ ...data, saved_answers: [{ question_id: "math/q1", answer: "first" }] });
+    render(<StudentWorkspace user={user} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId("student-page-papers"));
+    await userEvent.click(screen.getByTestId("student-start-pub1"));
+    expect(await screen.findByTestId("student-answer-math/q1")).toHaveValue("first newest");
+    expect(screen.getByText("已恢复本机文本草稿，等待保存到服务器。")).toBeInTheDocument();
+    mocks.submitStudentAttempt.mockRejectedValueOnce(new Error("offline submission"));
+    await userEvent.click(screen.getByTestId("student-submit-attempt"));
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+    expect(await screen.findByText("offline submission")).toBeInTheDocument();
+    expect(localStorage.getItem(studentDraftKey(scope)!)).not.toBeNull();
+    mocks.submitStudentAttempt.mockResolvedValueOnce({ attempt: { id: "attempt1", status: "submitted", submitted_answers_accepted: true } });
+    await userEvent.click(screen.getByTestId("student-submit-attempt"));
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(localStorage.getItem(studentDraftKey(scope)!)).toBeNull());
+    expect(mocks.submitStudentAttempt).toHaveBeenLastCalledWith("attempt1", expect.objectContaining({
+      answers: [{ question_id: "math/q1", answer: "first newest", images: [] }],
+    }));
+  });
+
+  it.each([[false, true], [undefined, true], [false, false], [undefined, false]])("retains text when a submission response does not confirm this payload (accepted=%s, scope=%s)", async (accepted, withScope) => {
+    const scope = { accountId: "s1", projectScope: "project-1", publicationId: "pub1", attemptId: "attempt1", snapshotVersion: "snapshot-1" };
+    mocks.startStudentPaper.mockResolvedValue({
+      attempt: { id: "attempt1", publication_id: "pub1", exam_id: "midterm/Math", title: "Text Paper", status: "in_progress",
+        ...(withScope ? { project_scope: scope.projectScope, snapshot_version: scope.snapshotVersion } : {}) },
+      questions: [{ question_id: "math/q1", header: "1", section_id: "Work", score_per_item: 5, type: "fill", content: "Explain" }], saved_answers: [],
+    });
+    mocks.submitStudentAttempt.mockResolvedValue({ attempt: { id: "attempt1", status: "submitted", submitted_answers_accepted: accepted } });
+    render(<StudentWorkspace user={{ id: "s1", role: "student", username: "student", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId("student-page-papers"));
+    await userEvent.click(screen.getByTestId("student-start-pub1"));
+    await userEvent.type(await screen.findByTestId("student-answer-math/q1"), "local not submitted");
+    await userEvent.click(screen.getByTestId("student-submit-attempt"));
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+    expect(await screen.findByText("查看未确认的本机文本：Text Paper")).toBeInTheDocument();
+    if (withScope) expect(localStorage.getItem(studentDraftKey(scope)!)).toContain("local not submitted");
+    else expect(screen.getByText("本机存储暂不可用，请在离开本页前复制以下文本。")).toBeInTheDocument();
+    expect(screen.getByText("math/q1: local not submitted")).toBeInTheDocument();
   });
 
   it("auto-submits at zero without an unanswered confirmation", async () => {

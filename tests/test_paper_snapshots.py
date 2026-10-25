@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 import yaml
 
-from solaire.web.papers.snapshots import public_snapshot_identity
+from solaire.web.papers.snapshots import public_snapshot_identity, project_scope_identity
 from tests.test_platform_student_api import _publish_exam_for_student, _write_online_exam
 
 
@@ -43,6 +43,7 @@ def test_student_snapshot_identity_and_attempt_survive_source_question_edits(web
     assert first.status_code == 200
     started = first.json()
     assert started["attempt"]["snapshot_version"].startswith("questions-v1:")
+    assert started["attempt"]["project_scope"] == project_scope_identity(tmp_path)
     assert all(not ({"answer", "correct_answer", "analysis"} & question.keys())
                for question in started["questions"])
 
@@ -55,3 +56,11 @@ def test_student_snapshot_identity_and_attempt_survive_source_question_edits(web
     assert resumed.json()["attempt"]["id"] == started["attempt"]["id"]
     assert resumed.json()["attempt"]["snapshot_version"] == started["attempt"]["snapshot_version"]
     assert resumed.json()["questions"] == started["questions"]
+
+
+def test_project_scope_is_stable_and_does_not_disclose_filesystem_paths(tmp_path):
+    identity = project_scope_identity(tmp_path)
+    assert identity == project_scope_identity(tmp_path / "nested" / "..")
+    assert identity != project_scope_identity(tmp_path / "another")
+    assert identity.startswith("project-v1:")
+    assert str(tmp_path) not in identity
