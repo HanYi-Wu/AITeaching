@@ -36,3 +36,15 @@ def test_snapshot_restore_discard(tmp_path: Path) -> None:
 def test_snapshot_returns_none_when_no_build_yaml(tmp_path: Path) -> None:
     (tmp_path / ".solaire").mkdir(parents=True)
     assert snapshot_build_yaml_before_export(tmp_path) is None
+
+
+def test_failed_first_export_restores_absence_of_build_yaml(tmp_path: Path) -> None:
+    backup = snapshot_build_yaml_before_export(tmp_path)
+    build = tmp_path / ".solaire" / BUILD_EXAM_NAME
+    build.write_text("failed export selection", encoding="utf-8")
+
+    restore_build_yaml_from_backup(tmp_path, backup)
+
+    assert not build.exists()
+    restore_build_yaml_from_backup(tmp_path, backup)
+    assert not build.exists()

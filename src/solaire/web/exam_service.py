@@ -32,6 +32,7 @@ from solaire.exam_compiler.loaders.questions import LoadedQuestions
 from solaire.web.library_discovery import discover_question_library_refs
 from solaire.web.project_layout import ensure_project_layout
 from solaire.web.security import assert_within_project, safe_filename_component
+from solaire.web.export_artifacts import export_staging, publish_export_files
 
 
 def _load_exam_config(exam_yaml_path: Path) -> ExamConfig:
@@ -112,11 +113,14 @@ def snapshot_build_yaml_before_export(project_root: Path) -> Path | None:
 
 
 def restore_build_yaml_from_backup(project_root: Path, backup: Path | None) -> None:
-    """将备份写回 .solaire/build.yaml（若备份存在）。"""
-    if backup is None or not backup.is_file():
-        return
+    """Restore the previous selection, including its absence before a first export."""
     sol = project_root / ".solaire"
     build = sol / BUILD_EXAM_NAME
+    if backup is None:
+        build.unlink(missing_ok=True)
+        return
+    if not backup.is_file():
+        raise FileNotFoundError("导出前的选题备份不存在，无法恢复")
     shutil.copy2(backup, build)
 
 
@@ -388,58 +392,11 @@ def export_pdfs(
     template: ExamTemplate | None = None,
     dest_dir: Path,
 ) -> tuple[Path, str, str]:
-    """
-    在 ``exams/<标签>/<学科>/`` 目录下生成 PDF，并写入带题分的 ``exam.yaml``。
-
-    保留同目录下的 ``scores/``，仅替换本次导出的 PDF 与 ``exam.yaml``。
-
-    Returns (exam_dir, student_pdf_name, teacher_pdf_name).
-    """
-    assert_within_project(project_root, exam_yaml)
-    dest = dest_dir.resolve()
-    assert_within_project(project_root, dest)
-    exams_root = (project_root / "exams").resolve()
-    try:
-        dest.relative_to(exams_root)
-    except ValueError as e:
-        raise ValueError("导出目录必须位于 exams/ 下") from e
-    dest.mkdir(parents=True, exist_ok=True)
-    for p in dest.glob("*.pdf"):
-        try:
-            p.unlink()
-        except OSError:
-            pass
-
-    try:
-        student_pdf, teacher_pdf, _preview_warn = build_exam_pdfs(exam_yaml, out_dir=dest)
-    except LatexmkError as e:
-        raise RuntimeError(format_latexmk_failure_message(e)) from e
-
-    stem = f"{safe_filename_component(export_label)}-{safe_filename_component(subject)}"
-    s_name = f"{stem}-学生版.pdf"
-    t_name = f"{stem}-教师版.pdf"
-    s_new = dest / s_name
-    t_new = dest / t_name
-    shutil.move(str(student_pdf), s_new)
-    shutil.move(str(teacher_pdf), t_new)
-
-    # 保存 exam.yaml 副本，注入 score_per_item 供成绩分析使用
-    if exam_yaml.is_file():
-        with exam_yaml.open(encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
-        exam_data = ExamConfig.model_validate(raw)
-        if template is not None:
-            sec_score_map = {s.section_id: s.score_per_item for s in template.sections}
-            for sel in exam_data.selected_items:
-                if sel.section_id in sec_score_map and sel.score_per_item is None:
-                    sel.score_per_item = sec_score_map[sel.section_id]
-        dest_exam_yaml = dest / "exam.yaml"
-        exam_data = _rewrite_exam_paths_for_copy(project_root, exam_yaml, dest_exam_yaml, exam_data)
-        with dest_exam_yaml.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(exam_data.model_dump(mode="json"), f, allow_unicode=True, sort_keys=False)
-
-    return dest, s_name, t_name
-
+    """Generate both PDFs before replacing the previous pair and exam metadata."""
+    return _export_documents(
+        project_root, exam_yaml=exam_yaml, export_label=export_label,
+        subject=subject, template=template, dest_dir=dest_dir, format="pdf",
+    )
 
 
 def export_docx(
@@ -451,59 +408,80 @@ def export_docx(
     template: ExamTemplate | None = None,
     dest_dir: Path,
 ) -> tuple[Path, str, str]:
-    """
-    Generate student and teacher DOCX files under ``exams/<label>/<subject>/``.
+    """Generate both Word files before replacing the previous pair and metadata."""
+    return _export_documents(
+        project_root, exam_yaml=exam_yaml, export_label=export_label,
+        subject=subject, template=template, dest_dir=dest_dir, format="docx",
+    )
 
-    Keeps existing PDFs and score data. Only stale DOCX files from previous Word exports are replaced.
-    Returns (exam_dir, student_docx_name, teacher_docx_name).
-    """
+
+def _export_documents(
+    project_root: Path,
+    *,
+    exam_yaml: Path,
+    export_label: str,
+    subject: str,
+    template: ExamTemplate | None,
+    dest_dir: Path,
+    format: str,
+) -> tuple[Path, str, str]:
     assert_within_project(project_root, exam_yaml)
     dest = dest_dir.resolve()
     assert_within_project(project_root, dest)
     exams_root = (project_root / "exams").resolve()
     try:
         dest.relative_to(exams_root)
-    except ValueError as e:
-        raise ValueError("导出目录必须位于 exams/ 下") from e
+    except ValueError as exc:
+        raise ValueError("导出目录必须位于 exams/ 下") from exc
     dest.mkdir(parents=True, exist_ok=True)
-
-    try:
-        student_docx, teacher_docx = build_exam_docx(exam_yaml, out_dir=dest)
-    except PandocError as e:
-        raise RuntimeError(format_pandoc_failure_message(e)) from e
-
     stem = f"{safe_filename_component(export_label)}-{safe_filename_component(subject)}"
-    s_name = f"{stem}-学生版.docx"
-    t_name = f"{stem}-教师版.docx"
-    s_new = dest / s_name
-    t_new = dest / t_name
-    for p in (s_new, t_new):
-        if p.resolve() in {student_docx.resolve(), teacher_docx.resolve()}:
-            continue
+    student_name = f"{stem}-学生版.{format}"
+    teacher_name = f"{stem}-教师版.{format}"
+
+    with export_staging(dest) as stage:
         try:
-            p.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-    shutil.move(str(student_docx), s_new)
-    shutil.move(str(teacher_docx), t_new)
+            if format == "pdf":
+                student, teacher, _warnings = build_exam_pdfs(exam_yaml, out_dir=stage)
+            else:
+                student, teacher = build_exam_docx(exam_yaml, out_dir=stage)
+        except LatexmkError as exc:
+            raise RuntimeError(format_latexmk_failure_message(exc)) from exc
+        except PandocError as exc:
+            raise RuntimeError(format_pandoc_failure_message(exc)) from exc
+        files = {student_name: student, teacher_name: teacher}
+        if exam_yaml.is_file():
+            with exam_yaml.open(encoding="utf-8") as handle:
+                exam_data = ExamConfig.model_validate(yaml.safe_load(handle))
+            if template is not None:
+                section_scores = {s.section_id: s.score_per_item for s in template.sections}
+                for section in exam_data.selected_items:
+                    if section.score_per_item is None and section.section_id in section_scores:
+                        section.score_per_item = section_scores[section.section_id]
+            destination_yaml = dest / "exam.yaml"
+            exam_data = _rewrite_exam_paths_for_copy(project_root, exam_yaml, destination_yaml, exam_data)
+            staged_yaml = stage / "exam.yaml"
+            staged_yaml.write_text(
+                yaml.safe_dump(exam_data.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            files["exam.yaml"] = staged_yaml
+        for name in files:
+            assert_within_project(project_root, dest / name)
+        publish_export_files(dest, stage, files)
 
-    if exam_yaml.is_file():
-        with exam_yaml.open(encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
-        exam_data = ExamConfig.model_validate(raw)
-        if template is not None:
-            sec_score_map = {s.section_id: s.score_per_item for s in template.sections}
-            for sel in exam_data.selected_items:
-                if sel.section_id in sec_score_map and sel.score_per_item is None:
-                    sel.score_per_item = sec_score_map[sel.section_id]
-        dest_exam_yaml = dest / "exam.yaml"
-        exam_data = _rewrite_exam_paths_for_copy(project_root, exam_yaml, dest_exam_yaml, exam_data)
-        with dest_exam_yaml.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(exam_data.model_dump(mode="json"), f, allow_unicode=True, sort_keys=False)
-
-    return dest, s_name, t_name
+    # Remove obsolete generated variants only after the complete replacement succeeded.
+    # Other formats, user documents and score data remain intact.
+    for previous in dest.glob(f"*.{format}"):
+        if previous.name in {student_name, teacher_name}:
+            continue
+        if previous.name.endswith((f"-学生版.{format}", f"-教师版.{format}")) or previous.name in {
+            f"student_paper.{format}", f"teacher_paper.{format}",
+        }:
+            try:
+                previous.unlink()
+            except OSError:
+                pass
+    return dest, student_name, teacher_name
 
 
 def export_preview_pdfs(
