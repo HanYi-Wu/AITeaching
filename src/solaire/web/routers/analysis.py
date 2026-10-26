@@ -93,6 +93,7 @@ def analysis_remediation_draft_preview(
     weak_limit: int = Query(default=5, ge=1, le=20),
     practice_per_node: int = Query(default=4, ge=1, le=50),
     exclude_source_exam_questions: bool = Query(default=True),
+    source_batch_id: str | None = Query(None),
 ) -> dict[str, Any]:
     root = _require_root()
     try:
@@ -124,6 +125,7 @@ def analysis_remediation_drafts_create(body: AnalysisRemediationDraftBody) -> di
             template_ref=body.template_ref,
             template_path=body.template_path,
             export_label=body.export_label,
+            source_batch_id=body.source_batch_id,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

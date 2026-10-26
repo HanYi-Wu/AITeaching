@@ -50,6 +50,7 @@ def _publish_personalized(
     submission_mode: str,
     max_screen_switches: int,
     time_limit_minutes: int | None,
+    project_root: Path | None = None,
 ) -> dict[str, Any]:
     if practice_kind not in PRACTICE_KINDS:
         raise ValueError("Unsupported practice kind")
@@ -120,6 +121,17 @@ def _publish_personalized(
                     ),
                 ),
             )
+        from solaire.web.learning_progress.baselines import freeze_personalized_baseline
+
+        freeze_personalized_baseline(
+            con,
+            project_root=project_root,
+            publication_id=publication_id,
+            practice_kind=practice_kind,
+            source_publication_ids=source_publication_ids,
+            assignments=assignments,
+            captured_at=now,
+        )
     publication = {
         "id": publication_id,
         "paper_id": paper_id,
@@ -183,6 +195,7 @@ def publish_wrong_question_practice(
         practice_kind="wrong_questions",
         source_publication_ids=[clean_source_id],
         assignments=assignments,
+        project_root=project_root,
         **settings,
     )
     result["skipped_student_count"] = len(students) - len(assignments)
@@ -253,6 +266,7 @@ async def publish_reinforcement_practice(
         practice_kind="reinforcement",
         source_publication_ids=clean_ids,
         assignments=assignments,
+        project_root=project_root,
         **settings,
     )
     result["skipped_student_count"] = len(students) - len(assignments)

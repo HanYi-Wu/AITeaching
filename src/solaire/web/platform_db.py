@@ -250,6 +250,46 @@ CREATE TABLE IF NOT EXISTS ai_audit_events (
   payload_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS practice_sources (
+  id TEXT PRIMARY KEY,
+  practice_publication_id TEXT NOT NULL REFERENCES exam_publications(id) ON DELETE CASCADE,
+  practice_kind TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_exam_id TEXT,
+  source_batch_id TEXT,
+  source_publication_id TEXT,
+  captured_at TEXT NOT NULL,
+  calculation_rule_version TEXT NOT NULL DEFAULT 'v1_equal_split',
+  metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_practice_sources_pub ON practice_sources(practice_publication_id);
+CREATE INDEX IF NOT EXISTS idx_practice_sources_src_pub ON practice_sources(source_publication_id);
+CREATE INDEX IF NOT EXISTS idx_practice_sources_src_batch ON practice_sources(source_batch_id);
+
+CREATE TABLE IF NOT EXISTS practice_frozen_baselines (
+  id TEXT PRIMARY KEY,
+  practice_publication_id TEXT NOT NULL REFERENCES exam_publications(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  source_type TEXT NOT NULL,
+  source_ref_id TEXT NOT NULL,
+  source_attempt_id TEXT,
+  source_question_id TEXT NOT NULL,
+  knowledge_node_id TEXT NOT NULL,
+  effective_score REAL NOT NULL,
+  effective_max_score REAL NOT NULL,
+  weight REAL NOT NULL DEFAULT 1.0,
+  raw_score REAL,
+  raw_max_score REAL,
+  rule_version TEXT NOT NULL DEFAULT 'v1_equal_split',
+  source_snapshot_hash TEXT NOT NULL,
+  captured_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_frozen_baseline_pub_student ON practice_frozen_baselines(practice_publication_id, student_id);
+CREATE INDEX IF NOT EXISTS idx_frozen_baseline_pub_node ON practice_frozen_baselines(practice_publication_id, knowledge_node_id);
+CREATE INDEX IF NOT EXISTS idx_frozen_baseline_student_node ON practice_frozen_baselines(student_id, knowledge_node_id);
+
 CREATE TABLE IF NOT EXISTS platform_sessions (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

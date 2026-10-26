@@ -339,6 +339,7 @@ def _save_with_unique_label(
     template_path: str,
     selected_items: list[dict[str, Any]],
     source_exam_id: str,
+    source_batch_id: str | None = None,
 ) -> dict[str, Any]:
     base = _norm_text(export_label) or "补练"
     candidates = [_unique_export_label(project_root, subject, base)] + [
@@ -358,6 +359,8 @@ def _save_with_unique_label(
                 selected_items=selected_items,
             )
             doc["source_exam_id"] = source_exam_id
+            if source_batch_id:
+                doc["source_batch_id"] = source_batch_id
             return persist_exam_document(project_root, doc)
         except ValueError as e:
             last_error = e
@@ -378,6 +381,7 @@ def create_remediation_draft(
     template_ref: str | None = None,
     template_path: str | None = None,
     export_label: str | None = None,
+    source_batch_id: str | None = None,
 ) -> dict[str, Any]:
     """Create an editable mixed practice workspace from diagnosis suggestions."""
     _ = (template_ref, template_path)
@@ -409,6 +413,7 @@ def create_remediation_draft(
         template_path=tpl_path,
         selected_items=selected_items,
         source_exam_id=exam_id,
+        source_batch_id=source_batch_id or batch_id,
     )
     return {
         "exam_id": doc["exam_id"],
@@ -422,4 +427,5 @@ def create_remediation_draft(
         "ai_assist_payload": plan.get("ai_assist_payload"),
         "source_exam_id": exam_id,
         "batch_id": batch_id,
+        "source_batch_id": source_batch_id or batch_id,
     }

@@ -1045,6 +1045,8 @@ def publish_online_paper(
     max_screen_switches: int = 0,
     time_limit_minutes: int | None = None,
     subject: str | None = None,
+    source_exam_id: str | None = None,
+    source_batch_id: str | None = None,
 ) -> dict[str, Any]:
     return publication_service.publish_online_paper(
         root,
@@ -1066,6 +1068,8 @@ def publish_online_paper(
         time_limit_minutes=time_limit_minutes,
         subject=subject,
         id_factory=_new_id,
+        source_exam_id=source_exam_id,
+        source_batch_id=source_batch_id,
     )
 
 def ingest_offline_submission(
