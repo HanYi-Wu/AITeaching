@@ -63,6 +63,7 @@ def _submitted_attempt(client: TestClient, project_root: Path) -> dict[str, str]
     return {
         "paper_id": str(paper["paper_id"]),
         "attempt_id": attempt_id,
+        "student_id": str(student["id"]),
         "teacher_id": teacher_id,
         "admin_id": admin_id,
         "school_id": school_id,
