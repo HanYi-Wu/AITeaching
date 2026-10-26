@@ -41,6 +41,34 @@ def _root(ctx: InvocationContext):
     return teacher_graph_root(ctx.project_root, ctx.platform_user)
 
 
+def _validate_qualified_id(qid: str) -> str:
+    s = str(qid or "").strip()
+    if not s:
+        raise ValueError("question_qualified_id 必填")
+    if len(s) > 255:
+        raise ValueError(f"question_qualified_id 长度不能超过 255 字符: {s[:30]}...")
+    if "/" not in s:
+        raise ValueError(f"question_qualified_id 必须包含 '/'（形如 科目/题集/题目）: {s}")
+    parts = s.split("/")
+    if any(not p.strip() or p.strip() == ".." for p in parts):
+        raise ValueError(f"question_qualified_id 包含非法或空路径段: {s}")
+    return s
+
+
+def _validate_node_id(node_id: str) -> str:
+    s = str(node_id or "").strip()
+    if not s:
+        raise ValueError("node_id 必填")
+    if len(s) > 255:
+        raise ValueError(f"node_id 长度不能超过 255 字符: {s[:30]}...")
+    if "\0" in s:
+        raise ValueError(f"node_id 包含空字符: {s}")
+    parts = s.split("/")
+    if any(p.strip() == ".." for p in parts):
+        raise ValueError(f"node_id 包含非法相对跳转段 (..): {s}")
+    return s
+
+
 def tool_list_graphs(ctx: InvocationContext, _args: dict[str, Any]) -> ToolResult:
     """列出所有科目图谱。"""
     graphs = list_graphs(_root(ctx))
@@ -111,8 +139,24 @@ def tool_create_node(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult
     canonical_name = str(body.get("canonical_name") or "").strip()
     if not canonical_name:
         return ToolResult(status="failed", error_code="invalid_arguments", error_message="canonical_name 必填")
+    if len(canonical_name) > 128:
+        return ToolResult(status="failed", error_code="invalid_arguments", error_message="canonical_name 长度不能超过 128 字符")
     node_id = str(args.get("id") or "").strip() or None
     parent = str(args.get("parent_node_id") or "").strip() or None
+    if node_id:
+        try:
+            _validate_node_id(node_id)
+        except ValueError as e:
+            return ToolResult(status="failed", error_code="invalid_arguments", error_message=str(e))
+    if parent:
+        try:
+            _validate_node_id(parent)
+        except ValueError as e:
+            return ToolResult(status="failed", error_code="invalid_arguments", error_message=str(e))
+        try:
+            get_concept_node(root, parent, graph=graph)
+        except FileNotFoundError:
+            return ToolResult(status="failed", error_code="invalid_arguments", error_message=f"父节点不存在: {parent}")
     payload = {k: v for k, v in body.items() if k != "id"}
     try:
         if not node_id:
@@ -222,17 +266,28 @@ def tool_update_relation(ctx: InvocationContext, args: dict[str, Any]) -> ToolRe
 def tool_bind_question(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
     graph = _get_graph(args)
     try:
+        qid = _validate_qualified_id(str(args.get("question_qualified_id") or ""))
+        nid = _validate_node_id(str(args.get("node_id") or ""))
+        root = _root(ctx)
+        try:
+            get_concept_node(root, nid, graph=graph)
+        except FileNotFoundError:
+            return ToolResult(
+                status="failed",
+                error_code="not_found",
+                error_message=f"目标知识点节点不存在: {nid}，未建立绑定",
+            )
         bind_question_to_node(
-            _root(ctx),
+            root,
             {
-                "question_qualified_id": str(args.get("question_qualified_id") or ""),
-                "node_id": str(args.get("node_id") or ""),
+                "question_qualified_id": qid,
+                "node_id": nid,
             },
             graph=graph,
         )
+        return ToolResult(status="succeeded", data={"ok": True})
     except ValueError as e:
         return ToolResult(status="failed", error_code="invalid_arguments", error_message=str(e))
-    return ToolResult(status="succeeded", data={"ok": True})
 
 
 def tool_attach_resource(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
@@ -241,8 +296,18 @@ def tool_attach_resource(ctx: InvocationContext, args: dict[str, Any]) -> ToolRe
     rel_path = str(args.get("relative_path") or "").strip()
     if not node_id or not rel_path:
         return ToolResult(status="failed", error_code="invalid_arguments", error_message="node_id 与 relative_path 必填")
+    if ".." in rel_path.replace("\\", "/").split("/"):
+        return ToolResult(status="failed", error_code="invalid_arguments", error_message="relative_path 不得包含相对路径跳转 (..)")
+    root = _root(ctx)
     try:
-        link_id = attach_file_to_node(_root(ctx), node_id, rel_path, graph=graph)
+        _validate_node_id(node_id)
+        get_concept_node(root, node_id, graph=graph)
+    except FileNotFoundError:
+        return ToolResult(status="failed", error_code="not_found", error_message=f"目标知识点节点不存在: {node_id}")
+    except ValueError as e:
+        return ToolResult(status="failed", error_code="invalid_arguments", error_message=str(e))
+    try:
+        link_id = attach_file_to_node(root, node_id, rel_path, graph=graph)
     except ValueError as e:
         return ToolResult(status="failed", error_code="invalid_arguments", error_message=str(e))
     return ToolResult(status="succeeded", data={"ok": True, "link_id": link_id})
