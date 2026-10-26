@@ -37,6 +37,12 @@ class RegisteredTool:
     vivace_fast_review: bool = False
     action_label: str | None = None
 
+    def validate(self) -> None:
+        """Validate this tool definition against registry contract rules."""
+        from solaire.agent_layer.registry import validate_registered_tool
+
+        validate_registered_tool(self)
+
 
 def _fn(
     name: str,
