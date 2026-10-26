@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
-import { MathfieldElement } from "mathlive";
-import "mathlive";
-import "mathlive/fonts.css";
 
-import { canonicalizeLatex } from "../lib/latexCanon";
+import {
+  createMathLiveBridge,
+  DEFAULT_MATH_MODAL_CLASS,
+  type MathLiveBridgeInstance,
+} from "./latexField/mathLiveBridge";
+import { isImeComposingKeyboardEvent } from "../lib/ime";
 
 type MathInsertOverlayProps = {
   open: boolean;
@@ -17,28 +19,37 @@ type MathInsertOverlayProps = {
  */
 export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverlayProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const mfRef = useRef<MathfieldElement | null>(null);
+  const bridgeRef = useRef<MathLiveBridgeInstance | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const onConfirmRef = useRef(onConfirm);
+  onConfirmRef.current = onConfirm;
 
   useEffect(() => {
     if (!open) {
-      mfRef.current = null;
+      bridgeRef.current?.destroy();
+      bridgeRef.current = null;
       return;
     }
     const host = hostRef.current;
     if (!host) {
       return;
     }
-    const mf = new MathfieldElement();
-    mf.className =
-      "w-full min-h-[52px] rounded-md border border-slate-300 bg-white px-2 py-2 text-base text-slate-900";
-    host.innerHTML = "";
-    host.appendChild(mf);
-    mfRef.current = mf;
-    void mf.focus();
+    const bridge = createMathLiveBridge({
+      host,
+      className: DEFAULT_MATH_MODAL_CLASS,
+      onConfirm: (latex) => {
+        if (!latex) return;
+        onConfirmRef.current(`$${latex}$`);
+        onCloseRef.current();
+      },
+      onCancel: () => onCloseRef.current(),
+    });
+    bridgeRef.current = bridge;
 
     return () => {
-      mfRef.current = null;
-      host.innerHTML = "";
+      bridge.destroy();
+      bridgeRef.current = null;
     };
   }, [open]);
 
@@ -47,12 +58,11 @@ export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverla
   }
 
   function tryConfirm() {
-    const mf = mfRef.current;
-    if (!mf) {
+    const bridge = bridgeRef.current;
+    if (!bridge) {
       return;
     }
-    const rawLatex = mf.getValue("latex").trim();
-    const latex = canonicalizeLatex(rawLatex);
+    const latex = bridge.getCanonicalLatex();
     if (!latex) {
       return;
     }
@@ -68,6 +78,8 @@ export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverla
       aria-labelledby="math-insert-title"
       onClick={onClose}
       onKeyDown={(e) => {
+        if (isImeComposingKeyboardEvent(e)) return;
+        if (hostRef.current?.contains(e.target as Node)) return;
         if (e.key === "Escape") {
           onClose();
         }

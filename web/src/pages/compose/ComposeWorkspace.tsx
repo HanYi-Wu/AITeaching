@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -15,16 +14,10 @@ import { TexSetupNotice } from "../../components/TexSetupNotice";
 import { useAgentContext } from "../../contexts/AgentContext";
 import { useToolBar } from "../../contexts/ToolBarContext";
 import i18n from "../../i18n/i18n";
-import { collapseGroupRowsForList, type SectionSlot } from "../../lib/groupQuestions";
+import type { SectionSlot } from "../../lib/groupQuestions";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { dispatchExamsChanged, SOLAIRE_EXAMS_CHANGED_EVENT, type ExamsChangedDetail } from "../../lib/examEvents";
-import { normalizeQuestionTypeForFilter } from "../../lib/questionTypes";
-import {
-  buildMetadataFilterDefinitions,
-  hasActiveMetadataFilters,
-  matchesMetadataFilters,
-  type MetadataFilters,
-} from "../../lib/metadataFilters";
+import type { MetadataFilters } from "../../lib/metadataFilters";
 import { isTauriShell } from "../../lib/tauriEnv";
 import { isImeCompositionActive } from "../../lib/ime";
 import {
@@ -48,7 +41,6 @@ import type {
 import {
   downloadExportedBundle,
   normTemplatePath,
-  questionTypeMatchesSection,
 } from "./composeHelpers";
 import {
   addQuestionsToSectionInModel,
@@ -70,6 +62,7 @@ import { buildComposeDraftPaperKey } from "./composeDraftStorage";
 import { useComposeRequestScope } from "./useComposeRequestScope";
 import { useComposePaperHistory } from "./useComposePaperHistory";
 import { useComposeDraftScope } from "./useComposeDraftScope";
+import { useComposeBankFilter } from "./useComposeBankFilter";
 import { ComposeHistorySidebar } from "./ComposeHistorySidebar";
 import { ComposeBankSearchPanel } from "./ComposeBankSearchPanel";
 import { ComposePaperEditorPanel } from "./ComposePaperEditorPanel";
@@ -316,11 +309,6 @@ export function ComposeWorkspace({
     return () => setPageContext(null);
   }, [subject, templatePath, exportLabel, setPageContext, t]);
 
-  const questionsForSubject = useMemo(() => {
-    const s = subject.trim();
-    return questions.filter((q) => (q.subject ?? "") === s);
-  }, [questions, subject]);
-
   /** 题库目录导出的 subjects 可能不含当前试卷学科；必须把 exam 中的学科并入选项，否则 select 无匹配项、界面表现为未切到该学科 */
   const subjectOptionsForSelect = useMemo(() => {
     const base = subjectOptions.length > 0 ? subjectOptions : [];
@@ -341,73 +329,9 @@ export function ComposeWorkspace({
     return cur ? [cur] : dlg ? [dlg] : [];
   }, [subjectOptions, subject, dlgSubject]);
 
-  const namespaces = useMemo(() => {
-    const s = new Set<string>();
-    for (const q of questionsForSubject) {
-      s.add(q.collection ?? q.namespace);
-    }
-    return [...s].sort();
-  }, [questionsForSubject]);
-
-  const collapsedQuestionsForSubject = useMemo(
-    () => collapseGroupRowsForList(questionsForSubject),
-    [questionsForSubject],
-  );
-
-  const metadataScopeQuestions = useMemo(() => {
-    const ns = namespaceFilter === "__all__" ? null : namespaceFilter;
-    return collapsedQuestionsForSubject.filter((q) => {
-      const coll = q.collection ?? q.namespace;
-      if (ns && coll !== ns) {
-        return false;
-      }
-      if (typeFilter !== "__all__" && !questionTypeMatchesSection(q.type, typeFilter, q.answer)) {
-        return false;
-      }
-      return true;
-    });
-  }, [collapsedQuestionsForSubject, namespaceFilter, typeFilter]);
-
-  const metadataFilterDefinitions = useMemo(
-    () => buildMetadataFilterDefinitions(metadataScopeQuestions),
-    [metadataScopeQuestions],
-  );
-  const deferredSearch = useDeferredValue(search);
-  const deferredMetadataFilters = useDeferredValue(metadataFilters);
-  const activeMetadataFilters = useMemo(
-    () => (hasActiveMetadataFilters(deferredMetadataFilters) ? deferredMetadataFilters : null),
-    [deferredMetadataFilters],
-  );
-  const metadataScopeSearchQuestions = useMemo(
-    () =>
-      metadataScopeQuestions.map((question) => ({
-        question,
-        searchText: [
-          question.id,
-          question.qualified_id,
-          question.content_preview,
-          normalizeQuestionTypeForFilter(question.type, question.answer),
-          question.group_id ?? "",
-          question.group_material ?? "",
-          JSON.stringify(question.metadata ?? {}),
-        ]
-          .join("\n")
-          .toLowerCase(),
-      })),
-    [metadataScopeQuestions],
-  );
-
-  const filteredQuestions = useMemo(() => {
-    const qlow = deferredSearch.trim().toLowerCase();
-    return metadataScopeSearchQuestions
-      .filter(({ question, searchText }) => {
-        if (activeMetadataFilters && !matchesMetadataFilters(question.metadata, activeMetadataFilters)) {
-          return false;
-        }
-        return !qlow || searchText.includes(qlow);
-      })
-      .map(({ question }) => question);
-  }, [activeMetadataFilters, metadataScopeSearchQuestions, deferredSearch]);
+  const { namespaces, metadataFilterDefinitions, filteredQuestions } = useComposeBankFilter({
+    questions, subject, namespaceFilter, typeFilter, metadataFilters, search,
+  });
   const selectedLeftIdsSet = useMemo(() => new Set(selectedLeftIds), [selectedLeftIds]);
 
   const commitSearch = useCallback((value: string) => {

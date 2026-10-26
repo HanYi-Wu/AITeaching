@@ -50,10 +50,13 @@ describe("tokenizeContent", () => {
     expect(result[0]).toMatchObject({ type: "inlineMath", latex: "a\nb" });
   });
 
-  it("图片占位符 :::EMBED_IMG:path:::", () => {
-    const result = tokenizeContent("见图 :::EMBED_IMG:foo/bar.png::: 后");
+  it.each(["EMBED_IMG", "PRIMEBRUSH_IMG", "MERMAID_IMG"])("preserves %s image placeholders", (kind) => {
+    const raw = `:::${kind}:foo/bar.png:::`;
+    const result = tokenizeContent(`见图 ${raw} 后`);
     expect(result).toHaveLength(3);
-    expect(result[1]).toMatchObject({ type: "image", kind: "EMBED_IMG_IMG", path: "foo/bar.png" });
+    expect(result[1]).toMatchObject({ type: "image", kind, path: "foo/bar.png", raw });
+    const image = result[1];
+    expect(image.type === "image" && `:::${image.kind}:${image.path}:::`).toBe(raw);
   });
 
   it("Mermaid 围栏", () => {

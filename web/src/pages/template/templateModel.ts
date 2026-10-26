@@ -22,7 +22,7 @@ export type PrimeBrushPdfOpts = {
   latex_width?: string;
 };
 
-type LayoutOpts = {
+export type LayoutOpts = {
   margin_cm?: number;
   body_font_size_pt?: number;
   show_binding_line?: boolean;
@@ -46,8 +46,18 @@ export type MetadataUiField = {
   omit_values?: unknown[];
 };
 
+/** 内置版面表单负责的默认键名（与后端 TEMPLATE_EDITOR_LAYOUT_BUILTIN_KEYS_ORDERED 保持一致） */
+export const DEFAULT_LAYOUT_BUILTIN_KEYS = [
+  "margin_cm",
+  "body_font_size_pt",
+  "show_binding_line",
+  "show_name_column",
+  "mermaid_pdf",
+  "primebrush_pdf",
+] as const;
+
 /** 内置版面表单负责的键由 GET /api/templates/parsed 的 layout_builtin_keys 提供 */
-function splitMetadataDefaults(
+export function splitMetadataDefaults(
   raw: unknown,
   builtinKeys: Set<string>,
 ): { layout: LayoutOpts; extra: Record<string, unknown> } {
@@ -103,30 +113,43 @@ export function serializeExtraForYaml(
     }
     return value;
   }
+  const omit = spec.omit_values ?? [];
   if (spec.kind === "text" || spec.kind === "textarea") {
     const s = String(value);
     if (s.trim() === "") {
+      return undefined;
+    }
+    if (omit.some((x) => String(x) === s)) {
       return undefined;
     }
     return value;
   }
   if (spec.kind === "select") {
     const s = String(value);
-    const omit = spec.omit_values ?? [];
     if (omit.some((x) => String(x) === s)) {
       return undefined;
     }
     return value;
   }
   if (spec.kind === "checkbox") {
-    return Boolean(value);
+    const b = Boolean(value);
+    if (omit.some((x) => Boolean(x) === b || String(x) === String(b))) {
+      return undefined;
+    }
+    return b;
   }
   if (spec.kind === "number") {
     const n = Number(value);
     if (Number.isNaN(n)) {
       return undefined;
     }
+    if (omit.some((x) => Number(x) === n || String(x) === String(n))) {
+      return undefined;
+    }
     return n;
+  }
+  if (omit.some((x) => String(x) === String(value) || x === value)) {
+    return undefined;
   }
   return value;
 }
@@ -356,3 +379,149 @@ export const FALLBACK_LATEX_BASES: LatexBasesResponse = {
   in_project: [],
   choices: ["exam-zh-base.tex.j2"],
 };
+
+export type BuildYamlOptions = {
+  fields?: MetadataUiField[];
+  editorDefaults?: Record<string, unknown> | null;
+  layoutBuiltinKeys?: string[] | Set<string>;
+};
+
+export function buildTemplateYamlObject(
+  draft: Draft,
+  options?: BuildYamlOptions,
+): Record<string, unknown> {
+  const fields = options?.fields ?? [];
+  const def = options?.editorDefaults;
+  const builtinKeys =
+    options?.layoutBuiltinKeys instanceof Set
+      ? options.layoutBuiltinKeys
+      : new Set(options?.layoutBuiltinKeys ?? DEFAULT_LAYOUT_BUILTIN_KEYS);
+
+  const lo = draft.metadata_defaults;
+  const loOut: Record<string, unknown> = {};
+  const mDef = (def?.mermaid_pdf ?? {}) as MermaidPdfOpts;
+  const pDef = (def?.primebrush_pdf ?? {}) as PrimeBrushPdfOpts;
+
+  if (lo.margin_cm != null && !Number.isNaN(lo.margin_cm)) {
+    if (!(def != null && lo.margin_cm === def.margin_cm)) {
+      loOut.margin_cm = lo.margin_cm;
+    }
+  }
+  if (lo.body_font_size_pt != null && !Number.isNaN(lo.body_font_size_pt)) {
+    loOut.body_font_size_pt = lo.body_font_size_pt;
+  }
+  if (lo.show_binding_line) {
+    loOut.show_binding_line = true;
+  }
+  if (lo.show_name_column) {
+    loOut.show_name_column = true;
+  }
+  const mermaidOut = {
+    landscape_width: lo.mermaid_pdf?.landscape_width?.trim() || mDef.landscape_width || "",
+    portrait_width: lo.mermaid_pdf?.portrait_width?.trim() || mDef.portrait_width || "",
+    portrait_max_height: lo.mermaid_pdf?.portrait_max_height?.trim() || mDef.portrait_max_height || "",
+  };
+  const primebrushOut = {
+    latex_width: lo.primebrush_pdf?.latex_width?.trim() || pDef.latex_width || "",
+  };
+  if (!(def != null && mermaidPdfEqual(mermaidOut, def.mermaid_pdf))) {
+    loOut.mermaid_pdf = mermaidOut;
+  }
+  if (!(def != null && primebrushPdfEqual(primebrushOut, def.primebrush_pdf))) {
+    loOut.primebrush_pdf = primebrushOut;
+  }
+
+  for (const [k, v] of Object.entries(draft.metadata_extra)) {
+    if (builtinKeys.has(k)) {
+      continue;
+    }
+    const ser = serializeExtraForYaml(k, v, fields);
+    if (ser !== undefined) {
+      loOut[k] = ser;
+    }
+  }
+
+  const cleaned: Record<string, unknown> = {
+    template_id: draft.template_id,
+    layout: draft.layout,
+    latex_base: draft.latex_base,
+    sections: draft.sections.map((s) => {
+      const row: Record<string, unknown> = {
+        section_id: s.section_id,
+        type: s.type,
+        required_count: s.type === "text" ? 0 : s.required_count,
+        score_per_item: s.score_per_item,
+      };
+      if (s.describe && s.describe.trim()) {
+        row.describe = s.describe;
+      }
+      return row;
+    }),
+    metadata_defaults: loOut,
+  };
+
+  return cleaned;
+}
+
+export function buildTemplateYaml(draft: Draft, options?: BuildYamlOptions): string {
+  const cleaned = buildTemplateYamlObject(draft, options);
+  return yaml.dump(cleaned, { lineWidth: 120, noRefs: true });
+}
+
+export function updateSectionItem(
+  sections: TemplateSectionRow[],
+  index: number,
+  patch: Partial<TemplateSectionRow>,
+): TemplateSectionRow[] {
+  if (index < 0 || index >= sections.length) return sections;
+  const next = [...sections];
+  const cur = { ...next[index], ...patch };
+  if (cur.type === "text") {
+    cur.required_count = 0;
+  }
+  next[index] = cur;
+  return next;
+}
+
+export function moveSectionItem(
+  sections: TemplateSectionRow[],
+  index: number,
+  dir: -1 | 1,
+): TemplateSectionRow[] {
+  const target = index + dir;
+  if (index < 0 || index >= sections.length || target < 0 || target >= sections.length) {
+    return sections;
+  }
+  const next = [...sections];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+export function removeSectionItem(
+  sections: TemplateSectionRow[],
+  index: number,
+): TemplateSectionRow[] {
+  if (index < 0 || index >= sections.length) return sections;
+  return sections.filter((_, k) => k !== index);
+}
+
+export function addSectionItem(
+  sections: TemplateSectionRow[],
+  type: string,
+  kindLabel: string,
+): TemplateSectionRow[] {
+  let ordinal = 1;
+  while (sections.some((s) => s.section_id === `${kindLabel} ${ordinal}`)) {
+    ordinal += 1;
+  }
+  return [
+    ...sections,
+    {
+      section_id: `${kindLabel} ${ordinal}`,
+      type,
+      required_count: type === "text" ? 0 : 1,
+      score_per_item: type === "text" ? 0 : 5,
+      describe: "",
+    },
+  ];
+}

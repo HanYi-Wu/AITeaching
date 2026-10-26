@@ -152,7 +152,7 @@ export function tokenizeContent(value: string): ContentToken[] {
     IMAGE_PLACEHOLDER_RE,
     (_full: string, imgKind: string, path: string) => {
       const idx = saved.length;
-      saved.push({ kind: "image", imgKind: `${imgKind}_IMG`, path, raw: _full });
+      saved.push({ kind: "image", imgKind, path, raw: _full });
       return `${SENTINEL_PRE}${idx}${SENTINEL_SUF}`;
     },
   );

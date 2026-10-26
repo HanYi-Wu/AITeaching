@@ -115,4 +115,69 @@ describe("LatexRichTextField widget deletion", () => {
     expect(execCommand).toHaveBeenCalledWith("delete");
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith("before  after"));
   });
+  it("applies a new question value while the visual editor remains focused", () => {
+    const onChange = vi.fn();
+    const textAreaRef = createRef<HTMLTextAreaElement>();
+    const { container, rerender, getByText } = render(
+      <LatexRichTextField value="question one" onChange={onChange} textAreaRef={textAreaRef} />
+    );
+    const editor = container.querySelector("[contenteditable='true']") as HTMLDivElement;
+    editor.focus();
+
+    // The parent selects another question without blurring this field.
+    rerender(
+      <LatexRichTextField value="question two" onChange={onChange} textAreaRef={textAreaRef} />
+    );
+
+    expect(editor.textContent).toBe("question two");
+
+    fireEvent.click(getByText("源码"));
+    rerender(
+      <LatexRichTextField value="question three" onChange={onChange} textAreaRef={textAreaRef} />
+    );
+    const source = container.querySelector("textarea:not(.sr-only)") as HTMLTextAreaElement;
+    expect(source.value).toBe("question three");
+
+    fireEvent.click(getByText("可视化"));
+    expect(container.querySelector("[contenteditable='true']")?.textContent).toBe("question three");
+  });
+
+  it("passes unified selection to embed requests in visual mode", () => {
+    const onRequestMermaid = vi.fn();
+    const textAreaRef = createRef<HTMLTextAreaElement>();
+    const { getByTitle } = render(
+      <LatexRichTextField
+        value="0123456789"
+        onChange={vi.fn()}
+        textAreaRef={textAreaRef}
+        onRequestMermaid={onRequestMermaid}
+      />
+    );
+
+    fireEvent.click(getByTitle("插入流程图 / Mermaid 图表"));
+    expect(onRequestMermaid).toHaveBeenCalled();
+  });
+
+  it("syncs source mode textarea selection to hidden sync textarea", () => {
+    const textAreaRef = createRef<HTMLTextAreaElement>();
+    const { container, getByText } = render(
+      <LatexRichTextField
+        value="0123456789"
+        onChange={vi.fn()}
+        textAreaRef={textAreaRef}
+      />
+    );
+
+    // Switch to source mode
+    fireEvent.click(getByText("源码"));
+    const sourceTa = container.querySelector("textarea:not(.sr-only)") as HTMLTextAreaElement;
+    expect(sourceTa).not.toBeNull();
+
+    sourceTa.selectionStart = 4;
+    sourceTa.selectionEnd = 8;
+    fireEvent.keyUp(sourceTa);
+
+    expect(textAreaRef.current?.selectionStart).toBe(4);
+    expect(textAreaRef.current?.selectionEnd).toBe(8);
+  });
 });

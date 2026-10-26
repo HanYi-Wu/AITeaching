@@ -1,9 +1,5 @@
 import {
-  type ChangeEvent,
-  type Dispatch,
   type LegacyRef,
-  type RefObject,
-  type SetStateAction,
   useMemo,
   useRef,
   useState,
@@ -12,95 +8,43 @@ import { useTranslation } from "react-i18next";
 import { ImagePlus } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { QUESTION_TYPE_OPTIONS, isChoiceQuestionType } from "../lib/questionTypes";
-import type { EmbedKind } from "../lib/bankEditorEmbedKinds";
 import { ChoiceOptionsFields } from "./ChoiceOptionsFields";
 import { LatexRichTextField } from "./LatexRichTextField";
 import { readAnswerLogic } from '../lib/answerLogic';
 import { AnswerRelationEditor } from './AnswerRelationEditor';
 import { KatexText } from './KatexText';
+import type {
+  BankQuestionEditorPanelProps,
+  GiLatexMemberField,
+} from "./bankEditorTypes";
+import {
+  addGroupSubItem,
+  getUnifiedUiInfo,
+  giFieldId,
+  parseGroupMemberIndex,
+  removeLastGroupSubItem,
+  resolveEditorSaveAction,
+  updateCategoryMetaRow,
+  updateGroupMaterial,
+  updateGroupMemberField,
+  updateGroupMemberOptions,
+  updateGroupMemberType,
+  updateGroupUnifiedType,
+  updateSingleQuestionType,
+} from "./bankEditorAdapters";
 
-export type QuestionJson = {
-  id: string;
-  type: string;
-  content: string;
-  options?: Record<string, string> | null;
-  answer: string;
-  analysis: string;
-  metadata?: Record<string, unknown>;
-  /** 题组展开时由后端填充，编辑材料时同步 */
-  group_material?: string | null;
-};
-
-export type GroupMemberJson = {
-  /** 混编（unified: false）时必填 */
-  type?: string;
-  content: string;
-  options?: Record<string, string> | null;
-  answer: string;
-  analysis: string;
-  metadata?: Record<string, unknown>;
-};
-
-export type QuestionGroupJson = {
-  id: string;
-  type: "group";
-  material: string;
-  /** false = 混编；否则为同型小题题型 */
-  unified: boolean | string;
-  items: GroupMemberJson[];
-};
-
-export type BankDetailState = {
-  qualified_id: string;
-  question: QuestionJson;
-  question_display?: QuestionJson;
-  file_yaml: string;
-  storage_path: string;
-  storage_kind: string;
-  question_group?: QuestionGroupJson | null;
-  question_group_preview?: { material: string; items: GroupMemberJson[]; unified?: boolean | string } | null;
-};
-
-export type { EmbedKind, MathFieldKey } from "../lib/bankEditorEmbedKinds";
-
-type MetaRow = { key: string; value: string };
-
-export type BankQuestionEditorPanelProps = {
-  /** full：表单+源码双 Tab；form / yaml：仅显示对应区块（用于外层「字段 / 源文件」分栏） */
-  panelMode?: "full" | "form" | "yaml";
-  detail: BankDetailState;
-  setDetail: Dispatch<SetStateAction<BankDetailState | null>>;
-  busy: boolean;
-  editorTab: "form" | "yaml";
-  setEditorTab: Dispatch<SetStateAction<"form" | "yaml">>;
-  rawYaml: string;
-  setRawYaml: Dispatch<SetStateAction<string>>;
-  metaRows: MetaRow[];
-  setMetaRows: Dispatch<SetStateAction<MetaRow[]>>;
-  contentRef: RefObject<HTMLTextAreaElement | null>;
-  answerRef: RefObject<HTMLTextAreaElement | null>;
-  analysisRef: RefObject<HTMLTextAreaElement | null>;
-  materialGroupRef: RefObject<HTMLTextAreaElement | null>;
-  imageInputRef: RefObject<HTMLInputElement | null>;
-  beginMathEmbed: (kind: EmbedKind, sel: { start: number; end: number } | null) => void;
-  beginMermaidEmbed: (kind: EmbedKind, sel: { start: number; end: number } | null) => void;
-  beginPrimeBrushEmbed: (kind: EmbedKind, sel: { start: number; end: number } | null) => void;
-  beginImageEmbed: (kind: EmbedKind, sel: { start: number; end: number } | null) => void;
-  onImageFileSelected: (e: ChangeEvent<HTMLInputElement>) => void;
-  onRemove: () => void;
-  onSave: () => void;
-  onSaveYaml: () => void;
-  onClose?: () => void;
-  removeLabel?: string;
-  /** 为 true 时不渲染外层白卡片与顶栏（由父级提供标题栏时） */
-  embedded?: boolean;
-};
-
-function giFieldId(i: number, f: "content" | "answer" | "analysis") {
-  return `bank-gi-${i}-${f}`;
-}
-
-type GiLatexMemberField = "content" | "answer" | "analysis";
+export type {
+  QuestionJson,
+  GroupMemberJson,
+  QuestionGroupJson,
+  BankDetailState,
+  BankQuestionEditorPanelProps,
+  MetaRow,
+  GiLatexMemberField,
+  EmbedKind,
+  MathFieldKey,
+} from "./bankEditorTypes";
+export { giFieldId } from "./bankEditorAdapters";
 
 function BankGiLatexField({
   memberIndex,
@@ -181,22 +125,16 @@ export function BankQuestionEditorPanel({
   const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false);
   const qg = detail.question_group;
   /** 同型题组：与 synthetic question id 的 __01 后缀对应；整组编辑时为 0 */
-  const memberIdx = useMemo(() => {
-    const m = detail.question.id.match(/__(\d{2})$/);
-    return m ? parseInt(m[1], 10) - 1 : 0;
-  }, [detail.question.id]);
+  const memberIdx = useMemo(() => parseGroupMemberIndex(detail.question.id), [detail.question.id]);
 
-  const unifiedUi = qg ? (qg.unified === false ? "mixed" : String(qg.unified)) : "single_choice";
-  const innerTypeForItems = unifiedUi === "mixed" ? "single_choice" : unifiedUi;
+  const { unifiedUi, innerTypeForItems } = useMemo(() => getUnifiedUiInfo(qg), [qg]);
 
   const tabsValue =
     panelMode === "full" ? editorTab : panelMode === "form" ? "form" : "yaml";
   const showTabSwitch = panelMode === "full";
 
   const runSave = () => {
-    if (panelMode === "yaml") return onSaveYaml();
-    if (panelMode === "form") return onSave();
-    return editorTab === "yaml" ? onSaveYaml() : onSave();
+    return resolveEditorSaveAction(panelMode, editorTab) === "yaml" ? onSaveYaml() : onSave();
   };
 
   return (
@@ -274,7 +212,7 @@ export function BankQuestionEditorPanel({
           </div>
           {!qg && <label className="block text-xs font-medium text-slate-600">分类（可自定义）
             <input aria-label="题目分类" className="mt-1 w-full rounded border p-2" placeholder="例如：课前练习、单元复习、易错题" value={metaRows.find(row => row.key === 'category')?.value ?? ''}
-              onChange={e => setMetaRows([...metaRows.filter(row => row.key !== 'category'), {key: 'category', value: e.target.value}])} />
+              onChange={e => setMetaRows(updateCategoryMetaRow(metaRows, e.target.value))} />
           </label>}
           {qg ? (
             <>
@@ -295,41 +233,7 @@ export function BankQuestionEditorPanel({
                   className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
                   value={unifiedUi}
                   onChange={(e) => {
-                    const u = e.target.value;
-                    const unifiedVal = u === "mixed" ? false : u;
-                    let items = qg.items.map((it) => ({ ...it }));
-                    if (u === "mixed") {
-                      /* 混编：不批量改各小题 options */
-                    } else if (isChoiceQuestionType(u)) {
-                      items = items.map((it) => ({
-                        ...it,
-                        options:
-                          it.options && Object.keys(it.options).length
-                            ? it.options
-                            : { A: "", B: "", C: "", D: "" },
-                      }));
-                    } else {
-                      items = items.map((it) => {
-                        const { options: _omit, ...rest } = it as GroupMemberJson & {
-                          options?: Record<string, string>;
-                        };
-                        return rest as GroupMemberJson;
-                      });
-                    }
-                    setDetail({
-                      ...detail,
-                      question_group: { ...qg, unified: unifiedVal, items },
-                      question: {
-                        ...detail.question,
-                        type: u === "mixed" ? "single_choice" : u,
-                        options:
-                          u === "mixed"
-                            ? detail.question.options
-                            : isChoiceQuestionType(u)
-                              ? detail.question.options ?? { A: "", B: "", C: "", D: "" }
-                              : null,
-                      },
-                    });
+                    setDetail(updateGroupUnifiedType(detail, e.target.value));
                   }}
                 >
                   <option value="mixed">{t("components:bankEditor.mixedOpt")}</option>
@@ -397,13 +301,9 @@ export function BankQuestionEditorPanel({
                   textAreaRef={materialGroupRef}
                   minRows={5}
                   value={qg.material}
-                  onChange={(next) =>
-                    setDetail({
-                      ...detail,
-                      question_group: { ...qg, material: next },
-                      question: { ...detail.question, group_material: next },
-                    })
-                  }
+                  onChange={(next) => {
+                    setDetail(updateGroupMaterial(detail, next));
+                  }}
                   onRequestMermaid={(sel) => beginMermaidEmbed({ k: "gm" }, sel)}
                   onRequestPrimeBrush={(sel) => beginPrimeBrushEmbed({ k: "gm" }, sel)}
                   onRequestImage={(sel) => beginImageEmbed({ k: "gm" }, sel)}
@@ -415,21 +315,8 @@ export function BankQuestionEditorPanel({
                 <button
                   type="button"
                   className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
-                    onClick={() => {
-                    const emptyChoiceOpts = { A: "", B: "", C: "", D: "" };
-                    const newItem =
-                      unifiedUi === "mixed"
-                        ? { type: "single_choice" as const, content: "", answer: "", analysis: "", metadata: {}, options: emptyChoiceOpts }
-                        : isChoiceQuestionType(innerTypeForItems)
-                          ? { content: "", answer: "", analysis: "", metadata: {}, options: emptyChoiceOpts }
-                          : { content: "", answer: "", analysis: "", metadata: {} };
-                    setDetail({
-                      ...detail,
-                      question_group: {
-                        ...qg,
-                        items: [...qg.items, newItem],
-                      },
-                    });
+                  onClick={() => {
+                    setDetail(addGroupSubItem(detail, unifiedUi, innerTypeForItems));
                   }}
                 >
                   {t("components:bankEditor.addSub")}
@@ -439,10 +326,7 @@ export function BankQuestionEditorPanel({
                     type="button"
                     className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
                     onClick={() => {
-                      setDetail({
-                        ...detail,
-                        question_group: { ...qg, items: qg.items.slice(0, -1) },
-                      });
+                      setDetail(removeLastGroupSubItem(detail));
                     }}
                   >
                     {t("components:bankEditor.removeLastSub")}
@@ -461,20 +345,7 @@ export function BankQuestionEditorPanel({
                         className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
                         value={it.type ?? "single_choice"}
                         onChange={(e) => {
-                          const nt = e.target.value;
-                          const items = [...qg.items];
-                          const cur = items[i];
-                          if (isChoiceQuestionType(nt)) {
-                            items[i] = {
-                              ...cur,
-                              type: nt,
-                              options: cur.options ?? { A: "", B: "", C: "", D: "" },
-                            };
-                          } else {
-                            const { options: _o, ...rest } = cur as GroupMemberJson & { options?: Record<string, string> };
-                            items[i] = { ...rest, type: nt };
-                          }
-                          setDetail({ ...detail, question_group: { ...qg, items } });
+                          setDetail(updateGroupMemberType(detail, i, e.target.value));
                         }}
                       >
                         {QUESTION_TYPE_OPTIONS.map((o) => (
@@ -545,10 +416,7 @@ export function BankQuestionEditorPanel({
                       value={it.content}
                       minRows={4}
                       onChange={(next) => {
-                        const items = [...qg.items];
-                        items[i] = { ...items[i], content: next };
-                        const q = memberIdx === i ? { ...detail.question, content: next, group_material: qg.material } : detail.question;
-                        setDetail({ ...detail, question_group: { ...qg, items }, question: q });
+                        setDetail(updateGroupMemberField(detail, memberIdx, i, "content", next));
                       }}
                       beginMermaidEmbed={beginMermaidEmbed}
                       beginPrimeBrushEmbed={beginPrimeBrushEmbed}
@@ -562,15 +430,7 @@ export function BankQuestionEditorPanel({
                       <ChoiceOptionsFields
                         options={it.options ?? { A: "", B: "", C: "", D: "" }}
                         onCommit={(opts) => {
-                          const items = [...qg.items];
-                          items[i] = { ...items[i], options: opts };
-                          const m = detail.question.id.match(/__(\d{2})$/);
-                          const midx = m ? parseInt(m[1], 10) - 1 : -1;
-                          let q = detail.question;
-                          if (midx === i) {
-                            q = { ...q, options: opts };
-                          }
-                          setDetail({ ...detail, question_group: { ...qg, items }, question: q });
+                          setDetail(updateGroupMemberOptions(detail, memberIdx, i, opts));
                         }}
                         idPrefix={`bank-opt-gi-${i}`}
                         busy={busy}
@@ -584,9 +444,7 @@ export function BankQuestionEditorPanel({
                   )}
                   <div className="mt-2">
                     <AnswerRelationEditor teacher value={it.answer} onChange={next => {
-                      const items = [...qg.items];
-                      items[i] = { ...items[i], answer: next };
-                      setDetail({ ...detail, question_group: { ...qg, items }, question: memberIdx === i ? { ...detail.question, answer: next } : detail.question });
+                      setDetail(updateGroupMemberField(detail, memberIdx, i, "answer", next));
                     }} />
                     {readAnswerLogic(it.answer) ? <KatexText text={it.answer} /> : <BankGiLatexField
                       memberIndex={i}
@@ -595,10 +453,7 @@ export function BankQuestionEditorPanel({
                       value={it.answer}
                       minRows={2}
                       onChange={(next) => {
-                        const items = [...qg.items];
-                        items[i] = { ...items[i], answer: next };
-                        const q = memberIdx === i ? { ...detail.question, answer: next } : detail.question;
-                        setDetail({ ...detail, question_group: { ...qg, items }, question: q });
+                        setDetail(updateGroupMemberField(detail, memberIdx, i, "answer", next));
                       }}
                       beginMermaidEmbed={beginMermaidEmbed}
                       beginPrimeBrushEmbed={beginPrimeBrushEmbed}
@@ -615,10 +470,7 @@ export function BankQuestionEditorPanel({
                       value={it.analysis ?? ""}
                       minRows={2}
                       onChange={(next) => {
-                        const items = [...qg.items];
-                        items[i] = { ...items[i], analysis: next };
-                        const q = memberIdx === i ? { ...detail.question, analysis: next } : detail.question;
-                        setDetail({ ...detail, question_group: { ...qg, items }, question: q });
+                        setDetail(updateGroupMemberField(detail, memberIdx, i, "analysis", next));
                       }}
                       beginMermaidEmbed={beginMermaidEmbed}
                       beginPrimeBrushEmbed={beginPrimeBrushEmbed}
@@ -647,21 +499,10 @@ export function BankQuestionEditorPanel({
                   className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
                   value={detail.question.type}
                   onChange={(e) => {
-                    const nt = e.target.value;
-                    const cur = detail.question;
-                    if (isChoiceQuestionType(nt)) {
-                      setDetail({
-                        ...detail,
-                        question: {
-                          ...cur,
-                          type: nt,
-                          options: cur.options ?? { A: "", B: "", C: "", D: "" },
-                        },
-                      });
-                    } else {
-                      const { options: _omit, ...rest } = cur;
-                      setDetail({ ...detail, question: { ...rest, type: nt, options: null } });
-                    }
+                    setDetail({
+                      ...detail,
+                      question: updateSingleQuestionType(detail.question, e.target.value),
+                    });
                   }}
                 >
                   {QUESTION_TYPE_OPTIONS.map((o) => (

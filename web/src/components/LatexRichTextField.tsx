@@ -9,435 +9,36 @@ import {
   useRef,
   useState,
 } from "react";
-import { MathfieldElement } from "mathlive";
-import "mathlive";
-import "mathlive/fonts.css";
+import { MathSymbolsDropdown } from "./latexField/MathSymbolsPanel";
+import { MathEditPopup } from "./latexField/MathEditPopup";
+import { getFieldSelection } from "./latexField/asyncCallbackBridge";
 import { Shapes, Table2 } from "lucide-react";
 
 import { resourceApiUrl } from "../api/client";
-import { tokenizeContent, type ContentToken } from "../lib/contentTokenizer";
-import { canonicalizeLatex } from "../lib/latexCanon";
-import { renderMathToHtmlSimple } from "../lib/katexRender";
 import { lintMathContent, type MathLintResult } from "../lib/mathLint";
-import { initMermaid } from "../lib/mermaidInit";
 import { isImeComposingKeyboardEvent } from "../lib/ime";
 import { TableEditorModal } from "./TableEditorModal";
 import {
   defaultSolaireTable,
-  expandSolaireTable,
-  parseSolaireTable,
   serializeSolaireTableBody,
-  type SolaireTableCell,
 } from "../lib/solaireTable";
+import {
+  MATH_WIDGET_CLASS,
+  DISPLAY_MATH_WIDGET_CLASS,
+  MERMAID_WIDGET_CLASS,
+  IMAGE_WIDGET_CLASS,
+  TABLE_WIDGET_CLASS,
+  buildEditorDom,
+  createMathWidget,
+  createTableWidget,
+  getSerializedCaretOffset,
+  isWidget,
+  renderMathHtml,
+  renderMermaidToElement,
+  serializeEditor,
+} from "./latexField/contentPreview";
 
-/* ═══════════════════ constants ═══════════════════ */
 
-const MATH_WIDGET_CLASS = "lrt-math-widget";
-const DISPLAY_MATH_WIDGET_CLASS = "lrt-display-math-widget";
-const MERMAID_WIDGET_CLASS = "lrt-mermaid-widget";
-const IMAGE_WIDGET_CLASS = "lrt-image-widget";
-const TABLE_WIDGET_CLASS = "lrt-table-widget";
-
-/* ═══════════════════ utility functions ═══════════════════ */
-
-function renderMathHtml(latex: string, displayMode = false): string {
-  return renderMathToHtmlSimple(latex, displayMode);
-}
-
-async function renderMermaidToElement(source: string, container: HTMLElement) {
-  try {
-    const mermaid = await initMermaid();
-    const id = `lrt-mmd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const { svg } = await mermaid.render(id, source.trim());
-    container.innerHTML = svg;
-  } catch {
-    container.textContent = "图表语法有误";
-    container.classList.add("text-amber-600");
-  }
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function renderTableCellHtml(text: string): string {
-  return tokenizeContent(text)
-    .map((token) => {
-      if (token.type === "text") return escapeHtml(token.content).replace(/\n/g, "<br/>");
-      if (token.type === "inlineMath") return renderMathHtml(token.latex, false);
-      if (token.type === "displayMath") return renderMathHtml(token.latex, true);
-      return "raw" in token ? escapeHtml(token.raw) : "";
-    })
-    .join("");
-}
-
-function tableCellAlignClass(cell: SolaireTableCell): string {
-  if (cell.align === "center") return "text-center";
-  if (cell.align === "right") return "text-right";
-  return "text-left";
-}
-
-/* ═══════════════════ Tokenizer ═══════════════════ */
-
-/** 统一分词器的别名，供编辑器使用。 */
-type Token = ContentToken;
-
-function tokenize(value: string): Token[] {
-  return tokenizeContent(value);
-}
-
-/* ═══════════════════ DOM builders ═══════════════════ */
-
-function createMathWidget(latex: string): HTMLSpanElement {
-  const span = document.createElement("span");
-  span.className = `${MATH_WIDGET_CLASS} mx-0.5 inline-flex max-w-full cursor-pointer items-baseline align-baseline rounded border border-transparent bg-blue-50/80 px-1 py-px transition-colors hover:border-blue-300 hover:bg-blue-100`;
-  span.contentEditable = "false";
-  span.tabIndex = -1;
-  span.dataset.latex = latex;
-  span.setAttribute("role", "button");
-  span.title = "点击编辑公式";
-  span.innerHTML = renderMathHtml(latex, false);
-  return span;
-}
-
-/** 显示公式 widget（$$...$$），块级居中渲染。 */
-function createDisplayMathWidget(latex: string): HTMLDivElement {
-  const div = document.createElement("div");
-  div.className = `${DISPLAY_MATH_WIDGET_CLASS} my-1.5 w-full cursor-pointer rounded border border-transparent bg-blue-50/60 px-2 py-1 text-center transition-colors hover:border-blue-300 hover:bg-blue-100`;
-  div.contentEditable = "false";
-  div.tabIndex = -1;
-  div.dataset.latex = latex;
-  div.dataset.displayMath = "true";
-  div.setAttribute("role", "button");
-  div.title = "点击编辑公式（显示模式）";
-  div.innerHTML = renderMathHtml(latex, true);
-  return div;
-}
-
-function createMermaidWidget(source: string): HTMLDivElement {
-  const div = document.createElement("div");
-  div.className = `${MERMAID_WIDGET_CLASS} my-1.5 block w-full cursor-pointer rounded-lg border border-emerald-200 bg-emerald-50/50 p-2 transition-colors hover:border-emerald-300 hover:bg-emerald-50`;
-  div.contentEditable = "false";
-  div.tabIndex = -1;
-  div.dataset.mermaidSource = source;
-  div.setAttribute("role", "button");
-  div.title = "点击编辑图表";
-
-  const header = document.createElement("div");
-  header.className = "flex items-center gap-1.5 text-[11px] text-emerald-700";
-  header.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="font-medium">Mermaid 图表</span><span class="text-emerald-500 text-[10px]">点击编辑</span>`;
-  div.appendChild(header);
-
-  const preview = document.createElement("div");
-  preview.className = "mt-1.5 max-h-48 overflow-auto rounded bg-white/80 p-1 text-[10px] text-slate-400";
-  preview.textContent = "渲染中…";
-  div.appendChild(preview);
-  void renderMermaidToElement(source, preview);
-
-  return div;
-}
-
-function createImageWidget(kind: string, path: string): HTMLSpanElement {
-  const span = document.createElement("span");
-  span.className = `${IMAGE_WIDGET_CLASS} my-1 inline-block max-w-full cursor-pointer rounded-lg border border-violet-200 bg-violet-50/50 p-1.5 align-top transition-colors hover:border-violet-300 hover:bg-violet-50`;
-  span.contentEditable = "false";
-  span.tabIndex = -1;
-  span.dataset.imageKind = kind;
-  span.dataset.imagePath = path;
-  span.setAttribute("role", "button");
-  span.title = "点击查看图片";
-
-  const img = document.createElement("img");
-  img.src = resourceApiUrl(path.trim());
-  img.alt = "";
-  img.className = "max-h-40 max-w-full rounded object-contain";
-  img.onerror = () => {
-    img.style.display = "none";
-    const fallback = document.createElement("span");
-    fallback.className = "text-xs text-violet-500";
-    fallback.textContent = `图片: ${path.trim()}`;
-    span.appendChild(fallback);
-  };
-  span.appendChild(img);
-
-  const label = document.createElement("div");
-  label.className = "mt-1 text-[10px] text-violet-500 truncate";
-  label.textContent = path.trim().split("/").pop() ?? "图片";
-  span.appendChild(label);
-
-  return span;
-}
-
-function createTableWidget(source: string): HTMLDivElement {
-  const div = document.createElement("div");
-  div.className = `${TABLE_WIDGET_CLASS} my-1.5 block w-full cursor-pointer rounded border border-cyan-200 bg-cyan-50/40 p-2 transition-colors hover:border-cyan-300 hover:bg-cyan-50`;
-  div.contentEditable = "false";
-  div.tabIndex = -1;
-  div.dataset.tableSource = source;
-  div.setAttribute("role", "button");
-  div.title = "点击编辑表格";
-
-  const header = document.createElement("div");
-  header.className = "mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-cyan-800";
-  header.textContent = "表格 · 点击编辑";
-  div.appendChild(header);
-
-  const body = document.createElement("div");
-  body.className = "max-h-56 overflow-auto rounded bg-white/90";
-  try {
-    const expanded = expandSolaireTable(parseSolaireTable(source));
-    const table = document.createElement("table");
-    table.className = "w-full border-collapse text-xs text-slate-800";
-    const tbody = document.createElement("tbody");
-    expanded.slots.forEach((row, r) => {
-      const tr = document.createElement("tr");
-      row.forEach((slot, c) => {
-        if (slot.covered) return;
-        const cell = document.createElement(slot.cell.header ? "th" : "td");
-        cell.rowSpan = slot.cell.rowSpan ?? 1;
-        cell.colSpan = slot.cell.colSpan ?? 1;
-        cell.className = `border border-slate-300 px-2 py-1 align-top ${tableCellAlignClass(slot.cell)} ${
-          slot.cell.header ? "bg-slate-100 font-semibold" : "bg-white"
-        }`;
-        cell.innerHTML = renderTableCellHtml(slot.cell.text);
-        cell.dataset.tableCell = `${r}:${c}`;
-        tr.appendChild(cell);
-      });
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    body.appendChild(table);
-  } catch (e) {
-    const pre = document.createElement("pre");
-    pre.className = "whitespace-pre-wrap p-2 text-xs text-red-700";
-    pre.textContent = e instanceof Error ? e.message : String(e);
-    body.appendChild(pre);
-  }
-  div.appendChild(body);
-  return div;
-}
-
-/* ═══════════════════ buildEditorDom ═══════════════════ */
-
-function buildEditorDom(root: HTMLElement, value: string): void {
-  root.innerHTML = "";
-  const tokens = tokenize(value);
-  for (const token of tokens) {
-    if (token.type === "text") {
-      const lines = token.content.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        if (i > 0) root.appendChild(document.createElement("br"));
-        if (lines[i]) root.appendChild(document.createTextNode(lines[i]));
-      }
-    } else if (token.type === "inlineMath") {
-      root.appendChild(createMathWidget(token.latex));
-    } else if (token.type === "displayMath") {
-      root.appendChild(createDisplayMathWidget(token.latex));
-    } else if (token.type === "mermaid") {
-      root.appendChild(createMermaidWidget(token.source));
-    } else if (token.type === "image") {
-      root.appendChild(createImageWidget(token.kind, token.path));
-    } else if (token.type === "table") {
-      root.appendChild(createTableWidget(token.source));
-    }
-  }
-  if (root.childNodes.length === 0) {
-    root.appendChild(document.createTextNode(""));
-  }
-}
-
-/* ═══════════════════ Serializer ═══════════════════ */
-
-function serializeEditor(root: HTMLElement): string {
-  let out = "";
-  function walk(n: Node): void {
-    if (n.nodeType === Node.TEXT_NODE) {
-      out += n.textContent ?? "";
-      return;
-    }
-    if (n.nodeType !== Node.ELEMENT_NODE) return;
-    const el = n as HTMLElement;
-    if (el.classList.contains(MATH_WIDGET_CLASS)) {
-      out += `$${el.dataset.latex ?? ""}$`;
-      return;
-    }
-    if (el.classList.contains(DISPLAY_MATH_WIDGET_CLASS)) {
-      out += `$$${el.dataset.latex ?? ""}$$`;
-      return;
-    }
-    if (el.classList.contains(MERMAID_WIDGET_CLASS)) {
-      const src = el.dataset.mermaidSource ?? "";
-      out += "```mermaid\n" + src + "\n```";
-      return;
-    }
-    if (el.classList.contains(IMAGE_WIDGET_CLASS)) {
-      const kind = el.dataset.imageKind ?? "EMBED_IMG";
-      const path = el.dataset.imagePath ?? "";
-      out += `:::${kind}:${path}:::`;
-      return;
-    }
-    if (el.classList.contains(TABLE_WIDGET_CLASS)) {
-      out += "```solaire-table\n" + (el.dataset.tableSource ?? "") + "\n```";
-      return;
-    }
-    if (el.tagName === "BR") {
-      out += "\n";
-      return;
-    }
-    for (const c of el.childNodes) walk(c);
-  }
-  for (const c of root.childNodes) walk(c);
-  return out;
-}
-
-/* ═══════════════════ Caret utilities ═══════════════════ */
-
-function widgetSerializedLength(el: HTMLElement): number {
-  if (el.classList.contains(MATH_WIDGET_CLASS)) {
-    return `$${el.dataset.latex ?? ""}$`.length;
-  }
-  if (el.classList.contains(DISPLAY_MATH_WIDGET_CLASS)) {
-    return `$$${el.dataset.latex ?? ""}$$`.length;
-  }
-  if (el.classList.contains(MERMAID_WIDGET_CLASS)) {
-    const src = el.dataset.mermaidSource ?? "";
-    return ("```mermaid\n" + src + "\n```").length;
-  }
-  if (el.classList.contains(IMAGE_WIDGET_CLASS)) {
-    const kind = el.dataset.imageKind ?? "EMBED_IMG";
-    const path = el.dataset.imagePath ?? "";
-    return `:::${kind}:${path}:::`.length;
-  }
-  if (el.classList.contains(TABLE_WIDGET_CLASS)) {
-    return ("```solaire-table\n" + (el.dataset.tableSource ?? "") + "\n```").length;
-  }
-  return 0;
-}
-
-function isWidget(el: HTMLElement): boolean {
-  return (
-    el.classList.contains(MATH_WIDGET_CLASS) ||
-    el.classList.contains(DISPLAY_MATH_WIDGET_CLASS) ||
-    el.classList.contains(MERMAID_WIDGET_CLASS) ||
-    el.classList.contains(IMAGE_WIDGET_CLASS) ||
-    el.classList.contains(TABLE_WIDGET_CLASS)
-  );
-}
-
-function serializedLengthOfNode(n: Node | undefined | null): number {
-  if (!n) return 0;
-  if (n.nodeType === Node.TEXT_NODE) return (n.textContent ?? "").length;
-  if (n.nodeType !== Node.ELEMENT_NODE) return 0;
-  const el = n as HTMLElement;
-  if (isWidget(el)) return widgetSerializedLength(el);
-  if (el.tagName === "BR") return 1;
-  let len = 0;
-  for (const c of el.childNodes) len += serializedLengthOfNode(c);
-  return len;
-}
-
-function getSerializedCaretOffset(root: HTMLElement, range: Range): number {
-  if (range.startContainer === root) {
-    let total = 0;
-    for (let i = 0; i < range.startOffset; i++) {
-      total += serializedLengthOfNode(root.childNodes[i] ?? undefined);
-    }
-    return total;
-  }
-  let total = 0;
-  let done = false;
-  function walk(n: Node): boolean {
-    if (done) return true;
-    if (n.nodeType === Node.TEXT_NODE) {
-      const text = n.textContent ?? "";
-      if (range.startContainer === n) {
-        total += Math.min(range.startOffset, text.length);
-        done = true;
-        return true;
-      }
-      total += text.length;
-      return false;
-    }
-    if (n.nodeType !== Node.ELEMENT_NODE) return false;
-    const el = n as HTMLElement;
-    if (isWidget(el)) {
-      const wLen = widgetSerializedLength(el);
-      if (range.startContainer === el || el.contains(range.startContainer)) {
-        if (range.startContainer === el && range.startOffset === 0) {
-          /* before widget */
-        } else {
-          total += wLen;
-        }
-        done = true;
-        return true;
-      }
-      total += wLen;
-      return false;
-    }
-    if (el.tagName === "BR") {
-      if (range.startContainer === el) {
-        done = true;
-        return true;
-      }
-      total += 1;
-      return false;
-    }
-    for (const c of el.childNodes) if (walk(c)) return true;
-    return false;
-  }
-  for (const c of root.childNodes) if (walk(c)) break;
-  return total;
-}
-
-/* ═══════════════════ Toolbar data ═══════════════════ */
-
-const SYMBOL_GROUPS: { label: string; symbols: { label: string; latex: string }[] }[] = [
-  {
-    label: "希腊字母",
-    symbols: [
-      { label: "α", latex: "\\alpha" },
-      { label: "β", latex: "\\beta" },
-      { label: "γ", latex: "\\gamma" },
-      { label: "δ", latex: "\\delta" },
-      { label: "θ", latex: "\\theta" },
-      { label: "λ", latex: "\\lambda" },
-      { label: "μ", latex: "\\mu" },
-      { label: "π", latex: "\\pi" },
-      { label: "σ", latex: "\\sigma" },
-      { label: "ω", latex: "\\omega" },
-    ],
-  },
-  {
-    label: "运算符",
-    symbols: [
-      { label: "±", latex: "\\pm" },
-      { label: "×", latex: "\\times" },
-      { label: "÷", latex: "\\div" },
-      { label: "≤", latex: "\\leq" },
-      { label: "≥", latex: "\\geq" },
-      { label: "≠", latex: "\\neq" },
-      { label: "≈", latex: "\\approx" },
-      { label: "∞", latex: "\\infty" },
-    ],
-  },
-  {
-    label: "常用",
-    symbols: [
-      { label: "∑", latex: "\\sum" },
-      { label: "∏", latex: "\\prod" },
-      { label: "∫", latex: "\\int" },
-      { label: "∂", latex: "\\partial" },
-      { label: "→", latex: "\\rightarrow" },
-      { label: "⇒", latex: "\\Rightarrow" },
-      { label: "∈", latex: "\\in" },
-      { label: "∀", latex: "\\forall" },
-    ],
-  },
-];
 
 /* ═══════════════════ Component ═══════════════════ */
 
@@ -496,20 +97,18 @@ export function LatexRichTextField({
   hideToolbar = false,
 }: LatexRichTextFieldProps) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const sourceTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const mermaidRenderSeqRef = useRef(0);
   const lastEmittedRef = useRef<string | null>(null);
   const composingRef = useRef(false);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
   const [mode, setMode] = useState<"visual" | "source">("visual");
-  const [symbolsOpen, setSymbolsOpen] = useState(false);
-  const symbolsBtnRef = useRef<HTMLButtonElement>(null);
 
   /* popup state */
   const [mathPopup, setMathPopup] = useState<MathPopupState>(null);
   const [mathPopupPos, setMathPopupPos] = useState({ top: 0, left: 0 });
-  const mathPopupHostRef = useRef<HTMLDivElement>(null);
-  const mfRef = useRef<MathfieldElement | null>(null);
   const mathPopupStateRef = useRef<MathPopupState>(null);
   mathPopupStateRef.current = mathPopup;
 
@@ -539,23 +138,14 @@ export function LatexRichTextField({
   /* ─── Hidden textarea sync ─── */
 
   const syncHiddenSelection = useCallback(() => {
-    const root = editorRef.current;
-    const ta = textAreaRef.current;
-    if (!root || !ta) return;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const r = sel.getRangeAt(0);
-    if (!root.contains(r.commonAncestorContainer)) return;
-    const rs = document.createRange();
-    rs.setStart(r.startContainer, r.startOffset);
-    rs.collapse(true);
-    const start = getSerializedCaretOffset(root, rs);
-    const re = document.createRange();
-    re.setStart(r.endContainer, r.endOffset);
-    re.collapse(true);
-    const end = r.collapsed ? start : getSerializedCaretOffset(root, re);
-    ta.setSelectionRange(Math.min(start, end), Math.max(start, end));
-  }, [textAreaRef]);
+    getFieldSelection(
+      editorRef.current,
+      textAreaRef.current,
+      sourceTextareaRef.current,
+      mode,
+      getSerializedCaretOffset,
+    );
+  }, [mode, textAreaRef]);
 
   /* ─── Emit changes ─── */
 
@@ -606,7 +196,8 @@ export function LatexRichTextField({
     const root = editorRef.current;
     if (!root) return;
     if (composingRef.current) return;
-    if (document.activeElement === root && value === lastEmittedRef.current) return;
+    const isFocused = document.activeElement === root;
+    if (isFocused && value === lastEmittedRef.current) return;
     buildEditorDom(root, value);
     lastEmittedRef.current = value;
   }, [value, mode]);
@@ -635,12 +226,11 @@ export function LatexRichTextField({
     setMathPopup({ widget, latex, isNew });
   }, []);
 
-  const closeMathPopup = useCallback((confirm: boolean) => {
+  const closeMathPopup = useCallback((confirm: boolean, latexOverride?: string) => {
     const popup = mathPopupStateRef.current;
     if (!popup) return;
-    if (confirm && mfRef.current) {
-      const rawLatex = mfRef.current.getValue("latex").trim();
-      const latex = canonicalizeLatex(rawLatex);
+    if (confirm) {
+      const latex = (latexOverride ?? popup.latex).trim();
       const isDisplay = popup.widget.classList.contains(DISPLAY_MATH_WIDGET_CLASS);
       if (latex) {
         popup.widget.dataset.latex = latex;
@@ -652,7 +242,6 @@ export function LatexRichTextField({
       popup.widget.remove();
     }
     setMathPopup(null);
-    mfRef.current = null;
     const root = editorRef.current;
     if (root) {
       const next = serializeEditor(root);
@@ -661,32 +250,6 @@ export function LatexRichTextField({
       root.focus();
     }
   }, []);
-
-  useEffect(() => {
-    if (!mathPopup || !mathPopupHostRef.current) return;
-    const host = mathPopupHostRef.current;
-    const mf = new MathfieldElement();
-    mf.className =
-      "w-full min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-base text-slate-900 outline-none focus:ring-2 focus:ring-blue-400";
-    host.innerHTML = "";
-    host.appendChild(mf);
-    mfRef.current = mf;
-    requestAnimationFrame(() => {
-      if (mathPopup.latex) mf.setValue(mathPopup.latex);
-      mf.focus();
-    });
-    const handleMfKey = (e: globalThis.KeyboardEvent) => {
-      if (isImeComposingKeyboardEvent(e)) return;
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); closeMathPopup(true); }
-      if (e.key === "Escape") { e.preventDefault(); closeMathPopup(false); }
-    };
-    mf.addEventListener("keydown", handleMfKey);
-    return () => {
-      mf.removeEventListener("keydown", handleMfKey);
-      mfRef.current = null;
-      host.innerHTML = "";
-    };
-  }, [mathPopup, closeMathPopup]);
 
   /* ═══════════════════ MERMAID POPUP ═══════════════════ */
 
@@ -729,7 +292,9 @@ export function LatexRichTextField({
     const el = mermaidPreviewRef.current;
     el.textContent = "渲染中…";
     el.classList.remove("text-amber-600");
-    const timer = setTimeout(() => void renderMermaidToElement(mermaidDraft, el), 400);
+    const seq = ++mermaidRenderSeqRef.current;
+    el.dataset.renderSeq = String(seq);
+    const timer = setTimeout(() => void renderMermaidToElement(mermaidDraft, el, seq), 400);
     return () => clearTimeout(timer);
   }, [mermaidDraft, mermaidPopup]);
 
@@ -1029,19 +594,7 @@ export function LatexRichTextField({
   }, []);
   const switchToSource = useCallback(() => setMode("source"), []);
 
-  /* ─── Close symbols dropdown on outside click ─── */
-
-  useEffect(() => {
-    if (!symbolsOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (symbolsBtnRef.current && !symbolsBtnRef.current.contains(e.target as Node)) {
-        const dropdown = document.getElementById("lrt-symbols-dropdown");
-        if (dropdown && !dropdown.contains(e.target as Node)) setSymbolsOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [symbolsOpen]);
+  
 
   /* ═══════════════════ Render ═══════════════════ */
 
@@ -1132,48 +685,10 @@ export function LatexRichTextField({
         </button>
 
         {/* symbols dropdown */}
-        <div className="relative">
-          <button
-            ref={symbolsBtnRef}
-            type="button"
-            className="rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-white hover:shadow-sm disabled:opacity-40"
-            disabled={mode !== "visual"}
-            onClick={() => setSymbolsOpen((o) => !o)}
-            title="常用符号"
-          >
-            α β π ▾
-          </button>
-          {symbolsOpen && (
-            <div
-              id="lrt-symbols-dropdown"
-              className="absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-2 shadow-xl"
-            >
-              {SYMBOL_GROUPS.map((group) => (
-                <div key={group.label} className="mb-1.5 last:mb-0">
-                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                    {group.label}
-                  </p>
-                  <div className="flex flex-wrap gap-0.5">
-                    {group.symbols.map((sym) => (
-                      <button
-                        key={sym.latex}
-                        type="button"
-                        className="rounded px-1.5 py-0.5 text-sm hover:bg-blue-50 hover:text-blue-700"
-                        title={sym.latex}
-                        onClick={() => {
-                          insertMathTemplate(sym.latex);
-                          setSymbolsOpen(false);
-                        }}
-                      >
-                        {sym.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <MathSymbolsDropdown
+          disabled={mode !== "visual"}
+          onSelectSymbol={insertMathTemplate}
+        />
 
         <div className="mx-1 h-4 w-px bg-slate-300" />
 
@@ -1263,6 +778,9 @@ export function LatexRichTextField({
         />
       ) : (
         <textarea
+          ref={sourceTextareaRef}
+          onKeyUp={syncHiddenSelection}
+          onMouseUp={syncHiddenSelection}
           className={`w-full border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-relaxed text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 ${hideToolbar ? "rounded-md" : "rounded-b-md border-t-0"}`}
           style={{ minHeight: minH }}
           value={value}
@@ -1310,35 +828,14 @@ export function LatexRichTextField({
       )}
 
       {/* ═══ Math editing popup ═══ */}
-      {mathPopup && (
-        <div id="lrt-math-popup" className="fixed z-50" style={{ top: mathPopupPos.top, left: mathPopupPos.left }}>
-          <div className="w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-2xl ring-1 ring-black/5">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-700">
-                {mathPopup.isNew ? "插入公式" : "编辑公式"}
-              </span>
-              <span className="text-[10px] text-slate-400">Enter 确认 · Esc 取消</span>
-            </div>
-            <div ref={mathPopupHostRef} className="min-h-[40px]" />
-            <div className="mt-2.5 flex justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-md px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
-                onClick={() => closeMathPopup(false)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
-                onClick={() => closeMathPopup(true)}
-              >
-                确认
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <MathEditPopup
+        open={!!mathPopup}
+        isNew={mathPopup?.isNew ?? false}
+        position={mathPopupPos}
+        initialLatex={mathPopup?.latex ?? ""}
+        onConfirm={(latex) => closeMathPopup(true, latex)}
+        onCancel={() => closeMathPopup(false)}
+      />
 
       {/* ═══ Mermaid editing popup ═══ */}
       {mermaidPopup && (

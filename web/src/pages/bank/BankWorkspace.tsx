@@ -1,20 +1,16 @@
 import {
   useCallback,
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
   useState,
   type ChangeEvent,
-  type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, X } from "lucide-react";
 import yaml from "js-yaml";
 import {
   apiDelete,
   apiGet,
-  apiGraphQuestionBindingsIndex,
   apiPost,
   apiPostFormData,
   apiPut,
@@ -28,34 +24,27 @@ import {
 } from "../../components/BankQuestionEditorPanel";
 import type { EmbedKind } from "../../lib/bankEditorEmbedKinds";
 import { ContentWithPrimeBrush } from "../../components/ContentWithPrimeBrush";
-import { BankFolderExplorer, type BankFolders } from "../../components/BankFolderExplorer";
-import { QuestionHoverDetails } from '../../components/QuestionHoverDetails';
-import { ContentTags, TagChips } from '../../components/ContentTags';
-import { KatexPlainPreview } from "../../components/KatexText";
+import { ContentTags } from '../../components/ContentTags';
 import { MathInsertOverlay } from "../../components/MathInsertOverlay";
 import { MermaidEditorModal } from "../../components/MermaidEditorModal";
 import { PrimeBrushEditorModal } from "../../components/PrimeBrushEditorModal";
-import { MetadataFilterControls } from "../../components/MetadataFilterControls";
 import { useAgentContext } from "../../contexts/AgentContext";
-import { useToolBar } from "../../contexts/ToolBarContext";
 import { TabPanel, type TabItem } from "../../components/layout/TabPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import i18n from "../../i18n/i18n";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { localeCompareStrings } from "../../lib/locale";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
-import { notifyContentLibraryChanged, useContentLibraryChanged } from "../../lib/contentEvents";
-import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../../lib/ime";
-import { cn } from "../../lib/utils";
+import { notifyContentLibraryChanged } from "../../lib/contentEvents";
+import { isImeCompositionActive } from "../../lib/ime";
 import { downloadPlatformBlob, listTaggedItems, type ContentTag } from "../../platform/auth";
-import { QUESTION_TYPE_OPTIONS, isChoiceQuestionType } from "../../lib/questionTypes";
-import {
-  buildMetadataFilterDefinitions,
-  hasActiveMetadataFilters,
-  matchesMetadataFilters,
-  type MetadataFilters,
-} from "../../lib/metadataFilters";
-import { defaultItemsForNewGroup, type BankListItem, type BankCollectionRow } from "./bankModel";
+import { isChoiceQuestionType } from "../../lib/questionTypes";
+import { defaultItemsForNewGroup, type BankListItem } from "./bankModel";
+import { pruneStaleSelection } from "./bankOperationModel";
+import { useBankList } from "./useBankList";
+import { BankToolbar } from "./BankToolbar";
+import { BankSidebar } from "./BankSidebar";
+import { useBankImageUpload } from "./bankImageAdapter";
 
 export function BankWorkspace({
   onError,
@@ -65,17 +54,32 @@ export function BankWorkspace({
   onOpenGraphNode?: (nodeId: string) => void;
 }) {
   const { t } = useTranslation(["bank", "lib", "common"]);
-  const [items, setItems] = useState<BankListItem[]>([]);
-  const [folders, setFolders] = useState<BankFolders>({ folders: [], assignments: {} });
-  const [collections, setCollections] = useState<BankCollectionRow[]>([]);
-  const [subjects, setSubjects] = useState<string[]>([]);
-  const [filterSubject, setFilterSubject] = useState<string>("__all__");
-  const [filterCollection, setFilterCollection] = useState<string>("__all__");
-  const [filterType, setFilterType] = useState<string>("__all__");
-  const [filterCategory, setFilterCategory] = useState("__all__");
-  const [metadataFilters, setMetadataFilters] = useState<MetadataFilters>({});
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+  const {
+    items,
+    folders,
+    setFolders,
+    collections,
+    subjects,
+    filterSubject,
+    setFilterSubject,
+    filterCollection,
+    setFilterCollection,
+    filterType,
+    setFilterType,
+    filterCategory,
+    setFilterCategory,
+    metadataFilters,
+    setMetadataFilters,
+    searchInput,
+    setSearchInput,
+    commitSearch,
+    graphLinkIndex,
+    loadList,
+    metadataFilterDefinitions,
+    filtered,
+    bankFilterSummary,
+  } = useBankList({ onError });
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
   const refreshTags = useCallback(() => { void listTaggedItems("bank").then(({ items }) => setTaggedItems(items)).catch(() => undefined); }, []);
@@ -90,15 +94,8 @@ export function BankWorkspace({
   const [importYaml, setImportYaml] = useState("");
   const [importSubject, setImportSubject] = useState(() => i18n.t("bank:defaultSubject"));
   const [importTarget] = useState("默认");
-  const importFileRef = useRef<HTMLInputElement>(null);
   const openModalAfterCreateRef = useRef(false);
   const [editorModalOpen, setEditorModalOpen] = useState(false);
-  const [bankFilterMenuOpen, setBankFilterMenuOpen] = useState(false);
-  const bankFilterDropdownRef = useRef<HTMLDivElement | null>(null);
-  const [bankNewQuestionOpen, setBankNewQuestionOpen] = useState(false);
-  const bankNewQuestionRef = useRef<HTMLDivElement | null>(null);
-  const [bankImportOpen, setBankImportOpen] = useState(false);
-  const bankImportRef = useRef<HTMLDivElement | null>(null);
   const [bankManageOpen, setBankManageOpen] = useState(false);
   const [manageEditId, setManageEditId] = useState<string | null>(null);
   const [manageDraftSubject, setManageDraftSubject] = useState("");
@@ -114,26 +111,37 @@ export function BankWorkspace({
   const [editorTab, setEditorTab] = useState<"form" | "yaml">("form");
   const [rawYaml, setRawYaml] = useState("");
   const [metaRows, setMetaRows] = useState<{ key: string; value: string }[]>([]);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const detailRequestSeqRef = useRef(0);
+  const draftRef = useRef({ selectedId, detail, rawYaml, metaRows });
+  draftRef.current = { selectedId, detail, rawYaml, metaRows };
+  const saveInProgressRef = useRef(false);
   const [mathOpen, setMathOpen] = useState(false);
   const [mermaidOpen, setMermaidOpen] = useState(false);
   const [primeBrushOpen, setPrimeBrushOpen] = useState(false);
-  /** 题目全限定 id → 已关联知识点（用于列表与编辑区标签） */
-  const [graphLinkIndex, setGraphLinkIndex] = useState<
-    Record<string, { id: string; canonical_name: string; node_kind: string }[]>
-  >({});
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const analysisRef = useRef<HTMLTextAreaElement>(null);
   const materialGroupRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  /** 插入目标（公式 / Mermaid / 图片） */
+  /** 插入目标（公式 / Mermaid） */
   const embedKindRef = useRef<EmbedKind | null>(null);
-  const imageEmbedKindRef = useRef<EmbedKind | null>(null);
   /** Saved when opening Math/Mermaid overlay — focus moves and loses textarea selection. */
   const embedSelectionRef = useRef<{ start: number; end: number } | null>(null);
 
+  const { imageInputRef, beginImageEmbed, onImageFileSelected, insertSnippet } =
+    useBankImageUpload({
+      detail,
+      setDetail,
+      setBusy,
+      onError,
+      contentRef,
+      answerRef,
+      analysisRef,
+      materialGroupRef,
+    });
+
   const { setPageContext } = useAgentContext();
-  const { setToolBar, clearToolBar } = useToolBar();
   const baselineRef = useRef<Record<string, { yaml: string; detailJson: string; metaRowsJson: string }>>({});
 
   useEffect(() => {
@@ -177,209 +185,6 @@ export function BankWorkspace({
     setPrimeBrushOpen(true);
   }, []);
 
-  const beginImageEmbed = useCallback((kind: EmbedKind, sel: { start: number; end: number } | null) => {
-    imageEmbedKindRef.current = kind;
-    embedSelectionRef.current = sel;
-    imageInputRef.current?.click();
-  }, []);
-
-  /** kind / saved 必须由调用方传入，勿在 updater 内读 ref，否则 React 18 Strict Mode 会双次调用 updater 导致第二次读空 ref、插入丢失。 */
-  const insertSnippet = useCallback(
-    (snippet: string, kind: EmbedKind, saved: { start: number; end: number } | null) => {
-      setDetail((d) => {
-        if (!d) {
-          return d;
-        }
-
-        if (kind.k === "qo") {
-          const key = kind.key;
-          const opts = { ...(d.question.options ?? {}) };
-          const prev = opts[key] ?? "";
-          const start = saved?.start ?? prev.length;
-          const end = saved?.end ?? prev.length;
-          const next = prev.slice(0, start) + snippet + prev.slice(end);
-          const pos = start + snippet.length;
-          opts[key] = next;
-          requestAnimationFrame(() => {
-            const ta = document.getElementById(`bank-opt-q-${key}`) as HTMLTextAreaElement | null;
-            if (ta) {
-              ta.focus();
-              ta.setSelectionRange(pos, pos);
-            }
-          });
-          return { ...d, question: { ...d.question, options: opts } };
-        }
-
-        if (kind.k === "gio" && d.question_group) {
-          const { i, key } = kind;
-          const g = d.question_group;
-          const items = [...g.items];
-          const row = { ...items[i] };
-          const opts = { ...(row.options ?? {}) };
-          const prev = opts[key] ?? "";
-          const start = saved?.start ?? prev.length;
-          const end = saved?.end ?? prev.length;
-          const next = prev.slice(0, start) + snippet + prev.slice(end);
-          const pos = start + snippet.length;
-          opts[key] = next;
-          items[i] = { ...row, options: opts };
-          const m = d.question.id.match(/__(\d{2})$/);
-          const midx = m ? parseInt(m[1], 10) - 1 : -1;
-          let q = d.question;
-          if (midx === i) {
-            q = { ...q, options: opts };
-          }
-          requestAnimationFrame(() => {
-            const ta = document.getElementById(`bank-opt-gi-${i}-${key}`) as HTMLTextAreaElement | null;
-            if (ta) {
-              ta.focus();
-              ta.setSelectionRange(pos, pos);
-            }
-          });
-          return { ...d, question_group: { ...g, items }, question: q };
-        }
-
-        if (kind.k === "q") {
-          const key = kind.f;
-          const ref = kind.f === "content" ? contentRef : kind.f === "answer" ? answerRef : analysisRef;
-          const prev = d.question[key];
-          const start = saved?.start ?? prev.length;
-          const end = saved?.end ?? prev.length;
-          const next = prev.slice(0, start) + snippet + prev.slice(end);
-          const pos = start + snippet.length;
-          requestAnimationFrame(() => {
-            const ta = ref.current;
-            if (ta) {
-              ta.focus();
-              ta.setSelectionRange(pos, pos);
-            }
-          });
-          return { ...d, question: { ...d.question, [key]: next } };
-        }
-
-        if (kind.k === "gm" && d.question_group) {
-          const prev = d.question_group.material;
-          const start = saved?.start ?? prev.length;
-          const end = saved?.end ?? prev.length;
-          const next = prev.slice(0, start) + snippet + prev.slice(end);
-          const pos = start + snippet.length;
-          requestAnimationFrame(() => {
-            const ta = materialGroupRef.current;
-            if (ta) {
-              ta.focus();
-              ta.setSelectionRange(pos, pos);
-            }
-          });
-          return {
-            ...d,
-            question_group: { ...d.question_group, material: next },
-            question: { ...d.question, group_material: next },
-          };
-        }
-
-        if (kind.k === "gi" && d.question_group) {
-          const { i, f } = kind;
-          const g = d.question_group;
-          const items = [...g.items];
-          const row = { ...items[i] };
-          const prev = (row[f] as string) ?? "";
-          const start = saved?.start ?? prev.length;
-          const end = saved?.end ?? prev.length;
-          const next = prev.slice(0, start) + snippet + prev.slice(end);
-          const pos = start + snippet.length;
-          (row as { content: string; answer: string; analysis: string })[f] = next;
-          items[i] = row;
-          const m = d.question.id.match(/__(\d{2})$/);
-          const midx = m ? parseInt(m[1], 10) - 1 : -1;
-          let q = d.question;
-          if (midx === i) {
-            if (f === "content") {
-              q = { ...q, content: next };
-            } else if (f === "answer") {
-              q = { ...q, answer: next };
-            } else {
-              q = { ...q, analysis: next };
-            }
-          }
-          requestAnimationFrame(() => {
-            const ta = document.getElementById(`bank-gi-${i}-${f}`) as HTMLTextAreaElement | null;
-            if (ta) {
-              ta.focus();
-              ta.setSelectionRange(pos, pos);
-            }
-          });
-          return { ...d, question_group: { ...g, items }, question: q };
-        }
-
-        return d;
-      });
-    },
-    [],
-  );
-
-  const onImageFileSelected = useCallback(
-    async (e: ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      const kind = imageEmbedKindRef.current;
-      imageEmbedKindRef.current = null;
-      e.target.value = "";
-      if (!file || !detail || !kind) {
-        return;
-      }
-      setBusy(true);
-      onError(null);
-      try {
-        const fd = new FormData();
-        fd.append("file", file);
-        const enc = encodeURIComponent(detail.qualified_id);
-        const r = await apiPostFormData<{ marker: string }>(`/api/bank/items/${enc}/image`, fd);
-        const saved = embedSelectionRef.current;
-        embedSelectionRef.current = null;
-        insertSnippet(r.marker, kind, saved);
-      } catch (err) {
-        onError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [detail, insertSnippet, onError],
-  );
-
-  const loadList = useCallback(async () => {
-    onError(null);
-    const [c, it, sub, folderData] = await Promise.all([
-      apiGet<{
-        collections: { id: string; label: string; subject?: string; collection?: string }[];
-      }>("/api/bank/collections"),
-      apiGet<{ items: BankListItem[] }>("/api/bank/items"),
-      apiGet<{ subjects: string[] }>("/api/bank/subjects"),
-      apiGet<BankFolders>("/api/bank/folders"),
-    ]);
-    setCollections(
-      c.collections.map((x) => {
-        const parts = x.id.split("/");
-        const subj = x.subject ?? parts[0] ?? "";
-        const coll =
-          x.collection ?? (parts.length > 1 ? parts.slice(1).join("/") : parts[0] ?? "");
-        return { id: x.id, label: x.label, subject: subj, collection: coll };
-      }),
-    );
-    setItems(it.items);
-    setFolders(folderData);
-    setSubjects(sub.subjects);
-    try {
-      const idx = await apiGraphQuestionBindingsIndex();
-      setGraphLinkIndex(idx.index ?? {});
-    } catch {
-      setGraphLinkIndex({});
-    }
-  }, [onError]);
-
-  useEffect(() => {
-    void loadList().catch((e: Error) => onError(e.message));
-  }, [loadList, onError]);
-  useContentLibraryChanged(kind => { if (kind === 'question') void loadList().catch((e: Error) => onError(e.message)); });
-
   useEffect(() => {
     if (!bankManageOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -392,177 +197,16 @@ export function BankWorkspace({
     return () => window.removeEventListener("keydown", onKey);
   }, [bankManageOpen]);
 
-  const collectionOptions = useMemo(() => {
-    if (filterSubject === "__all__") {
-      return collections;
-    }
-    return collections.filter((c) => {
-      if (c.id === "main") {
-        return filterSubject === "main";
-      }
-      return c.id.startsWith(`${filterSubject}/`);
-    });
-  }, [collections, filterSubject]);
-
-  // Legacy grouped files are exposed as ordinary questions in the unified bank.
-  const collapsedBankItems = items;
-
-  const metadataScopeItems = useMemo(() => {
-    return collapsedBankItems.filter((it) => {
-      if (filterSubject !== "__all__" && (it.subject ?? "") !== filterSubject) {
-        return false;
-      }
-      if (filterCollection !== "__all__" && it.collection !== filterCollection) {
-        return false;
-      }
-      if (filterType !== "__all__" && it.type !== filterType) {
-        return false;
-      }
-      return true;
-    });
-  }, [collapsedBankItems, filterSubject, filterCollection, filterType]);
-
-  const metadataFilterDefinitions = useMemo(
-    () => buildMetadataFilterDefinitions(metadataScopeItems),
-    [metadataScopeItems],
-  );
-  const deferredSearch = useDeferredValue(search);
-  const deferredMetadataFilters = useDeferredValue(metadataFilters);
-  const activeMetadataFilters = useMemo(
-    () => (hasActiveMetadataFilters(deferredMetadataFilters) ? deferredMetadataFilters : null),
-    [deferredMetadataFilters],
-  );
-  const metadataScopeSearchItems = useMemo(
-    () =>
-      metadataScopeItems.map((it) => ({
-        item: it,
-        searchText: [
-          it.qualified_id,
-          it.content_preview,
-          it.group_id ?? "",
-          it.group_material ?? "",
-          JSON.stringify(it.metadata ?? {}),
-        ]
-          .join("\n")
-          .toLowerCase(),
-      })),
-    [metadataScopeItems],
-  );
-
-  const filtered = useMemo(() => {
-    const q = deferredSearch.trim().toLowerCase();
-    return metadataScopeSearchItems
-      .filter(({ item, searchText }) => {
-        if (filterCategory !== "__all__" && String(item.metadata?.category || "未分类") !== filterCategory) return false;
-        if (activeMetadataFilters && !matchesMetadataFilters(item.metadata, activeMetadataFilters)) {
-          return false;
-        }
-        return !q || searchText.includes(q);
-      })
-      .map(({ item }) => item);
-  }, [activeMetadataFilters, metadataScopeSearchItems, deferredSearch, filterCategory]);
-  const bankFilterSummary = useMemo(() => {
-    const all = t("bank:filterAllLabel");
-    const sub = filterSubject === "__all__" ? all : filterSubject;
-    const collLabel =
-      filterCollection === "__all__"
-        ? all
-        : collections.find((c) => c.id === filterCollection)?.label ?? filterCollection;
-    const typLabel =
-      filterType === "__all__"
-        ? all
-        : filterType === "group"
-          ? t("bank:typeGroup")
-          : t(`lib:questionTypes.${filterType}`);
-    const searchSuffix = search.trim() ? t("bank:filterSearchActive") : "";
-    const tagSuffix = hasActiveMetadataFilters(metadataFilters) ? " · metadata" : "";
-    return `${sub} · ${collLabel} · ${typLabel}${searchSuffix}${tagSuffix}`;
-  }, [filterSubject, filterCollection, filterType, search, metadataFilters, collections, t]);
-
-  useEffect(() => {
-    if (!bankFilterMenuOpen) return;
-    const root = bankFilterDropdownRef.current;
-    if (!root) return;
-    const onPointerDownCapture = (e: PointerEvent) => {
-      if (e.composedPath().includes(root)) return;
-      setBankFilterMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDownCapture, true);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setBankFilterMenuOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDownCapture, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [bankFilterMenuOpen]);
-
-  useEffect(() => {
-    if (!bankNewQuestionOpen) return;
-    const root = bankNewQuestionRef.current;
-    if (!root) return;
-    const onPointerDownCapture = (e: PointerEvent) => {
-      if (e.composedPath().includes(root)) return;
-      if (!busy) setBankNewQuestionOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDownCapture, true);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) setBankNewQuestionOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDownCapture, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [bankNewQuestionOpen, busy]);
-
-  useEffect(() => {
-    if (!bankImportOpen) return;
-    const root = bankImportRef.current;
-    if (!root) return;
-    const onPointerDownCapture = (e: PointerEvent) => {
-      if (e.composedPath().includes(root)) return;
-      setBankImportOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDownCapture, true);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setBankImportOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDownCapture, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [bankImportOpen]);
-
   /** 导入目标科目：接口科目 + 列表中已出现的科目 */
   const importSubjectList = useMemo(() => {
     const fromItems = [...new Set(items.map((i) => i.subject).filter(Boolean) as string[])];
     return [...new Set([...subjects, ...fromItems])].sort((a, b) => localeCompareStrings(a, b));
   }, [subjects, items]);
 
-  const newCollectionList = useMemo(() => {
-    const subject = newSubject.trim();
-    return [
-      ...new Set(
-        collections
-          .filter((c) => !subject || c.subject === subject)
-          .map((c) => c.collection)
-          .filter(Boolean),
-      ),
-    ].sort((a, b) => localeCompareStrings(a, b));
-  }, [collections, newSubject]);
-
   const newSubjectSelectValue = useMemo(() => {
     const subject = newSubject.trim();
     return importSubjectList.includes(subject) ? subject : "__custom__";
   }, [importSubjectList, newSubject]);
-
-  const newCollectionSelectValue = useMemo(() => {
-    const collection = newCollection.trim();
-    return newCollectionList.includes(collection) ? collection : "__custom__";
-  }, [newCollection, newCollectionList]);
 
   const importSubjectSelectValue = useMemo(() => {
     if (importSubjectList.length === 0) {
@@ -582,64 +226,122 @@ export function BankWorkspace({
     return `${sub} → ${coll}`;
   }, [importSubject, importTarget, t]);
 
+  const fetchDetail = useCallback(async (qid: string): Promise<BankDetailState> => {
+    const enc = encodeURIComponent(qid);
+    const d = await apiGet<{
+      qualified_id: string;
+      question: QuestionJson | null;
+      question_display?: QuestionJson | null;
+      file_yaml: string;
+      storage_path: string;
+      storage_kind: string;
+      question_group?: QuestionGroupJson | null;
+      question_group_preview?: { material: string; items: GroupMemberJson[] } | null;
+    }>(`/api/bank/items/${enc}`);
+    let detailState: BankDetailState;
+    if (!d.question && d.question_group) {
+      const ug = d.question_group.unified;
+      const t = ug === false ? "single_choice" : typeof ug === "string" ? ug : "single_choice";
+      detailState = {
+        ...d,
+        question: {
+          id: `${d.question_group.id}__01`,
+          type: t,
+          content: "",
+          answer: "",
+          analysis: "",
+          metadata: {},
+          options: isChoiceQuestionType(t) ? { A: "", B: "", C: "", D: "" } : null,
+          group_material: d.question_group.material,
+        },
+        question_display: undefined,
+      };
+    } else {
+      detailState = {
+        ...(d as BankDetailState),
+        question_display: d.question_display ?? undefined,
+      };
+    }
+    return detailState;
+  }, []);
+
+  const detailMetaRows = useCallback((detailState: BankDetailState) => {
+    const m = detailState.question.metadata ?? {};
+    return Object.keys(m).length
+      ? Object.entries(m).map(([k, v]) => ({ key: k, value: String(v) }))
+      : [{ key: "", value: "" }];
+  }, []);
+
+  const setDetailBaseline = useCallback((qid: string, detailState: BankDetailState, rows: { key: string; value: string }[]) => {
+    baselineRef.current[qid] = {
+      yaml: detailState.file_yaml,
+      detailJson: JSON.stringify(detailState),
+      metaRowsJson: JSON.stringify(rows),
+    };
+  }, []);
+
   const loadDetail = useCallback(
     async (qid: string) => {
+      const requestSeq = ++detailRequestSeqRef.current;
       onError(null);
-      const enc = encodeURIComponent(qid);
-      const d = await apiGet<{
-        qualified_id: string;
-        question: QuestionJson | null;
-        question_display?: QuestionJson | null;
-        file_yaml: string;
-        storage_path: string;
-        storage_kind: string;
-        question_group?: QuestionGroupJson | null;
-        question_group_preview?: { material: string; items: GroupMemberJson[] } | null;
-      }>(`/api/bank/items/${enc}`);
-      let detailState: BankDetailState;
-      if (!d.question && d.question_group) {
-        const ug = d.question_group.unified;
-        const t = ug === false ? "single_choice" : typeof ug === "string" ? ug : "single_choice";
-        detailState = {
-          ...d,
-          question: {
-            id: `${d.question_group.id}__01`,
-            type: t,
-            content: "",
-            answer: "",
-            analysis: "",
-            metadata: {},
-            options: isChoiceQuestionType(t) ? { A: "", B: "", C: "", D: "" } : null,
-            group_material: d.question_group.material,
-          },
-          question_display: undefined,
-        };
-      } else {
-        detailState = {
-          ...(d as BankDetailState),
-          question_display: d.question_display ?? undefined,
-        };
+      const detailState = await fetchDetail(qid);
+      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid) {
+        return;
       }
+      const nextMetaRows = detailMetaRows(detailState);
       setDetail(detailState);
       setRawYaml(detailState.file_yaml);
-      const m = detailState.question.metadata ?? {};
-      const nextMetaRows = Object.keys(m).length
-        ? Object.entries(m).map(([k, v]) => ({ key: k, value: String(v) }))
-        : [{ key: "", value: "" }];
       setMetaRows(nextMetaRows);
       setEditorTab("form");
-      baselineRef.current[qid] = {
-        yaml: detailState.file_yaml,
-        detailJson: JSON.stringify(detailState),
-        metaRowsJson: JSON.stringify(nextMetaRows),
-      };
+      setDetailBaseline(qid, detailState, nextMetaRows);
     },
-    [onError],
+    [onError, fetchDetail, detailMetaRows, setDetailBaseline],
+  );
+
+  const reconcileSavedDetail = useCallback(
+    async (
+      qid: string,
+      submittedDetailJson: string,
+      submittedMetaRowsJson: string,
+      submittedYaml: string,
+    ) => {
+      const requestSeq = ++detailRequestSeqRef.current;
+      const detailState = await fetchDetail(qid);
+      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid) {
+        return;
+      }
+
+      const nextMetaRows = detailMetaRows(detailState);
+      setDetailBaseline(qid, detailState, nextMetaRows);
+
+      const current = draftRef.current;
+      const currentDetailBelongsToQuestion = current.detail?.qualified_id === qid;
+      const formUnchanged =
+        !currentDetailBelongsToQuestion ||
+        (JSON.stringify(current.detail) === submittedDetailJson &&
+          JSON.stringify(current.metaRows) === submittedMetaRowsJson);
+      const yamlUnchanged =
+        !currentDetailBelongsToQuestion || current.rawYaml === submittedYaml;
+
+      if (formUnchanged) {
+        setDetail(detailState);
+        setMetaRows(nextMetaRows);
+      }
+      if (yamlUnchanged) {
+        setRawYaml(detailState.file_yaml);
+      }
+      if (formUnchanged && yamlUnchanged) {
+        setEditorTab("form");
+      }
+    },
+    [fetchDetail, detailMetaRows, setDetailBaseline],
   );
 
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
+      setRawYaml("");
+      setMetaRows([]);
       setEditorModalOpen(false);
       return;
     }
@@ -724,13 +426,19 @@ export function BankWorkspace({
 
   async function saveForm() {
     if (isImeCompositionActive()) return;
-    if (!detail) {
+    if (!detail || detail.qualified_id !== selectedId) {
       return;
     }
+    if (saveInProgressRef.current) return;
+    const qid = detail.qualified_id;
+    const submittedDetailJson = JSON.stringify(detail);
+    const submittedMetaRowsJson = JSON.stringify(metaRows);
+    const submittedYaml = rawYaml;
+    saveInProgressRef.current = true;
     setBusy(true);
     onError(null);
     try {
-      const enc = encodeURIComponent(detail.qualified_id);
+      const enc = encodeURIComponent(qid);
       if (detail.question_group) {
         const body = buildQuestionGroupFromForm();
         await apiPut(`/api/bank/items/${enc}`, body);
@@ -739,20 +447,31 @@ export function BankWorkspace({
         await apiPut(`/api/bank/items/${enc}`, q);
       }
       await loadList();
-      await loadDetail(detail.qualified_id);
+      if (selectedIdRef.current === qid) {
+        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml);
+      }
       notifyContentLibraryChanged("question");
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (selectedIdRef.current === qid) {
+        onError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
+      saveInProgressRef.current = false;
       setBusy(false);
     }
   }
 
   async function saveRawYaml() {
     if (isImeCompositionActive()) return;
-    if (!detail) {
+    if (!detail || detail.qualified_id !== selectedId) {
       return;
     }
+    if (saveInProgressRef.current) return;
+    const qid = detail.qualified_id;
+    const submittedDetailJson = JSON.stringify(detail);
+    const submittedMetaRowsJson = JSON.stringify(metaRows);
+    const submittedYaml = rawYaml;
+    saveInProgressRef.current = true;
     setBusy(true);
     onError(null);
     try {
@@ -762,10 +481,10 @@ export function BankWorkspace({
           throw new Error(t("bank:errors.yamlMustBeObject"));
         }
         const obj = parsed as Record<string, unknown>;
-        if (String(obj.id ?? "") !== detail.qualified_id.split("/").at(-1)) {
+        if (String(obj.id ?? "") !== qid.split("/").at(-1)) {
           throw new Error("题目 ID 不可在 YAML 中修改；如需更名，请新建题目后迁移内容。");
         }
-        const enc = encodeURIComponent(detail.qualified_id);
+        const enc = encodeURIComponent(qid);
         if (obj.type === "group") {
           await apiPut(`/api/bank/items/${enc}`, obj as unknown as QuestionGroupJson);
         } else {
@@ -774,11 +493,16 @@ export function BankWorkspace({
         }
       }
       await loadList();
-      await loadDetail(detail.qualified_id);
+      if (selectedIdRef.current === qid) {
+        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml);
+      }
       notifyContentLibraryChanged("question");
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (selectedIdRef.current === qid) {
+        onError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
+      saveInProgressRef.current = false;
       setBusy(false);
     }
   }
@@ -825,8 +549,12 @@ export function BankWorkspace({
       notifyContentLibraryChanged("question");
       openModalAfterCreateRef.current = true;
       setOpenTabs((prev) => (prev.includes(r.qualified_id) ? prev : [...prev, r.qualified_id]));
+      selectedIdRef.current = r.qualified_id;
+      setDetail(null);
+      setRawYaml("");
+      setMetaRows([]);
       setSelectedId(r.qualified_id);
-      setBankNewQuestionOpen(false);
+      return true;
     } catch (e) {
       // The server can finish creating a question after a slow response timed out.
       // Reconcile the intended ID before offering another create attempt.
@@ -844,18 +572,23 @@ export function BankWorkspace({
         await loadList();
         openModalAfterCreateRef.current = true;
         setOpenTabs((prev) => (prev.includes(qualifiedId) ? prev : [...prev, qualifiedId]));
+        selectedIdRef.current = qualifiedId;
+        setDetail(null);
+        setRawYaml("");
+        setMetaRows([]);
         setSelectedId(qualifiedId);
-        setBankNewQuestionOpen(false);
         onError(null);
+        return true;
       } else {
         onError(e instanceof Error ? e.message : String(e));
+        return false;
       }
     } finally {
       setBusy(false);
     }
   }
 
-  async function doImport() {
+  async function doImport(): Promise<boolean> {
     setBusy(true);
     onError(null);
     try {
@@ -867,19 +600,20 @@ export function BankWorkspace({
       setImportYaml("");
       await loadList();
       notifyContentLibraryChanged("question");
-      setBankImportOpen(false);
+      return true;
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
-  async function doImportFromFile(e: ChangeEvent<HTMLInputElement>) {
+  async function doImportFromFile(e: ChangeEvent<HTMLInputElement>): Promise<boolean> {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) {
-      return;
+      return false;
     }
     const name = f.name.toLowerCase();
     setBusy(true);
@@ -898,7 +632,7 @@ export function BankWorkspace({
         }
         await loadList();
         notifyContentLibraryChanged("question");
-        setBankImportOpen(false);
+        return true;
       } else if (name.endsWith(".yaml") || name.endsWith(".yml")) {
         const text = await f.text();
         await apiPost("/api/bank/import", {
@@ -908,27 +642,44 @@ export function BankWorkspace({
         });
         await loadList();
         notifyContentLibraryChanged("question");
-        setBankImportOpen(false);
+        return true;
       } else {
         onError(t("errors.pickYamlZip"));
+        return false;
       }
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
   async function doExportSelection() {
-    if (selectedExportIds.length === 0) {
+    if (busy) return;
+    const currentItemIds = new Set(items.map((it) => it.qualified_id));
+    const { valid, stale } = pruneStaleSelection(selectedExportIds, currentItemIds);
+
+    if (stale.length > 0) {
+      setSelectedExportIds(valid);
+      if (valid.length === 0) {
+        onError("所选题目已不存在或已失效，请重新选择");
+        return;
+      }
+      onError(`部分已选题目（${stale.length} 道）已失效，已自动保留有效题目`);
+    } else {
+      onError(null);
+    }
+
+    if (valid.length === 0) {
       onError("请在左侧勾选需要导出的题目");
       return;
     }
+
     setBusy(true);
-    onError(null);
     try {
       const result = await apiPost<{ download_url: string; filename: string; question_count: number }>("/api/bank/export-selection", {
-        qualified_ids: selectedExportIds,
+        qualified_ids: valid,
         title: "我的题目导出",
       });
       const blob = await downloadPlatformBlob(result.download_url);
@@ -967,7 +718,16 @@ export function BankWorkspace({
       const newNs = r.namespace;
       const prefix = `${oldNs}/`;
       const mapQid = (qid: string) => (qid.startsWith(prefix) ? `${newNs}/${qid.slice(prefix.length)}` : qid);
-      setSelectedId((cur) => (cur ? mapQid(cur) : null));
+      const currentSelectedId = selectedIdRef.current;
+      const nextSelectedId = currentSelectedId ? mapQid(currentSelectedId) : null;
+      if (nextSelectedId !== currentSelectedId) {
+        detailRequestSeqRef.current++;
+        setDetail(null);
+        setRawYaml("");
+        setMetaRows([]);
+      }
+      selectedIdRef.current = nextSelectedId;
+      setSelectedId(nextSelectedId);
       setOpenTabs((tabs) => tabs.map(mapQid));
       if (filterCollection === oldNs) {
         setFilterCollection(newNs);
@@ -990,7 +750,22 @@ export function BankWorkspace({
     try {
       await apiPost("/api/bank/delete-collection", { namespace });
       const prefix = `${namespace}/`;
-      setSelectedId((cur) => (cur && (cur.startsWith(prefix) || cur === namespace) ? null : cur));
+      setSelectedExportIds((prev) => prev.filter((id) => id !== namespace && !id.startsWith(prefix)));
+      const currentSelectedId = selectedIdRef.current;
+      const selectedWasDeleted = Boolean(
+        currentSelectedId && (currentSelectedId.startsWith(prefix) || currentSelectedId === namespace),
+      );
+      if (selectedWasDeleted) {
+        selectedIdRef.current = null;
+        detailRequestSeqRef.current++;
+        setDetail(null);
+        setRawYaml("");
+        setMetaRows([]);
+        setEditorModalOpen(false);
+      }
+      setSelectedId((current) =>
+        current && (current.startsWith(prefix) || current === namespace) ? null : current,
+      );
       setOpenTabs((tabs) => tabs.filter((id) => id !== namespace && !id.startsWith(prefix)));
       if (filterCollection === namespace) {
         setFilterCollection("__all__");
@@ -1025,10 +800,24 @@ export function BankWorkspace({
         ? `?storage_path=${encodeURIComponent(detail.storage_path)}`
         : "";
       await apiDelete(`/api/bank/items/${enc}${sp}`);
-      setOpenTabs((prev) => prev.filter((x) => x !== selectedId));
+      const currentItem = items.find((x) => x.qualified_id === selectedId);
+      const removedIds = new Set([
+        selectedId,
+        ...(currentItem?.group_member_qualified_ids ?? []),
+      ]);
+      setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
+      setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
       delete baselineRef.current[selectedId];
-      setSelectedId(null);
-      setDetail(null);
+      const selectedWasDeleted = Boolean(selectedIdRef.current && removedIds.has(selectedIdRef.current));
+      if (selectedWasDeleted) {
+        selectedIdRef.current = null;
+        detailRequestSeqRef.current++;
+        setRawYaml("");
+        setMetaRows([]);
+        setEditorModalOpen(false);
+      }
+      setSelectedId((current) => (current && removedIds.has(current) ? null : current));
+      setDetail((current) => (current && removedIds.has(current.qualified_id) ? null : current));
       await loadList();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1046,13 +835,23 @@ export function BankWorkspace({
         ? `?storage_path=${encodeURIComponent(item.storage_path)}`
         : "";
       await apiDelete(`/api/bank/items/${enc}${sp}`);
-      setOpenTabs((prev) => prev.filter((x) => x !== item.qualified_id));
+      const removedIds = new Set([
+        item.qualified_id,
+        ...(item.group_member_qualified_ids ?? []),
+      ]);
+      setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
+      setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
       delete baselineRef.current[item.qualified_id];
-      if (selectedId === item.qualified_id) {
-        setSelectedId(null);
-        setDetail(null);
+      const selectedWasDeleted = Boolean(selectedIdRef.current && removedIds.has(selectedIdRef.current));
+      if (selectedWasDeleted) {
+        selectedIdRef.current = null;
+        detailRequestSeqRef.current++;
+        setRawYaml("");
+        setMetaRows([]);
         setEditorModalOpen(false);
       }
+      setSelectedId((current) => (current && removedIds.has(current) ? null : current));
+      setDetail((current) => (current && removedIds.has(current.qualified_id) ? null : current));
       await loadList();
       setPendingDeleteItem(null);
     } catch (e) {
@@ -1077,7 +876,7 @@ export function BankWorkspace({
   }, [detail]);
 
   const dirty = useMemo(() => {
-    if (!selectedId || !detail) return false;
+    if (!selectedId || !detail || detail.qualified_id !== selectedId) return false;
     const b = baselineRef.current[selectedId];
     if (!b) return false;
     const yamlDirty = rawYaml !== b.yaml;
@@ -1092,6 +891,11 @@ export function BankWorkspace({
       if (dirty && !window.confirm(t("switchTabDiscard"))) {
         return false;
       }
+      detailRequestSeqRef.current++;
+      selectedIdRef.current = qid;
+      setDetail(null);
+      setRawYaml("");
+      setMetaRows([]);
       setSelectedId(qid);
       return true;
     },
@@ -1107,10 +911,6 @@ export function BankWorkspace({
     [trySelectId],
   );
 
-  const commitSearch = useCallback((value: string) => {
-    setSearch(value);
-  }, []);
-
   const closeTab = useCallback(
     (qid: string) => {
       if (qid === selectedId && dirty && !window.confirm(t("closeTabConfirm"))) {
@@ -1120,10 +920,12 @@ export function BankWorkspace({
         const next = prev.filter((x) => x !== qid);
         if (selectedId === qid) {
           const fallback = next[next.length - 1] ?? null;
+          detailRequestSeqRef.current++;
+          selectedIdRef.current = fallback;
+          setDetail(null);
+          setRawYaml("");
+          setMetaRows([]);
           setSelectedId(fallback);
-          if (!fallback) {
-            setDetail(null);
-          }
         }
         return next;
       });
@@ -1137,419 +939,13 @@ export function BankWorkspace({
   const saveRawYamlRef = useRef(saveRawYaml);
   saveRawYamlRef.current = saveRawYaml;
 
-  useEffect(() => {
-    const left: ReactNode = (
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative shrink-0" ref={bankFilterDropdownRef}>
-          <button
-            type="button"
-            className={cn(
-              "flex max-w-[min(100vw-8rem,20rem)] items-center gap-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-left text-xs font-medium text-slate-800 hover:bg-slate-50",
-              bankFilterMenuOpen && "border-slate-400 bg-slate-100",
-            )}
-            aria-expanded={bankFilterMenuOpen}
-            aria-haspopup="dialog"
-            onClick={() => {
-              setBankNewQuestionOpen(false);
-              setBankImportOpen(false);
-              setBankFilterMenuOpen((v) => !v);
-            }}
-          >
-            <span className="shrink-0">{t("filter")}</span>
-            <span className="flex min-w-0 flex-1 items-center gap-1">
-              <span className="truncate text-[10px] font-normal text-slate-500">{bankFilterSummary}</span>
-              <ChevronDown
-                className={cn(
-                  "h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-200",
-                  bankFilterMenuOpen && "rotate-180",
-                )}
-                aria-hidden
-              />
-            </span>
-          </button>
-          {bankFilterMenuOpen ? (
-            <div
-              className="absolute left-0 top-full z-[100] mt-1 w-72 max-h-[min(70vh,28rem)] overflow-y-auto rounded-md border border-slate-200 bg-white p-2 shadow-lg"
-              role="dialog"
-              aria-label={t("filter")}
-            >
-              <div className="space-y-2">
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("subject")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm"
-                    value={filterSubject}
-                    onChange={(e) => {
-                      setFilterSubject(e.target.value);
-                      setFilterCollection("__all__");
-                    }}
-                  >
-                    <option value="__all__">{t("filterAllLabel")}</option>
-                    {(subjects.length ? subjects : [...new Set(items.map((i) => i.subject).filter(Boolean) as string[])]).map(
-                      (s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ),
-                    )}
-                  </select>
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("questionType")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                    value={filterType}
-                    onChange={(e) => setFilterType(e.target.value)}
-                  >
-                    <option value="__all__">{t("filterAllLabel")}</option>
-                    {QUESTION_TYPE_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {t(`lib:questionTypes.${o.value}`)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("search")}
-                  <input
-                    className="mt-0.5 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                    value={searchInput}
-                    onChange={(e) => setSearchInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter" || isImeComposingKeyboardEvent(e)) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      commitSearch(e.currentTarget.value);
-                    }}
-                    onBlur={(e) => commitSearch(e.currentTarget.value)}
-                    placeholder={t("searchPlaceholder")}
-                  />
-                </label>
-                <MetadataFilterControls
-                  definitions={metadataFilterDefinitions}
-                  filters={metadataFilters}
-                  onChange={setMetadataFilters}
-                />
-                <label className="block text-xs">分类
-                  <select aria-label="题目分类筛选" className="mt-1 w-full rounded border p-2" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
-                    <option value="__all__">全部分类</option>
-                    {[...new Set(["未分类", ...items.map(it => String(it.metadata?.category || "未分类"))])].sort().map(category => <option key={category}>{category}</option>)}
-                  </select>
-                </label>
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <div className="relative shrink-0" ref={bankNewQuestionRef}>
-          <button
-            type="button"
-            className={cn(
-              "flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50",
-              bankNewQuestionOpen && "border-slate-400 bg-slate-100",
-            )}
-            disabled={busy}
-            aria-expanded={bankNewQuestionOpen}
-            aria-haspopup="dialog"
-            onClick={() => {
-              setBankFilterMenuOpen(false);
-              setBankImportOpen(false);
-              setBankNewQuestionOpen((v) => !v);
-            }}
-          >
-            {t("newQuestion")}
-            <ChevronDown
-              className={cn(
-                "h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-200",
-                bankNewQuestionOpen && "rotate-180",
-              )}
-              aria-hidden
-            />
-          </button>
-          {bankNewQuestionOpen ? (
-            <div
-              className="absolute left-0 top-full z-[100] mt-1 w-80 max-h-[min(85vh,32rem)] overflow-y-auto rounded-md border border-slate-200 bg-white p-2 shadow-lg"
-              role="dialog"
-              aria-label={t("newQuestion")}
-            >
-              <div className="space-y-2">
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("newSubject")}
-                  <div className="mt-0.5 space-y-1">
-                    <select
-                      className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                      value={newSubjectSelectValue}
-                      onChange={(e) => setNewSubject(e.target.value === "__custom__" ? "" : e.target.value)}
-                    >
-                      {importSubjectList.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                      <option value="__custom__">{t("otherSubject")}</option>
-                    </select>
-                    {newSubjectSelectValue === "__custom__" && (
-                      <input
-                        className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
-                        value={newSubject}
-                        onChange={(e) => setNewSubject(e.target.value)}
-                        placeholder={t("newSubjectPh")}
-                      />
-                    )}
-                  </div>
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("newId")}
-                  <input
-                    className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 font-mono text-sm"
-                    value={newId}
-                    onChange={(e) => setNewId(e.target.value)}
-                  />
-                </label>
-                <label className="block text-[11px] font-medium text-slate-600">
-                  {t("newType")}
-                  <select
-                    className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 text-sm"
-                    value={newType}
-                    onChange={(e) => setNewType(e.target.value)}
-                  >
-                    {QUESTION_TYPE_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {t(`lib:questionTypes.${o.value}`)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {newType === "group" && (
-                  <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-2">
-                    <label className="block text-[11px] font-medium text-slate-600">
-                      {t("subItemMode")}
-                      <select
-                        className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                        value={newGroupUnified}
-                        onChange={(e) => setNewGroupUnified(e.target.value)}
-                      >
-                        <option value="mixed">{t("mixedMode")}</option>
-                        {QUESTION_TYPE_OPTIONS.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {t("sameType", { label: t(`lib:questionTypes.${o.value}`) })}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="block text-[11px] font-medium text-slate-600">
-                      {t("sharedMaterial")}
-                      <textarea
-                        className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1.5 font-mono text-xs"
-                        rows={4}
-                        value={newGroupMaterial}
-                        onChange={(e) => setNewGroupMaterial(e.target.value)}
-                        placeholder={t("sharedMaterialPh")}
-                      />
-                    </label>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="w-full rounded-md border border-slate-300 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
-                  disabled={busy || !newSubject.trim() || !newCollection.trim() || !newId.trim()}
-                  onClick={() => void createQuestion()}
-                >
-                  {newType === "group" ? t("createGroup") : t("createDraft")}
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <div className="relative shrink-0" ref={bankImportRef}>
-          <button
-            type="button"
-            className={cn(
-              "flex max-w-[min(100vw-8rem,22rem)] items-center gap-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-left text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50",
-              bankImportOpen && "border-slate-400 bg-slate-100",
-            )}
-            disabled={busy}
-            aria-expanded={bankImportOpen}
-            aria-haspopup="dialog"
-            onClick={() => {
-              setBankFilterMenuOpen(false);
-              setBankNewQuestionOpen(false);
-              setBankImportOpen((v) => !v);
-            }}
-          >
-            <span className="shrink-0">{t("importToolbar")}</span>
-            <span className="flex min-w-0 flex-1 items-center justify-end gap-1">
-              <span className="truncate text-[10px] font-normal text-slate-500">{importSummaryHint}</span>
-              <ChevronDown
-                className={cn(
-                  "h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-200",
-                  bankImportOpen && "rotate-180",
-                )}
-                aria-hidden
-              />
-            </span>
-          </button>
-          {bankImportOpen ? (
-            <div
-              className="absolute left-0 top-full z-[100] mt-1 w-80 max-h-[min(85vh,32rem)] overflow-y-auto rounded-md border border-slate-200 bg-white p-2 shadow-lg"
-              role="dialog"
-              aria-label={t("importToolbar")}
-            >
-              <p className="text-[10px] leading-snug text-slate-500">{t("importFormats")}</p>
-              <label className="mt-2 block text-[11px] font-medium text-slate-600">
-                {t("targetSubject")}
-                {importSubjectList.length > 0 ? (
-                  <div className="mt-0.5 space-y-1">
-                    <select
-                      className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                      value={importSubjectSelectValue}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (v === "__custom__") {
-                          setImportSubject("");
-                        } else {
-                          setImportSubject(v);
-                        }
-                      }}
-                    >
-                      {importSubjectList.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                      <option value="__custom__">{t("otherSubject")}</option>
-                    </select>
-                    {importSubjectSelectValue === "__custom__" && (
-                      <input
-                        className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
-                        value={importSubject}
-                        onChange={(e) => setImportSubject(e.target.value)}
-                        placeholder={t("folderNamePh")}
-                      />
-                    )}
-                  </div>
-                ) : (
-                  <input
-                    className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 text-sm"
-                    value={importSubject}
-                    onChange={(e) => setImportSubject(e.target.value)}
-                    placeholder={t("folderNamePh")}
-                  />
-                )}
-              </label>
-              <input
-                ref={importFileRef}
-                type="file"
-                accept=".yaml,.yml,.zip,application/zip,application/x-yaml,text/yaml"
-                className="hidden"
-                aria-hidden
-                onChange={(e) => void doImportFromFile(e)}
-              />
-              <button
-                type="button"
-                className="mt-2 w-full rounded-md bg-slate-900 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                disabled={busy}
-                onClick={() => importFileRef.current?.click()}
-              >
-                {t("importChooseFile")}
-              </button>
-              <details className="mt-2 rounded border border-slate-200 bg-slate-50 p-2">
-                <summary className="cursor-pointer text-[11px] font-medium text-slate-700">{t("pasteYaml")}</summary>
-                <p className="mt-1 text-[10px] text-slate-500">{t("pasteYamlHint")}</p>
-                <textarea
-                  className="mt-2 w-full rounded border border-slate-300 bg-white font-mono text-xs"
-                  rows={5}
-                  placeholder={t("pasteYamlTextareaPh")}
-                  value={importYaml}
-                  onChange={(e) => setImportYaml(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="mt-2 w-full rounded-md border border-slate-800 bg-slate-50 py-1.5 text-xs font-medium text-slate-800 disabled:opacity-50"
-                  disabled={busy || !importYaml.trim()}
-                  onClick={() => void doImport()}
-                >
-                  {t("importToCollection")}
-                </button>
-              </details>
-            </div>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-          disabled={busy || selectedExportIds.length === 0}
-          title={selectedExportIds.length === 0 ? "先在左侧勾选题目" : undefined}
-          onClick={() => void doExportSelection()}
-        >
-          导出已选（{selectedExportIds.length}）
-        </button>
-      </div>
-    );
-    const right: ReactNode =
-      selectedId && detail ? (
-        <div className="flex items-center gap-2">
-          {dirty ? (
-            <span className="text-[11px] text-amber-700">{t("common:unsavedHint")}</span>
-          ) : null}
-          <button
-            type="button"
-            className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
-            disabled={busy || !dirty}
-            onClick={() => {
-              if (workView === "source") {
-                void saveRawYamlRef.current();
-              } else {
-                void saveFormRef.current();
-              }
-            }}
-          >
-            {t("components:bankEditor.save")}
-          </button>
-        </div>
-      ) : null;
-    setToolBar({ left, right });
-    return () => clearToolBar();
-  }, [
-    t,
-    busy,
-    selectedId,
-    selectedExportIds,
-    detail,
-    dirty,
-    workView,
-    editorTab,
-    filterCollection,
-    bankFilterMenuOpen,
-    bankFilterSummary,
-    filterSubject,
-    filterType,
-    filterCategory,
-    searchInput,
-    search,
-    commitSearch,
-    subjects,
-    items,
-    collectionOptions,
-    bankNewQuestionOpen,
-    newSubject,
-    newCollection,
-    newId,
-    newType,
-    newGroupUnified,
-    newGroupMaterial,
-    bankImportOpen,
-    importYaml,
-    importSubject,
-    importTarget,
-    importSubjectList,
-    newCollectionList,
-    newSubjectSelectValue,
-    newCollectionSelectValue,
-    importSubjectSelectValue,
-    importSummaryHint,
-    setToolBar,
-    clearToolBar,
-  ]);
+  const handleToolbarSave = useCallback(() => {
+    if (workView === "source") {
+      void saveRawYamlRef.current();
+    } else {
+      void saveFormRef.current();
+    }
+  }, [workView]);
 
   useEffect(() => {
     if (workView === "source") {
@@ -1660,100 +1056,72 @@ export function BankWorkspace({
 
   return (
     <>
+      <BankToolbar
+        busy={busy}
+        selectedExportIds={selectedExportIds}
+        onExport={doExportSelection}
+        subjects={subjects}
+        items={items}
+        filterSubject={filterSubject}
+        setFilterSubject={setFilterSubject}
+        setFilterCollection={setFilterCollection}
+        filterType={filterType}
+        setFilterType={setFilterType}
+        filterCategory={filterCategory}
+        setFilterCategory={setFilterCategory}
+        metadataFilters={metadataFilters}
+        setMetadataFilters={setMetadataFilters}
+        metadataFilterDefinitions={metadataFilterDefinitions}
+        searchInput={searchInput}
+        setSearchInput={setSearchInput}
+        commitSearch={commitSearch}
+        bankFilterSummary={bankFilterSummary}
+        importSubjectList={importSubjectList}
+        newSubject={newSubject}
+        setNewSubject={setNewSubject}
+        newSubjectSelectValue={newSubjectSelectValue}
+        newCollection={newCollection}
+        newId={newId}
+        setNewId={setNewId}
+        newType={newType}
+        setNewType={setNewType}
+        newGroupUnified={newGroupUnified}
+        setNewGroupUnified={setNewGroupUnified}
+        newGroupMaterial={newGroupMaterial}
+        setNewGroupMaterial={setNewGroupMaterial}
+        onCreateQuestion={createQuestion}
+        importSubject={importSubject}
+        setImportSubject={setImportSubject}
+        importSubjectSelectValue={importSubjectSelectValue}
+        importSummaryHint={importSummaryHint}
+        importYaml={importYaml}
+        setImportYaml={setImportYaml}
+        onImportFile={doImportFromFile}
+        onImportYaml={doImport}
+        selectedId={selectedId}
+        hasDetail={Boolean(detail)}
+        dirty={dirty}
+        onSave={handleToolbarSave}
+      />
     <div className="flex h-full min-h-0 flex-col md:flex-row">
       {/* 左：筛选 + 列表 + 导入 */}
-      <section className="flex w-full shrink-0 flex-col border-slate-200 bg-white md:w-[min(100%,300px)] md:border-r">
-        <div className="border-b border-slate-100 p-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("title")}</h2>
-        </div>
-        <BankFolderExplorer data={folders} items={filtered} selectedIds={selectedExportIds}
-          onOpenItem={openOrFocusTab} onRefresh={loadList}
-          onSelectIds={setSelectedExportIds}
-          onChange={setFolders} onError={onError} renderItem={(it) => {
-              const graphNodes = graphLinkIndex[it.qualified_id] ?? [];
-              return (
-                <li
-                  key={it.qualified_id}
-                  className={cn(
-                    "relative mb-1 rounded-lg border px-2 py-2 transition-colors",
-                    selectedId === it.qualified_id
-                      ? "border-slate-900 bg-slate-100"
-                      : "border-transparent bg-slate-50 hover:border-slate-200 hover:bg-white",
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    aria-label={`选择导出 ${it.qualified_id}`}
-                    checked={selectedExportIds.includes(it.qualified_id)}
-                    onChange={() => setSelectedExportIds((current) => current.includes(it.qualified_id) ? current.filter((id) => id !== it.qualified_id) : [...current, it.qualified_id])}
-                    className="absolute right-7 top-2 h-4 w-4"
-                  />
-                  <button
-                    type="button"
-                    className="w-full min-w-0 pr-5 text-left text-sm"
-                    title={`${it.qualified_id}\n${it.content_preview}`}
-                    onClick={() => openOrFocusTab(it.qualified_id)}
-                  >
-                    <div className="flex w-full min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
-                      <span className="shrink-0 rounded bg-slate-200 px-1 py-0.5 text-[10px] font-medium text-slate-700">
-                        {t(`lib:questionTypes.${it.type}`, { defaultValue: it.type })}
-                      </span>
-                      <span className="min-w-0 flex-1 break-all font-mono text-[11px] leading-snug text-slate-800">
-                        {it.qualified_id}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 block w-full min-w-0">
-                      <QuestionHoverDetails id={it.qualified_id}>
-                      <KatexPlainPreview
-                        text={it.content_preview}
-                        className="line-clamp-3 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
-                      />
-                      </QuestionHoverDetails>
-                    </div>
-                    {it.answer_relation_needs_review ? <p className="mt-1 text-xs text-amber-700">旧答案可能含且/或关系，请让助手AI检查并适配。</p> : null}
-                    {Object.keys(it.metadata ?? {}).length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {Object.entries(it.metadata).map(([k, v]) => (
-                          <span key={k} className="rounded-full bg-slate-200/80 px-1.5 py-0.5 text-[10px] text-slate-600">
-                            {k}:{String(v)}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </button>
-                  {(taggedItems[it.qualified_id]?.length ?? 0) > 0 ? <div className="mt-1"><TagChips tags={taggedItems[it.qualified_id]} /></div> : null}
-                  {graphNodes.length > 0 ? (
-                    <div className="mt-1.5 flex flex-wrap gap-1 border-t border-slate-200/80 pt-1.5">
-                      <span className="w-full text-[10px] font-medium text-slate-500">{t("knowledgePoints")}</span>
-                      {graphNodes.map((n) => (
-                        <button
-                          key={n.id}
-                          type="button"
-                          className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium text-sky-900 hover:bg-sky-200"
-                          onClick={() => onOpenGraphNode?.(n.id)}
-                        >
-                          {n.canonical_name}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="absolute right-1 top-1 rounded p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
-                    disabled={busy}
-                    aria-label={t("remove")}
-                    title={t("remove")}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setPendingDeleteItem(it);
-                    }}
-                  >
-                    <X className="h-3.5 w-3.5" aria-hidden />
-                  </button>
-                </li>
-              );
-          }} />
-      </section>
+      <BankSidebar
+        folders={folders}
+        setFolders={setFolders}
+        filteredItems={filtered}
+        allItems={items}
+        selectedExportIds={selectedExportIds}
+        onSelectExportIds={setSelectedExportIds}
+        selectedId={selectedId}
+        onOpenItem={openOrFocusTab}
+        onRefresh={loadList}
+        onError={onError}
+        busy={busy}
+        graphLinkIndex={graphLinkIndex}
+        taggedItems={taggedItems}
+        onOpenGraphNode={onOpenGraphNode}
+        onRequestDelete={setPendingDeleteItem}
+      />
 
       {/* 中：多标签 + 字段 / 浏览 / 源文件 */}
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden border-slate-200 bg-slate-50 lg:border-r">
