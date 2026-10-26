@@ -14,12 +14,10 @@ import {
   validateBankFolderPath,
 } from '../pages/bank/bankModel';
 import {
-  boxSelection,
   pruneStaleSelection,
-  rangeSelection,
   toggleFolderOrFilteredSelection,
-  toggleSingleSelection,
 } from '../pages/bank/bankOperationModel';
+import { BankFileGrid } from './BankFileGrid';
 
 export type { BankFolders };
 type Item = { qualified_id: string; content_preview?: string };
@@ -45,10 +43,6 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
   const [invitation, setInvitation] = useState('');
   const [shareCode, setShareCode] = useState('');
   const [editing, setEditing] = useState<{ action: 'create' | 'rename'; path: string; value: string } | null>(null);
-  const [rectangle, setRectangle] = useState<{ x: number; y: number; right: number; bottom: number } | null>(null);
-  const drag = useRef<{ x: number; y: number; base: string[] } | null>(null);
-  const grid = useRef<HTMLDivElement>(null);
-  const anchor = useRef<string | null>(null);
   const fileDrag = useRef<{ x: number; y: number; ids?: string[]; folder?: string; moved: boolean } | null>(null);
   const blockClickUntil = useRef(0);
   const [dropHighlight, setDropHighlight] = useState<string | null>(null);
@@ -347,36 +341,39 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
       {message ? <p role="status" className="mb-2 text-xs text-emerald-700">{message}</p> : null}
       {shareCode ? <label className="mb-2 text-xs">邀请CDK（7天有效）<input readOnly value={shareCode} aria-label="文件管理器邀请码" onFocus={e => e.target.select()} className="ml-2 rounded border p-1" /></label> : null}
       {editing ? <form className="mb-3 flex flex-wrap items-center gap-2 rounded border bg-blue-50 p-2" onSubmit={e => { e.preventDefault(); void perform(editing.action === 'create' ? { action: 'create', path: editing.value.trim() } : { action: 'rename', path: editing.path, target: editing.value.trim() }); }}><label className="text-xs">{editing.action === 'create' ? '新目录路径' : '新路径'}<input autoFocus aria-label="文件管理器目录路径" value={editing.value} onChange={e => setEditing({ ...editing, value: e.target.value })} className="ml-2 rounded border p-1" /></label><button className={buttonClass} disabled={busy || !editing.value.trim()}>保存目录</button><button type="button" className={buttonClass} onClick={() => setEditing(null)}>取消</button></form> : null}
-      <div ref={grid} data-file-area tabIndex={0} aria-label="题库文件区域" className="relative min-h-0 flex-1 select-none overflow-auto bg-slate-50 p-3" onDragOver={e => e.preventDefault()} onDrop={e => drop(e, selectedFolder)} onContextMenu={e => { if (!(e.target as HTMLElement).closest('[data-question],[data-folder]')) { e.preventDefault(); setFocusedFolder(''); setMenu({ x: e.clientX, y: e.clientY, folder: null }); } }} onKeyDown={e => {
-        if ((e.target as HTMLElement).closest('input, textarea, select')) return;
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); toggleAll(selectedFolder); }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); if (!busy) cut(); }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); if (!busy) paste(); }
-        if (e.key === 'Escape') { e.stopPropagation(); onSelectIds?.([]); setFocusedFolder(''); setMenu(null); setClipboard(null); }
-      }} onPointerDown={event => {
-        if (event.button !== 0 || (event.target as HTMLElement).closest('button,input,[data-question]')) return;
-        drag.current = { x: event.clientX, y: event.clientY, base: event.ctrlKey || event.metaKey ? selectedIds : [] };
-        event.currentTarget.setPointerCapture(event.pointerId);
-        onSelectIds?.(drag.current.base);
-        setFocusedFolder(''); setMenu(null);
-      }} onPointerMove={event => {
-        if (!drag.current) return;
-        const box = { x: Math.min(drag.current.x, event.clientX), y: Math.min(drag.current.y, event.clientY), right: Math.max(drag.current.x, event.clientX), bottom: Math.max(drag.current.y, event.clientY) };
-        setRectangle(box);
-        const ids = [...(grid.current?.querySelectorAll<HTMLElement>('[data-question]') ?? [])].filter(element => { const rect = element.getBoundingClientRect(); return rect.right >= box.x && rect.left <= box.right && rect.bottom >= box.y && rect.top <= box.bottom; }).map(element => element.dataset.question!);
-        onSelectIds?.(boxSelection(drag.current.base, ids));
-      }} onPointerUp={() => { drag.current = null; setRectangle(null); }} onPointerCancel={() => { drag.current = null; setRectangle(null); }}>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {(index.children.get(selectedFolder) ?? []).map(path => <button key={path} data-folder={path} draggable onDragStart={e => startDrag(e, undefined, path)} onDragOver={e => e.preventDefault()} onDrop={e => drop(e, path)} onContextMenu={e => { e.preventDefault(); setFocusedFolder(path); onSelectIds?.([]); setMenu({ x: e.clientX, y: e.clientY, folder: path }); }} className={`rounded border p-3 text-left ${focusedFolder === path || dropHighlight === path ? 'border-blue-500 bg-blue-100' : 'bg-amber-50'}`} onClick={() => { setFocusedFolder(path); onSelectIds?.([]); }} onDoubleClick={() => { setSelectedFolder(path); setName(path); setFocusedFolder(''); }}><Folder className="h-6 w-6 text-amber-600" />{path.split('/').at(-1)}</button>)}
-          {(index.questions.get(selectedFolder) ?? []).map(item => <div key={item.qualified_id} data-question={item.qualified_id} draggable onDragStart={e => startDrag(e, item.qualified_id)} onContextMenu={e => { e.preventDefault(); if (!selectedIds.includes(item.qualified_id)) onSelectIds?.([item.qualified_id]); setFocusedFolder(''); setMenu({ x: e.clientX, y: e.clientY, folder: null, id: item.qualified_id }); }} onDoubleClick={() => { onOpenItem?.(item.qualified_id); setExploring(false); }} role="checkbox" aria-checked={selectedIds.includes(item.qualified_id)} tabIndex={0} title={item.content_preview || item.qualified_id}
-            className={`min-h-24 cursor-pointer break-all rounded border p-3 text-xs ${selectedIds.includes(item.qualified_id) ? 'border-blue-500 bg-blue-100' : 'bg-white'}`}
-            onClick={event => { setFocusedFolder(''); const visible = (index.questions.get(selectedFolder) ?? []).map(q => q.qualified_id); onSelectIds?.(event.shiftKey ? rangeSelection(selectedIds, visible, anchor.current, item.qualified_id) : event.ctrlKey || event.metaKey ? toggleSingleSelection(selectedIds, item.qualified_id) : [item.qualified_id]); anchor.current = item.qualified_id; }}
-            onKeyDown={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); onSelectIds?.(toggleSingleSelection(selectedIds, item.qualified_id)); } }}>
-            <p className="mb-2 font-semibold">{item.qualified_id}</p><p className="line-clamp-4">{item.content_preview}</p>
-          </div>)}
-        </div>
-      </div>
-      {rectangle ? <div className="pointer-events-none fixed z-[51] border border-blue-500 bg-blue-200/30" style={{ left: rectangle.x, top: rectangle.y, width: rectangle.right - rectangle.x, height: rectangle.bottom - rectangle.y }} /> : null}
+      <BankFileGrid
+        folders={index.children.get(selectedFolder) ?? []}
+        questions={index.questions.get(selectedFolder) ?? []}
+        selectedFolder={selectedFolder}
+        focusedFolder={focusedFolder}
+        dropHighlight={dropHighlight}
+        selectedIds={selectedIds}
+        busy={busy}
+        clipboard={clipboard}
+        onSelectIds={onSelectIds}
+        onSetFocusedFolder={setFocusedFolder}
+        onOpenFolder={(path) => {
+          setSelectedFolder(path);
+          setName(path);
+          setFocusedFolder('');
+        }}
+        onOpenItem={(id) => {
+          onOpenItem?.(id);
+          setExploring(false);
+        }}
+        onContextMenu={(info) => setMenu(info)}
+        onStartDrag={startDrag}
+        onDrop={drop}
+        onCut={() => cut()}
+        onPaste={() => paste()}
+        onToggleAll={toggleAll}
+        onClearSelection={() => {
+          onSelectIds?.([]);
+          setFocusedFolder('');
+          setMenu(null);
+          setClipboard(null);
+        }}
+      />
       {menu ? contextMenu() : null}
     </Dialog.Content></Dialog.Portal></Dialog.Root> : null}
     {!exploring && menu ? contextMenu() : null}
