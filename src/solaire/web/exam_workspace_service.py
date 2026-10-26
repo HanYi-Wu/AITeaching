@@ -2,314 +2,112 @@
 
 from __future__ import annotations
 
-import json
-import re
-import shutil
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 
 from solaire.common.security import assert_within_project
-from solaire.common.atomic_files import write_text_atomic
-from solaire.exam_compiler.facade import SelectedSection
-from solaire.exam_compiler.loaders.template_loader import load_template
-
 from solaire.web.draft_service import (
-    _section_dump,
     _sections_from_raw,
     normalize_draft_name,
 )
-
-ExamStatus = Literal["draft", "exported"]
-
-_WIN_FORBIDDEN = frozenset('<>:"/\\|?*')
-# Windows 保留设备名（不含扩展名时）
-_WIN_RESERVED_NAMES = frozenset(
-    {"CON", "PRN", "AUX", "NUL", *{f"COM{i}" for i in range(1, 10)}, *{f"LPT{i}" for i in range(1, 10)}}
+from solaire.web.exam_workspaces.identity import (
+    ExamStatus,
+    _WIN_FORBIDDEN,
+    _WIN_RESERVED_NAMES,
+    _build_exam_doc,
+    _fill_identity_from_exam_path_fields,
+    _identity_nonempty,
+    _norm_label,
+    _safe_exam_id,
+    _safe_fs_segment,
+    _same_identity,
+    _utc_now_iso,
+    exam_id_from_labels,
+    label_subject_pair,
+    segments_for_identity,
+)
+from solaire.web.exam_workspaces.paths import (
+    _exams_root,
+    _norm_template_path_rel,
+    _split_exam_path,
+    config_json_path,
+    exam_yaml_path,
+    resolve_template_under_project,
+    workspace_dir,
+)
+from solaire.web.exam_workspaces.persistence import (
+    _default_config,
+    _read_config,
+    _write_config,
+    _write_exam_yaml,
+    assert_unique_exam_identity,
+    delete_exam_workspace,
+    label_subject_taken,
+    load_exam_workspace,
+    mark_exported,
+    persist_exam_document,
 )
 
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _exams_root(project_root: Path) -> Path:
-    d = project_root / "exams"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _norm_label(s: str) -> str:
-    return " ".join((s or "").strip().split())
-
-
-def _norm_template_path_rel(s: str) -> str:
-    """
-    与 ``/api/templates`` 列表一致：相对项目根的路径，如 ``templates/foo.yaml``。
-    exam.yaml 中可能存 ``../templates/foo.yaml``（相对考试目录），需去掉前导 ``../`` 才能与前端列表匹配。
-    """
-    t = (s or "").replace("\\", "/").strip()
-    while t.startswith("../"):
-        t = t[3:]
-    return t.lstrip("/")
-
-
-def resolve_template_under_project(
-    project_root: Path, template_path: str, template_ref: str
-) -> tuple[Path, str]:
-    """
-    解析项目根下的版式 YAML 路径。
-
-    先使用 ``template_path``（相对项目根，经 `_norm_template_path_rel`）；若文件不存在且
-    ``template_ref`` 非空，则在 ``templates/**/*.yaml`` 中按 ``template_id`` 匹配回退，
-    避免历史 ``exam.yaml`` 中路径与重命名后的模板文件不一致。
-    """
-    rel0 = _norm_template_path_rel(template_path)
-    cand = (project_root / rel0).resolve()
-    assert_within_project(project_root, cand)
-    if cand.is_file():
-        return cand, rel0
-    ref = (template_ref or "").strip()
-    if not ref:
-        return cand, rel0
-    td = project_root / "templates"
-    if not td.is_dir():
-        return cand, rel0
-    root_res = project_root.resolve()
-    for p in sorted(td.rglob("*.yaml")):
-        try:
-            t = load_template(p)
-        except Exception:
-            continue
-        if t.template_id == ref:
-            pr = p.resolve()
-            assert_within_project(project_root, pr)
-            rel1 = pr.relative_to(root_res).as_posix()
-            return pr, rel1
-    return cand, rel0
-
-
-def label_subject_pair(export_label: str, subject: str) -> tuple[str, str]:
-    return (_norm_label(export_label), _norm_label(subject))
-
-
-def _identity_nonempty(pair: tuple[str, str]) -> bool:
-    return bool(pair[0]) and bool(pair[1])
-
-
-def _same_identity(a: tuple[str, str], b: tuple[str, str]) -> bool:
-    if not _identity_nonempty(a) or not _identity_nonempty(b):
-        return False
-    return a == b
-
-
-def _safe_fs_segment(normalized_text: str, *, field_name: str) -> str:
-    """
-    将已规范化的标签/学科文本转为单层目录名。
-    若含 Windows 非法字符或规范化后不可用，抛出 ValueError（业务化提示）。
-    """
-    s = normalized_text.strip()
-    if not s:
-        raise ValueError(f"{field_name}不能为空。")
-    out: list[str] = []
-    for ch in s:
-        if ch in _WIN_FORBIDDEN or ord(ch) < 32:
-            out.append("－")
-        else:
-            out.append(ch)
-    seg = "".join(out).strip()
-    # 去掉末尾点与空格（Windows 不允许）
-    seg = seg.rstrip(" .")
-    seg = re.sub(r"[\s.]+$", "", seg)
-    if not seg:
-        raise ValueError(f"{field_name}在去除不可用符号后为空，请调整后再试。")
-    if len(seg) > 120:
-        raise ValueError(f"{field_name}过长，请缩短后再试（目录名最多 120 个字符）。")
-    upper = seg.upper()
-    if upper in _WIN_RESERVED_NAMES or upper.split(".")[0].upper() in _WIN_RESERVED_NAMES:
-        raise ValueError(f"{field_name}「{seg}」不可用（与系统保留名称冲突），请调整后再试。")
-    return seg
-
-
-def segments_for_identity(export_label: str, subject: str) -> tuple[str, str]:
-    """由「试卷说明 + 学科」得到两级目录名；非法则抛出 ValueError。"""
-    el, sub = label_subject_pair(export_label, subject)
-    if not _identity_nonempty((el, sub)):
-        raise ValueError("请填写试卷说明与学科。")
-    return (
-        _safe_fs_segment(el, field_name="试卷说明"),
-        _safe_fs_segment(sub, field_name="学科"),
-    )
-
-
-def exam_id_from_labels(export_label: str, subject: str) -> str:
-    a, b = segments_for_identity(export_label, subject)
-    return f"{a}/{b}"
-
-
-def _split_exam_path(exam_id: str) -> tuple[str, str]:
-    s = (exam_id or "").strip().replace("\\", "/")
-    parts = [p for p in s.split("/") if p and p != "."]
-    if len(parts) != 2:
-        raise ValueError("无效的考试标识")
-    a, b = parts[0], parts[1]
-    if ".." in a or ".." in b:
-        raise ValueError("无效的考试标识")
-    return a, b
-
-
-def _fill_identity_from_exam_path_fields(doc: dict[str, Any], eid: str) -> None:
-    """当 YAML 中缺少试卷说明或学科时，用目录 ``exams/<标签段>/<学科段>/`` 回填。"""
-    try:
-        label_seg, subject_seg = _split_exam_path(eid)
-    except ValueError:
-        return
-    if not str(doc.get("export_label") or "").strip():
-        doc["export_label"] = label_seg
-    if not str(doc.get("subject") or "").strip():
-        doc["subject"] = subject_seg
-
-
-def _safe_exam_id(exam_id: str) -> str:
-    """校验并规范化 ``标签段/学科段`` 形式的 exam_id。"""
-    a, b = _split_exam_path(exam_id)
-    if not a or not b:
-        raise ValueError("无效的考试标识")
-    return f"{a}/{b}"
-
-
-def workspace_dir(project_root: Path, exam_id: str) -> Path:
-    a, b = _split_exam_path(exam_id)
-    d = (_exams_root(project_root) / a / b).resolve()
-    assert_within_project(project_root, d)
-    return d
-
-
-def exam_yaml_path(project_root: Path, exam_id: str) -> Path:
-    return workspace_dir(project_root, exam_id) / "exam.yaml"
-
-
-def config_json_path(project_root: Path, exam_id: str) -> Path:
-    return workspace_dir(project_root, exam_id) / "config.json"
-
-
-def _read_config(project_root: Path, exam_id: str) -> dict[str, Any] | None:
-    p = config_json_path(project_root, exam_id)
-    if not p.is_file():
-        return None
-    try:
-        with p.open(encoding="utf-8") as f:
-            raw = json.load(f)
-        return raw if isinstance(raw, dict) else None
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _write_config(project_root: Path, exam_id: str, cfg: dict[str, Any]) -> None:
-    p = config_json_path(project_root, exam_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    write_text_atomic(p, json.dumps(cfg, ensure_ascii=False, indent=2))
-
-
-def _default_config(
-    *,
-    exam_id: str,
-    status: ExamStatus,
-    export_label: str,
-    subject: str,
-    display_name: str,
-    source_exam_id: str | None,
-    created_at: str,
-    updated_at: str,
-) -> dict[str, Any]:
-    return {
-        "exam_id": exam_id,
-        "status": status,
-        "exam_label": export_label,
-        "subject": subject,
-        "display_name": display_name,
-        "source_exam_id": source_exam_id,
-        "created_at": created_at,
-        "updated_at": updated_at,
-    }
-
-
-def assert_unique_exam_identity(
-    project_root: Path,
-    export_label: str,
-    subject: str,
-    *,
-    exclude_exam_id: str | None = None,
-) -> None:
-    """若已存在相同的「试卷说明」与「学科」，抛出 ``ValueError``。"""
-    if label_subject_taken(project_root, export_label, subject, exclude_exam_id=exclude_exam_id):
-        raise ValueError("已存在相同的「试卷说明」与「学科」，请修改后再试。")
-
-
-def label_subject_taken(
-    project_root: Path,
-    export_label: str,
-    subject: str,
-    *,
-    exclude_exam_id: str | None = None,
-) -> bool:
-    """True if another workspace already uses the same non-empty 试卷说明 + 学科."""
-    want = label_subject_pair(export_label, subject)
-    if not _identity_nonempty(want):
-        return False
-    excl = _safe_exam_id(exclude_exam_id) if exclude_exam_id else None
-    root = _exams_root(project_root)
-    if not root.is_dir():
-        return False
-    target_dir = (root / exam_id_from_labels(export_label, subject)).resolve()
-    for label_dir in root.iterdir():
-        if not label_dir.is_dir():
-            continue
-        for subj_dir in label_dir.iterdir():
-            if not subj_dir.is_dir():
-                continue
-            eid = f"{label_dir.name}/{subj_dir.name}"
-            if excl and eid == excl:
-                continue
-            try:
-                cfg = _read_config(project_root, eid)
-            except (PermissionError, ValueError):
-                # 不读取其他教师的内容；仍保留其目录名，避免同名创建覆盖已有试卷。
-                if subj_dir.resolve() == target_dir:
-                    return True
-                continue
-            if cfg:
-                got = label_subject_pair(str(cfg.get("exam_label") or ""), str(cfg.get("subject") or ""))
-            else:
-                yp = subj_dir / "exam.yaml"
-                if not yp.is_file():
-                    continue
-                try:
-                    with yp.open(encoding="utf-8") as f:
-                        raw = yaml.safe_load(f)
-                except OSError:
-                    continue
-                if not isinstance(raw, dict):
-                    continue
-                got = label_subject_pair(str(raw.get("export_label") or ""), str(raw.get("subject") or ""))
-            if _same_identity(want, got):
-                return True
-    return False
+__all__ = [
+    "ExamStatus",
+    "_WIN_FORBIDDEN",
+    "_WIN_RESERVED_NAMES",
+    "_utc_now_iso",
+    "_exams_root",
+    "_norm_label",
+    "_norm_template_path_rel",
+    "resolve_template_under_project",
+    "label_subject_pair",
+    "_identity_nonempty",
+    "_same_identity",
+    "_safe_fs_segment",
+    "segments_for_identity",
+    "exam_id_from_labels",
+    "_split_exam_path",
+    "_fill_identity_from_exam_path_fields",
+    "_safe_exam_id",
+    "workspace_dir",
+    "exam_yaml_path",
+    "config_json_path",
+    "_read_config",
+    "_write_config",
+    "_default_config",
+    "assert_unique_exam_identity",
+    "label_subject_taken",
+    "list_exam_workspaces",
+    "load_exam_workspace",
+    "delete_exam_workspace",
+    "_build_exam_doc",
+    "save_exam_workspace",
+    "_write_exam_yaml",
+    "persist_exam_document",
+    "exam_document_from_exam",
+    "create_workspace_from_exam",
+    "mark_exported",
+    "save_exam_workspace_after_export_failure",
+    "import_legacy_draft_yaml",
+]
 
 
 def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
     """Newest ``updated_at`` first."""
     from solaire.common.actor_context import actor
     from solaire.web.platform_db import connect, default_platform_root, platform_db_path
+
     user = actor.get()
     hidden = set()
     platform = default_platform_root()
-    if user and user.get('role') == 'teacher' and platform_db_path(platform).is_file():
+    if user and user.get("role") == "teacher" and platform_db_path(platform).is_file():
         with connect(platform) as con:
-            hidden = {str(row['exam_id']).casefold() for row in con.execute(
-                'SELECT exam_id FROM paper_records WHERE owner_teacher_id IS NOT NULL AND owner_teacher_id != ?', (str(user['id']),))}
+            hidden = {
+                str(row["exam_id"]).casefold()
+                for row in con.execute(
+                    "SELECT exam_id FROM paper_records WHERE owner_teacher_id IS NOT NULL AND owner_teacher_id != ?",
+                    (str(user["id"]),),
+                )
+            }
     root = _exams_root(project_root)
     if not root.is_dir():
         return []
@@ -389,69 +187,6 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
     return out
 
 
-def load_exam_workspace(project_root: Path, exam_id: str) -> dict[str, Any]:
-    """Load ``exam.yaml`` for the compose UI."""
-    eid = _safe_exam_id(exam_id)
-    path = exam_yaml_path(project_root, eid)
-    assert_within_project(project_root, path)
-    if not path.is_file():
-        raise FileNotFoundError(f"考试工作区不存在：{exam_id}")
-    with path.open(encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    if not isinstance(raw, dict):
-        raise ValueError("无效的考试工作区文件")
-    doc = dict(raw)
-    # 目录标识以路径为准（``exams/<标签>/<学科>/``），避免 YAML 内仍为历史单段 id 时污染前端与后续保存。
-    doc["exam_id"] = eid
-    tp = doc.get("template_path")
-    if isinstance(tp, str):
-        doc["template_path"] = _norm_template_path_rel(tp)
-    _fill_identity_from_exam_path_fields(doc, eid)
-    return doc
-
-
-def delete_exam_workspace(project_root: Path, exam_id: str) -> None:
-    """删除 ``exams/<标签>/<学科>/``。"""
-    eid = _safe_exam_id(exam_id)
-    d = workspace_dir(project_root, eid)
-    assert_within_project(project_root, d)
-    if d.is_dir():
-        shutil.rmtree(d)
-
-
-def _build_exam_doc(
-    *,
-    exam_id: str,
-    name: str,
-    subject: str,
-    export_label: str,
-    template_ref: str,
-    template_path: str,
-    selected_items: list[SelectedSection],
-    created_at: str,
-    updated_at: str,
-    source_exam_id: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    tpl_rel = _norm_template_path_rel(template_path)
-    doc: dict[str, Any] = {
-        "exam_id": exam_id,
-        "name": name,
-        "subject": subject.strip(),
-        "export_label": export_label.strip(),
-        "template_ref": template_ref.strip(),
-        "template_path": tpl_rel,
-        "selected_items": [_section_dump(s) for s in selected_items],
-        "created_at": created_at,
-        "updated_at": updated_at,
-    }
-    if source_exam_id:
-        doc["source_exam_id"] = source_exam_id
-    if metadata:
-        doc["metadata"] = dict(metadata)
-    return doc
-
-
 def save_exam_workspace(
     project_root: Path,
     *,
@@ -520,6 +255,7 @@ def save_exam_workspace(
             assert_unique_exam_identity(project_root, export_label, subject, exclude_exam_id=eid)
         meta = dict(old.get("metadata")) if isinstance(old, dict) and isinstance(old.get("metadata"), dict) else {}
         from solaire.common.actor_context import actor
+
         current_actor = actor.get()
         if current_actor and current_actor.get("role") == "teacher" and not meta.get("owner_teacher_id"):
             meta["owner_teacher_id"] = str(current_actor["id"])
@@ -565,6 +301,7 @@ def save_exam_workspace(
     wdir.mkdir(parents=True, exist_ok=True)
     new_meta: dict[str, Any] = {}
     from solaire.common.actor_context import actor
+
     current_actor = actor.get()
     if current_actor and current_actor.get("role") == "teacher":
         new_meta["owner_teacher_id"] = str(current_actor["id"])
@@ -592,56 +329,6 @@ def save_exam_workspace(
             display_name=final_name,
             source_exam_id=None,
             created_at=now,
-            updated_at=now,
-        ),
-    )
-    return doc
-
-
-def _write_exam_yaml(project_root: Path, doc: dict[str, Any]) -> None:
-    eid = _safe_exam_id(str(doc.get("exam_id") or ""))
-    if not eid:
-        raise ValueError("exam_id required")
-    path = exam_yaml_path(project_root, eid)
-    assert_within_project(project_root, path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    to_store = {k: v for k, v in doc.items() if k != "draft_id"}
-    write_text_atomic(path, yaml.safe_dump(to_store, allow_unicode=True, sort_keys=False))
-
-
-def persist_exam_document(project_root: Path, doc: dict[str, Any]) -> dict[str, Any]:
-    """Write a full exam dict (e.g. from history copy) to disk."""
-    exam_id = str(doc.get("exam_id") or "").strip()
-    if not exam_id:
-        raise ValueError("exam_id required")
-    doc = dict(doc)
-    doc.pop("draft_id", None)
-    tp0 = doc.get("template_path")
-    if isinstance(tp0, str):
-        doc["template_path"] = _norm_template_path_rel(tp0)
-    eid = _safe_exam_id(exam_id)
-    doc["exam_id"] = eid
-    pair = label_subject_pair(str(doc.get("export_label") or ""), str(doc.get("subject") or ""))
-    if _identity_nonempty(pair):
-        assert_unique_exam_identity(project_root, doc["export_label"], doc["subject"], exclude_exam_id=eid)
-    now = _utc_now_iso()
-    doc.setdefault("created_at", now)
-    doc["updated_at"] = now
-    _write_exam_yaml(project_root, doc)
-    cfg = _read_config(project_root, eid) or {}
-    status = cfg.get("status") if cfg.get("status") in ("draft", "exported") else "draft"
-    src_ex = doc.get("source_exam_id") or cfg.get("source_exam_id")
-    _write_config(
-        project_root,
-        eid,
-        _default_config(
-            exam_id=eid,
-            status=status,
-            export_label=str(doc.get("export_label") or ""),
-            subject=str(doc.get("subject") or ""),
-            display_name=str(doc.get("name") or eid),
-            source_exam_id=str(src_ex) if src_ex else None,
-            created_at=str(cfg.get("created_at") or doc["created_at"]),
             updated_at=now,
         ),
     )
@@ -689,47 +376,6 @@ def create_workspace_from_exam(
     return persist_exam_document(project_root, doc)
 
 
-def mark_exported(project_root: Path, exam_id: str) -> None:
-    """导出成功后：``status=exported``。"""
-    eid = _safe_exam_id(exam_id)
-    cfg = _read_config(project_root, eid) or {}
-    yp = exam_yaml_path(project_root, eid)
-    if yp.is_file():
-        try:
-            with yp.open(encoding="utf-8") as f:
-                raw = yaml.safe_load(f)
-            if isinstance(raw, dict):
-                cfg.setdefault("exam_label", str(raw.get("export_label") or ""))
-                cfg.setdefault("subject", str(raw.get("subject") or ""))
-                cfg.setdefault("display_name", str(raw.get("name") or eid))
-        except OSError:
-            pass
-    if not cfg.get("created_at"):
-        cfg["created_at"] = _utc_now_iso()
-    now = _utc_now_iso()
-    cfg["exam_id"] = eid
-    cfg["status"] = "exported"
-    cfg["updated_at"] = now
-    cfg.pop("last_export_result_id", None)
-    for k in ("exam_label", "subject", "display_name", "source_exam_id"):
-        if k not in cfg:
-            cfg[k] = ""
-    _write_config(project_root, eid, cfg)
-    yp = exam_yaml_path(project_root, eid)
-    if yp.is_file():
-        try:
-            with yp.open(encoding="utf-8") as f:
-                raw = yaml.safe_load(f)
-            if isinstance(raw, dict):
-                raw["updated_at"] = now
-                write_text_atomic(yp, yaml.safe_dump(
-                    {k: v for k, v in raw.items() if k != "draft_id"},
-                    allow_unicode=True, sort_keys=False,
-                ))
-        except OSError:
-            pass
-
-
 def save_exam_workspace_after_export_failure(
     project_root: Path,
     *,
@@ -764,7 +410,9 @@ def save_exam_workspace_after_export_failure(
     raise ValueError("无法为导出失败快照分配唯一的试卷说明")
 
 
-def import_legacy_draft_yaml(project_root: Path, draft_yaml: Path, *, suffix: str | None = None) -> dict[str, Any]:
+def import_legacy_draft_yaml(
+    project_root: Path, draft_yaml: Path, *, suffix: str | None = None
+) -> dict[str, Any]:
     """
     Import a single ``.solaire/drafts/*.yaml`` into ``exams/<标签>/<学科>/``.
 
@@ -775,6 +423,7 @@ def import_legacy_draft_yaml(project_root: Path, draft_yaml: Path, *, suffix: st
     if not isinstance(raw, dict):
         raise ValueError("invalid draft yaml")
     from solaire.common.actor_context import actor
+
     metadata = dict(raw.get("metadata") or {}) if isinstance(raw.get("metadata"), dict) else {}
     user = actor.get()
     if user and user.get("role") == "teacher":
