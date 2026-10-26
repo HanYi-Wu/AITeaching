@@ -259,6 +259,7 @@ export function usePaperGrading(scopeKey: string) {
     acceptSave,
     finishSave,
     enqueueSave,
+    isCurrentScope: isScopeCurrent,
     beginAiRequest,
     isCurrentAiRequest,
     isCurrentAiBatch,

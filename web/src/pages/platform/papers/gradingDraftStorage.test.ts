@@ -48,7 +48,8 @@ describe("gradingDraftStorage", () => {
 
     const unavailable = { getItem: () => { throw new Error("blocked"); }, removeItem: () => undefined };
     expect(readGradingDraft(scope, unavailable).status).toBe("unavailable");
-    expect(writeGradingDraft(scope, createGradingDraft({}), null, {
+    const dirty = updateGradingDraft({}, "a1:math/q1", { score: 2, feedback: "server" }, "feedback", "draft")["a1:math/q1"];
+    expect(writeGradingDraft(scope, dirty, null, {
       setItem: () => { throw new Error("quota"); },
       removeItem: () => undefined,
     })).toBe(false);

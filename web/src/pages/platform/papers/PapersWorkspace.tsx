@@ -4,15 +4,12 @@ import {
   BarChart3,
   ClipboardList,
   Download,
-  FileImage,
   RefreshCw,
   Upload,
   X,
 } from "lucide-react";
 import { apiDownloadBlob, apiGet } from "../../../api/client";
 import { ContentTags } from "../../../components/ContentTags";
-import { formatLocaleDateTime } from "../../../lib/locale";
-import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
 import {
   analyzePlatformPaper,
   completePaperAttemptGrading,
@@ -66,6 +63,9 @@ import { usePaperGrading } from "./usePaperGrading";
 import { PaperListSidebar } from "./PaperListSidebar";
 import { PaperClassPublishPanel } from "./PaperClassPublishPanel";
 import { PaperPublishingSidebar } from "./PaperPublishingSidebar";
+import GradingQuestionCard from "./GradingQuestionCard";
+import { GradingWorkspace } from "./GradingWorkspace";
+import { PaperSubmissionDetail } from "./PaperSubmissionDetail";
 import {
   readGradingDraft,
   writeGradingDraft,
@@ -78,7 +78,6 @@ import {
   mergeMeta,
   htmlEscape,
   downloadBlob,
-  submissionStatusLabel,
   gradingStatusLabel,
   formatStudentAnswer,
 } from "./paperHelpers";
@@ -154,6 +153,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const [gradingDraftStorageWarning, setGradingDraftStorageWarning] = useState<{ ownerKey: string; visible: boolean }>({ ownerKey: "", visible: false });
   const gradingDraftSourceVersionsRef = useRef(new Map<string, string | null>());
   const restoredGradingDraftKeysRef = useRef(new Set<string>());
+  const pendingGradingDraftRestoreKeysRef = useRef(new Set<string>());
 
   function setGradingDrafts(update: GradingDrafts | ((current: GradingDrafts) => GradingDrafts)) {
     setGradingDraftState((current) => {
@@ -223,6 +223,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     gradingDraftOwnerRef.current = gradingOwnerKey;
     gradingDraftSourceVersionsRef.current.clear();
     restoredGradingDraftKeysRef.current.clear();
+    pendingGradingDraftRestoreKeysRef.current.clear();
   }
   const gradingDrafts = gradingDraftState.ownerKey === gradingOwnerKey ? gradingDraftState.drafts : {};
   const gradingRequests = usePaperGrading(gradingOwnerKey);
@@ -234,6 +235,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     if (!gradingStorageScope) return;
     const restoreEntries: Array<{
       key: string;
+      storageKey: string;
       source: GradingDraftSource;
       record: NonNullable<ReturnType<typeof readGradingDraft>["draft"]>;
     }> = [];
@@ -249,7 +251,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       if (!gradingDraftSourceVersionsRef.current.has(key)) {
         gradingDraftSourceVersionsRef.current.set(key, result.draft.sourceVersion);
       }
-      restoreEntries.push({ key, source: toGradingDraftSource(answer), record: result.draft });
+      pendingGradingDraftRestoreKeysRef.current.add(storageKey);
+      restoreEntries.push({ key, storageKey, source: toGradingDraftSource(answer), record: result.draft });
     }));
     if (restoreEntries.length > 0) {
       setGradingDrafts((current) => {
@@ -269,9 +272,16 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     if (!gradingStorageScope) return;
     submissions.forEach((submission) => submission.answers.forEach((answer) => {
       const key = gradeKey(submission.attempt_id, answer.question_id);
+      const storageKey = `${gradingOwnerKey}/${submission.attempt_id}/${answer.question_id}`;
+      if (pendingGradingDraftRestoreKeysRef.current.has(storageKey)) {
+        pendingGradingDraftRestoreKeysRef.current.delete(storageKey);
+        return;
+      }
       const draft = gradingDrafts[key];
       if (!draft) return;
-      if (!gradingDraftSourceVersionsRef.current.has(key)) {
+      if (!draft.score.dirty && !draft.feedback.dirty) {
+        gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+      } else if (!gradingDraftSourceVersionsRef.current.has(key)) {
         gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
       }
       const ok = writeGradingDraft(
@@ -711,7 +721,9 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         const result = expectedVersion
           ? await gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, payload, expectedVersion)
           : await gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, payload);
-        gradingDraftSourceVersionsRef.current.set(key, result.answer.grading_version ?? expectedVersion ?? null);
+        if (gradingRequests.isCurrentScope(gradingSave.scopeVersion)) {
+          gradingDraftSourceVersionsRef.current.set(key, result.answer.grading_version ?? expectedVersion ?? null);
+        }
         return result;
       });
       if (!queuedSave.started) return;
@@ -1261,241 +1273,59 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                 </aside>
               </div>
               ) : (
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-slate-950">线上提交批改</h3>
-                      <p className="mt-1 text-sm text-slate-500">图片提交在这里审核，最终分数以教师保存为准。</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        data-testid="paper-ai-grade-batch"
-                        disabled={busy === "ai-grade:batch" || submissions.length === 0}
-                        onClick={() => void suggestLoadedPendingGrades()}
-                        className="rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-                      >
-                        {busy === "ai-grade:batch" ? "AI 批量处理中..." : "AI 批量预批改"}
-                      </button>
-                      <button
-                        type="button"
-                        data-testid="paper-load-submissions"
-                        disabled={submissionsBusy}
-                        onClick={() => void loadSelectedSubmissions()}
-                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                        {submissionsBusy ? "加载中..." : "刷新提交"}
-                      </button>
-                    </div>
-                  </div>
-                  {gradingDraftStorageWarning.ownerKey === gradingOwnerKey && gradingDraftStorageWarning.visible ? (
-                    <p role="status" className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                      本地批改草稿暂不可用；仍可使用保存按钮将批改结果提交到服务器。
-                    </p>
+                <GradingWorkspace
+                  submissions={submissions}
+                  selectedSubmission={selectedGradingSubmission}
+                  batchBusy={busy === "ai-grade:batch"}
+                  submissionsBusy={submissionsBusy}
+                  storageWarning={gradingDraftStorageWarning.ownerKey === gradingOwnerKey && gradingDraftStorageWarning.visible}
+                  onBatch={() => void suggestLoadedPendingGrades()}
+                  onReload={() => void loadSelectedSubmissions()}
+                  onSelectSubmission={setSelectedGradingAttemptId}
+                >
+                  {selectedGradingSubmission ? (
+                    <PaperSubmissionDetail
+                      key={selectedGradingSubmission.attempt_id}
+                      submission={selectedGradingSubmission}
+                      busy={busy}
+                      scanImageUrls={scanImageUrls}
+                      onSuggest={() => void suggestSubmissionGrades(selectedGradingSubmission)}
+                      onLoadScan={(pageIndex) => void loadOfflineScanImage(selectedGradingSubmission, pageIndex)}
+                      onComplete={() => void completeGrading(selectedGradingSubmission)}
+                    >
+                      {selectedGradingSubmission.answers.map((answer) => {
+                        const key = gradeKey(selectedGradingSubmission.attempt_id, answer.question_id);
+                        const source = toGradingDraftSource(answer);
+                        const draft = getGradingDraft(gradingDrafts, key, source);
+                        const sourceVersion = gradingDraftSourceVersionsRef.current.get(key);
+                        const versionChanged = gradingDraftSourceVersionsRef.current.has(key) && sourceVersion !== (answer.grading_version ?? null);
+                        return (
+                          <GradingQuestionCard
+                            key={answer.question_id}
+                            answer={answer}
+                            scoreValue={draft.score.value}
+                            feedbackValue={draft.feedback.value}
+                            statusLabel={gradingStatusLabel(answer.grading_status)}
+                            studentAnswerText={formatStudentAnswer(answer.answer)}
+                            saving={busy === "grade:" + key}
+                            versionChanged={versionChanged && (draft.score.dirty || draft.feedback.dirty)}
+                            onScoreChange={(changedValue) => {
+                              gradingRequests.beginEdit(key, "score");
+                              if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+                              setGradingDrafts((current) => updateGradingDraft(current, key, source, "score", changedValue));
+                            }}
+                            onFeedbackChange={(changedValue) => {
+                              gradingRequests.beginEdit(key, "feedback");
+                              if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+                              setGradingDrafts((current) => updateGradingDraft(current, key, source, "feedback", changedValue));
+                            }}
+                            onSave={() => void saveGrade(selectedGradingSubmission, answer.question_id)}
+                          />
+                        );
+                      })}
+                    </PaperSubmissionDetail>
                   ) : null}
-                  <div className="space-y-4">
-                    {submissions.length > 0 ? (
-                      <label className="block rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-medium text-slate-700">
-                        选择学生答卷
-                        <select
-                          data-testid="paper-grading-student-select"
-                          value={selectedGradingSubmission?.attempt_id ?? ""}
-                          onChange={(event) => setSelectedGradingAttemptId(event.target.value)}
-                          className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                        >
-                          {submissions.map((submission) => (
-                            <option key={submission.attempt_id} value={submission.attempt_id}>
-                              {[submission.student_no, submission.student_name, submission.grading_completed_at ? "已发布" : submissionStatusLabel(submission.status)].filter(Boolean).join(" · ")}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    ) : null}
-                    {selectedGradingSubmission ? [selectedGradingSubmission].map((submission) => (
-                      <article key={submission.attempt_id} className="rounded-lg border border-slate-200 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
-                          <div className="min-w-0">
-                            <p className="font-medium text-slate-950">{submission.student_name || submission.student_no}</p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {[submission.student_no, submission.grading_completed_at ? "已发布" : submissionStatusLabel(submission.status), submission.submitted_at ? formatLocaleDateTime(submission.submitted_at) : null].filter(Boolean).join(" · ")}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              data-testid={`paper-ai-grade-${submission.attempt_id}`}
-                              disabled={
-                                busy === `ai-grade:${submission.attempt_id}` ||
-                                submission.status !== "submitted" ||
-                                !submission.answers.some((answer) => (answer.grading_status || "pending") === "pending")
-                              }
-                              onClick={() => void suggestSubmissionGrades(submission)}
-                              className="rounded-md border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-                            >
-                              {busy === `ai-grade:${submission.attempt_id}` ? "AI 处理中..." : "AI 预批改"}
-                            </button>
-                            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                              {submission.score ?? "-"} / {submission.max_score ?? "-"}
-                            </span>
-                          </div>
-                        </div>
-                        {submission.scan_images && submission.scan_images.length > 0 ? (
-                          <div className="mt-4">
-                            <p className="mb-2 text-xs font-semibold text-slate-600">线下答卷原图（{submission.scan_images.length} 页）</p>
-                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                              {submission.scan_images.map((image, index) => (
-                                <div
-                                  key={`${submission.attempt_id}:scan:${index}`}
-                                  className="overflow-hidden rounded-md border border-slate-200 bg-white"
-                                >
-                                  {scanImageUrls[`${submission.attempt_id}:${image.page_index}`] ? (
-                                    <a href={scanImageUrls[`${submission.attempt_id}:${image.page_index}`]} target="_blank" rel="noreferrer">
-                                      <img src={scanImageUrls[`${submission.attempt_id}:${image.page_index}`]} alt={`答卷第 ${index + 1} 页`} className="aspect-[4/3] w-full object-contain" />
-                                    </a>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => void loadOfflineScanImage(submission, image.page_index)}
-                                      disabled={busy === `scan:${submission.attempt_id}:${image.page_index}`}
-                                      className="flex aspect-[4/3] w-full items-center justify-center bg-slate-50 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-60"
-                                    >
-                                      {busy === `scan:${submission.attempt_id}:${image.page_index}` ? "正在加载..." : `加载第 ${index + 1} 页`}
-                                    </button>
-                                  )}
-                                  <p className="truncate border-t border-slate-100 px-2 py-1 text-xs text-slate-500">第 {index + 1} 页 · {image.name}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-                        <div className="mt-4 space-y-4">
-                          {submission.answers.map((answer) => {
-                            const key = gradeKey(submission.attempt_id, answer.question_id);
-                            const source = toGradingDraftSource(answer);
-                            const draft = getGradingDraft(gradingDrafts, key, source);
-                            const value = draft.score.value;
-                            const feedback = draft.feedback.value;
-                            const sourceVersion = gradingDraftSourceVersionsRef.current.get(key);
-                            const versionChanged = gradingDraftSourceVersionsRef.current.has(key) && sourceVersion !== (answer.grading_version ?? null);
-                            return (
-                              <div key={answer.question_id} className="rounded-md bg-slate-50 p-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                                  <span className="font-medium">{answer.header || answer.question_id}</span>
-                                  <span className="text-xs text-slate-500">
-                                    本题 {answer.score_per_item ?? "-"} 分 · {gradingStatusLabel(answer.grading_status)}
-                                  </span>
-                                </div>
-                                {versionChanged && (draft.score.dirty || draft.feedback.dirty) ? (
-                                  <p role="status" className="mt-2 text-xs text-amber-700">服务器批改版本已变化，本地草稿基于较早内容；保存前会请你确认。</p>
-                                ) : null}
-                                {answer.content ? <KatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}
-                                <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-sm">
-                                  <span className="font-semibold">参考答案：</span>
-                                  <KatexText text={answer.correct_answer ?? '未配置参考答案'} className="inline" />
-                                </div>
-                                {answer.options && Object.keys(answer.options).length > 0 ? (
-                                  <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-                                    {Object.entries(answer.options).map(([optionKey, optionText]) => (
-                                      <div key={optionKey} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
-                                        <span className="mr-1 font-semibold">{optionKey}.</span>
-                                        <KatexText text={optionText} className="inline" />
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : null}
-                                <div className="mt-3 rounded-md border border-blue-100 bg-white p-3">
-                                  <p className="text-xs font-semibold text-blue-700">学生作答</p>
-                                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-900">
-                                    {formatStudentAnswer(answer.answer)}
-                                  </p>
-                                </div>
-                                {answer.images && answer.images.length > 0 ? (
-                                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                    {answer.images.map((image, index) => (
-                                      <a
-                                        key={`${answer.question_id}:${image.name}:${index}`}
-                                        href={image.data_url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="group block overflow-hidden rounded-md border border-slate-200 bg-white"
-                                      >
-                                        <img
-                                          data-testid={`paper-answer-image-${answer.question_id}`}
-                                          src={image.data_url}
-                                          alt={image.name || "学生提交图片"}
-                                          className="aspect-[4/3] w-full object-contain bg-white"
-                                        />
-                                        <div className="flex items-center gap-2 border-t border-slate-100 px-2 py-1 text-xs text-slate-500">
-                                          <FileImage className="h-3.5 w-3.5" />
-                                          <span className="truncate">{image.name || `image-${index + 1}`}</span>
-                                        </div>
-                                      </a>
-                                    ))}
-                                  </div>
-                                ) : null}
-                                <div className="mt-3 grid gap-2 sm:grid-cols-[120px_minmax(0,1fr)_auto]">
-                                  <input
-                                    data-testid={`paper-grade-${answer.question_id}`}
-                                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                    value={value}
-                                    placeholder="分数"
-                                    onChange={(event) => {
-                                      gradingRequests.beginEdit(key, "score");
-                                      if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
-                                      setGradingDrafts((current) => updateGradingDraft(current, key, source, "score", event.target.value))
-                                    }}
-                                  />
-                                  <input
-                                    data-testid={`paper-feedback-${answer.question_id}`}
-                                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                    value={feedback}
-                                    placeholder="批改反馈"
-                                    onChange={(event) => {
-                                      gradingRequests.beginEdit(key, "feedback");
-                                      if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
-                                      setGradingDrafts((current) => updateGradingDraft(current, key, source, "feedback", event.target.value))
-                                    }}
-                                  />
-                                  <button
-                                    type="button"
-                                    data-testid={`paper-save-grade-${answer.question_id}`}
-                                    disabled={busy === `grade:${key}`}
-                                    onClick={() => void saveGrade(submission, answer.question_id)}
-                                    className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                                  >
-                                    保存
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
-                          {submission.grading_completed_at ? (
-                            <span className="text-sm font-medium text-emerald-700">成绩已发布给学生</span>
-                          ) : (
-                            <span className="text-xs text-slate-500">{!submission.submitted_at && !["submitted", "completed"].includes(submission.status) ? "学生尚未提交答卷，提交后才能完成批改并发布成绩。" : "所有题目保存分数后，完成整卷批改才会向学生展示成绩。"}</span>
-                          )}
-                          <button
-                            type="button"
-                            data-testid={`paper-complete-grading-${submission.attempt_id}`}
-                            disabled={busy === `complete:${submission.attempt_id}` || (!submission.submitted_at && !["submitted", "completed"].includes(submission.status))}
-                            onClick={() => void completeGrading(submission)}
-                            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                          >
-                            {busy === `complete:${submission.attempt_id}` ? "正在发布..." : "完成批改并发布成绩"}
-                          </button>
-                        </div>
-                      </article>
-                    )) : null}
-                    {submissions.length === 0 ? (
-                      <p className="rounded-md border border-dashed border-slate-300 p-6 text-sm text-slate-500">
-                        暂无已加载提交
-                      </p>
-                    ) : null}
-                  </div>
-                </section>
+                </GradingWorkspace>
               )}
               {message ? (
                 <div className="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">

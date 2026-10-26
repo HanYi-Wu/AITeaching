@@ -74,6 +74,7 @@ describe("usePaperGrading", () => {
     rerender({ scope: "teacher-b/project-b/paper-b" });
 
     expect(result.current.isCurrentSave(save)).toBe(false);
+    expect(result.current.isCurrentScope(save.scopeVersion)).toBe(false);
     expect(result.current.isCurrentAiRequest(ai, "attempt-1:question-1")).toBe(false);
     expect(result.current.isCurrentRefresh(refresh)).toBe(false);
   });
