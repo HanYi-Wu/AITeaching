@@ -1,4 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  fetchStudentLearningProgressComparison,
+  type StudentComparisonResponse,
+} from "../../../platform/learningProgress";
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
 import {
   type StudentAnswerImage,
@@ -68,6 +72,131 @@ export function StudentAnalysisVisual({ result }: { result: StudentResultRecord 
   );
 }
 
+export function StudentPracticeComparisonCard({
+  publicationId,
+}: {
+  publicationId: string;
+}) {
+  const [data, setData] = useState<StudentComparisonResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!publicationId) {
+      setData(null);
+      return;
+    }
+    const curId = ++requestIdRef.current;
+    setLoading(true);
+
+    fetchStudentLearningProgressComparison({ practicePublicationId: publicationId })
+      .then((res) => {
+        if (curId === requestIdRef.current) {
+          setData(res);
+        }
+      })
+      .catch(() => {
+        if (curId === requestIdRef.current) {
+          setData(null);
+        }
+      })
+      .finally(() => {
+        if (curId === requestIdRef.current) {
+          setLoading(false);
+        }
+      });
+  }, [publicationId]);
+
+  if (loading) {
+    return (
+      <div data-testid="student-practice-comparison-card" className="rounded-md border border-indigo-100 bg-indigo-50/30 p-3 text-xs text-indigo-700">
+        正在加载靶向复练对照数据...
+      </div>
+    );
+  }
+
+  if (!data || !data.comparison?.node_comparisons?.length) {
+    return null;
+  }
+
+  const { comparison, source_status } = data;
+  const isModified = source_status?.is_modified || comparison.is_source_modified;
+  const isMissing = source_status?.is_missing || comparison.is_source_missing;
+
+  return (
+    <div data-testid="student-practice-comparison-card" className="rounded-md border border-indigo-200 bg-indigo-50/40 p-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-100 pb-2">
+        <div className="flex items-center gap-1.5 font-semibold text-indigo-950">
+          <span>📚 知识点复练掌握率对照</span>
+        </div>
+        <div className="font-mono text-[11px] text-indigo-700">
+          批次：{publicationId}
+        </div>
+      </div>
+
+      {isModified && (
+        <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
+          ⚠️ 来源首考成绩已被教师复核修改（基线保持冻结原值）
+        </div>
+      )}
+
+      {isMissing && (
+        <div className="mt-2 rounded border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-800">
+          ⚠️ 来源考试已被删除或撤回，历史基线不可比
+        </div>
+      )}
+
+      <div className="mt-2 divide-y divide-indigo-100/60">
+        {comparison.node_comparisons.map((node) => {
+          const preText = node.pre_percentage !== null ? `${node.pre_percentage.toFixed(1)}%` : "无基线";
+          let postText = "-";
+          if (node.post_percentage !== null) {
+            postText = `${node.post_percentage.toFixed(1)}%`;
+          } else if (node.status === "target_unsubmitted") {
+            postText = "未提交";
+          } else if (node.status === "target_unreleased") {
+            postText = "待发布";
+          } else if (node.status === "target_ungraded") {
+            postText = "批改中";
+          } else if (node.status === "missing_target") {
+            postText = "无答题";
+          }
+
+          const delta = node.delta_percentage_points;
+
+          return (
+            <div key={node.knowledge_node_id} className="flex flex-wrap items-center justify-between py-1.5">
+              <div>
+                <span className="font-medium text-slate-800">{node.knowledge_node_id}</span>
+                {node.is_modified && (
+                  <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800">原分复核</span>
+                )}
+                {node.incomparable_reason && (
+                  <span className="ml-1.5 text-[11px] text-rose-600">({node.incomparable_reason})</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-4 text-slate-700">
+                <span>首考: {preText}</span>
+                <span>复练: {postText}</span>
+                <span className="font-semibold font-mono">
+                  {delta !== null ? (
+                    <span className={delta > 0 ? "text-emerald-600" : delta < 0 ? "text-rose-600" : "text-slate-600"}>
+                      {delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)} pp
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">-</span>
+                  )}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function StudentResultDetails({ result }: { result: StudentResultRecord }) {
   const [wrongOnly, setWrongOnly] = useState(false);
   const reviewAnswers = wrongOnly ? result.answers.filter((answer) => answer.is_correct === false) : result.answers;
@@ -90,6 +219,9 @@ export function StudentResultDetails({ result }: { result: StudentResultRecord }
           </div>
         ))}
       </div>
+      {result.publication_id && (
+        <StudentPracticeComparisonCard publicationId={result.publication_id} />
+      )}
       <p className="text-xs text-slate-500">平均每题用时：{result.analysis?.average_time_per_question_seconds ?? 0} 秒</p>
       <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
