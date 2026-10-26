@@ -91,4 +91,4 @@ def get_paper_ai_grade_task(
     root = require_platform_root()
     project_root = require_content_project_root()
     service = AiPregradeTaskService(root, project_root)
-    return service.get(task_id, user=user)
+    return service.get(task_id, user=user, paper_id=paper_id)

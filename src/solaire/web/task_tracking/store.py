@@ -141,6 +141,8 @@ class TaskProjectionStore:
             if event.error_summary is not None
             else None
         )
+        if any(value is not None and len(value.encode("utf-8")) > 16384 for value in (res_json, err_json)):
+            raise ValueError("Task summaries must not exceed 16 KiB each.")
 
         # A task without a source_id cannot claim reliable source retry
         effective_retryable = bool(event.is_retryable and event.source_id)
@@ -155,6 +157,10 @@ class TaskProjectionStore:
                 # Disallow cross-owner or cross-project hijacking
                 if existing["owner"] != event.owner or existing["project_scope"] != event.project_scope:
                     raise PermissionError("Task projection owner or project scope mismatch.")
+                if existing["task_type"] != event.task_type or (
+                    event.source_id is not None and existing["source_id"] not in (None, event.source_id)
+                ):
+                    raise ValueError("Task projection source identity cannot change.")
 
                 existing_attempt = int(existing["attempt"])
                 existing_ver = int(existing["event_version"])
@@ -171,8 +177,16 @@ class TaskProjectionStore:
                         return self._to_record(existing)
 
                     # Terminal state cannot regress to active in same attempt
-                    if existing_status in TERMINAL_STATUSES and event.status not in TERMINAL_STATUSES:
+                    if existing_status in TERMINAL_STATUSES:
                         return self._to_record(existing)
+
+                if existing_status not in ACTIVE_STATUSES and event.status in ACTIVE_STATUSES:
+                    self._check_active_capacity(db, event.owner, event.project_scope)
+                if event.attempt > existing_attempt:
+                    db.execute(
+                        "UPDATE task_projections SET result_summary_json=NULL, error_json=NULL, stage=NULL WHERE task_id=?",
+                        (event.task_id,),
+                    )
 
                 # Safe to update
                 db.execute(
@@ -211,14 +225,7 @@ class TaskProjectionStore:
             else:
                 # Capacity check for active queued/running tasks
                 if event.status in ACTIVE_STATUSES:
-                    active_count = db.execute(
-                        "SELECT COUNT(*) FROM task_projections WHERE owner = ? AND project_scope = ? AND status IN ('queued', 'running')",
-                        (event.owner, event.project_scope),
-                    ).fetchone()[0]
-                    if active_count >= MAX_ACTIVE_PER_OWNER:
-                        raise RuntimeError(
-                            f"待处理任务已达上限 ({MAX_ACTIVE_PER_OWNER})，请等待已有任务结束。"
-                        )
+                    self._check_active_capacity(db, event.owner, event.project_scope)
 
                 db.execute(
                     """
@@ -256,6 +263,15 @@ class TaskProjectionStore:
                 "SELECT * FROM task_projections WHERE task_id = ?", (event.task_id,)
             ).fetchone()
             return self._to_record(row)
+
+    @staticmethod
+    def _check_active_capacity(db, owner, project_scope):
+        count = db.execute(
+            "SELECT COUNT(*) FROM task_projections WHERE owner=? AND project_scope=? AND status IN ('queued','running')",
+            (owner, project_scope),
+        ).fetchone()[0]
+        if count >= MAX_ACTIVE_PER_OWNER:
+            raise RuntimeError(f"待处理任务已达上限 ({MAX_ACTIVE_PER_OWNER})，请等待已有任务结束。")
 
     def get_projection(
         self,

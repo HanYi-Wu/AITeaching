@@ -11,6 +11,7 @@ from solaire.web.school_api import router as school_router
 from solaire.web.student_api import router as student_router
 from solaire.web.routers.learning_progress import router as learning_progress_router
 from solaire.web.routers import (
+    ai_pregrade_tasks,
     analysis,
     bank,
     exams,
@@ -34,6 +35,7 @@ def register_routes(app: FastAPI) -> None:
     ):
         app.include_router(router, prefix="/api")
     for module in (
+        ai_pregrade_tasks,
         system,
         projects,
         bank,

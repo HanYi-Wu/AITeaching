@@ -43,15 +43,18 @@ export function useTaskProgress({
   pollIntervalMs = 1000,
   enabled = true,
 }: TaskProgressOptions): TaskProgressResult {
-  const captureScope = useComposeRequestScope(scopeKey);
+  const identity = `${scopeKey}\u0000${taskId ?? ""}\u0000${enabled}`;
+  const captureScope = useComposeRequestScope(identity);
+  const requestSequence = useRef(0);
   const [projection, setProjection] = useState<TaskProjectionView | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
 
   // Invalidate old data immediately on scope change
-  const previousScope = useRef(scopeKey);
-  if (previousScope.current !== scopeKey) {
-    previousScope.current = scopeKey;
+  const previousScope = useRef(identity);
+  if (previousScope.current !== identity) {
+    previousScope.current = identity;
+    requestSequence.current += 1;
     setProjection(null);
     setPollError(null);
     setBusy(false);
@@ -60,17 +63,21 @@ export function useTaskProgress({
   const refresh = useCallback(async () => {
     if (!taskId || !enabled) return;
     const isCurrent = captureScope();
+    const sequence = ++requestSequence.current;
+    const accepts = () => isCurrent() && sequence === requestSequence.current;
     setBusy(true);
     try {
       const result = await getTaskProjectionApi(taskId);
-      if (!isCurrent()) return;
-      setProjection(result);
+      if (!accepts()) return;
+      setProjection((current) => current && current.task_id === result.task_id &&
+        (current.attempt > result.attempt || (current.attempt === result.attempt && current.event_version > result.event_version))
+        ? current : result);
       setPollError(null);
     } catch (err: unknown) {
-      if (!isCurrent()) return;
+      if (!accepts()) return;
       setPollError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (isCurrent()) {
+      if (accepts()) {
         setBusy(false);
       }
     }
@@ -89,15 +96,14 @@ export function useTaskProgress({
     if (
       !taskId ||
       !enabled ||
-      !projection ||
-      ["succeeded", "failed", "cancelled"].includes(projection.status)
+      (projection && ["succeeded", "failed", "cancelled"].includes(projection.status))
     ) {
       return;
     }
-    const timer = window.setTimeout(() => {
+    const timer = window.setInterval(() => {
       void refresh();
     }, pollIntervalMs);
-    return () => window.clearTimeout(timer);
+    return () => window.clearInterval(timer);
   }, [enabled, pollIntervalMs, projection, refresh, taskId]);
 
   useEffect(() => {

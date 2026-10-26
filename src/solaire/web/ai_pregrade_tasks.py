@@ -1,71 +1,25 @@
-"""Asynchronous AI pre-grade execution service and adapter.
-
-Enforces authoritative database checks for:
-1. Active user account status.
-2. Paper ownership and teacher visibility.
-3. Authoritative school AI policy via policy.check_school_ai_allowed reusing shared SQLite connection.
-4. Answer revision check against paper_answer_grading_versions to reject late suggestions.
-5. Strict non-generation and non-publishing of teacher final score/grades.
-"""
-
+"""Bounded optional background adapter for the existing pregrading service."""
 from __future__ import annotations
 
 import logging
 import sqlite3
-import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-
 from solaire.agent_layer.llm.router import load_llm_settings
-from solaire.web.paper_service import (
-    _attempt_scan_payloads,
-    _clamp_score,
-    _contains_grading_prompt_injection,
-    _extract_json_object,
-    _json_payload,
-    _ocr_attempt_scan_images,
-    _ocr_images,
-    _paper_attempt_row,
-    _question_maps_for_attempt,
-    _run_async_blocking,
-    find_paper_submissions,
-)
-from solaire.web.papers import ai_grading
+from solaire.web.paper_service import _paper_attempt_row, find_paper_submissions, suggest_ai_grades_for_attempt
 from solaire.web.papers.visibility import ensure_paper_access
 from solaire.web.platform_db import connect, row_to_dict
 from solaire.web.project_scope import project_scope_id
 from solaire.web.school.policy import check_school_ai_allowed
+from solaire.web.task_tracking import TaskEvent, create_or_update_projection, get_task_projection, normalize_owner
+from solaire.web.task_tracking.live_tasks import mark_live, mark_finished
 
 logger = logging.getLogger(__name__)
-
-# Bounded, dedicated thread pool for AI pre-grade tasks (max 2 workers)
 _pregrade_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ai-pregrade")
-
-_tasks_lock = threading.RLock()
-_in_memory_tasks: dict[str, dict[str, Any]] = {}
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def normalize_owner(user: dict[str, Any] | None | str) -> str:
-    if isinstance(user, str):
-        cleaned = user.strip()
-        return cleaned if cleaned else "local"
-    if user is None:
-        return "local"
-    role = user.get("role")
-    user_id = user.get("id")
-    if role and user_id:
-        return f"{role}:{user_id}"
-    return "local"
-
 
 def verify_security_context(
     con: sqlite3.Connection,
@@ -73,6 +27,7 @@ def verify_security_context(
     *,
     paper_id: str,
     user_id: str,
+    require_ai: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Authoritatively verify current user account status, paper access, and school AI policy.
 
@@ -109,6 +64,8 @@ def verify_security_context(
 
     # 3. Authoritative school AI policy verification reusing shared SQLite connection
     school_id = str(user.get("school_id") or paper.get("school_id") or "")
+    if not require_ai:
+        return user, paper
     if school_id:
         check_school_ai_allowed(root, school_id=school_id, _connection=con)
     else:
@@ -121,474 +78,94 @@ def verify_security_context(
 
 
 class AiPregradeTaskService:
-    """Service managing bounded, asynchronous AI pregrade jobs with durable/projection state."""
-
-    def __init__(
-        self,
-        root: Path,
-        project_root: Path,
-        *,
-        executor: ThreadPoolExecutor | None = None,
-    ):
+    def __init__(self, root: Path, project_root: Path, *, executor=None):
         self.root = root.resolve()
         self.project_root = project_root.resolve()
         self.pool = executor if executor is not None else _pregrade_executor
         self.project_scope = project_scope_id(self.project_root)
 
-    def submit(
-        self,
-        *,
-        paper_id: str,
-        user: dict[str, Any],
-        attempt_id: str | None = None,
-        max_attempts: int = 5,
-        max_questions_total: int = 50,
-        task_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Submit an asynchronous AI pregrade job."""
+    def submit(self, *, paper_id, user, attempt_id=None, max_attempts=5, max_questions_total=50, task_id=None):
         if not user or not user.get("id"):
             raise HTTPException(status_code=401, detail="未认证的用户")
-
         user_id = str(user["id"])
-        # Synchronous pre-flight security check
-        con = connect(self.root)
-        try:
-            user_info, paper_info = verify_security_context(
-                con, self.root, paper_id=paper_id, user_id=user_id
-            )
-        finally:
-            con.close()
-
+        with connect(self.root) as con:
+            fresh_user, _ = verify_security_context(con, self.root, paper_id=paper_id, user_id=user_id)
+        if attempt_id:
+            _paper_attempt_row(self.root, paper_id=paper_id, attempt_id=attempt_id, user=fresh_user)
         task_id = task_id or uuid.uuid4().hex
-        owner_str = normalize_owner(user_info)
-
-        task_record = {
-            "task_id": task_id,
-            "task_type": "ai_pregrade",
-            "owner": owner_str,
-            "project_scope": self.project_scope,
-            "source_id": f"pregrade:{paper_id}:{attempt_id or 'all'}",
-            "paper_id": paper_id,
-            "attempt_id": attempt_id,
-            "status": "queued",
-            "progress": 0.0,
-            "stage": "queued",
-            "event_version": 1,
-            "attempt": 1,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-            "result_summary": None,
-            "error_summary": None,
-        }
-
-        self._record_projection(task_record)
-
-        self.pool.submit(
-            self._execute_worker,
-            task_id=task_id,
-            paper_id=paper_id,
-            user_id=user_id,
-            attempt_id=attempt_id,
-            max_attempts=max_attempts,
-            max_questions_total=max_questions_total,
-        )
-
-        return task_record
-
-    def get(self, task_id: str, *, user: dict[str, Any]) -> dict[str, Any]:
-        """Retrieve task details, enforcing owner isolation."""
-        owner = normalize_owner(user)
+        owner = normalize_owner(fresh_user)
+        if get_task_projection(self.project_root, task_id, owner):
+            raise ValueError("任务标识已存在，不能重复提交。")
+        event = TaskEvent(task_id=task_id, task_type="ai_pregrade", owner=owner,
+                          project_scope=self.project_scope, source_id=paper_id,
+                          status="queued", stage="排队中", title="AI预批改")
+        mark_live(self.project_root, task_id)
         try:
-            from solaire.web.task_tracking.contract import get_task_projection
+            record = create_or_update_projection(self.project_root, event)
+            self.pool.submit(self._execute_worker, event=event, paper_id=paper_id, user_id=user_id,
+                             attempt_id=attempt_id, max_attempts=max_attempts,
+                             max_questions_total=max_questions_total)
+        except Exception:
+            mark_finished(self.project_root, task_id)
+            raise
+        return record.model_dump()
 
-            proj = get_task_projection(
-                self.project_root,
-                task_id=task_id,
-                owner=owner,
-                project_scope=self.project_scope,
-            )
-            if proj is not None:
-                return proj.model_dump()
-        except ImportError:
-            pass
+    def get(self, task_id, *, user, paper_id=None):
+        from solaire.web.task_tracking.reconciliation import reconcile_task
+        record = get_task_projection(self.project_root, task_id, normalize_owner(user))
+        if record is None or record.task_type != "ai_pregrade" or (paper_id and record.source_id != paper_id):
+            raise HTTPException(status_code=404, detail="AI预批改任务不存在")
+        with connect(self.root) as con:
+            verify_security_context(con, self.root, paper_id=record.source_id, user_id=str(user["id"]), require_ai=False)
+        return reconcile_task(self.project_root, record, user).model_dump()
 
-        with _tasks_lock:
-            task = _in_memory_tasks.get(task_id)
-            if not task:
-                raise HTTPException(status_code=404, detail="AI预批改任务不存在")
-            if task.get("owner") != owner and user.get("role") != "admin":
-                raise HTTPException(status_code=403, detail="无权访问该任务")
-            return dict(task)
+    def _execute_worker(self, *, event, paper_id, user_id, attempt_id, max_attempts, max_questions_total):
+        def verify(con):
+            return verify_security_context(con, self.root, paper_id=paper_id, user_id=user_id)
 
-    def _record_projection(self, record: dict[str, Any]) -> None:
-        """Record task state to durable TaskProjection store if present, and in-memory fallback."""
-        with _tasks_lock:
-            _in_memory_tasks[record["task_id"]] = dict(record)
+        def update(status, stage, progress=None, result=None, error=None):
+            nonlocal event
+            event = event.model_copy(update={"status": status, "stage": stage, "progress": progress,
+                                             "result_summary": result, "error_summary": error,
+                                             "event_version": event.event_version + 1})
+            return create_or_update_projection(self.project_root, event)
 
         try:
-            from solaire.web.task_tracking.contract import create_or_update_projection
-            from solaire.web.task_tracking.models import TaskEvent
-
-            event = TaskEvent(
-                task_id=record["task_id"],
-                task_type="ai_pregrade",
-                owner=record["owner"],
-                project_scope=record["project_scope"],
-                source_id=record.get("source_id"),
-                attempt=record.get("attempt", 1),
-                status=record["status"],
-                event_version=record.get("event_version", 1),
-                progress=record.get("progress"),
-                stage=record.get("stage"),
-                title=f"AI预批改: {record.get('paper_id')}",
-                result_summary=record.get("result_summary"),
-                error_summary=record.get("error_summary"),
-                is_retryable=False,
-            )
-            create_or_update_projection(self.project_root, event)
-        except ImportError:
-            pass
-
-    def _update_task(
-        self,
-        task_id: str,
-        *,
-        status: str,
-        progress: float | None = None,
-        stage: str | None = None,
-        result_summary: dict[str, Any] | None = None,
-        error_summary: dict[str, Any] | None = None,
-    ) -> None:
-        with _tasks_lock:
-            task = _in_memory_tasks.get(task_id)
-            if not task:
-                return
-            task["status"] = status
-            if progress is not None:
-                task["progress"] = progress
-            if stage is not None:
-                task["stage"] = stage
-            if result_summary is not None:
-                task["result_summary"] = result_summary
-            if error_summary is not None:
-                task["error_summary"] = error_summary
-            task["event_version"] = task.get("event_version", 1) + 1
-            task["updated_at"] = _now_iso()
-            self._record_projection(task)
-
-    def _execute_worker(
-        self,
-        *,
-        task_id: str,
-        paper_id: str,
-        user_id: str,
-        attempt_id: str | None,
-        max_attempts: int,
-        max_questions_total: int,
-    ) -> None:
-        self._update_task(task_id, status="running", progress=0.05, stage="validating_context")
-        clean_limit = max(1, min(int(max_attempts or 5), 20))
-        question_budget = max(1, min(int(max_questions_total or 50), 100))
-
-        try:
-            con = connect(self.root)
-            try:
-                user, paper = verify_security_context(
-                    con, self.root, paper_id=paper_id, user_id=user_id
-                )
-            finally:
-                con.close()
-
+            update("running", "核对权限与答卷")
+            with connect(self.root) as con:
+                user, _ = verify(con)
             if attempt_id:
-                full_att = _paper_attempt_row(
-                    self.root, paper_id=paper_id, attempt_id=attempt_id, user=user
-                )
-                if not full_att:
-                    raise ValueError(f"答卷不存在: {attempt_id}")
-                target_attempts = [full_att]
+                attempts = [{"attempt_id": attempt_id}]
             else:
-                submissions = find_paper_submissions(
-                    self.root,
-                    paper_id=paper_id,
-                    user=user,
-                    status="submitted",
-                    grading_status="pending",
-                    limit=clean_limit,
-                )
-                target_attempts = [
-                    _paper_attempt_row(
-                        self.root,
-                        paper_id=paper_id,
-                        attempt_id=str(item["attempt_id"]),
-                        user=user,
-                    )
-                    for item in submissions
-                ]
-
-            if not target_attempts:
-                self._update_task(
-                    task_id,
-                    status="succeeded",
-                    progress=1.0,
-                    stage="completed",
-                    result_summary={
-                        "processed_count": 0,
-                        "suggestion_count": 0,
-                        "attempted_question_count": 0,
-                        "items": [],
-                    },
-                )
-                return
-
-            total_attempts = len(target_attempts)
-            items_summary: list[dict[str, Any]] = []
-            total_suggestion_count = 0
-            attempted_question_count = 0
-
-            for idx, attempt in enumerate(target_attempts):
-                if attempted_question_count >= question_budget:
+                attempts = find_paper_submissions(self.root, paper_id=paper_id, user=user,
+                            status="submitted", grading_status="pending",
+                            limit=max(1, min(int(max_attempts), 20)))
+            budget = max(1, min(int(max_questions_total), 100))
+            processed = 0
+            count = 0
+            attempted = 0
+            for item in attempts:
+                if budget <= 0:
                     break
-
-                att_id = str(attempt.get("attempt_id") or attempt.get("id"))
-                # Re-verify account & policy before each attempt batch
-                con = connect(self.root)
-                try:
-                    user, paper = verify_security_context(
-                        con, self.root, paper_id=paper_id, user_id=user_id
-                    )
-                    pending_rows = con.execute(
-                        """
-                        SELECT id, question_id, answer_payload, grading_status
-                        FROM student_answers
-                        WHERE attempt_id = ? AND COALESCE(grading_status, 'pending') = 'pending'
-                        """,
-                        (att_id,),
-                    ).fetchall()
-                    ver_rows = con.execute(
-                        "SELECT question_id, revision FROM paper_answer_grading_versions WHERE attempt_id = ?",
-                        (att_id,),
-                    ).fetchall()
-                    initial_revisions = {
-                        str(r["question_id"]): int(r["revision"]) for r in ver_rows
-                    }
-                finally:
-                    con.close()
-
-                if not pending_rows:
-                    continue
-
-                questions, by_id, score_by_id = _question_maps_for_attempt(
-                    self.root,
-                    self.project_root,
-                    paper,
-                    attempt,
-                )
-
-                candidate_qids = [
-                    str(r["question_id"])
-                    for r in pending_rows
-                    if str(r["question_id"]) in by_id
-                ]
-                remaining = question_budget - attempted_question_count
-                selected_qids = candidate_qids[:remaining]
-                if not selected_qids:
-                    continue
-                attempted_question_count += len(selected_qids)
-
-                by_question = {
-                    str(r["question_id"]): row_to_dict(r) or {} for r in pending_rows
-                }
-
-                shared_scan_images = _attempt_scan_payloads(
-                    self.root, att_id, include_content=False
-                )
-                shared_ocr_text, shared_ocr_errors = _ocr_attempt_scan_images(
-                    self.root, att_id
-                )
-                has_api_key = bool(load_llm_settings(self.project_root).api_key)
-
-                attempt_suggestions = 0
-
-                for qid in selected_qids:
-                    # Re-verify before each AI model call
-                    con = connect(self.root)
-                    try:
-                        verify_security_context(
-                            con, self.root, paper_id=paper_id, user_id=user_id
-                        )
-                        ans_info = by_question.get(qid)
-                        if not ans_info:
-                            continue
-                        check_curr = con.execute(
-                            "SELECT grading_status FROM student_answers WHERE id = ?",
-                            (ans_info["id"],),
-                        ).fetchone()
-                    finally:
-                        con.close()
-
-                    if not check_curr or str(check_curr["grading_status"] or "pending") != "pending":
-                        continue
-
-                    payload = _json_payload(ans_info.get("answer_payload"))
-                    answer_images = (
-                        payload.get("images")
-                        if isinstance(payload.get("images"), list)
-                        else []
-                    )
-                    has_images = bool(answer_images or shared_scan_images)
-                    if answer_images:
-                        ocr_text, ocr_errors = _ocr_images(answer_images)
-                    else:
-                        ocr_text, ocr_errors = shared_ocr_text, shared_ocr_errors
-                    ocr_text = (ocr_text or "")[:12000]
-                    answer_text = str(payload.get("answer") or "").strip()
-                    max_score = float(score_by_id.get(qid, 0.0))
-
-                    suggestion = None
-                    ai_error: str | None = None
-                    if _contains_grading_prompt_injection(f"{answer_text}\n{ocr_text}"):
-                        ai_error = (
-                            "检测到疑似操纵评分的答题指令，已禁止 AI 自动给分，请教师人工核对实际作答"
-                        )
-                    elif not answer_text and not ocr_text:
-                        ai_error = "未识别到可用于 AI 判分的答案文本"
-                    elif not has_api_key:
-                        ai_error = "未配置 AI 模型"
-                    else:
-                        try:
-                            suggestion = _run_async_blocking(
-                                ai_grading.ai_grade_answer(
-                                    self.project_root,
-                                    question=by_id[qid],
-                                    answer_text=answer_text,
-                                    ocr_text=ocr_text,
-                                    max_score=max_score,
-                                    extract_json_object_fn=_extract_json_object,
-                                    clamp_score_fn=_clamp_score,
-                                )
-                            )
-                            if suggestion is None:
-                                ai_error = "模型未返回有效的结构化建议"
-                        except Exception as exc:
-                            ai_error = str(exc)
-                        print(f"DEBUG: model returned for {qid}: {suggestion}", flush=True)
-
-                    if suggestion is None:
-                        feedback_parts = []
-                        if has_images:
-                            feedback_parts.append("图片答案需要教师复核。")
-                            if ocr_text:
-                                feedback_parts.append("已提取 OCR 文本，可作为参考。")
-                            elif ocr_errors:
-                                feedback_parts.append("OCR 未能清晰识别，请人工查看图片。")
-                        else:
-                            feedback_parts.append("主观题答案需要教师复核。")
-                        if ai_error:
-                            feedback_parts.append(f"AI 建议暂未生成：{ai_error}")
-                        feedback = "".join(feedback_parts)
-                        suggested_score = None
-                        status_val = "pending"
-                    else:
-                        feedback = str(
-                            suggestion.get("feedback")
-                            or "AI 已生成建议，请教师复核。"
-                        )
-                        suggested_score = suggestion.get("suggested_score")
-                        status_val = "needs_review"
-
-                    # WRITE-BACK TRANSACTION
-                    # Re-verify account and policy, and check answer/grading version before commit
-                    con = connect(self.root)
-                    try:
-                        with con:
-                            verify_security_context(
-                                con, self.root, paper_id=paper_id, user_id=user_id
-                            )
-
-                            current_ans = con.execute(
-                                "SELECT grading_status FROM student_answers WHERE id = ?",
-                                (ans_info["id"],),
-                            ).fetchone()
-                            if (
-                                not current_ans
-                                or str(current_ans["grading_status"] or "pending") != "pending"
-                            ):
-                                # Late suggestion rejected: Teacher manual grading already confirmed
-                                continue
-
-                            ver_now = con.execute(
-                                "SELECT revision FROM paper_answer_grading_versions WHERE attempt_id = ? AND question_id = ?",
-                                (att_id, qid),
-                            ).fetchone()
-                            curr_revision = int(ver_now["revision"]) if ver_now else 0
-                            if curr_revision != initial_revisions.get(qid, 0):
-                                # Late suggestion rejected: Manual revision updated while AI was running
-                                continue
-
-                            # Update suggestion ONLY — NEVER write teacher score, graded_by, or graded_at!
-                            upd = con.execute(
-                                """
-                                UPDATE student_answers
-                                SET grading_status = ?,
-                                    ai_suggested_score = ?,
-                                    ai_feedback = ?,
-                                    ai_ocr_text = ?,
-                                    responded_at = responded_at
-                                WHERE id = ?
-                                  AND COALESCE(grading_status, 'pending') = 'pending'
-                                """,
-                                (
-                                    status_val,
-                                    suggested_score,
-                                    feedback,
-                                    ocr_text or "\n".join(ocr_errors),
-                                    ans_info["id"],
-                                ),
-                            )
-                            if upd.rowcount == 1 and status_val == "needs_review":
-                                attempt_suggestions += 1
-                                total_suggestion_count += 1
-                    finally:
-                        con.close()
-
-                items_summary.append(
-                    {
-                        "attempt_id": att_id,
-                        "student_no": attempt.get("student_no"),
-                        "student_name": attempt.get("student_name"),
-                        "status": "succeeded",
-                        "suggestion_count": attempt_suggestions,
-                        "attempted_question_count": len(selected_qids),
-                    }
-                )
-
-                progress = round(
-                    0.05 + 0.90 * ((idx + 1) / total_attempts), 2
-                )
-                self._update_task(
-                    task_id,
-                    status="running",
-                    progress=progress,
-                    stage=f"processed_{idx + 1}_of_{total_attempts}",
-                )
-
-            self._update_task(
-                task_id,
-                status="succeeded",
-                progress=1.0,
-                stage="completed",
-                result_summary={
-                    "items": items_summary,
-                    "processed_count": len(items_summary),
-                    "suggestion_count": total_suggestion_count,
-                    "attempted_question_count": attempted_question_count,
-                },
-            )
+                aid = str(item["attempt_id"])
+                with connect(self.root) as con:
+                    user, _ = verify(con)
+                    ids = [str(r[0]) for r in con.execute(
+                        "SELECT question_id FROM student_answers WHERE attempt_id=? AND COALESCE(grading_status,'pending')='pending' ORDER BY question_id LIMIT ?",
+                        (aid, min(budget, 50)))]
+                if ids:
+                    suggestions = suggest_ai_grades_for_attempt(self.root, self.project_root,
+                        paper_id=paper_id, attempt_id=aid, user=user, question_ids=ids,
+                        _verify_context=verify)
+                    count += sum(s["status"] == "needs_review" for s in suggestions)
+                    budget -= len(ids)
+                    attempted += len(ids)
+                processed += 1
+                update("running", f"已处理 {processed}/{len(attempts)} 份答卷", processed / len(attempts))
+            update("succeeded", "预批改完成", 1.0,
+                   {"processed_count": processed, "suggestion_count": count, "attempted_question_count": attempted})
         except Exception as exc:
-            logger.exception("AI pregrade task failed: %s", exc)
-            self._update_task(
-                task_id,
-                status="failed",
-                stage="failed",
-                error_summary={"detail": str(exc)},
-            )
+            logger.exception("AI pregrade task failed")
+            update("failed", "预批改失败", error={"detail": str(exc)[:500]})
+        finally:
+            mark_finished(self.project_root, event.task_id)

@@ -157,4 +157,27 @@ describe("useTaskProgress", () => {
     expect(result.current.projection).toBeNull();
     expect(result.current.pollError).toBe("网络连接失败");
   });
+
+  it("rejects a late response after switching tasks within the same account and project", async () => {
+    let resolveOld!: (value: TaskProjectionView) => void;
+    mockGet.mockImplementationOnce(() => new Promise<TaskProjectionView>((resolve) => { resolveOld = resolve; }));
+    mockGet.mockResolvedValue(mockProjection({ task_id: "new-task", status: "succeeded" }));
+    const { result, rerender } = renderHook(({ taskId }) => useTaskProgress({ taskId, scopeKey: "same-project" }),
+      { initialProps: { taskId: "old-task" } });
+    rerender({ taskId: "new-task" });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.projection?.task_id).toBe("new-task");
+    await act(async () => { resolveOld(mockProjection({ task_id: "old-task" })); await Promise.resolve(); });
+    expect(result.current.projection?.task_id).toBe("new-task");
+  });
+
+  it("polls again after the first request fails", async () => {
+    mockGet.mockRejectedValueOnce(new Error("offline"));
+    const { result } = renderHook(() => useTaskProgress({ taskId: "task-100", scopeKey: "same-project", pollIntervalMs: 1000 }));
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.pollError).toBe("offline");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(result.current.projection?.task_id).toBe("task-100");
+    expect(result.current.pollError).toBeNull();
+  });
 });

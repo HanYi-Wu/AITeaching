@@ -1,6 +1,4 @@
 """Public contract and entrypoints for task tracking projections.
-
-Frozen for G13 consumption.
 """
 
 from __future__ import annotations

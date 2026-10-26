@@ -78,7 +78,7 @@ def project_export_task(
             if status == "queued":
                 progress = 0.0
             elif status == "running":
-                progress = 0.5
+                progress = None
             elif status == "succeeded":
                 progress = 1.0
             else:

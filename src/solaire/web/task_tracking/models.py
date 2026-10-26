@@ -75,7 +75,7 @@ class TaskProjectionRecord(BaseModel):
     created_at: str
     updated_at: str
 
-    @field_validator("progress")
+    @field_validator("progress", mode="before")
     @classmethod
     def validate_record_progress(cls, v: Any) -> float | None:
         return normalize_progress(v)
@@ -99,7 +99,7 @@ class TaskEvent(BaseModel):
     error_summary: dict[str, Any] | None = None
     is_retryable: bool = False
 
-    @field_validator("progress")
+    @field_validator("progress", mode="before")
     @classmethod
     def validate_event_progress(cls, v: Any) -> float | None:
         return normalize_progress(v)

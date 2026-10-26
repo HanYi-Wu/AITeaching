@@ -48,7 +48,7 @@ def project_analysis_job(
         effective_owner = (
             owner
             or job.get("owner")
-            or normalize_owner(actor.get())
+            or (normalize_owner(actor.get()) if is_analysis_job_active(job_id) else "local")
         )
 
         title = f"分析任务 ({kind})"
@@ -70,7 +70,7 @@ def project_analysis_job(
         if raw_status == "running":
             if is_analysis_job_active(job_id):
                 stage = "分析计算中"
-                progress = 0.5
+                progress = None
                 effective_status = "running"
             else:
                 # Interrupted / process-loss job from prior execution

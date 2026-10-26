@@ -380,6 +380,10 @@ def run_script_with_request_id(
                 allowed_imports=EXECUTOR_ALLOWED_IMPORTS,
                 blocked_import_prefixes=EXECUTOR_BLOCKED_IMPORT_PREFIXES,
             )
+        except Exception as exc:
+            execution = {"status": "failed", "error_code": "runtime_error", "error": str(exc),
+                         "stdout": "", "stderr": "", "truncated": False,
+                         "killed_reason": None, "limits_applied": job["limits_applied"]}
         finally:
             _EXECUTOR_SEMAPHORE.release()
     duration_ms = int((time.perf_counter() - start) * 1000)

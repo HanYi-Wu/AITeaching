@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from solaire.common.actor_context import actor
 from solaire.web.request_context import _require_root
+from solaire.web.task_tracking.reconciliation import reconcile_task
 from solaire.web.schemas.task_tracking import (
     TaskProjectionListView,
     TaskProjectionView,
@@ -38,9 +39,12 @@ def task_list(
         owner=owner,
         project_scope=scope,
         task_type=task_type,
-        status=status,
+        status=None,
         limit=limit,
     )
+    projs = [reconcile_task(root, p, user) for p in projs]
+    if status:
+        projs = [p for p in projs if p.status == status]
     return TaskProjectionListView(
         tasks=[TaskProjectionView.model_validate(p) for p in projs],
         total=len(projs),
@@ -59,7 +63,7 @@ def task_get(task_id: str):
     proj = get_task_projection(root, task_id, owner=owner, project_scope=scope)
     if proj is None:
         raise HTTPException(status_code=404, detail="任务不存在。")
-    return TaskProjectionView.model_validate(proj)
+    return TaskProjectionView.model_validate(reconcile_task(root, proj, user))
 
 
 @router.post("/api/tasks/{task_id}/retry", response_model=TaskProjectionView, status_code=202)
