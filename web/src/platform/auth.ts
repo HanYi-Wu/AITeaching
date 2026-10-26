@@ -1,9 +1,27 @@
 import { resolveApiUrl } from "../api/client";
 import { logApiCall } from "../lib/appLog";
 import type { PlatformRole } from "./roles";
+import {
+  LEGACY_SESSION_STORAGE_KEY,
+  PROJECT_SESSION_STORAGE_PREFIX,
+  clearProjectScopedSessionTokens,
+  clearSessionToken,
+  loadSessionToken,
+  saveSessionToken,
+  sessionStorageKeyForProject,
+  setPlatformProjectRoot,
+} from "./session";
 
-const LEGACY_SESSION_STORAGE_KEY = "solaire.platform.session";
-const PROJECT_SESSION_STORAGE_PREFIX = "solaire.platform.session:";
+export {
+  LEGACY_SESSION_STORAGE_KEY,
+  PROJECT_SESSION_STORAGE_PREFIX,
+  clearProjectScopedSessionTokens,
+  clearSessionToken,
+  loadSessionToken,
+  saveSessionToken,
+  sessionStorageKeyForProject,
+  setPlatformProjectRoot,
+};
 
 export type PlatformUser = {
   id: string;
@@ -522,35 +540,7 @@ export type StudentResultRecord = StudentAttemptRecord & {
   };
 };
 
-export function sessionStorageKeyForProject(_projectRoot: string | null): string {
-  return LEGACY_SESSION_STORAGE_KEY;
-}
-
-export function setPlatformProjectRoot(_projectRoot: string | null): void {
-  // Platform sessions are global. Project roots only affect content workspaces.
-}
-
-function clearProjectScopedSessionTokens(): void {
-  for (const key of Object.keys(localStorage)) {
-    if (key.startsWith(PROJECT_SESSION_STORAGE_PREFIX)) {
-      localStorage.removeItem(key);
-    }
-  }
-}
-
-export function saveSessionToken(token: string): void {
-  localStorage.setItem(LEGACY_SESSION_STORAGE_KEY, token);
-  clearProjectScopedSessionTokens();
-}
-
-export function loadSessionToken(): string | null {
-  return localStorage.getItem(LEGACY_SESSION_STORAGE_KEY);
-}
-
-export function clearSessionToken(): void {
-  localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
-  clearProjectScopedSessionTokens();
-}
+// Platform session token storage extracted to ./session
 
 function buildQuery(params: Record<string, string | number | null | undefined>): string {
   const qs = new URLSearchParams();
@@ -622,13 +612,20 @@ export function getPlatformStatus(): Promise<PlatformStatus> {
 }
 
 export async function getCurrentUser(): Promise<{ user: PlatformUser | null }> {
-  if (!loadSessionToken()) {
+  const token = loadSessionToken();
+  if (!token) {
     return { user: null };
   }
   try {
-    return await platformRequest<{ user: PlatformUser }>("/api/auth/me");
+    const data = await platformRequest<{ user: PlatformUser }>("/api/auth/me");
+    if (loadSessionToken() !== token) {
+      return { user: null };
+    }
+    return data;
   } catch (e) {
-    clearSessionToken();
+    if (loadSessionToken() === token) {
+      clearSessionToken();
+    }
     return { user: null };
   }
 }
@@ -652,13 +649,15 @@ export function loginPlatform(payload: { username: string; password: string }): 
 }
 
 export async function logoutPlatform(): Promise<void> {
-  if (!loadSessionToken()) {
+  const token = loadSessionToken();
+  clearSessionToken();
+  if (!token) {
     return;
   }
   try {
     await platformRequest<{ ok: boolean }>("/api/auth/logout", { method: "POST", body: "{}" });
-  } finally {
-    clearSessionToken();
+  } catch {
+    /* ignore network errors during logout */
   }
 }
 
