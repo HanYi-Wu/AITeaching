@@ -115,4 +115,65 @@ describe("LatexRichTextField widget deletion", () => {
     expect(execCommand).toHaveBeenCalledWith("delete");
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith("before  after"));
   });
+  it("does not overwrite active user input when a stale late-arriving value update is received while focused", () => {
+    const onChange = vi.fn();
+    const textAreaRef = createRef<HTMLTextAreaElement>();
+    const { container, rerender } = render(
+      <LatexRichTextField value="initial" onChange={onChange} textAreaRef={textAreaRef} />
+    );
+    const editor = container.querySelector("[contenteditable='true']") as HTMLDivElement;
+    editor.focus();
+
+    // User types additional text
+    editor.textContent = "initial edited text";
+    fireEvent.input(editor);
+    expect(onChange).toHaveBeenCalledWith("initial edited text");
+
+    // Stale prop from a delayed callback arrives while editor remains focused
+    rerender(
+      <LatexRichTextField value="initial" onChange={onChange} textAreaRef={textAreaRef} />
+    );
+
+    // Editor should not be overwritten back to stale "initial"
+    expect(editor.textContent).toBe("initial edited text");
+  });
+
+  it("passes unified selection to embed requests in visual mode", () => {
+    const onRequestMermaid = vi.fn();
+    const textAreaRef = createRef<HTMLTextAreaElement>();
+    const { getByTitle } = render(
+      <LatexRichTextField
+        value="0123456789"
+        onChange={vi.fn()}
+        textAreaRef={textAreaRef}
+        onRequestMermaid={onRequestMermaid}
+      />
+    );
+
+    fireEvent.click(getByTitle("插入流程图 / Mermaid 图表"));
+    expect(onRequestMermaid).toHaveBeenCalled();
+  });
+
+  it("syncs source mode textarea selection to hidden sync textarea", () => {
+    const textAreaRef = createRef<HTMLTextAreaElement>();
+    const { container, getByText } = render(
+      <LatexRichTextField
+        value="0123456789"
+        onChange={vi.fn()}
+        textAreaRef={textAreaRef}
+      />
+    );
+
+    // Switch to source mode
+    fireEvent.click(getByText("源码"));
+    const sourceTa = container.querySelector("textarea:not(.sr-only)") as HTMLTextAreaElement;
+    expect(sourceTa).not.toBeNull();
+
+    sourceTa.selectionStart = 4;
+    sourceTa.selectionEnd = 8;
+    fireEvent.keyUp(sourceTa);
+
+    expect(textAreaRef.current?.selectionStart).toBe(4);
+    expect(textAreaRef.current?.selectionEnd).toBe(8);
+  });
 });

@@ -11,6 +11,10 @@ import {
 } from "react";
 import { MathSymbolsDropdown } from "./latexField/MathSymbolsPanel";
 import { MathEditPopup } from "./latexField/MathEditPopup";
+import {
+  getFieldSelection,
+  shouldIgnoreLateValueUpdate,
+} from "./latexField/asyncCallbackBridge";
 import { Shapes, Table2 } from "lucide-react";
 
 import { resourceApiUrl } from "../api/client";
@@ -96,6 +100,8 @@ export function LatexRichTextField({
   hideToolbar = false,
 }: LatexRichTextFieldProps) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const sourceTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const mermaidRenderSeqRef = useRef(0);
   const lastEmittedRef = useRef<string | null>(null);
   const composingRef = useRef(false);
   const onChangeRef = useRef(onChange);
@@ -135,23 +141,14 @@ export function LatexRichTextField({
   /* ─── Hidden textarea sync ─── */
 
   const syncHiddenSelection = useCallback(() => {
-    const root = editorRef.current;
-    const ta = textAreaRef.current;
-    if (!root || !ta) return;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const r = sel.getRangeAt(0);
-    if (!root.contains(r.commonAncestorContainer)) return;
-    const rs = document.createRange();
-    rs.setStart(r.startContainer, r.startOffset);
-    rs.collapse(true);
-    const start = getSerializedCaretOffset(root, rs);
-    const re = document.createRange();
-    re.setStart(r.endContainer, r.endOffset);
-    re.collapse(true);
-    const end = r.collapsed ? start : getSerializedCaretOffset(root, re);
-    ta.setSelectionRange(Math.min(start, end), Math.max(start, end));
-  }, [textAreaRef]);
+    getFieldSelection(
+      editorRef.current,
+      textAreaRef.current,
+      sourceTextareaRef.current,
+      mode,
+      getSerializedCaretOffset,
+    );
+  }, [mode, textAreaRef]);
 
   /* ─── Emit changes ─── */
 
@@ -201,8 +198,11 @@ export function LatexRichTextField({
     if (mode !== "visual") return;
     const root = editorRef.current;
     if (!root) return;
-    if (composingRef.current) return;
-    if (document.activeElement === root && value === lastEmittedRef.current) return;
+    const isFocused = document.activeElement === root;
+    if (shouldIgnoreLateValueUpdate(value, lastEmittedRef.current, isFocused, composingRef.current)) {
+      return;
+    }
+    if (isFocused && value === lastEmittedRef.current) return;
     buildEditorDom(root, value);
     lastEmittedRef.current = value;
   }, [value, mode]);
@@ -297,7 +297,8 @@ export function LatexRichTextField({
     const el = mermaidPreviewRef.current;
     el.textContent = "渲染中…";
     el.classList.remove("text-amber-600");
-    const timer = setTimeout(() => void renderMermaidToElement(mermaidDraft, el), 400);
+    const seq = ++mermaidRenderSeqRef.current;
+    const timer = setTimeout(() => void renderMermaidToElement(mermaidDraft, el, seq), 400);
     return () => clearTimeout(timer);
   }, [mermaidDraft, mermaidPopup]);
 
@@ -781,6 +782,9 @@ export function LatexRichTextField({
         />
       ) : (
         <textarea
+          ref={sourceTextareaRef}
+          onKeyUp={syncHiddenSelection}
+          onMouseUp={syncHiddenSelection}
           className={`w-full border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-relaxed text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 ${hideToolbar ? "rounded-md" : "rounded-b-md border-t-0"}`}
           style={{ minHeight: minH }}
           value={value}

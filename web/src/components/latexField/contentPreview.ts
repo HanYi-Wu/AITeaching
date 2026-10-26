@@ -22,13 +22,28 @@ export function renderMathHtml(latex: string, displayMode = false): string {
   return renderMathToHtmlSimple(latex, displayMode);
 }
 
-export async function renderMermaidToElement(source: string, container: HTMLElement): Promise<void> {
+export async function renderMermaidToElement(
+  source: string,
+  container: HTMLElement,
+  expectedSeq?: number | string
+): Promise<void> {
+  const currentSeq = expectedSeq !== undefined ? String(expectedSeq) : undefined;
+  if (currentSeq !== undefined) {
+    container.dataset.renderSeq = currentSeq;
+  }
   try {
     const mermaid = await initMermaid();
     const id = `lrt-mmd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const { svg } = await mermaid.render(id, source.trim());
+    if (currentSeq !== undefined && container.dataset.renderSeq !== currentSeq) {
+      return;
+    }
     container.innerHTML = svg;
+    container.classList.remove("text-amber-600");
   } catch {
+    if (currentSeq !== undefined && container.dataset.renderSeq !== currentSeq) {
+      return;
+    }
     container.textContent = "图表语法有误";
     container.classList.add("text-amber-600");
   }
