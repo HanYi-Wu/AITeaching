@@ -21,6 +21,7 @@ from .models import (
     normalize_owner,
     normalize_progress,
 )
+from .source_operations import retry_source_task
 from .store import TaskProjectionStore
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "list_task_projections",
     "normalize_owner",
     "normalize_progress",
+    "retry_source_task",
 ]

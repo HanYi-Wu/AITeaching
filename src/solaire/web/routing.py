@@ -18,6 +18,7 @@ from solaire.web.routers import (
     graph,
     projects,
     system,
+    task_tracking,
     templates,
 )
 
@@ -41,5 +42,6 @@ def register_routes(app: FastAPI) -> None:
         graph,
         analysis,
         export_tasks,
+        task_tracking,
     ):
         app.include_router(module.router)
