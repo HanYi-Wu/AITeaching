@@ -1,402 +1,53 @@
 import i18n from "../i18n/i18n";
-import { logApiCall } from "../lib/appLog";
-import { isTauriShell, waitForTauriShell } from "../lib/tauriEnv";
+import {
+  ensureApiBase,
+  joinApi,
+  resolveApiUrl,
+  resourceApiUrl,
+  apiAbsoluteUrl,
+} from "./address";
+import {
+  ApiError,
+  filenameFromContentDisposition,
+  parseDetailFromResponse,
+  type ExamSavedPayload,
+  type DraftSavedPayload,
+} from "./errors";
+import {
+  isHeavyApiPath,
+  fetchWithLog,
+  apiGet,
+  apiGetBlob,
+  apiPost,
+  apiPostFormData,
+  apiPut,
+  apiDelete,
+  apiDownloadBlob,
+  downloadBankExportBundle,
+} from "./transport";
 
-let apiBaseResolved: string | null = null;
-let apiBasePromise: Promise<string> | null = null;
-const PLATFORM_SESSION_STORAGE_KEY = "solaire.platform.session";
-
-/** 生产构建首次打开时，Tauri 注入可能晚于首帧脚本，需短暂等待再判定是否在壳内。 */
-const TAURI_INJECT_WAIT_MS = 5000;
-
-/** 桌面壳内等待本地服务就绪（事件 + 非阻塞 invoke 竞态 + 超时）。 */
-const SHELL_BACKEND_WAIT_MS = 120_000;
-
-async function waitForShellBackendPort(): Promise<number> {
-  const { listen } = await import("@tauri-apps/api/event");
-  const { invoke } = await import("@tauri-apps/api/core");
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timeouts: ReturnType<typeof setTimeout>[] = [];
-    let unlistenReady: (() => void) | undefined;
-    let unlistenFail: (() => void) | undefined;
-
-    const cleanup = () => {
-      for (const t of timeouts) clearTimeout(t);
-      try {
-        unlistenReady?.();
-      } catch {
-        /* ignore */
-      }
-      try {
-        unlistenFail?.();
-      } catch {
-        /* ignore */
-      }
-    };
-
-    const fail = (msg: string) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error(msg));
-    };
-
-    const ok = (port: number) => {
-      if (settled) return;
-      if (!Number.isFinite(port) || port <= 0) {
-        fail(i18n.t("localServiceFailed", { ns: "common" }));
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve(port);
-    };
-
-    void (async () => {
-      try {
-        unlistenReady = await listen<unknown>("backend-ready", (event) => {
-          const p = event.payload;
-          let port = 0;
-          if (typeof p === "object" && p !== null && "port" in p) {
-            port = Number((p as { port: number }).port);
-          } else if (typeof p === "number") {
-            port = p;
-          }
-          if (port > 0) ok(port);
-        });
-
-        unlistenFail = await listen<{ message: string }>("backend-failed", (event) => {
-          const m = event.payload?.message;
-          if (typeof m === "string" && m.trim()) {
-            fail(m);
-          } else {
-            fail(i18n.t("localServiceFailed", { ns: "common" }));
-          }
-        });
-
-        try {
-          const port = await invoke<number>("get_backend_port");
-          if (port > 0) ok(port);
-        } catch {
-          /* 尚未就绪，依赖事件 */
-        }
-      } catch (e) {
-        fail(e instanceof Error ? e.message : String(e));
-      }
-    })();
-
-    timeouts.push(
-      setTimeout(() => {
-        fail(
-          i18n.t("localServiceStartTimeout", {
-            ns: "common",
-          }),
-        );
-      }, SHELL_BACKEND_WAIT_MS),
-    );
-  });
-}
-
-async function resolveApiBase(): Promise<string> {
-  if (apiBaseResolved !== null) return apiBaseResolved;
-
-  let inShell = isTauriShell();
-  if (!import.meta.env.DEV && !inShell) {
-    inShell = await waitForTauriShell(TAURI_INJECT_WAIT_MS);
-  }
-
-  if (inShell) {
-    try {
-      const port = await waitForShellBackendPort();
-      apiBaseResolved = `http://127.0.0.1:${port}`;
-      return apiBaseResolved;
-    } catch (e) {
-      const msg =
-        e instanceof Error ? e.message : typeof e === "string" ? e : String(e);
-      throw new Error(msg);
-    }
-  }
-  apiBaseResolved = "";
-  return apiBaseResolved;
-}
-
-/** 桌面壳（Tauri）下解析后端端口；浏览器开发环境为空字符串（走 Vite 代理）。 */
-export async function ensureApiBase(): Promise<void> {
-  if (!apiBasePromise) {
-    apiBasePromise = resolveApiBase();
-  }
-  await apiBasePromise;
-}
-
-function joinApi(path: string): string {
-  if (path.startsWith("http://") || path.startsWith("https://")) return path;
-  const base = apiBaseResolved ?? "";
-  if (!base) return path;
-  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-/** 用于少数直接 `fetch` 的场景（如下载流）。 */
-export async function resolveApiUrl(path: string): Promise<string> {
-  await ensureApiBase();
-  return joinApi(path);
-}
-
-/**
- * `resource/` 下文件的 HTTP 路径（桌面壳下需带后端 origin，见 main.tsx 中 `ensureApiBase` 已先完成）。
- */
-export function resourceApiUrl(resourceRel: string): string {
-  const rel = resourceRel
-    .split("/")
-    .map((s) => encodeURIComponent(s))
-    .join("/");
-  return joinApi(`/api/resource/${rel}`);
-}
-
-/**
- * 手册 Markdown、富文本里以 `/api/...` 开头的绝对路径（如 `/api/help/asset/...`），
- * 在 Tauri 壳下需拼上后端 origin，否则图片会请求到 WebView 自身页面而显示损坏。
- */
-export function apiAbsoluteUrl(path: string): string {
-  const p = path.trim();
-  if (!p) return p;
-  if (
-    p.startsWith("http://") ||
-    p.startsWith("https://") ||
-    p.startsWith("data:") ||
-    p.startsWith("blob:")
-  ) {
-    return p;
-  }
-  if (p.startsWith("//")) return p;
-  const normalized = p.startsWith("/") ? p : `/${p}`;
-  return joinApi(normalized);
-}
-
-/** Prefer RFC 5987 filename* (UTF-8) so non-ASCII names from the backend are preserved. */
-function filenameFromContentDisposition(cd: string | null): string | null {
-  if (!cd) {
-    return null;
-  }
-  const star = /filename\*=UTF-8''([^;\s]+)/i.exec(cd);
-  if (star?.[1]) {
-    try {
-      return decodeURIComponent(star[1]);
-    } catch {
-      /* fall through */
-    }
-  }
-  const m = /filename="([^"]+)"/.exec(cd);
-  return m?.[1] ?? null;
-}
-
-export type ExamSavedPayload = { exam_id: string; name: string };
-
-/** @deprecated 使用 ExamSavedPayload */
-export type DraftSavedPayload = ExamSavedPayload;
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly examSaved?: ExamSavedPayload;
-
-  constructor(message: string, status: number, opts?: { examSaved?: ExamSavedPayload }) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.examSaved = opts?.examSaved;
-  }
-}
-
-async function parseDetailFromResponse(r: Response): Promise<{
-  message: string;
-  examSaved?: ExamSavedPayload;
-}> {
-  try {
-    const j = (await r.json()) as { detail?: unknown };
-    if (typeof j.detail === "string") {
-      return { message: j.detail };
-    }
-    if (Array.isArray(j.detail)) {
-      return {
-        message: j.detail
-          .map((x: { msg?: string }) => x?.msg)
-          .filter(Boolean)
-          .join("; "),
-      };
-    }
-    if (j.detail && typeof j.detail === "object" && !Array.isArray(j.detail)) {
-      const d = j.detail as Record<string, unknown>;
-      let msg =
-        typeof d.message === "string" && d.message.trim()
-          ? d.message
-          : r.statusText || "Request failed";
-      if (typeof d.suggestion === "string" && d.suggestion.trim()) {
-        msg = `${msg} ${d.suggestion}`;
-      }
-      const raw = d.exam_saved ?? d.draft_saved;
-      let examSaved: ExamSavedPayload | undefined;
-      if (raw && typeof raw === "object" && raw !== null) {
-        const o = raw as Record<string, unknown>;
-        const eid = typeof o.exam_id === "string" ? o.exam_id : typeof o.draft_id === "string" ? o.draft_id : "";
-        if (eid) {
-          examSaved = { exam_id: eid, name: typeof o.name === "string" ? o.name : "" };
-        }
-      }
-      return { message: msg, examSaved };
-    }
-  } catch {
-    /* ignore */
-  }
-  return { message: r.statusText || "Request failed" };
-}
-
-function isHeavyApiPath(path: string): boolean {
-  const p = path.split("?")[0] ?? "";
-  return (
-    p === "/api/exam/export" ||
-    p === "/api/exam/validate" ||
-    p === "/api/bank/import-bundle" ||
-    p === "/api/bank/import" ||
-    p === "/api/bank/export-bundle"
-  );
-}
-
-async function fetchWithLog(path: string, init?: RequestInit): Promise<Response> {
-  await ensureApiBase();
-  const url = joinApi(path);
-  const t0 = performance.now();
-  const method = init?.method ?? "GET";
-  const headers = new Headers(init?.headers);
-  if (typeof localStorage !== "undefined" && !headers.has("Authorization")) {
-    const token = localStorage.getItem(PLATFORM_SESSION_STORAGE_KEY);
-    if (token) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
-  }
-  let r: Response;
-  try {
-    r = await fetch(url, { ...init, headers });
-  } catch (e) {
-    const ms = Math.round(performance.now() - t0);
-    const msg = e instanceof Error ? e.message : String(e);
-    logApiCall({
-      path,
-      method,
-      ok: false,
-      status: 0,
-      ms,
-      detail: i18n.t("networkError", { ns: "common", detail: msg }),
-    });
-    throw e instanceof Error ? e : new Error(msg);
-  }
-  const ms = Math.round(performance.now() - t0);
-  if (!r.ok) {
-    const parsed = await parseDetailFromResponse(r);
-    logApiCall({ path, method, ok: false, status: r.status, ms, detail: parsed.message });
-    throw new ApiError(parsed.message, r.status, { examSaved: parsed.examSaved });
-  }
-  if (method !== "GET" || isHeavyApiPath(path)) {
-    logApiCall({ path, method, ok: true, status: r.status, ms });
-  }
-  return r;
-}
-
-export async function apiGet<T>(path: string): Promise<T> {
-  const r = await fetchWithLog(path);
-  return r.json() as Promise<T>;
-}
-
-/** Fetch a protected binary resource through the same authenticated request path as JSON APIs. */
-export async function apiGetBlob(path: string): Promise<Blob> {
-  const r = await fetchWithLog(path);
-  const blob = await r.blob();
-  if (blob.size === 0) {
-    throw new ApiError(i18n.t("emptyFileResponse", { ns: "common" }), r.status);
-  }
-  return blob;
-}
-
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const r = await fetchWithLog(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return r.json() as Promise<T>;
-}
-
-/** multipart/form-data POST — do not set Content-Type (browser sets boundary). */
-export async function apiPostFormData<T>(path: string, formData: FormData): Promise<T> {
-  const r = await fetchWithLog(path, { method: "POST", body: formData });
-  return r.json() as Promise<T>;
-}
-
-export async function apiPut<T>(path: string, body: unknown): Promise<T> {
-  const r = await fetchWithLog(path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return r.json() as Promise<T>;
-}
-
-export async function apiDelete<T>(path: string): Promise<T> {
-  const r = await fetchWithLog(path, { method: "DELETE" });
-  return r.json() as Promise<T>;
-}
-
-/** Download an authenticated API response without opening a popup (which browsers may block). */
-export async function apiDownloadBlob(path: string): Promise<{ blob: Blob; filename: string | null }> {
-  const response = await fetchWithLog(path);
-  return {
-    blob: await response.blob(),
-    filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
-  };
-}
-
-/** Download strict bank exchange ZIP (POST /api/bank/export-bundle — 避免 GET 查询串中 namespace 含 / 时的编码问题). */
-export async function downloadBankExportBundle(namespace: string): Promise<void> {
-  const path = `/api/bank/export-bundle`;
-  await ensureApiBase();
-  const requestUrl = joinApi(path);
-  const t0 = performance.now();
-  let r: Response;
-  try {
-    r = await fetch(requestUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace }),
-    });
-  } catch (e) {
-    const ms = Math.round(performance.now() - t0);
-    const msg = e instanceof Error ? e.message : String(e);
-    logApiCall({
-      path,
-      method: "POST",
-      ok: false,
-      status: 0,
-      ms,
-      detail: i18n.t("networkError", { ns: "common", detail: msg }),
-    });
-    throw e instanceof Error ? e : new Error(msg);
-  }
-  const ms = Math.round(performance.now() - t0);
-  if (!r.ok) {
-    const parsed = await parseDetailFromResponse(r);
-    logApiCall({ path, method: "POST", ok: false, status: r.status, ms, detail: parsed.message });
-    throw new ApiError(parsed.message, r.status, { examSaved: parsed.examSaved });
-  }
-  logApiCall({ path, method: "POST", ok: true, status: r.status, ms });
-  const cd = r.headers.get("Content-Disposition");
-  const filename = filenameFromContentDisposition(cd) ?? "bank-export.bank.zip";
-  const blob = await r.blob();
-  const { saveBlobToDisk } = await import("../lib/saveBlobToDisk");
-  await saveBlobToDisk(blob, {
-    defaultFileName: filename,
-    filters: [{ name: "ZIP", extensions: ["zip"] }],
-  });
-}
+export {
+  ensureApiBase,
+  joinApi,
+  resolveApiUrl,
+  resourceApiUrl,
+  apiAbsoluteUrl,
+  ApiError,
+  filenameFromContentDisposition,
+  parseDetailFromResponse,
+  type ExamSavedPayload,
+  type DraftSavedPayload,
+  isHeavyApiPath,
+  fetchWithLog,
+  apiGet,
+  apiGetBlob,
+  apiPost,
+  apiPostFormData,
+  apiPut,
+  apiDelete,
+  apiDownloadBlob,
+  downloadBankExportBundle,
+};
 
 /** 知识点 id 中可含 `/`，需按段编码后再拼到路径。 */
 export function encodeGraphNodePathSegment(nodeId: string): string {
