@@ -74,6 +74,7 @@ import { PreviewPdfModal } from "./ComposeDialogs";
 import { extractExamPathIdFromDir } from "./composeExportTasks";
 import { useComposeExportTasks, type ExportSuccess } from "./useComposeExportTasks";
 import { ComposeExportTaskBanner } from "./ComposeExportTaskBanner";
+import { useTaskProgress } from "./useTaskProgress";
 import { ComposeDraftRecoveryDialog } from "./ComposeDraftRecoveryDialog";
 
 type GraphBindingNode = { id: string; canonical_name: string; node_kind?: string };
@@ -639,6 +640,13 @@ export function ComposeWorkspace({
       } else onError(message);
     },
     onError,
+  });
+
+  const taskProgress = useTaskProgress({
+    taskId: exportTasks.activeTask?.id ?? null,
+    scopeKey: `${draftScope.ownerKey}::${currentExamId ?? "scratch"}`,
+    pollIntervalMs: 650,
+    enabled: Boolean(exportTasks.activeTask && ["queued", "running"].includes(exportTasks.activeTask.status)),
   });
 
   const startExportTask = useCallback(async (
@@ -1229,11 +1237,23 @@ export function ComposeWorkspace({
           {t("common:processing")}
         </div>
       ) : null}
-      <ComposeExportTaskBanner task={exportTasks.activeTask} pendingSubmissionFailure={exportTasks.pendingSubmissionFailure}
+      <ComposeExportTaskBanner
+        task={exportTasks.activeTask}
+        stage={taskProgress.stage}
+        progress={taskProgress.progress}
+        isRetryable={taskProgress.isRetryable}
+        projection={taskProgress.projection}
+        pendingSubmissionFailure={exportTasks.pendingSubmissionFailure}
         historical={exportTasks.historical}
-        busy={exportTasks.taskBusy} pollError={exportTasks.pollError}
-        onRetry={() => void exportTasks.retryExportTask()} onResume={() => void exportTasks.resumePolling()}
-        onDismiss={exportTasks.dismissExportTask} />
+        busy={exportTasks.taskBusy}
+        pollError={exportTasks.pollError || taskProgress.pollError}
+        onRetry={() => void exportTasks.retryExportTask()}
+        onResume={() => {
+          void exportTasks.resumePolling();
+          void taskProgress.refresh();
+        }}
+        onDismiss={exportTasks.dismissExportTask}
+      />
       {exportPreflightFailure ? <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
         <span>{t("compose:exportPreflightFailed", { format: exportPreflightFailure.format === "pdf" ? "PDF" : "Word", reason: exportPreflightFailure.reason })}</span>
         <button type="button" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={() => void exportWithConflictCheck(exportPreflightFailure.format)} className="rounded border bg-white px-2.5 py-1 disabled:opacity-50">{t("compose:exportPreflightRetry")}</button>

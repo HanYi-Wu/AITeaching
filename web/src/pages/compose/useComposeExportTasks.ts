@@ -7,6 +7,9 @@ import { useComposeRequestScope } from "./useComposeRequestScope";
 import i18n from "../../i18n/i18n";
 import { forgetExportSubmission, readExportSubmission, retainExportSubmission, type ExportSubmissionContext, type PendingExportSubmissionFailure } from "./composeExportSubmissionStorage";
 export type { PendingExportSubmissionFailure } from "./composeExportSubmissionStorage";
+export { useTaskProgress } from "./useTaskProgress";
+export type { TaskProgressOptions, TaskProgressResult } from "./useTaskProgress";
+export type { TaskProjectionView, TaskProjectionListView } from "./taskTrackingApi";
 
 type Context = ExportSubmissionContext;
 export type ExportSuccess = Context & { task?: ComposeExportTaskView; format: ComposeExportTaskFormat; result: ComposeExportTaskResult; isCurrent: () => boolean };
