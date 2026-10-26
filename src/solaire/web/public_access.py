@@ -128,6 +128,8 @@ def _is_admin_configuration(path: str, method: str) -> bool:
 
 
 def student_request_allowed(path: str, method: str) -> bool:
+    if method == "GET" and path == "/api/learning-progress/student/comparison":
+        return True
     if path in _STUDENT_ALLOWED_EXACT:
         return True
     if path.startswith("/api/student/"):
@@ -140,6 +142,11 @@ def student_request_allowed(path: str, method: str) -> bool:
 
 
 def school_request_allowed(path: str, method: str) -> bool:
+    if method == "GET" and path in {
+        "/api/learning-progress/teacher/comparison",
+        "/api/learning-progress/teacher/publications",
+    }:
+        return True
     if path in _SCHOOL_ALLOWED_EXACT:
         return True
     if path.startswith("/api/school/"):

@@ -17,7 +17,7 @@ export type ExamResult = {
   mtime: string;
 };
 
-type ScoreBatch = {
+export type ScoreBatch = {
   batch_id: string;
   imported_at: string;
   student_count: number;

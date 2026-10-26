@@ -47,6 +47,7 @@ class AnalysisRemediationDraftBody(BaseModel):
     template_ref: str | None = None
     template_path: str | None = None
     export_label: str | None = None
+    source_batch_id: str | None = None
 
 
 class AnalysisToolInvokeBody(BaseModel):

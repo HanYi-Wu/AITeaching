@@ -9,6 +9,7 @@ from solaire.web.auth_api import router as auth_router
 from solaire.web.paper_api import router as paper_router
 from solaire.web.school_api import router as school_router
 from solaire.web.student_api import router as student_router
+from solaire.web.routers.learning_progress import router as learning_progress_router
 from solaire.web.routers import (
     analysis,
     bank,
@@ -28,6 +29,7 @@ def register_routes(app: FastAPI) -> None:
         school_router,
         paper_router,
         student_router,
+        learning_progress_router,
     ):
         app.include_router(router, prefix="/api")
     for module in (

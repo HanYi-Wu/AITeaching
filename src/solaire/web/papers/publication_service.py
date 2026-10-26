@@ -231,6 +231,8 @@ def publish_online_paper(
     time_limit_minutes: int | None = None,
     subject: str | None = None,
     id_factory: Callable[[], str] | None = None,
+    source_exam_id: str | None = None,
+    source_batch_id: str | None = None,
 ) -> dict[str, Any]:
     start_at, end_at = normalize_schedule(start_at, end_at)
     init_platform_db(root)
@@ -398,6 +400,28 @@ def publish_online_paper(
                     for row in rows
                 ],
             )
+            effective_src_exam = source_exam_id
+            effective_src_batch = source_batch_id
+            if (not effective_src_exam or not effective_src_batch) and project_root is not None:
+                try:
+                    from solaire.web.exam_workspace_service import load_exam_workspace
+                    doc = load_exam_workspace(project_root, str(current_paper["exam_id"]))
+                    effective_src_exam = effective_src_exam or doc.get("source_exam_id")
+                    effective_src_batch = effective_src_batch or doc.get("source_batch_id")
+                except Exception:
+                    pass
+            if effective_src_exam and effective_src_batch and project_root is not None:
+                from solaire.web.learning_progress.baselines import freeze_publication_baseline
+                freeze_publication_baseline(
+                    con,
+                    project_root=project_root,
+                    publication_id=publication_id,
+                    student_ids=student_ids_to_assign,
+                    source_exam_id=effective_src_exam,
+                    source_batch_id=effective_src_batch,
+                    captured_at=now,
+                    practice_kind="remediation",
+                )
             con.execute(
                 "UPDATE paper_records SET delivery_mode='online', status='published', folder_id=?, updated_at=? WHERE id=?",
                 (effective_folder_id or None, now, paper_id),

@@ -241,6 +241,26 @@ class TestComputeStatistics:
         assert q11["avg_raw_score"] == 4.5
         assert q12["avg_raw_score"] == 2.0
 
+    def test_import_and_compute_preserves_distinct_student_identities_without_merging(self, tmp_path: Path) -> None:
+        ensure_project_layout(tmp_path)
+        rd = _exam_workspace(tmp_path, "same-name-test")
+        _write_exam_yaml(rd, _eid("same-name-test"), [("s1", 1)])
+
+        # Two students with the exact same name but different student IDs
+        csv_data = "姓名,学号,1.1\n张伟,2026001,5\n张伟,2026002,3\n"
+        result = import_scores(tmp_path, _eid("same-name-test"), csv_data.encode("utf-8"), "scores.csv")
+        assert result["student_count"] == 2
+
+        analysis = compute_statistics(tmp_path, _eid("same-name-test"), result["batch_id"])
+        assert len(analysis["student_stats"]) == 2
+        s1, s2 = analysis["student_stats"]
+        assert s1["student_id"] == "2026001"
+        assert s1["raw_total"] == 5.0
+        assert s1["rank"] == 1
+        assert s2["student_id"] == "2026002"
+        assert s2["raw_total"] == 3.0
+        assert s2["rank"] == 2
+
 
 class TestDeleteResultData:
     def test_delete_score_batch(self, tmp_path: Path) -> None:
