@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,12 +24,17 @@ vi.mock("../../components/PrimeBrushEditorModal", () => ({ PrimeBrushEditorModal
 // The real workspace, toolbar, file list and save workflows are under test.
 // Replace only the rich editor's rendering with the same controlled input contract.
 vi.mock("../../components/BankQuestionEditorPanel", () => ({
-  BankQuestionEditorPanel: ({ panelMode, rawYaml, setRawYaml, metaRows, setMetaRows }: BankQuestionEditorPanelProps) => panelMode === "yaml" ? (
-    <textarea aria-label="题目 YAML" value={rawYaml} onChange={(event) => setRawYaml(event.target.value)} />
-  ) : (
+  BankQuestionEditorPanel: ({ panelMode, detail, rawYaml, setRawYaml, metaRows, setMetaRows }: BankQuestionEditorPanelProps) => (
     <div>
-      <input aria-label="附加信息名称" value={metaRows[0]?.key ?? ""} onChange={(event) => setMetaRows([{ key: event.target.value, value: metaRows[0]?.value ?? "" }])} />
-      <input aria-label="附加信息内容" value={metaRows[0]?.value ?? ""} onChange={(event) => setMetaRows([{ key: metaRows[0]?.key ?? "", value: event.target.value }])} />
+      <span data-testid="editor-question-id">{detail.qualified_id}</span>
+      {panelMode === "yaml" ? (
+        <textarea aria-label="题目 YAML" value={rawYaml} onChange={(event) => setRawYaml(event.target.value)} />
+      ) : (
+        <>
+          <input aria-label="附加信息名称" value={metaRows[0]?.key ?? ""} onChange={(event) => setMetaRows([{ key: event.target.value, value: metaRows[0]?.value ?? "" }])} />
+          <input aria-label="附加信息内容" value={metaRows[0]?.value ?? ""} onChange={(event) => setMetaRows([{ key: metaRows[0]?.key ?? "", value: event.target.value }])} />
+        </>
+      )}
     </div>
   ),
 }));
@@ -240,5 +245,149 @@ describe("bank toolbar uses the current selection and edits", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "final edit" } });
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(`/api/bank/items/${encodeURIComponent(qid)}`, expect.objectContaining({ metadata: { topic: "final edit" } })));
+  });
+
+  it("ignores a detail response after another question has been selected", async () => {
+    const q2 = "数学/default/q2";
+    const q1Detail = {
+      qualified_id: qid,
+      question: savedQuestion,
+      file_yaml: yaml.dump(savedQuestion),
+      storage_path: "resource/数学/default/q1.yaml",
+      storage_kind: "single",
+    };
+    const q2Question = { id: "q2", type: "fill", content: "Question two", answer: "8", analysis: "", metadata: {} };
+    let resolveQ1: ((value: typeof q1Detail) => void) | undefined;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === `/api/bank/items/${encodeURIComponent(qid)}`) {
+        return await new Promise<typeof q1Detail>((resolve) => { resolveQ1 = resolve; });
+      }
+      if (path === `/api/bank/items/${encodeURIComponent(q2)}`) {
+        return { qualified_id: q2, question: q2Question, file_yaml: yaml.dump(q2Question), storage_path: "resource/数学/default/q2.yaml", storage_kind: "single" };
+      }
+      if (path === "/api/bank/collections") return { collections: [{ id: "数学/default", label: "数学/default" }] };
+      if (path === "/api/bank/subjects") return { subjects: ["数学"] };
+      if (path === "/api/bank/folders") return { folders: [], assignments: {} };
+      if (path === "/api/bank/items") return { items: ["q1", "q2"].map((id) => ({ id, qualified_id: `数学/default/${id}`, collection: "数学/default", subject: "数学", type: "fill", content_preview: `Question ${id}`, metadata: {}, storage_path: `resource/数学/default/${id}.yaml`, storage_kind: "single" })) };
+      throw new Error(`Unexpected GET ${path}`);
+    });
+
+    mountWorkspace();
+    await userEvent.click(await screen.findByRole("button", { name: /数学\/default\/q1/ }));
+    await waitFor(() => expect(resolveQ1).toBeTypeOf("function"));
+    await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q2/ }));
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent(q2);
+
+    await act(async () => {
+      resolveQ1!(q1Detail);
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("editor-question-id")).toHaveTextContent(q2);
+  });
+
+  it("keeps edits made after a save started and leaves them dirty", async () => {
+    let resolvePut: ((value: { ok: true }) => void) | undefined;
+    mocks.put.mockImplementationOnce((_path: string, question: QuestionJson) => {
+      savedQuestion = structuredClone(question);
+      return new Promise((resolve) => { resolvePut = resolve; });
+    });
+    await openFirstQuestion();
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息名称" }), { target: { value: "topic" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "submitted version" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(resolvePut).toBeTypeOf("function"));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "newer unsaved edit" } });
+    await act(async () => {
+      resolvePut!({ ok: true });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "附加信息内容" }) as HTMLInputElement).value).toBe("newer unsaved edit"));
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+  });
+
+  it("keeps newer YAML text when the submitted version finishes saving", async () => {
+    let resolvePut: ((value: { ok: true }) => void) | undefined;
+    mocks.put.mockImplementationOnce((_path: string, question: QuestionJson) => {
+      savedQuestion = structuredClone(question);
+      return new Promise((resolve) => { resolvePut = resolve; });
+    });
+    await openFirstQuestion();
+    await userEvent.click(screen.getByRole("tab", { name: "源文件" }));
+    const editor = screen.getByRole("textbox", { name: "题目 YAML" });
+    fireEvent.change(editor, { target: { value: yaml.dump({ ...savedQuestion, analysis: "submitted version" }) } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(resolvePut).toBeTypeOf("function"));
+
+    const latestYaml = yaml.dump({ ...savedQuestion, analysis: "newer unsaved edit" });
+    fireEvent.change(screen.getByRole("textbox", { name: "题目 YAML" }), { target: { value: latestYaml } });
+    await act(async () => {
+      resolvePut!({ ok: true });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "题目 YAML" }) as HTMLTextAreaElement).value).toContain("newer unsaved edit"));
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+  });
+
+  it("does not let an older save response switch the editor back to its question", async () => {
+    const q2 = "数学/default/q2";
+    const q2Question = { id: "q2", type: "fill", content: "Question two", answer: "8", analysis: "", metadata: {} };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === `/api/bank/items/${encodeURIComponent(q2)}`) {
+        return { qualified_id: q2, question: q2Question, file_yaml: yaml.dump(q2Question), storage_path: "resource/数学/default/q2.yaml", storage_kind: "single" };
+      }
+      return baseGet(path);
+    });
+    let resolvePut: ((value: { ok: true }) => void) | undefined;
+    mocks.put.mockImplementationOnce((_path: string, question: QuestionJson) => {
+      savedQuestion = structuredClone(question);
+      return new Promise((resolve) => { resolvePut = resolve; });
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await openFirstQuestion();
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息名称" }), { target: { value: "topic" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "saved version" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(resolvePut).toBeTypeOf("function"));
+
+    await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q2/ }));
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent(q2);
+    await act(async () => {
+      resolvePut!({ ok: true });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("editor-question-id")).toHaveTextContent(q2);
+  });
+
+  it("keeps the current question open when a deletion of another question finishes", async () => {
+    const q2 = "数学/default/q2";
+    const q2Question = { id: "q2", type: "fill", content: "Question two", answer: "8", analysis: "", metadata: {} };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === `/api/bank/items/${encodeURIComponent(q2)}`) {
+        return { qualified_id: q2, question: q2Question, file_yaml: yaml.dump(q2Question), storage_path: "resource/数学/default/q2.yaml", storage_kind: "single" };
+      }
+      return baseGet(path);
+    });
+    let resolveDelete: (() => void) | undefined;
+    mocks.del.mockImplementationOnce(() => new Promise((resolve) => { resolveDelete = () => resolve({ ok: true }); }));
+
+    await openFirstQuestion();
+    await userEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "删除题目" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(resolveDelete).toBeTypeOf("function"));
+
+    await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q2/ }));
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent(q2);
+    await act(async () => {
+      resolveDelete!();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("editor-question-id")).toHaveTextContent(q2);
   });
 });

@@ -111,6 +111,12 @@ export function BankWorkspace({
   const [editorTab, setEditorTab] = useState<"form" | "yaml">("form");
   const [rawYaml, setRawYaml] = useState("");
   const [metaRows, setMetaRows] = useState<{ key: string; value: string }[]>([]);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const detailRequestSeqRef = useRef(0);
+  const draftRef = useRef({ selectedId, detail, rawYaml, metaRows });
+  draftRef.current = { selectedId, detail, rawYaml, metaRows };
+  const saveInProgressRef = useRef(false);
   const [mathOpen, setMathOpen] = useState(false);
   const [mermaidOpen, setMermaidOpen] = useState(false);
   const [primeBrushOpen, setPrimeBrushOpen] = useState(false);
@@ -220,64 +226,122 @@ export function BankWorkspace({
     return `${sub} → ${coll}`;
   }, [importSubject, importTarget, t]);
 
+  const fetchDetail = useCallback(async (qid: string): Promise<BankDetailState> => {
+    const enc = encodeURIComponent(qid);
+    const d = await apiGet<{
+      qualified_id: string;
+      question: QuestionJson | null;
+      question_display?: QuestionJson | null;
+      file_yaml: string;
+      storage_path: string;
+      storage_kind: string;
+      question_group?: QuestionGroupJson | null;
+      question_group_preview?: { material: string; items: GroupMemberJson[] } | null;
+    }>(`/api/bank/items/${enc}`);
+    let detailState: BankDetailState;
+    if (!d.question && d.question_group) {
+      const ug = d.question_group.unified;
+      const t = ug === false ? "single_choice" : typeof ug === "string" ? ug : "single_choice";
+      detailState = {
+        ...d,
+        question: {
+          id: `${d.question_group.id}__01`,
+          type: t,
+          content: "",
+          answer: "",
+          analysis: "",
+          metadata: {},
+          options: isChoiceQuestionType(t) ? { A: "", B: "", C: "", D: "" } : null,
+          group_material: d.question_group.material,
+        },
+        question_display: undefined,
+      };
+    } else {
+      detailState = {
+        ...(d as BankDetailState),
+        question_display: d.question_display ?? undefined,
+      };
+    }
+    return detailState;
+  }, []);
+
+  const detailMetaRows = useCallback((detailState: BankDetailState) => {
+    const m = detailState.question.metadata ?? {};
+    return Object.keys(m).length
+      ? Object.entries(m).map(([k, v]) => ({ key: k, value: String(v) }))
+      : [{ key: "", value: "" }];
+  }, []);
+
+  const setDetailBaseline = useCallback((qid: string, detailState: BankDetailState, rows: { key: string; value: string }[]) => {
+    baselineRef.current[qid] = {
+      yaml: detailState.file_yaml,
+      detailJson: JSON.stringify(detailState),
+      metaRowsJson: JSON.stringify(rows),
+    };
+  }, []);
+
   const loadDetail = useCallback(
     async (qid: string) => {
+      const requestSeq = ++detailRequestSeqRef.current;
       onError(null);
-      const enc = encodeURIComponent(qid);
-      const d = await apiGet<{
-        qualified_id: string;
-        question: QuestionJson | null;
-        question_display?: QuestionJson | null;
-        file_yaml: string;
-        storage_path: string;
-        storage_kind: string;
-        question_group?: QuestionGroupJson | null;
-        question_group_preview?: { material: string; items: GroupMemberJson[] } | null;
-      }>(`/api/bank/items/${enc}`);
-      let detailState: BankDetailState;
-      if (!d.question && d.question_group) {
-        const ug = d.question_group.unified;
-        const t = ug === false ? "single_choice" : typeof ug === "string" ? ug : "single_choice";
-        detailState = {
-          ...d,
-          question: {
-            id: `${d.question_group.id}__01`,
-            type: t,
-            content: "",
-            answer: "",
-            analysis: "",
-            metadata: {},
-            options: isChoiceQuestionType(t) ? { A: "", B: "", C: "", D: "" } : null,
-            group_material: d.question_group.material,
-          },
-          question_display: undefined,
-        };
-      } else {
-        detailState = {
-          ...(d as BankDetailState),
-          question_display: d.question_display ?? undefined,
-        };
+      const detailState = await fetchDetail(qid);
+      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid) {
+        return;
       }
+      const nextMetaRows = detailMetaRows(detailState);
       setDetail(detailState);
       setRawYaml(detailState.file_yaml);
-      const m = detailState.question.metadata ?? {};
-      const nextMetaRows = Object.keys(m).length
-        ? Object.entries(m).map(([k, v]) => ({ key: k, value: String(v) }))
-        : [{ key: "", value: "" }];
       setMetaRows(nextMetaRows);
       setEditorTab("form");
-      baselineRef.current[qid] = {
-        yaml: detailState.file_yaml,
-        detailJson: JSON.stringify(detailState),
-        metaRowsJson: JSON.stringify(nextMetaRows),
-      };
+      setDetailBaseline(qid, detailState, nextMetaRows);
     },
-    [onError],
+    [onError, fetchDetail, detailMetaRows, setDetailBaseline],
+  );
+
+  const reconcileSavedDetail = useCallback(
+    async (
+      qid: string,
+      submittedDetailJson: string,
+      submittedMetaRowsJson: string,
+      submittedYaml: string,
+    ) => {
+      const requestSeq = ++detailRequestSeqRef.current;
+      const detailState = await fetchDetail(qid);
+      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid) {
+        return;
+      }
+
+      const nextMetaRows = detailMetaRows(detailState);
+      setDetailBaseline(qid, detailState, nextMetaRows);
+
+      const current = draftRef.current;
+      const currentDetailBelongsToQuestion = current.detail?.qualified_id === qid;
+      const formUnchanged =
+        !currentDetailBelongsToQuestion ||
+        (JSON.stringify(current.detail) === submittedDetailJson &&
+          JSON.stringify(current.metaRows) === submittedMetaRowsJson);
+      const yamlUnchanged =
+        !currentDetailBelongsToQuestion || current.rawYaml === submittedYaml;
+
+      if (formUnchanged) {
+        setDetail(detailState);
+        setMetaRows(nextMetaRows);
+      }
+      if (yamlUnchanged) {
+        setRawYaml(detailState.file_yaml);
+      }
+      if (formUnchanged && yamlUnchanged) {
+        setEditorTab("form");
+      }
+    },
+    [fetchDetail, detailMetaRows, setDetailBaseline],
   );
 
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
+      setRawYaml("");
+      setMetaRows([]);
       setEditorModalOpen(false);
       return;
     }
@@ -362,13 +426,19 @@ export function BankWorkspace({
 
   async function saveForm() {
     if (isImeCompositionActive()) return;
-    if (!detail) {
+    if (!detail || detail.qualified_id !== selectedId) {
       return;
     }
+    if (saveInProgressRef.current) return;
+    const qid = detail.qualified_id;
+    const submittedDetailJson = JSON.stringify(detail);
+    const submittedMetaRowsJson = JSON.stringify(metaRows);
+    const submittedYaml = rawYaml;
+    saveInProgressRef.current = true;
     setBusy(true);
     onError(null);
     try {
-      const enc = encodeURIComponent(detail.qualified_id);
+      const enc = encodeURIComponent(qid);
       if (detail.question_group) {
         const body = buildQuestionGroupFromForm();
         await apiPut(`/api/bank/items/${enc}`, body);
@@ -377,20 +447,31 @@ export function BankWorkspace({
         await apiPut(`/api/bank/items/${enc}`, q);
       }
       await loadList();
-      await loadDetail(detail.qualified_id);
+      if (selectedIdRef.current === qid) {
+        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml);
+      }
       notifyContentLibraryChanged("question");
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (selectedIdRef.current === qid) {
+        onError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
+      saveInProgressRef.current = false;
       setBusy(false);
     }
   }
 
   async function saveRawYaml() {
     if (isImeCompositionActive()) return;
-    if (!detail) {
+    if (!detail || detail.qualified_id !== selectedId) {
       return;
     }
+    if (saveInProgressRef.current) return;
+    const qid = detail.qualified_id;
+    const submittedDetailJson = JSON.stringify(detail);
+    const submittedMetaRowsJson = JSON.stringify(metaRows);
+    const submittedYaml = rawYaml;
+    saveInProgressRef.current = true;
     setBusy(true);
     onError(null);
     try {
@@ -400,10 +481,10 @@ export function BankWorkspace({
           throw new Error(t("bank:errors.yamlMustBeObject"));
         }
         const obj = parsed as Record<string, unknown>;
-        if (String(obj.id ?? "") !== detail.qualified_id.split("/").at(-1)) {
+        if (String(obj.id ?? "") !== qid.split("/").at(-1)) {
           throw new Error("题目 ID 不可在 YAML 中修改；如需更名，请新建题目后迁移内容。");
         }
-        const enc = encodeURIComponent(detail.qualified_id);
+        const enc = encodeURIComponent(qid);
         if (obj.type === "group") {
           await apiPut(`/api/bank/items/${enc}`, obj as unknown as QuestionGroupJson);
         } else {
@@ -412,11 +493,16 @@ export function BankWorkspace({
         }
       }
       await loadList();
-      await loadDetail(detail.qualified_id);
+      if (selectedIdRef.current === qid) {
+        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml);
+      }
       notifyContentLibraryChanged("question");
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (selectedIdRef.current === qid) {
+        onError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
+      saveInProgressRef.current = false;
       setBusy(false);
     }
   }
@@ -463,6 +549,10 @@ export function BankWorkspace({
       notifyContentLibraryChanged("question");
       openModalAfterCreateRef.current = true;
       setOpenTabs((prev) => (prev.includes(r.qualified_id) ? prev : [...prev, r.qualified_id]));
+      selectedIdRef.current = r.qualified_id;
+      setDetail(null);
+      setRawYaml("");
+      setMetaRows([]);
       setSelectedId(r.qualified_id);
       return true;
     } catch (e) {
@@ -482,6 +572,10 @@ export function BankWorkspace({
         await loadList();
         openModalAfterCreateRef.current = true;
         setOpenTabs((prev) => (prev.includes(qualifiedId) ? prev : [...prev, qualifiedId]));
+        selectedIdRef.current = qualifiedId;
+        setDetail(null);
+        setRawYaml("");
+        setMetaRows([]);
         setSelectedId(qualifiedId);
         onError(null);
         return true;
@@ -624,7 +718,16 @@ export function BankWorkspace({
       const newNs = r.namespace;
       const prefix = `${oldNs}/`;
       const mapQid = (qid: string) => (qid.startsWith(prefix) ? `${newNs}/${qid.slice(prefix.length)}` : qid);
-      setSelectedId((cur) => (cur ? mapQid(cur) : null));
+      const currentSelectedId = selectedIdRef.current;
+      const nextSelectedId = currentSelectedId ? mapQid(currentSelectedId) : null;
+      if (nextSelectedId !== currentSelectedId) {
+        detailRequestSeqRef.current++;
+        setDetail(null);
+        setRawYaml("");
+        setMetaRows([]);
+      }
+      selectedIdRef.current = nextSelectedId;
+      setSelectedId(nextSelectedId);
       setOpenTabs((tabs) => tabs.map(mapQid));
       if (filterCollection === oldNs) {
         setFilterCollection(newNs);
@@ -648,7 +751,21 @@ export function BankWorkspace({
       await apiPost("/api/bank/delete-collection", { namespace });
       const prefix = `${namespace}/`;
       setSelectedExportIds((prev) => prev.filter((id) => id !== namespace && !id.startsWith(prefix)));
-      setSelectedId((cur) => (cur && (cur.startsWith(prefix) || cur === namespace) ? null : cur));
+      const currentSelectedId = selectedIdRef.current;
+      const selectedWasDeleted = Boolean(
+        currentSelectedId && (currentSelectedId.startsWith(prefix) || currentSelectedId === namespace),
+      );
+      if (selectedWasDeleted) {
+        selectedIdRef.current = null;
+        detailRequestSeqRef.current++;
+        setDetail(null);
+        setRawYaml("");
+        setMetaRows([]);
+        setEditorModalOpen(false);
+      }
+      setSelectedId((current) =>
+        current && (current.startsWith(prefix) || current === namespace) ? null : current,
+      );
       setOpenTabs((tabs) => tabs.filter((id) => id !== namespace && !id.startsWith(prefix)));
       if (filterCollection === namespace) {
         setFilterCollection("__all__");
@@ -691,8 +808,16 @@ export function BankWorkspace({
       setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
       setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
       delete baselineRef.current[selectedId];
-      setSelectedId(null);
-      setDetail(null);
+      const selectedWasDeleted = Boolean(selectedIdRef.current && removedIds.has(selectedIdRef.current));
+      if (selectedWasDeleted) {
+        selectedIdRef.current = null;
+        detailRequestSeqRef.current++;
+        setRawYaml("");
+        setMetaRows([]);
+        setEditorModalOpen(false);
+      }
+      setSelectedId((current) => (current && removedIds.has(current) ? null : current));
+      setDetail((current) => (current && removedIds.has(current.qualified_id) ? null : current));
       await loadList();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -717,11 +842,16 @@ export function BankWorkspace({
       setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
       setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
       delete baselineRef.current[item.qualified_id];
-      if (selectedId && removedIds.has(selectedId)) {
-        setSelectedId(null);
-        setDetail(null);
+      const selectedWasDeleted = Boolean(selectedIdRef.current && removedIds.has(selectedIdRef.current));
+      if (selectedWasDeleted) {
+        selectedIdRef.current = null;
+        detailRequestSeqRef.current++;
+        setRawYaml("");
+        setMetaRows([]);
         setEditorModalOpen(false);
       }
+      setSelectedId((current) => (current && removedIds.has(current) ? null : current));
+      setDetail((current) => (current && removedIds.has(current.qualified_id) ? null : current));
       await loadList();
       setPendingDeleteItem(null);
     } catch (e) {
@@ -746,7 +876,7 @@ export function BankWorkspace({
   }, [detail]);
 
   const dirty = useMemo(() => {
-    if (!selectedId || !detail) return false;
+    if (!selectedId || !detail || detail.qualified_id !== selectedId) return false;
     const b = baselineRef.current[selectedId];
     if (!b) return false;
     const yamlDirty = rawYaml !== b.yaml;
@@ -761,6 +891,11 @@ export function BankWorkspace({
       if (dirty && !window.confirm(t("switchTabDiscard"))) {
         return false;
       }
+      detailRequestSeqRef.current++;
+      selectedIdRef.current = qid;
+      setDetail(null);
+      setRawYaml("");
+      setMetaRows([]);
       setSelectedId(qid);
       return true;
     },
@@ -785,10 +920,12 @@ export function BankWorkspace({
         const next = prev.filter((x) => x !== qid);
         if (selectedId === qid) {
           const fallback = next[next.length - 1] ?? null;
+          detailRequestSeqRef.current++;
+          selectedIdRef.current = fallback;
+          setDetail(null);
+          setRawYaml("");
+          setMetaRows([]);
           setSelectedId(fallback);
-          if (!fallback) {
-            setDetail(null);
-          }
         }
         return next;
       });
