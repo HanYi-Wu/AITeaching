@@ -108,7 +108,7 @@ describe("PapersWorkspace", () => {
       papers: [{ ...offlinePaper, submitted_student_count: 2, published_student_count: 1 }],
     });
     mocks.updatePlatformPaperDeliveryMode.mockResolvedValue({
-      paper: { ...offlinePaper, delivery_mode: "online", status: "draft" },
+      paper: { ...offlinePaper, delivery_mode: "online", status: "draft", question_count: 0, section_count: 0 },
     });
 
     render(<PapersWorkspace />);
@@ -122,6 +122,10 @@ describe("PapersWorkspace", () => {
 
     await waitFor(() => expect(mocks.updatePlatformPaperDeliveryMode).toHaveBeenCalledWith("p1", "online"));
     expect((await screen.findAllByText("线上")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2 份已提交").length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByLabelText(/Class 1/));
+    await userEvent.selectOptions(screen.getByLabelText("发布文件夹"), "f1");
+    expect(screen.getByTestId("paper-publish")).toBeEnabled();
   });
 
   it("publishes an online paper to selected classes", async () => {
@@ -877,6 +881,41 @@ describe("PapersWorkspace", () => {
     expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("4");
     expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("第二份评语");
     expect(screen.queryByText("已保存批改结果")).not.toBeInTheDocument();
+  });
+
+  it.each(["single", "batch"] as const)("keeps the new paper draft after an old %s suggestion returns", async (kind) => {
+    const response = deferred<{ suggestions: Array<{ question_id: string; suggested_score: number; feedback: string; status: string }> }>();
+    const firstPaper = { ...offlinePaper, delivery_mode: "online" as const };
+    const secondPaper = { ...firstPaper, paper_id: "p2", title: "Final" };
+    const firstSubmission = {
+      attempt_id: "a1", publication_id: "pub1", student_name: "Student One", student_no: "S001",
+      status: "submitted", submitted_at: "2026-08-23T08:30:00Z", score: null, max_score: 5,
+      answers: [{ question_id: "math/q1", score: null, feedback: null, grading_status: "pending", images: [] }],
+    };
+    const secondSubmission = { ...firstSubmission, attempt_id: "a2", student_name: "Student Two" };
+    mocks.listPlatformPapers.mockImplementation((params: { q?: string }) =>
+      Promise.resolve({ papers: params.q === "Final" ? [secondPaper] : [firstPaper] }),
+    );
+    mocks.listPaperSubmissions.mockImplementation((paperId: string) =>
+      Promise.resolve({ submissions: paperId === "p2" ? [secondSubmission] : [firstSubmission] }),
+    );
+    mocks.suggestAiGradesForAttempt.mockReturnValueOnce(response.promise);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { rerender } = render(<PapersWorkspace />);
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    await screen.findByText("Student One");
+    await userEvent.click(screen.getByTestId(kind === "single" ? "paper-ai-grade-a1" : "paper-ai-grade-batch"));
+    await waitFor(() => expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledOnce());
+    rerender(<PapersWorkspace openTarget={{ paperId: "p2", attemptId: "a2", title: "Final" }} />);
+    await screen.findByText("Student Two");
+    await userEvent.type(screen.getByTestId("paper-grade-math/q1"), "3");
+    await userEvent.type(screen.getByTestId("paper-feedback-math/q1"), "New paper draft");
+    await act(async () => {
+      response.resolve({ suggestions: [{ question_id: "math/q1", suggested_score: 1, feedback: "Old paper response", status: "needs_review" }] });
+      await response.promise;
+    });
+    expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("3");
+    expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("New paper draft");
   });
 
   it("does not let a late single AI response replace a saved final score or comment", async () => {

@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
         allow_headers=[
             "Authorization",
             "Content-Type",
+            "If-Match",
             "X-Solaire-Session",
             "X-Solaire-Control-Token",
         ],

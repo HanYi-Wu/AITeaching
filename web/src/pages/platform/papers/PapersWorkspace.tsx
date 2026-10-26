@@ -74,7 +74,6 @@ import {
 import {
   type PaperQuery,
   type PageMeta,
-  mergePaper,
   mergeMeta,
   htmlEscape,
   downloadBlob,
@@ -157,6 +156,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
   function setGradingDrafts(update: GradingDrafts | ((current: GradingDrafts) => GradingDrafts)) {
     setGradingDraftState((current) => {
+      if (gradingDraftOwnerRef.current !== gradingOwnerKey) return current;
       const existing = current.ownerKey === gradingOwnerKey ? current.drafts : {};
       const drafts = typeof update === "function" ? update(existing) : update;
       return { ownerKey: gradingOwnerKey, drafts };
@@ -395,7 +395,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     try {
       const updated = await updatePlatformPaperDeliveryMode(paper.paper_id, mode);
       setPapers((current) =>
-        current.map((item) => (item.paper_id === paper.paper_id ? mergePaper(item, updated.paper) : item)),
+        current.map((item) => (item.paper_id === paper.paper_id ? { ...item, delivery_mode: updated.paper.delivery_mode } : item)),
       );
     } catch (e) {
       reportError(e);
