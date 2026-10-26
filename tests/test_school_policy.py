@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException, UploadFile
 
+from solaire.web import school_api
 from solaire.web.platform_db import connect, init_platform_db
 from solaire.web.school.importer import import_classes, import_students, import_teachers
 from solaire.web.school.organization import create_school, get_school
+from solaire.web.school_routes import policy as policy_routes
 from solaire.web.school.policy import (
     check_school_ai_allowed,
     get_school_ai_status,
@@ -118,3 +123,51 @@ def test_school_management_stats_and_context(tmp_path: Path) -> None:
     assert len(context["assignments"]) == 1
     assert context["assignments"][0]["teacher_username"] == "teacher_m1"
     assert context["assignments"][0]["class_name"] == "Class M1"
+
+
+def test_school_ai_import_rechecks_policy_after_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_platform_db(tmp_path)
+    school = create_school(tmp_path, name="AI Import Guard School")
+    school_id = school["id"]
+    update_school_ai_enabled(tmp_path, school_id=school_id, ai_enabled=True)
+    monkeypatch.setattr(policy_routes, "require_platform_root", lambda: tmp_path)
+    monkeypatch.setattr(school_api, "_admin_ai_available", lambda: True)
+
+    with connect(tmp_path) as con:
+        con.execute("UPDATE schools SET status = 'disabled' WHERE id = ?", (school_id,))
+    with pytest.raises(HTTPException) as inactive:
+        policy_routes._require_school_ai_enabled(tmp_path, school_id)
+    assert inactive.value.status_code == 400
+    assert inactive.value.detail == "school is not active"
+
+    with connect(tmp_path) as con:
+        con.execute("UPDATE schools SET status = 'active' WHERE id = ?", (school_id,))
+
+    async def disable_ai_during_review(kind: str, rows: list[dict[str, object]]) -> str:
+        update_school_ai_enabled(tmp_path, school_id=school_id, ai_enabled=False)
+        return f"reviewed {kind}: {len(rows)} rows"
+
+    # Keep support for callers patching the legacy school_api export.
+    monkeypatch.setattr(school_api, "_review_school_import_with_ai", disable_ai_during_review)
+    upload = UploadFile(
+        BytesIO(b'[{"student_no":"AI001","display_name":"AI Student"}]'),
+        filename="students.json",
+    )
+
+    with pytest.raises(HTTPException) as disabled:
+        asyncio.run(
+            policy_routes.school_ai_import_file(
+                user={"role": "school", "school_id": school_id},
+                kind="students",
+                class_id=None,
+                file=upload,
+            )
+        )
+    assert disabled.value.status_code == 400
+    assert disabled.value.detail == "School AI is disabled"
+    with connect(tmp_path) as con:
+        imported = con.execute("SELECT COUNT(*) FROM students WHERE school_id = ?", (school_id,)).fetchone()[0]
+    assert imported == 0

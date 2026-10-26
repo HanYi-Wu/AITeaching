@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from solaire.web.platform_db import connect, init_platform_db
+from solaire.web.school_api import _import_school_bundle
 from solaire.web.school.importer import (
     import_classes,
     import_students,
@@ -263,3 +264,38 @@ def test_batch_transaction_atomicity_no_half_accounts(tmp_path: Path) -> None:
         subjects = con.execute("SELECT * FROM teacher_subjects").fetchall()
     assert len(teachers) == 0
     assert len(subjects) == 0
+
+
+def test_complete_school_bundle_rolls_back_all_import_kinds(tmp_path: Path) -> None:
+    init_platform_db(tmp_path)
+    school = create_school(tmp_path, name="Bundle Atomicity School")
+    school_id = school["id"]
+
+    with pytest.raises(ValueError, match=r"Row 1 \(class\): class not found"):
+        _import_school_bundle(
+            tmp_path,
+            school_id,
+            {
+                "classes": [{"name": "Bundle Class", "grade": "G10"}],
+                "teachers": [
+                    {"username": "bundle_teacher", "password": "teacher123", "subjects": "Math"}
+                ],
+                "students": [
+                    {"student_no": "BUNDLE001", "display_name": "Bundle Student", "class_name": "Bundle Class"}
+                ],
+                "assignments": [
+                    {"teacher_username": "bundle_teacher", "class_name": "Missing Class", "subject": "Math"}
+                ],
+            },
+        )
+
+    with connect(tmp_path) as con:
+        classes = con.execute("SELECT COUNT(*) FROM classes WHERE school_id = ?", (school_id,)).fetchone()[0]
+        teachers = con.execute(
+            "SELECT COUNT(*) FROM users WHERE school_id = ? AND role = 'teacher'", (school_id,)
+        ).fetchone()[0]
+        students = con.execute("SELECT COUNT(*) FROM students WHERE school_id = ?", (school_id,)).fetchone()[0]
+        subjects = con.execute("SELECT COUNT(*) FROM teacher_subjects").fetchone()[0]
+        assignments = con.execute("SELECT COUNT(*) FROM teacher_class_assignments").fetchone()[0]
+
+    assert (classes, teachers, students, subjects, assignments) == (0, 0, 0, 0, 0)

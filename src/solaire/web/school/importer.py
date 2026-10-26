@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from solaire.web.auth_service import hash_password, utc_now
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
@@ -22,13 +24,29 @@ def _check_active_school(con: Any, school_id: str) -> None:
         raise ValueError("school not found")
 
 
-def import_teachers(root: Path, *, school_id: str, teachers: list[dict[str, str]]) -> dict[str, Any]:
-    init_platform_db(root)
+@contextmanager
+def _import_connection(root: Path, connection: sqlite3.Connection | None) -> Iterator[sqlite3.Connection]:
+    if connection is not None:
+        yield connection
+    else:
+        with connect(root) as con:
+            yield con
+
+
+def import_teachers(
+    root: Path,
+    *,
+    school_id: str,
+    teachers: list[dict[str, str]],
+    _connection: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
     if not teachers:
         return {"imported": 0, "teachers": []}
+    if _connection is None:
+        init_platform_db(root)
     imported: list[dict[str, Any]] = []
     now = utc_now()
-    with connect(root) as con:
+    with _import_connection(root, _connection) as con:
         _check_active_school(con, school_id)
         for idx, raw in enumerate(teachers, start=1):
             username = _cell_text(raw.get("username"))
@@ -108,13 +126,20 @@ def import_teachers(root: Path, *, school_id: str, teachers: list[dict[str, str]
     return {"imported": len(imported), "teachers": imported}
 
 
-def import_classes(root: Path, *, school_id: str, classes: list[dict[str, str]]) -> dict[str, Any]:
-    init_platform_db(root)
+def import_classes(
+    root: Path,
+    *,
+    school_id: str,
+    classes: list[dict[str, str]],
+    _connection: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
     if not classes:
         return {"imported": 0, "classes": []}
+    if _connection is None:
+        init_platform_db(root)
     imported: list[dict[str, Any]] = []
     now = utc_now()
-    with connect(root) as con:
+    with _import_connection(root, _connection) as con:
         _check_active_school(con, school_id)
         for idx, raw in enumerate(classes, start=1):
             name = _cell_text(raw.get("name"))
@@ -155,13 +180,15 @@ def import_students(
     school_id: str,
     students: list[dict[str, str]],
     class_id: str | None = None,
+    _connection: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
-    init_platform_db(root)
     if not students:
         return {"imported": 0, "students": []}
+    if _connection is None:
+        init_platform_db(root)
     now = utc_now()
     imported: list[dict[str, Any]] = []
-    with connect(root) as con:
+    with _import_connection(root, _connection) as con:
         _check_active_school(con, school_id)
         if class_id is not None:
             klass = con.execute("SELECT 1 FROM classes WHERE id = ? AND school_id = ?", (class_id, school_id)).fetchone()
@@ -269,12 +296,14 @@ def import_teacher_class_assignments(
     *,
     school_id: str,
     assignments: list[dict[str, Any]],
+    _connection: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
-    init_platform_db(root)
     if not assignments:
         return {"imported": 0, "assignments": []}
+    if _connection is None:
+        init_platform_db(root)
     imported: list[dict[str, Any]] = []
-    with connect(root) as con:
+    with _import_connection(root, _connection) as con:
         _check_active_school(con, school_id)
         for idx, raw in enumerate(assignments, start=1):
             teacher_id = _cell_text(raw.get("teacher_id"))

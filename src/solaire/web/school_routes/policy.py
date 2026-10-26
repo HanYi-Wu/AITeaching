@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 from solaire.agent_layer.llm.router import ModelRouter, load_llm_settings
 from solaire.web import state
 from solaire.web.auth_api import current_platform_user, require_platform_root
+from solaire.web.platform_db import connect, init_platform_db
 from solaire.web.school_routes.common import (
     _admin_ai_available,
     _raise_api_error,
@@ -23,92 +24,70 @@ from solaire.web.school_routes.common import (
 )
 from solaire.web.school_schemas import SCHOOL_AI_CAPABILITIES, SchoolAiChatBody, SchoolAiSettingsBody
 from solaire.web.school_service import (
-    get_school,
+    check_school_ai_allowed,
+    get_school_ai_status,
+    get_school_management_context,
+    get_school_management_stats,
     import_classes,
     import_students,
     import_teacher_class_assignments,
     import_teachers,
-    list_teacher_class_assignments,
-    query_classes,
-    query_students,
-    query_teachers,
     update_school_ai_enabled,
 )
 
 router = APIRouter()
+_DEFAULT_ADMIN_AI_AVAILABLE = _admin_ai_available
 
 
-# [Wiring Point C05]: G4 provides unified school AI policy check / management query.
-# Without G4 freeze, maintain original API behavior and thin wrapper.
+def _admin_ai_available_for_route() -> bool:
+    mod = sys.modules.get("solaire.web.school_api")
+    compatibility_checker = getattr(mod, "_admin_ai_available", None) if mod else None
+    if callable(compatibility_checker) and compatibility_checker is not _DEFAULT_ADMIN_AI_AVAILABLE:
+        return bool(compatibility_checker())
+    return bool(_admin_ai_available())
+
+
 def _school_ai_payload(root: Any, school_id: str) -> dict[str, Any]:
-    school = get_school(root, school_id=school_id)
-    ai_enabled = bool(int(school.get("ai_enabled") or 0))
+    status = get_school_ai_status(
+        root,
+        school_id=school_id,
+        _ai_available=_admin_ai_available_for_route(),
+    )
     return {
-        "school": school,
-        "ai_available": _admin_ai_available(),
-        "ai_enabled": ai_enabled,
+        "school": status["school"],
+        "ai_available": status["ai_available"],
+        "ai_enabled": status["ai_enabled"],
     }
 
 
-# [Wiring Point C05]: G4 provides school AI execution guard.
-def _require_school_ai_enabled(root: Any, school_id: str) -> dict[str, Any]:
-    payload = _school_ai_payload(root, school_id)
-    if not payload["ai_available"]:
-        raise HTTPException(status_code=400, detail="AI API is not configured by admin")
-    if not payload["ai_enabled"]:
-        raise HTTPException(status_code=400, detail="School AI is disabled")
-    return payload
+def _require_school_ai_enabled(
+    root: Any,
+    school_id: str,
+    *,
+    _connection: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    try:
+        return check_school_ai_allowed(
+            root,
+            school_id=school_id,
+            _connection=_connection,
+            _ai_available=_admin_ai_available_for_route(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _school_ai_stats(root: Any, school_id: str) -> dict[str, int]:
-    teachers = query_teachers(root, school_id=school_id, page=1, page_size=1)
-    classes = query_classes(root, school_id=school_id, page=1, page_size=1)
-    students = query_students(root, school_id=school_id, page=1, page_size=1)
-    assignments = list_teacher_class_assignments(root, school_id=school_id, page=1, page_size=1)
-    return {
-        "teachers": int(teachers.get("total") or 0),
-        "classes": int(classes.get("total") or 0),
-        "students": int(students.get("total") or 0),
-        "assignments": int(assignments.get("total") or 0),
-    }
+    return get_school_management_stats(root, school_id=school_id)
 
 
 def _school_ai_context(root: Any, school_id: str) -> dict[str, Any]:
-    stats = _school_ai_stats(root, school_id)
-    teachers = query_teachers(root, school_id=school_id, page=1, page_size=50).get("teachers", [])
-    classes = query_classes(root, school_id=school_id, page=1, page_size=50).get("classes", [])
-    students = query_students(root, school_id=school_id, page=1, page_size=50).get("students", [])
-    assignments = list_teacher_class_assignments(root, school_id=school_id, page=1, page_size=50).get("assignments", [])
+    context = get_school_management_context(root, school_id=school_id)
     return {
-        "stats": stats,
-        "teachers": [
-            {
-                "username": item.get("username"),
-                "display_name": item.get("display_name"),
-                "subjects": item.get("subjects") or [],
-                "status": item.get("status"),
-            }
-            for item in teachers
-        ],
-        "classes": [
-            {
-                "name": item.get("name"),
-                "grade": item.get("grade"),
-                "student_count": item.get("student_count") or 0,
-                "teacher_count": item.get("teacher_count") or 0,
-            }
-            for item in classes
-        ],
-        "students": [
-            {
-                "student_no": item.get("student_no"),
-                "display_name": item.get("display_name"),
-                "account_username": item.get("account_username"),
-                "class_names": item.get("class_names"),
-                "status": item.get("status"),
-            }
-            for item in students
-        ],
+        "stats": context["stats"],
+        "teachers": context["teachers"],
+        "classes": context["classes"],
+        "students": context["students"],
         "assignments": [
             {
                 "teacher_name": item.get("teacher_name") or item.get("teacher_username"),
@@ -117,7 +96,7 @@ def _school_ai_context(root: Any, school_id: str) -> dict[str, Any]:
                 "class_grade": item.get("class_grade"),
                 "teacher_status": item.get("teacher_status"),
             }
-            for item in assignments
+            for item in context["assignments"]
         ],
     }
 
@@ -277,13 +256,29 @@ def _flatten_school_bundle(bundle: dict[str, list[dict[str, Any]]]) -> list[dict
     return [{"data_kind": kind, **row} for kind in ("classes", "teachers", "students", "assignments") for row in bundle[kind]]
 
 
-def _import_school_bundle(root: Any, school_id: str, bundle: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def _import_school_bundle(
+    root: Any,
+    school_id: str,
+    bundle: dict[str, list[dict[str, Any]]],
+    *,
+    _connection: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    if _connection is None:
+        init_platform_db(root)
+        with connect(root) as con:
+            return _import_school_bundle(root, school_id, bundle, _connection=con)
     results = {
-        "classes": import_classes(root, school_id=school_id, classes=bundle["classes"]),
-        "teachers": import_teachers(root, school_id=school_id, teachers=bundle["teachers"]),
-        "students": import_students(root, school_id=school_id, students=bundle["students"]),
+        "classes": import_classes(
+            root, school_id=school_id, classes=bundle["classes"], _connection=_connection
+        ),
+        "teachers": import_teachers(
+            root, school_id=school_id, teachers=bundle["teachers"], _connection=_connection
+        ),
+        "students": import_students(
+            root, school_id=school_id, students=bundle["students"], _connection=_connection
+        ),
         "assignments": import_teacher_class_assignments(
-            root, school_id=school_id, assignments=bundle["assignments"]
+            root, school_id=school_id, assignments=bundle["assignments"], _connection=_connection
         ),
     }
     return {
@@ -313,7 +308,7 @@ def school_ai_settings_update(
 ) -> dict[str, Any]:
     school_id = _require_school(user)
     root = require_platform_root()
-    if body.ai_enabled and not _admin_ai_available():
+    if body.ai_enabled and not _admin_ai_available_for_route():
         raise HTTPException(status_code=400, detail="AI API is not configured by admin")
     try:
         update_school_ai_enabled(root, school_id=school_id, ai_enabled=body.ai_enabled)
@@ -363,6 +358,7 @@ async def school_ai_chat(
         f"可用能力：{json.dumps(capabilities, ensure_ascii=False)}"
     )
     try:
+        payload = _require_school_ai_enabled(root, school_id)
         adapter = ModelRouter(load_llm_settings(state.get_root())).fast()
         response = await adapter.chat(
             [
@@ -446,16 +442,23 @@ async def school_ai_import_file(
         rows = _flatten_school_bundle(bundle) if bundle is not None else _rows_from_upload(file, expected=clean_kind)
         review_fn = _get_review_school_import_with_ai()
         review = await review_fn(clean_kind, rows)
-        if clean_kind == "teachers":
-            result = import_teachers(root, school_id=school_id, teachers=rows)
-        elif clean_kind == "classes":
-            result = import_classes(root, school_id=school_id, classes=rows)
-        elif clean_kind == "students":
-            result = import_students(root, school_id=school_id, students=rows, class_id=class_id)
-        elif clean_kind == "assignments":
-            result = import_teacher_class_assignments(root, school_id=school_id, assignments=rows)
-        else:
-            result = _import_school_bundle(root, school_id, bundle or {})
+        init_platform_db(root)
+        with connect(root) as con:
+            payload = _require_school_ai_enabled(root, school_id, _connection=con)
+            if clean_kind == "teachers":
+                result = import_teachers(root, school_id=school_id, teachers=rows, _connection=con)
+            elif clean_kind == "classes":
+                result = import_classes(root, school_id=school_id, classes=rows, _connection=con)
+            elif clean_kind == "students":
+                result = import_students(
+                    root, school_id=school_id, students=rows, class_id=class_id, _connection=con
+                )
+            elif clean_kind == "assignments":
+                result = import_teacher_class_assignments(
+                    root, school_id=school_id, assignments=rows, _connection=con
+                )
+            else:
+                result = _import_school_bundle(root, school_id, bundle or {}, _connection=con)
     except (ValueError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {

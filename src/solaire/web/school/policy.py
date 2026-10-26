@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -47,21 +48,33 @@ def check_admin_ai_available(root: Path | None = None) -> bool:
         return False
 
 
-def get_school_ai_status(root: Path, *, school_id: str) -> dict[str, Any]:
+def get_school_ai_status(
+    root: Path,
+    *,
+    school_id: str,
+    _ai_available: bool | None = None,
+) -> dict[str, Any]:
     """Read authoritative school AI settings and availability from live DB."""
     school = get_school(root, school_id=school_id)
     ai_enabled = bool(int(school.get("ai_enabled") or 0))
     school_status = str(school.get("status") or "")
-    ai_available = check_admin_ai_available(root)
+    if _ai_available is None:
+        _ai_available = check_admin_ai_available(root)
     return {
         "school": school,
-        "ai_available": ai_available,
+        "ai_available": _ai_available,
         "ai_enabled": ai_enabled,
         "school_active": school_status == "active",
     }
 
 
-def check_school_ai_allowed(root: Path, *, school_id: str) -> dict[str, Any]:
+def check_school_ai_allowed(
+    root: Path,
+    *,
+    school_id: str,
+    _connection: sqlite3.Connection | None = None,
+    _ai_available: bool | None = None,
+) -> dict[str, Any]:
     """Authoritative runtime verification for AI invocation.
 
     Reads the latest authoritative school record from DB, ensuring old sessions
@@ -73,10 +86,18 @@ def check_school_ai_allowed(root: Path, *, school_id: str) -> dict[str, Any]:
         ValueError: "AI API is not configured by admin" if platform AI is missing
         ValueError: "School AI is disabled" if school has disabled AI
     """
-    school = get_school(root, school_id=school_id)
+    if _connection is None:
+        school = get_school(root, school_id=school_id)
+    else:
+        row = _connection.execute("SELECT * FROM schools WHERE id = ?", (school_id,)).fetchone()
+        school = row_to_dict(row)
+        if school is None:
+            raise ValueError("school not found")
     if str(school.get("status") or "") != "active":
         raise ValueError("school is not active")
-    ai_available = check_admin_ai_available(root)
+    if _ai_available is None:
+        _ai_available = check_admin_ai_available(root)
+    ai_available = _ai_available
     if not ai_available:
         raise ValueError("AI API is not configured by admin")
     ai_enabled = bool(int(school.get("ai_enabled") or 0))
@@ -146,6 +167,7 @@ def get_school_management_context(root: Path, *, school_id: str) -> dict[str, An
                 "teacher_name": item.get("teacher_name"),
                 "class_name": item.get("class_name"),
                 "class_grade": item.get("class_grade"),
+                "teacher_status": item.get("teacher_status"),
                 "subject": item.get("subject") or "",
             }
             for item in assignments

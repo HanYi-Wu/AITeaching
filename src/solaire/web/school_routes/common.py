@@ -11,8 +11,7 @@ from fastapi import HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 
-from solaire.agent_layer.llm.router import load_llm_settings
-from solaire.web import state
+from solaire.web.school.policy import check_admin_ai_available
 
 
 def _require_admin(user: dict[str, Any]) -> None:
@@ -30,7 +29,7 @@ def _require_school(user: dict[str, Any]) -> str:
 
 
 def _admin_ai_available() -> bool:
-    return bool(load_llm_settings(state.get_root()).api_key)
+    return check_admin_ai_available()
 
 
 def _raise_api_error(exc: Exception) -> None:
