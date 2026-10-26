@@ -5,7 +5,15 @@ import { apiPost } from '../api/client';
 import { confirmDialog } from '../lib/confirmDialog';
 import { notifyContentLibraryChanged } from '../lib/contentEvents';
 
-export type BankFolders = { folders: string[]; assignments: Record<string, string> };
+import {
+  type BankFolders,
+  buildBankFolderIndex,
+  canMoveBankFolder,
+  canMoveBankQuestions,
+  validateBankFolderPath,
+} from '../pages/bank/bankModel';
+
+export type { BankFolders };
 type Item = { qualified_id: string; content_preview?: string };
 const buttonClass = 'rounded border border-slate-300 px-2 py-1.5 text-xs hover:bg-slate-100 disabled:opacity-50';
 
@@ -37,6 +45,19 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
   const [dropHighlight, setDropHighlight] = useState<string | null>(null);
   const transferType = 'application/x-eh-bank';
   async function perform(body: { action: string; path: string; target?: string; qualified_ids?: string[] }) {
+    if (body.action === 'move_folder') {
+      const check = canMoveBankFolder(body.path, body.target ?? '', data.folders);
+      if (!check.ok) { onError(check.reason ?? '移动目录失败'); return; }
+    } else if (body.action === 'move') {
+      const check = canMoveBankQuestions(body.qualified_ids ?? [], body.path, data.folders);
+      if (!check.ok) { onError(check.reason ?? '移动题目失败'); return; }
+    } else if (body.action === 'create') {
+      const check = validateBankFolderPath(body.path);
+      if (!check.ok) { onError(check.reason ?? '目录路径无效'); return; }
+    } else if (body.action === 'rename') {
+      const check = validateBankFolderPath(body.target ?? '');
+      if (!check.ok) { onError(check.reason ?? '目录路径无效'); return; }
+    }
     setBusy(true); onError(null);
     try {
       const result = await apiPost<BankFolders>('/api/bank/folders/actions', body);
@@ -109,27 +130,17 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
     onSelectIds?.(ids.every(id => selectedIds.includes(id))
       ? selectedIds.filter(id => !ids.includes(id)) : [...new Set([...selectedIds, ...ids])]);
   }
-  const index = useMemo(() => {
-    const children = new Map<string, string[]>();
-    const questions = new Map<string, T[]>();
-    const known = new Set(data.folders);
-    for (const path of data.folders) {
-      const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-      const group = children.get(parent) ?? [];
-      group.push(path);
-      children.set(parent, group);
-    }
-    for (const item of items) {
-      const assigned = data.assignments[item.qualified_id] ?? '';
-      const path = known.has(assigned) ? assigned : '';
-      const group = questions.get(path) ?? [];
-      group.push(item);
-      questions.set(path, group);
-    }
-    return { children, questions };
-  }, [data, items]);
+  const index = useMemo(() => buildBankFolderIndex(data, items), [data, items]);
 
   async function act(action: string) {
+    if (action === 'create' || action === 'rename') {
+      const check = validateBankFolderPath(name.trim());
+      if (!check.ok) { onError(check.reason ?? '目录路径无效'); return; }
+    }
+    if (action === 'move') {
+      const check = canMoveBankQuestions(selectedIds, destination, data.folders);
+      if (!check.ok) { onError(check.reason ?? '移动题目失败'); return; }
+    }
     if (action === 'remove' && !(await confirmDialog('删除此目录及子目录？题目会移到父目录，不会删除题目。'))) return;
     setBusy(true);
     onError(null);

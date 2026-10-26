@@ -48,3 +48,29 @@ test('blank cancels selection, right click cuts and drag moves into a folder', (
   fireEvent.drop(folder, { dataTransfer: { getData: () => JSON.stringify({ ids: ['q1'] }) } });
   expect(apiPost).toHaveBeenLastCalledWith('/api/bank/folders/actions', { action: 'move', path: 'folder', qualified_ids: ['q1'] });
 });
+
+test('prevents moving folder into itself or its descendant on drop', () => {
+  const onError = vi.fn();
+  vi.mocked(apiPost).mockClear();
+  render(
+    <BankFolderExplorer
+      data={{ folders: ['数学', '数学/代数'], assignments: {} }}
+      items={[]}
+      selectedIds={[]}
+      onChange={vi.fn()}
+      onError={onError}
+      onSelectIds={vi.fn()}
+      renderItem={() => null}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: '文件管理器' }));
+  const dialog = screen.getByRole('dialog');
+  const algebraFolder = within(dialog).getByRole('button', { name: '数学' });
+  // Try dropping '数学' into itself
+  fireEvent.drop(algebraFolder, {
+    dataTransfer: { getData: () => JSON.stringify({ folder: '数学' }) },
+  });
+  expect(onError).toHaveBeenCalledWith('不能将目录移到自身或子目录中');
+  expect(apiPost).not.toHaveBeenCalled();
+});
+
