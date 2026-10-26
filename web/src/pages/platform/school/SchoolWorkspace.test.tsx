@@ -295,4 +295,72 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(screen.getByTestId("school-ai-import-confirm"));
     await waitFor(() => expect(mocks.importSchoolAiFile).toHaveBeenCalledWith("all", file, null));
   });
+
+  it("ignores late responses from a previously selected account after switching", async () => {
+    let resolveUser1Teachers!: (value: unknown) => void;
+    const user1TeachersPromise = new Promise((resolve) => {
+      resolveUser1Teachers = resolve;
+    });
+
+    let firstCall = true;
+    mocks.listTeachers.mockImplementation(() => {
+      if (firstCall) {
+        firstCall = false;
+        return user1TeachersPromise;
+      }
+      return Promise.resolve({
+        teachers: [
+          {
+            id: "t2",
+            school_id: "s2",
+            role: "teacher",
+            username: "teacher_new",
+            display_name: "Teacher New",
+            status: "active",
+            subjects: ["Physics"],
+          },
+        ],
+      });
+    });
+
+    const { rerender } = render(
+      <SchoolWorkspace
+        user={{ id: "u1", school_id: "s1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    // Switch account to u2
+    rerender(
+      <SchoolWorkspace
+        user={{ id: "u2", school_id: "s2", role: "school", username: "school_b", display_name: "School B", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher New")).toBeInTheDocument();
+
+    // Now late response for user 1 resolves with Teacher Li
+    resolveUser1Teachers({
+      teachers: [
+        {
+          id: "t1",
+          school_id: "s1",
+          role: "teacher",
+          username: "teacher_li",
+          display_name: "Teacher Li",
+          status: "active",
+          subjects: ["Math"],
+        },
+      ],
+    });
+
+    // Wait a tick; Teacher Li must NOT overwrite Teacher New
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByDisplayValue("Teacher New")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Teacher Li")).not.toBeInTheDocument();
+  });
 });
