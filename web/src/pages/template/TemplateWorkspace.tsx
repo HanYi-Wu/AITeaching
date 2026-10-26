@@ -27,7 +27,6 @@ import {
   draftFromParsed,
   type LatexBasesResponse,
   type Draft,
-  applyTemplatePreset,
   templateIdFromSaveBody,
   desiredPathForTemplateId,
   createDefaultDraft,
@@ -36,6 +35,8 @@ import {
 } from "./templateModel";
 import { TemplateLayoutForm } from "./TemplateLayoutForm";
 import { TemplateSectionsEditor } from "./TemplateSectionsEditor";
+import { TemplatePresetPanel, TemplateYamlEditor } from "./TemplatePresetPanel";
+import { useTemplateRequestScope } from "./useTemplateRequestScope";
 
 export type { TemplatePresetId } from "./templateModel";
 export { applyTemplatePreset } from "./templateModel";
@@ -68,6 +69,13 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
 
   const [layoutBuiltinKeys, setLayoutBuiltinKeys] = useState<string[]>([]);
   const [editorDefaults, setEditorDefaults] = useState<Record<string, unknown> | null>(null);
+
+  const { createScopeCheck, isCurrentPath } = useTemplateRequestScope(path);
+  const currentDraftRef = useRef(draft);
+  currentDraftRef.current = draft;
+  const currentYamlTabRef = useRef(yamlTab);
+  currentYamlTabRef.current = yamlTab;
+  const skipNextPathEffectRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!path) {
@@ -142,39 +150,60 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     if (!path) {
       return;
     }
+    if (skipNextPathEffectRef.current === path) {
+      skipNextPathEffectRef.current = null;
+      return;
+    }
+    const isCurrent = createScopeCheck();
     onError(null);
-    const q = encodeURIComponent(path);
+    const targetPath = path;
+    const q = encodeURIComponent(targetPath);
     void Promise.all([
       apiGet<{ yaml: string }>(`/api/templates/raw?path=${q}`),
       apiGet<TemplateParsedResponse>(`/api/templates/parsed?path=${q}`),
     ])
       .then(([raw, parsed]) => {
+        if (!isCurrent()) {
+          return;
+        }
         setYamlTab(raw.yaml);
-        baselineYamlRef.current[path] = raw.yaml;
+        baselineYamlRef.current[targetPath] = raw.yaml;
         setLayoutBuiltinKeys(parsed.layout_builtin_keys);
         setDraft(draftFromParsed(parsed));
       })
-      .catch((e: Error) => onError(e.message));
-  }, [path, onError]);
+      .catch((e: Error) => {
+        if (isCurrent()) {
+          onError(e.message);
+        }
+      });
+  }, [path, onError, createScopeCheck]);
 
   useEffect(() => {
     if (!path || !draft.latex_base) {
       setMetadataUi({ fields: [], source: null, warnings: [] });
       return;
     }
+    const isCurrent = createScopeCheck();
     const q = new URLSearchParams({ template_path: path, latex_base: draft.latex_base });
     void apiGet<{ fields: MetadataUiField[]; source: string | null; warnings?: string[] }>(
       `/api/templates/latex-metadata-ui?${q}`,
     )
-      .then((r) =>
+      .then((r) => {
+        if (!isCurrent()) {
+          return;
+        }
         setMetadataUi({
           fields: r.fields ?? [],
           source: r.source ?? null,
           warnings: r.warnings ?? [],
-        }),
-      )
-      .catch(() => setMetadataUi({ fields: [], source: null, warnings: [] }));
-  }, [path, draft.latex_base]);
+        });
+      })
+      .catch(() => {
+        if (isCurrent()) {
+          setMetadataUi({ fields: [], source: null, warnings: [] });
+        }
+      });
+  }, [path, draft.latex_base, createScopeCheck]);
 
   const yamlDump = useMemo(
     () =>
@@ -240,23 +269,28 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     onError(null);
     setBusy(true);
     setMsg(null);
+
+    const saveOldPath = path.replace(/\\/g, "/");
+    const saveBody = tab === "yaml" ? yamlTab : yamlDump;
+    const saveDraft = draft;
+    const saveTab = tab;
+    const tid = templateIdFromSaveBody(saveTab, saveTab === "yaml" ? saveBody : "", saveDraft);
+    const desiredPath = desiredPathForTemplateId(saveOldPath, tid);
+    const putBody: { path: string; yaml: string; rename_to?: string } = {
+      path: saveOldPath,
+      yaml: saveBody,
+    };
+    if (desiredPath !== saveOldPath) {
+      putBody.rename_to = desiredPath;
+    }
+
     try {
-      const body = tab === "yaml" ? yamlTab : yamlDump;
-      const oldPath = path.replace(/\\/g, "/");
-      const tid = templateIdFromSaveBody(tab, yamlTab, draft);
-      const desiredPath = desiredPathForTemplateId(oldPath, tid);
-      const putBody: { path: string; yaml: string; rename_to?: string } = {
-        path: oldPath,
-        yaml: body,
-      };
-      if (desiredPath !== oldPath) {
-        putBody.rename_to = desiredPath;
-      }
       const putRes = await apiPut<{ ok: boolean; path?: string }>("/api/templates/raw", putBody);
-      let finalPath = (putRes.path ?? oldPath).replace(/\\/g, "/");
-      if (desiredPath !== oldPath) {
-        delete baselineYamlRef.current[oldPath];
-        setOpenTabs((prev) => prev.map((p) => (p === oldPath ? finalPath : p)));
+      const finalPath = (putRes.path ?? desiredPath ?? saveOldPath).replace(/\\/g, "/");
+
+      if (desiredPath !== saveOldPath) {
+        delete baselineYamlRef.current[saveOldPath];
+        setOpenTabs((prev) => prev.map((p) => (p === saveOldPath ? finalPath : p)));
       }
 
       const q = encodeURIComponent(finalPath);
@@ -264,13 +298,23 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         apiGet<{ yaml: string }>(`/api/templates/raw?path=${q}`),
         apiGet<TemplateParsedResponse>(`/api/templates/parsed?path=${q}`),
       ]);
-      setYamlTab(raw.yaml);
+
       baselineYamlRef.current[finalPath] = raw.yaml;
-      setLayoutBuiltinKeys(parsed.layout_builtin_keys);
-      setDraft(draftFromParsed(parsed));
-      if (finalPath !== oldPath) {
-        setPath(finalPath);
+
+      if (isCurrentPath(saveOldPath)) {
+        if (finalPath !== saveOldPath) {
+          skipNextPathEffectRef.current = finalPath;
+          setPath(finalPath);
+        }
+        if (currentYamlTabRef.current === saveBody) {
+          setYamlTab(raw.yaml);
+        }
+        if (currentDraftRef.current === saveDraft) {
+          setLayoutBuiltinKeys(parsed.layout_builtin_keys);
+          setDraft(draftFromParsed(parsed));
+        }
       }
+
       await refreshList();
       notifyContentLibraryChanged("template");
       setMsg(t("saved"));
@@ -563,51 +607,17 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
             ) : null}
             {msg && <p className="mb-2 text-sm text-emerald-700">{msg}</p>}
             {tab === "yaml" ? (
-              <textarea
-                className="h-[min(70vh,800px)] w-full rounded-lg border border-slate-300 bg-slate-50 p-3 font-mono text-sm"
-                value={yamlTab}
-                onChange={(e) => setYamlTab(e.target.value)}
-              />
+              <TemplateYamlEditor value={yamlTab} onChange={setYamlTab} />
             ) : (
               <div className="mx-auto max-w-3xl space-y-6">
-                <details className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <summary className="cursor-pointer text-sm font-semibold text-slate-800">
-                    快速套用版式{" "}
-                    <span
-                      title="会调整页面和题型结构；不会清除已选题目或分值。应用后仍需保存。"
-                      className="ml-1 cursor-help rounded-full border border-slate-300 px-1.5 text-[10px] text-slate-500"
-                    >
-                      ?
-                    </span>
-                  </summary>
-                  <p className="mt-2 text-xs text-slate-600">
-                    选一个起点，再修改下面的设置。应用后记得保存。
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {([
-                      ["practice", "随堂练习"],
-                      ["unit", "单元测验"],
-                      ["major", "期中 / 期末"],
-                    ] as const).map(([id, label]) => (
-                      <button
-                        key={id}
-                        type="button"
-                        title={`套用${label}的版式；已有题型与分值保留，应用后需要保存`}
-                        disabled={busy}
-                        onClick={() => {
-                          const next = applyTemplatePreset(draft, id);
-                          setDraft(next);
-                          setMsg(
-                            `已应用「${label}」：${next.layout === "double_column" ? "双栏" : "单栏"}，${next.metadata_defaults.margin_cm}cm 边距，${next.metadata_defaults.body_font_size_pt}pt 字号；${next.sections.reduce((sum, section) => sum + section.required_count, 0)} 题。请保存模板。`,
-                          );
-                        }}
-                        className="rounded-md border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50"
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </details>
+                <TemplatePresetPanel
+                  draft={draft}
+                  busy={busy}
+                  onApplyPreset={(next, message) => {
+                    setDraft(next);
+                    setMsg(message);
+                  }}
+                />
                 <TemplateLayoutForm
                   draft={draft}
                   advancedMode={advancedMode}
