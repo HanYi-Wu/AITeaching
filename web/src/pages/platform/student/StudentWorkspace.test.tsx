@@ -434,6 +434,45 @@ describe("StudentWorkspace", () => {
     }
   });
 
+  it("shows both submitted and newer unconfirmed images when submission has no acceptance receipt", async () => {
+    mocks.listStudentPapers.mockResolvedValue({ papers: [{
+      publication_id: "pub-img", attempt_id: "attempt-img", exam_id: "image/Math", title: "Image Exam", subject: "Math",
+      status: "not_started", question_count: 1, screen_switch_count: 0, screen_switch_limit: 0, time_spent_seconds: 0,
+      show_results: false, submission_mode: "image_ai",
+    }] });
+    mocks.listStudentResults.mockResolvedValue({ results: [] });
+    mocks.startStudentPaper.mockResolvedValue({
+      attempt: { id: "attempt-img", publication_id: "pub-img", title: "Image Exam", status: "in_progress", submission_mode: "image_ai" },
+      questions: [{ question_id: "math/q1", header: "1", section_id: "Work", score_per_item: 5, type: "short_answer", content: "Show work" }],
+    });
+    let finishSubmit!: (value: { attempt: { id: string; status: string } }) => void;
+    mocks.submitStudentAttempt.mockImplementationOnce(() => new Promise((resolve) => { finishSubmit = resolve; }));
+    const originalReadAsDataURL = FileReader.prototype.readAsDataURL;
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function readAsDataURL(this: FileReader, blob?: Blob) {
+      const name = blob instanceof File ? blob.name : "answer.png";
+      Object.defineProperty(this, "result", { value: `data:image/png;base64,${name}`, configurable: true });
+      this.onload?.({ target: this } as ProgressEvent<FileReader>);
+    });
+    try {
+      render(<StudentWorkspace user={{ id: "s1", role: "student", username: "student", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+      await userEvent.click(await screen.findByTestId("student-page-papers"));
+      await userEvent.click(screen.getByTestId("student-start-pub-img"));
+      const input = await screen.findByTestId("student-image-math/q1");
+      await userEvent.upload(input, new File(["first"], "first.png", { type: "image/png" }));
+      await userEvent.click(screen.getByTestId("student-submit-attempt"));
+      await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+      await waitFor(() => expect(mocks.submitStudentAttempt).toHaveBeenCalledTimes(1));
+      await userEvent.upload(input, new File(["newer"], "newer.png", { type: "image/png" }));
+      await waitFor(() => expect(screen.getByText("newer.png")).toBeInTheDocument());
+      await act(async () => finishSubmit({ attempt: { id: "attempt-img", status: "submitted" } }));
+      expect(await screen.findByText("查看未确认的本机图片：Image Exam")).toBeInTheDocument();
+      expect(screen.getByText("math/q1 · newer.png")).toBeInTheDocument();
+      expect(screen.getByText("math/q1 · first.png")).toBeInTheDocument();
+    } finally {
+      FileReader.prototype.readAsDataURL = originalReadAsDataURL;
+    }
+  });
+
   it("restores a draft, shows progress, saves without submitting on page hide, and confirms unanswered questions", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     mocks.startStudentPaper.mockResolvedValue({

@@ -53,7 +53,7 @@ function openDatabase(factory?: IDBFactory): Promise<IDBDatabase> {
   });
 }
 
-async function readDraft(key: string, scope: StudentDraftScope, factory?: IDBFactory): Promise<{ draft: ImageDraft | null; issue: ImageDraftIssue }> {
+async function readDraft(key: string, factory?: IDBFactory): Promise<{ draft: ImageDraft | null; issue: ImageDraftIssue }> {
   let database: IDBDatabase | undefined;
   try {
     database = await openDatabase(factory);
@@ -66,13 +66,17 @@ async function readDraft(key: string, scope: StudentDraftScope, factory?: IDBFac
     });
     if (!row) return { draft: null, issue: null };
     const draft = row as ImageDraft;
-    if (row.key !== key || draft.version !== 1 || studentDraftKey(draft.scope) !== key ||
+    const scopeParts = draft.scope && [draft.scope.accountId, draft.scope.projectScope, draft.scope.publicationId,
+      draft.scope.attemptId, draft.scope.snapshotVersion];
+    if (row.key !== key || draft.version !== 1 || !scopeParts || scopeParts.some((part) => typeof part !== "string") ||
+        studentDraftKey(draft.scope) !== key ||
         !draft.entries ||
         typeof draft.entries !== "object" || Array.isArray(draft.entries) ||
         Object.keys(draft.entries).length > MAX_QUESTIONS ||
         Object.values(draft.entries).some((entry) => !validEntry(entry))) {
       return { draft: null, issue: "corrupt" };
     }
+    if (new TextEncoder().encode(JSON.stringify(draft)).byteLength > MAX_DRAFT_BYTES) return { draft: null, issue: "too_large" };
     return { draft, issue: null };
   } catch {
     return { draft: null, issue: "unavailable" };
@@ -114,7 +118,7 @@ export async function restoreStudentImageDraft(
 ): Promise<{ images: Record<string, StudentAnswerImage[]>; conflicts: Record<string, StudentAnswerImage[]>; restored: boolean; issue: ImageDraftIssue }> {
   const key = studentDraftKey(scope);
   if (!key) return { images: { ...serverImages }, conflicts: {}, restored: false, issue: "unavailable" };
-  const { draft, issue } = await readDraft(key, scope, factory);
+  const { draft, issue } = await readDraft(key, factory);
   const images = { ...serverImages };
   const conflicts: Record<string, StudentAnswerImage[]> = {};
   let restored = false;
@@ -147,7 +151,7 @@ export function persistStudentImageDraft(
   const key = studentDraftKey(scope);
   if (!key) return Promise.resolve("unavailable");
   return enqueueWrite(async () => {
-    const previous = preserveIds.length ? (await readDraft(key, scope, factory)).draft : null;
+    const previous = preserveIds.length ? (await readDraft(key, factory)).draft : null;
     const entries: Record<string, ImageEntry> = {};
     const ids = new Set([...Object.keys(images), ...Object.keys(baseline), ...Object.keys(sent)]);
     for (const id of ids) {
@@ -174,7 +178,7 @@ export function acknowledgeStudentImageDraft(
   const key = studentDraftKey(scope);
   if (!key) return Promise.resolve("unavailable");
   return enqueueWrite(async () => {
-    const { draft, issue } = await readDraft(key, scope, factory);
+    const { draft, issue } = await readDraft(key, factory);
     if (!draft) return issue;
     for (const [id, entry] of Object.entries(draft.entries)) {
       if (!Object.prototype.hasOwnProperty.call(sent, id)) continue;
@@ -195,7 +199,7 @@ export function retainUnconfirmedStudentImageDraft(
   const key = studentDraftKey(scope);
   if (!key) return Promise.resolve("unavailable");
   return enqueueWrite(async () => {
-    const { draft } = await readDraft(key, scope, factory);
+    const { draft } = await readDraft(key, factory);
     const entries = { ...(draft?.entries ?? {}) };
     const ids = new Set([...Object.keys(submitted), ...Object.keys(latest)]);
     for (const id of ids) {
