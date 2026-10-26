@@ -185,11 +185,12 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     }
     const isCurrent = createScopeCheck();
     const q = new URLSearchParams({ template_path: path, latex_base: draft.latex_base });
+    let active = true;
     void apiGet<{ fields: MetadataUiField[]; source: string | null; warnings?: string[] }>(
       `/api/templates/latex-metadata-ui?${q}`,
     )
       .then((r) => {
-        if (!isCurrent()) {
+        if (!active || !isCurrent()) {
           return;
         }
         setMetadataUi({
@@ -199,10 +200,11 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         });
       })
       .catch(() => {
-        if (isCurrent()) {
+        if (active && isCurrent()) {
           setMetadataUi({ fields: [], source: null, warnings: [] });
         }
       });
+    return () => { active = false; };
   }, [path, draft.latex_base, createScopeCheck]);
 
   const yamlDump = useMemo(

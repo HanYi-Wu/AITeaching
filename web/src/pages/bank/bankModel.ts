@@ -1,4 +1,4 @@
-import { type QuestionGroupJson } from "../../components/BankQuestionEditorPanel";
+import { type QuestionGroupJson } from "../../components/bankEditorTypes";
 import { isChoiceQuestionType } from "../../lib/questionTypes";
 
 /** 新建题组时生成一条占位小题（与后端 QuestionGroupRecord 一致） */

@@ -70,7 +70,7 @@ describe("contentPreview", () => {
     expect(serialized).toContain("$x+1$");
     expect(serialized).toContain("$$\\int f(x)$$");
     expect(serialized).toContain("```mermaid\ngraph TD\n  A --> B\n\n```");
-    expect(serialized).toContain(":::EMBED_IMG_IMG:photos/pic.png:::");
+    expect(serialized).toContain(":::EMBED_IMG:photos/pic.png:::");
     expect(serialized).toContain("```solaire-table\n| Col1 | Col2 |\n| 1 | 2 |\n\n```");
     expect(serialized).toContain("End");
   });

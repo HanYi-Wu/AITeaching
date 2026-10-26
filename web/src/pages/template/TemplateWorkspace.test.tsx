@@ -143,6 +143,31 @@ describe("TemplateWorkspace async coordination", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps metadata fields for the current layout base when an older request finishes", async () => {
+    const oldFields = deferred<{ fields: { key: string; label: string; kind: string }[]; source: null }>();
+    const defaultGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((url: string) => {
+      if (url === "/api/templates/latex-bases") {
+        return Promise.resolve({ shipped: ["exam-zh-base.tex.j2", "alternate.tex.j2"], in_project: [], choices: ["exam-zh-base.tex.j2", "alternate.tex.j2"] });
+      }
+      if (url.startsWith("/api/templates/latex-metadata-ui?")) {
+        const base = new URLSearchParams(url.split("?")[1]).get("latex_base");
+        return base === "exam-zh-base.tex.j2"
+          ? oldFields.promise
+          : Promise.resolve({ fields: [{ key: "current", label: "当前版式字段", kind: "text" }], source: null });
+      }
+      return defaultGet(url);
+    });
+    renderWorkspace();
+    await screen.findByDisplayValue("tpl_a");
+    await userEvent.click(screen.getByRole("button", { name: "高级版式" }));
+    fireEvent.change(screen.getByRole("combobox", { name: /版式模板/ }), { target: { value: "alternate.tex.j2" } });
+    expect(await screen.findByLabelText("当前版式字段")).toBeInTheDocument();
+    await act(async () => { oldFields.resolve({ fields: [{ key: "old", label: "旧版式字段", kind: "text" }], source: null }); });
+    expect(screen.getByLabelText("当前版式字段")).toBeInTheDocument();
+    expect(screen.queryByLabelText("旧版式字段")).not.toBeInTheDocument();
+  });
+
   it("prevents late-arriving responses of a previous template from overwriting newly switched template", async () => {
     const deferA = deferred<{ yaml: string }>();
 
