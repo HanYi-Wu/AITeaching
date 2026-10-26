@@ -1,4 +1,4 @@
-"""Concurrency protection and locking primitives for KnowledgeForge graphs."""
+"""One reentrant project lock for graph read/modify/write operations."""
 
 from __future__ import annotations
 
@@ -6,90 +6,75 @@ import contextlib
 import os
 import threading
 import time
-from collections.abc import Iterator
+from functools import wraps
 from pathlib import Path
+
+from solaire.common.security import assert_within_project
 
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_GUARD = threading.Lock()
 _LOCAL = threading.local()
 
 
-def _get_thread_lock(key: str) -> threading.RLock:
-    with _THREAD_GUARD:
-        if key not in _THREAD_LOCKS:
-            _THREAD_LOCKS[key] = threading.RLock()
-        return _THREAD_LOCKS[key]
-
-
 @contextlib.contextmanager
-def graph_lock(
-    project_root: Path,
-    slug: str | None = None,
-    *,
-    timeout: float = 15.0,
-) -> Iterator[None]:
-    """Acquire both an in-process thread lock and an OS file lock for graph mutations."""
-    rk = str(project_root.resolve())
-    target_key = f"{rk}:{slug or '_meta'}"
-    thread_lock = _get_thread_lock(target_key)
-    thread_lock.acquire()
-
+def graph_lock(project_root: Path, slug: str | None = None, *, timeout: float = 15.0):
+    # References and IDs span subjects. A single lock also avoids lock-order inversions.
+    root = project_root.resolve()
+    key = os.path.normcase(str(root))
+    with _THREAD_GUARD:
+        lock = _THREAD_LOCKS.setdefault(key, threading.RLock())
+    if not lock.acquire(timeout=timeout):
+        raise TimeoutError("图谱正被其他操作使用，请稍后重试。")
     held = getattr(_LOCAL, "held", None)
     if held is None:
         held = _LOCAL.held = set()
-
-    reentrant = target_key in held
     handle = None
-
-    if not reentrant:
-        held.add(target_key)
-        lock_dir = (project_root / "resource" / "graph").resolve()
-        lock_dir.mkdir(parents=True, exist_ok=True)
-        safe_target = (slug or "_meta").replace("/", "_").replace("\\", "_")
-        lock_file = lock_dir / f".{safe_target}.lock"
-        start = time.monotonic()
-        try:
-            handle = open(lock_file, "a+", encoding="utf-8")
-            locked = False
-            while time.monotonic() - start < timeout:
+    acquired = False
+    reentrant = key in held
+    try:
+        if not reentrant:
+            path = root / "resource" / "graph" / ".write.lock"
+            assert_within_project(root, path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = path.open("a+b")
+            deadline = time.monotonic() + timeout
+            while True:
                 try:
                     if os.name == "nt":
                         import msvcrt
-
                         handle.seek(0)
                         msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                     else:
                         import fcntl
-
                         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    locked = True
+                    acquired = True
+                    held.add(key)
                     break
-                except (OSError, IOError):
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("图谱文件锁等待超时，未执行写入。") from None
                     time.sleep(0.02)
-        except Exception:
-            # If opening lock file fails, thread_lock still protects concurrency
-            handle = None
-
-    try:
         yield
     finally:
-        if not reentrant:
-            held.discard(target_key)
+        try:
+            if acquired:
+                held.discard(key)
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
             if handle is not None:
-                try:
-                    if os.name == "nt":
-                        import msvcrt
+                handle.close()
+            lock.release()
 
-                        handle.seek(0)
-                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                    else:
-                        import fcntl
 
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                except Exception:
-                    pass
-                try:
-                    handle.close()
-                except Exception:
-                    pass
-        thread_lock.release()
+def graph_mutation(fn):
+    @wraps(fn)
+    def locked(project_root, *args, **kwargs):
+        with graph_lock(project_root):
+            return fn(project_root, *args, **kwargs)
+    return locked

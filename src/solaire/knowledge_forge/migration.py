@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from solaire.common.security import assert_within_project
+from solaire.knowledge_forge.concurrency import graph_mutation
 from solaire.knowledge_forge.models import (
     GraphMeta,
     GraphState,
@@ -28,6 +29,7 @@ def _ensure_graph_dir_only(project_root: Path) -> None:
     assert_within_project(project_root, graph_dir)
 
 
+@graph_mutation
 def ensure_graph_layout(project_root: Path) -> None:
     """Ensure resource/graph/ exists. Migrate legacy state.yaml if needed."""
     graph_dir = _graph_dir(project_root)
@@ -68,7 +70,7 @@ def _migrate_legacy_graph_state(state: GraphState) -> bool:
 
 def _migrate_legacy_to_multi(project_root: Path) -> None:
     """将旧 state.yaml 按 node.subject 字段拆分为多科目文件。"""
-    from solaire.knowledge_forge.repository import _save_meta, _save_subject_state
+    from solaire.knowledge_forge.storage import _save_meta, _save_subject_state
 
     legacy = _legacy_state_path(project_root)
     if not legacy.is_file():
