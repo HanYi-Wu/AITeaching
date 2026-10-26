@@ -6,6 +6,7 @@ import {
   markGradingDraftSaved,
   parseGradingScore,
   reconcileGradingDrafts,
+  restoreGradingDraft,
   updateGradingDraft,
   type GradingDrafts,
 } from "./gradingModel";
@@ -52,6 +53,14 @@ describe("gradingModel", () => {
 
     expect(refreshed["a1:q1"].score).toEqual({ value: "2", baseline: "2", dirty: false });
     expect(refreshed["a1:q1"].feedback).toEqual({ value: "教师评语", baseline: "原评语", dirty: true });
+  });
+
+  it("restores stored values without replacing edits made in the current session", () => {
+    const current: GradingDrafts = updateGradingDraft({}, "a1:q1", { score: 2, feedback: "原评语" }, "score", "4");
+    const restored = restoreGradingDraft(current["a1:q1"], { score: "3", feedback: "本地评语" });
+
+    expect(restored.score).toEqual({ value: "4", baseline: "2", dirty: true });
+    expect(restored.feedback).toEqual({ value: "本地评语", baseline: "原评语", dirty: true });
   });
 
   it("protects a clean field edited after the refresh started", () => {

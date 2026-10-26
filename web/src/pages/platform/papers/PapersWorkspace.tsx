@@ -16,7 +16,7 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { apiDownloadBlob } from "../../../api/client";
+import { apiDownloadBlob, apiGet } from "../../../api/client";
 import { ContentFolderHelp, ContentFolders } from "../../../components/ContentFolders";
 import { ContentTags, TagChips } from "../../../components/ContentTags";
 import { formatLocaleDateTime } from "../../../lib/locale";
@@ -65,11 +65,17 @@ import {
   markGradingDraftSaved,
   parseGradingScore,
   reconcileGradingDrafts,
+  restoreGradingDraft,
   updateGradingDraft,
   type GradingDraftSource,
   type GradingDrafts,
 } from "./gradingModel";
 import { usePaperGrading } from "./usePaperGrading";
+import {
+  readGradingDraft,
+  writeGradingDraft,
+  type GradingDraftStorageScope,
+} from "./gradingDraftStorage";
 import {
   type PaperQuery,
   type PageMeta,
@@ -127,7 +133,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const [publishStartAt, setPublishStartAt] = useState("");
   const [publishEndAt, setPublishEndAt] = useState("");
   const [paperDetailView, setPaperDetailView] = useState<"manage" | "grading">("manage");
-  const [gradingDrafts, setGradingDrafts] = useState<GradingDrafts>({});
+  const [gradingDraftState, setGradingDraftState] = useState<{ ownerKey: string; drafts: GradingDrafts }>({ ownerKey: "", drafts: {} });
   const [selectedPaperId, setSelectedPaperId] = useState("");
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
   const [folders, setFolders] = useState<ContentFolder[]>([]);
@@ -150,6 +156,19 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const scanObjectUrlsRef = useRef<string[]>([]);
   const publicationRequestIdRef = useRef(0);
   const submissionRequestIdRef = useRef(0);
+  const [gradingAccountId, setGradingAccountId] = useState<string | null>(null);
+  const [gradingProjectId, setGradingProjectId] = useState<string | null>(null);
+  const [gradingDraftStorageWarning, setGradingDraftStorageWarning] = useState<{ ownerKey: string; visible: boolean }>({ ownerKey: "", visible: false });
+  const gradingDraftSourceVersionsRef = useRef(new Map<string, string | null>());
+  const restoredGradingDraftKeysRef = useRef(new Set<string>());
+
+  function setGradingDrafts(update: GradingDrafts | ((current: GradingDrafts) => GradingDrafts)) {
+    setGradingDraftState((current) => {
+      const existing = current.ownerKey === gradingOwnerKey ? current.drafts : {};
+      const drafts = typeof update === "function" ? update(existing) : update;
+      return { ownerKey: gradingOwnerKey, drafts };
+    });
+  }
 
   const clearScanObjectUrls = useCallback(() => {
     scanObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -165,11 +184,26 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     void getAccountProfile()
       .then(({ profile }) => {
         const subjects = profile.subjects ?? [];
+        setGradingAccountId(profile.id || null);
         setTeacherSubjects(subjects);
         setSelectedSubject((current) => current || (subjects.length === 1 ? subjects[0] : ""));
       })
       .catch(reportError);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void apiGet<{ bound?: boolean; root?: string | null; project_id?: string | null }>("/api/project/info")
+      .then((info) => {
+        if (!active) return;
+        const projectId = info.bound
+          ? (info.project_id || info.root || "").trim().replace(/\\/g, "/").replace(/\/+$/, "")
+          : "";
+        setGradingProjectId(projectId || null);
+      })
+      .catch(() => { if (active) setGradingProjectId(null); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -190,7 +224,71 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     () => papers.find((paper) => paper.paper_id === selectedPaperId) ?? papers[0] ?? null,
     [papers, selectedPaperId],
   );
-  const gradingRequests = usePaperGrading(selectedPaper?.paper_id ?? selectedPaperId);
+  const gradingOwnerKey = [gradingAccountId ?? "account-unavailable", gradingProjectId ?? "project-unavailable", selectedPaper?.paper_id ?? selectedPaperId].join("/");
+  const gradingDraftOwnerRef = useRef(gradingOwnerKey);
+  if (gradingDraftOwnerRef.current !== gradingOwnerKey) {
+    gradingDraftOwnerRef.current = gradingOwnerKey;
+    gradingDraftSourceVersionsRef.current.clear();
+    restoredGradingDraftKeysRef.current.clear();
+  }
+  const gradingDrafts = gradingDraftState.ownerKey === gradingOwnerKey ? gradingDraftState.drafts : {};
+  const gradingRequests = usePaperGrading(gradingOwnerKey);
+  const gradingStorageScope = gradingAccountId && gradingProjectId && selectedPaper
+    ? { accountId: gradingAccountId, projectId: gradingProjectId, paperId: selectedPaper.paper_id }
+    : null;
+
+  useEffect(() => {
+    if (!gradingStorageScope) return;
+    const restoreEntries: Array<{
+      key: string;
+      source: GradingDraftSource;
+      record: NonNullable<ReturnType<typeof readGradingDraft>["draft"]>;
+    }> = [];
+    submissions.forEach((submission) => submission.answers.forEach((answer) => {
+      const key = gradeKey(submission.attempt_id, answer.question_id);
+      const storageScope = gradingDraftStorageScope(gradingStorageScope, submission.attempt_id, answer.question_id);
+      const storageKey = `${gradingOwnerKey}/${submission.attempt_id}/${answer.question_id}`;
+      if (restoredGradingDraftKeysRef.current.has(storageKey)) return;
+      restoredGradingDraftKeysRef.current.add(storageKey);
+      const result = readGradingDraft(storageScope);
+      if (result.status === "corrupted" || result.status === "unavailable") setGradingDraftStorageWarning({ ownerKey: gradingOwnerKey, visible: true });
+      if (!result.draft) return;
+      if (!gradingDraftSourceVersionsRef.current.has(key)) {
+        gradingDraftSourceVersionsRef.current.set(key, result.draft.sourceVersion);
+      }
+      restoreEntries.push({ key, source: toGradingDraftSource(answer), record: result.draft });
+    }));
+    if (restoreEntries.length > 0) {
+      setGradingDrafts((current) => {
+        const next = { ...current };
+        restoreEntries.forEach(({ key, source, record }) => {
+          next[key] = restoreGradingDraft(
+            getGradingDraft(current, key, source),
+            record,
+          );
+        });
+        return next;
+      });
+    }
+  }, [gradingStorageScope?.accountId, gradingStorageScope?.projectId, gradingStorageScope?.paperId, gradingOwnerKey, submissions]);
+
+  useEffect(() => {
+    if (!gradingStorageScope) return;
+    submissions.forEach((submission) => submission.answers.forEach((answer) => {
+      const key = gradeKey(submission.attempt_id, answer.question_id);
+      const draft = gradingDrafts[key];
+      if (!draft) return;
+      if (!gradingDraftSourceVersionsRef.current.has(key)) {
+        gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+      }
+      const ok = writeGradingDraft(
+        gradingDraftStorageScope(gradingStorageScope, submission.attempt_id, answer.question_id),
+        draft,
+        gradingDraftSourceVersionsRef.current.get(key) ?? null,
+      );
+      if (!ok) setGradingDraftStorageWarning({ ownerKey: gradingOwnerKey, visible: true });
+    }));
+  }, [gradingDrafts, gradingStorageScope?.accountId, gradingStorageScope?.projectId, gradingStorageScope?.paperId, submissions]);
   const activePublishedClassIds = useMemo(() => {
     const ids = new Set<string>();
     publications
@@ -592,6 +690,16 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       return;
     }
     const feedback = gradingFeedbackForSave(draft.feedback);
+    const currentVersion = answer?.grading_version ?? null;
+    const sourceVersion = gradingDraftSourceVersionsRef.current.has(key)
+      ? gradingDraftSourceVersionsRef.current.get(key) ?? null
+      : currentVersion;
+    const versionChanged = gradingDraftSourceVersionsRef.current.has(key) && sourceVersion !== currentVersion;
+    if (versionChanged && !window.confirm("服务器批改版本已变化。本地分数或评语基于较早版本，继续保存将以当前服务器版本为准覆盖相应内容，是否继续？")) {
+      setMessage("已取消保存；本地批改草稿仍保留，请核对服务器内容后再试。");
+      return;
+    }
+    const confirmedVersion = versionChanged ? answer?.grading_version : undefined;
     const gradingSave = gradingRequests.beginSave(key);
     setBusy(`grade:${key}`);
     setMessage(null);
@@ -601,9 +709,18 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         feedback,
         is_correct: null,
       };
-      const queuedSave = await gradingRequests.enqueueSave(gradingSave, () =>
-        gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, payload),
-      );
+      const queuedSave = await gradingRequests.enqueueSave(gradingSave, async () => {
+        const latestSourceVersion = gradingDraftSourceVersionsRef.current.get(key);
+        const queueAdvancedVersion = latestSourceVersion !== undefined && latestSourceVersion !== sourceVersion && latestSourceVersion !== null
+          ? latestSourceVersion
+          : undefined;
+        const expectedVersion = queueAdvancedVersion ?? confirmedVersion ?? latestSourceVersion ?? currentVersion ?? undefined;
+        const result = expectedVersion
+          ? await gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, payload, expectedVersion)
+          : await gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, payload);
+        gradingDraftSourceVersionsRef.current.set(key, result.answer.grading_version ?? expectedVersion ?? null);
+        return result;
+      });
       if (!queuedSave.started) return;
       const result = queuedSave.value;
       const accepted = gradingRequests.acceptSave(gradingSave);
@@ -1370,6 +1487,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                       </button>
                     </div>
                   </div>
+                  {gradingDraftStorageWarning.ownerKey === gradingOwnerKey && gradingDraftStorageWarning.visible ? (
+                    <p role="status" className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                      本地批改草稿暂不可用；仍可使用保存按钮将批改结果提交到服务器。
+                    </p>
+                  ) : null}
                   <div className="space-y-4">
                     {submissions.length > 0 ? (
                       <label className="block rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-medium text-slate-700">
@@ -1452,6 +1574,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                             const draft = getGradingDraft(gradingDrafts, key, source);
                             const value = draft.score.value;
                             const feedback = draft.feedback.value;
+                            const sourceVersion = gradingDraftSourceVersionsRef.current.get(key);
+                            const versionChanged = gradingDraftSourceVersionsRef.current.has(key) && sourceVersion !== (answer.grading_version ?? null);
                             return (
                               <div key={answer.question_id} className="rounded-md bg-slate-50 p-3">
                                 <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -1460,6 +1584,9 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                                     本题 {answer.score_per_item ?? "-"} 分 · {gradingStatusLabel(answer.grading_status)}
                                   </span>
                                 </div>
+                                {versionChanged && (draft.score.dirty || draft.feedback.dirty) ? (
+                                  <p role="status" className="mt-2 text-xs text-amber-700">服务器批改版本已变化，本地草稿基于较早内容；保存前会请你确认。</p>
+                                ) : null}
                                 {answer.content ? <KatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}
                                 <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-sm">
                                   <span className="font-semibold">参考答案：</span>
@@ -1513,6 +1640,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                                     placeholder="分数"
                                     onChange={(event) => {
                                       gradingRequests.beginEdit(key, "score");
+                                      if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
                                       setGradingDrafts((current) => updateGradingDraft(current, key, source, "score", event.target.value))
                                     }}
                                   />
@@ -1523,6 +1651,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                                     placeholder="批改反馈"
                                     onChange={(event) => {
                                       gradingRequests.beginEdit(key, "feedback");
+                                      if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
                                       setGradingDrafts((current) => updateGradingDraft(current, key, source, "feedback", event.target.value))
                                     }}
                                   />
@@ -1667,6 +1796,14 @@ function toGradingDraftSource(answer: PaperSubmissionRecord["answers"][number]):
     feedback: answer.feedback,
     aiFeedback: answer.ai_feedback,
   };
+}
+
+function gradingDraftStorageScope(
+  owner: { accountId: string; projectId: string; paperId: string },
+  attemptId: string,
+  questionId: string,
+): GradingDraftStorageScope {
+  return { ...owner, attemptId, questionId };
 }
 
 function reconcileSubmissionSnapshot(

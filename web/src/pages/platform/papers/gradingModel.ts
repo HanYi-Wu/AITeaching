@@ -65,6 +65,20 @@ export function updateGradingDraft(
   };
 }
 
+export function restoreGradingDraft(
+  current: GradingDraft,
+  stored: { score?: string; feedback?: string },
+): GradingDraft {
+  return {
+    score: stored.score === undefined || current.score.dirty
+      ? current.score
+      : { ...current.score, value: stored.score, dirty: stored.score !== current.score.baseline },
+    feedback: stored.feedback === undefined || current.feedback.dirty
+      ? current.feedback
+      : { ...current.feedback, value: stored.feedback, dirty: stored.feedback !== current.feedback.baseline },
+  };
+}
+
 export function reconcileGradingDrafts(
   drafts: GradingDrafts,
   sources: GradingDraftSourceEntry[],

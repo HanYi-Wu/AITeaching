@@ -3,8 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PapersWorkspace } from "./PapersWorkspace";
+import { buildGradingDraftStorageKey } from "./gradingDraftStorage";
 
 const mocks = vi.hoisted(() => ({
+  apiGet: vi.fn(),
+  getAccountProfile: vi.fn(),
   listPlatformPaperPublications: vi.fn(),
   listPlatformPapers: vi.fn(),
   listTeacherAssignedClasses: vi.fn(),
@@ -23,10 +26,16 @@ const mocks = vi.hoisted(() => ({
   gradePaperAnswer: vi.fn(),
 }));
 
+vi.mock("../../../api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../api/client")>();
+  return { ...actual, apiGet: mocks.apiGet };
+});
+
 vi.mock("../../../platform/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../platform/auth")>();
   return {
     ...actual,
+    getAccountProfile: mocks.getAccountProfile,
     listPlatformPaperPublications: mocks.listPlatformPaperPublications,
     listPlatformPapers: mocks.listPlatformPapers,
     listTeacherAssignedClasses: mocks.listTeacherAssignedClasses,
@@ -78,6 +87,9 @@ describe("PapersWorkspace", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    mocks.apiGet.mockResolvedValue({ bound: true, root: "C:/project", project_id: "project-1" });
+    mocks.getAccountProfile.mockResolvedValue({ profile: { id: "teacher-1", subjects: [] } });
     Object.defineProperty(URL, "createObjectURL", { writable: true, value: vi.fn(() => "blob:report") });
     Object.defineProperty(URL, "revokeObjectURL", { writable: true, value: vi.fn() });
     mocks.listTeacherAssignedClasses.mockResolvedValue({
@@ -441,6 +453,166 @@ describe("PapersWorkspace", () => {
         is_correct: null,
       }),
     );
+  });
+
+  it("restores an isolated local grading draft and saves against its source version", async () => {
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: 2,
+      max_score: 5,
+      answers: [{ question_id: "math/q1", score: 2, grading_status: "reviewed", feedback: "服务器评语", grading_version: "revision-1", images: [] }],
+    };
+    const saved = {
+      ...submission,
+      answers: [{ ...submission.answers[0], score: 4.5, grading_version: "revision-2" }],
+    };
+    const key = buildGradingDraftStorageKey({
+      accountId: "teacher-1",
+      projectId: "project-1",
+      paperId: "p1",
+      attemptId: "a1",
+      questionId: "math/q1",
+    });
+    localStorage.setItem(key, JSON.stringify({ version: 1, sourceVersion: "revision-1", score: "4.5" }));
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValueOnce({ submissions: [submission] }).mockResolvedValueOnce({ submissions: [saved] });
+    mocks.gradePaperAnswer.mockResolvedValue({ answer: { ...saved.answers[0], feedback: "服务器评语" } });
+
+    render(<PapersWorkspace />);
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    const score = await screen.findByTestId("paper-grade-math/q1");
+    expect(score).toHaveValue("4.5");
+    await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
+
+    await waitFor(() => expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "math/q1", {
+      score: 4.5,
+      feedback: null,
+      is_correct: null,
+    }, "revision-1"));
+    await screen.findByText("已保存批改结果");
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it("asks before saving a local draft based on an older grading version", async () => {
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: 2,
+      max_score: 5,
+      answers: [{ question_id: "math/q1", score: 2, grading_status: "reviewed", feedback: "服务器评语", grading_version: "revision-2", images: [] }],
+    };
+    const saved = { ...submission, answers: [{ ...submission.answers[0], score: 4.5, grading_version: "revision-3" }] };
+    const key = buildGradingDraftStorageKey({ accountId: "teacher-1", projectId: "project-1", paperId: "p1", attemptId: "a1", questionId: "math/q1" });
+    localStorage.setItem(key, JSON.stringify({ version: 1, sourceVersion: "revision-1", score: "4.5" }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValueOnce({ submissions: [submission] }).mockResolvedValueOnce({ submissions: [saved] });
+    mocks.gradePaperAnswer.mockResolvedValue({ answer: { ...saved.answers[0], feedback: "服务器评语" } });
+
+    render(<PapersWorkspace />);
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    await screen.findByText("服务器批改版本已变化，本地草稿基于较早内容；保存前会请你确认。");
+    const save = screen.getByTestId("paper-save-grade-math/q1");
+    await userEvent.click(save);
+    expect(mocks.gradePaperAnswer).not.toHaveBeenCalled();
+    await userEvent.click(save);
+
+    await waitFor(() => expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "math/q1", {
+      score: 4.5,
+      feedback: null,
+      is_correct: null,
+    }, "revision-2"));
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the completed version when a same-question save is queued", async () => {
+    const firstSave = deferred<{ answer: { question_id: string; score: number; feedback: string; grading_version: string; grading_status: string } }>();
+    const secondSave = deferred<{ answer: { question_id: string; score: number; feedback: string; grading_version: string; grading_status: string } }>();
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: 1,
+      max_score: 5,
+      answers: [{ question_id: "math/q1", score: 1, grading_status: "reviewed", feedback: "服务器评语", grading_version: "revision-1", images: [] }],
+    };
+    let calls = 0;
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [submission] });
+    mocks.gradePaperAnswer.mockImplementation(() => ++calls === 1 ? firstSave.promise : secondSave.promise);
+
+    render(<PapersWorkspace />);
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    const score = await screen.findByTestId("paper-grade-math/q1");
+    await userEvent.clear(score);
+    await userEvent.type(score, "2");
+    await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
+    await waitFor(() => expect(calls).toBe(1));
+
+    await userEvent.clear(score);
+    await userEvent.type(score, "3");
+    await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
+    expect(calls).toBe(1);
+
+    await act(async () => {
+      firstSave.resolve({ answer: { question_id: "math/q1", score: 2, feedback: "服务器评语", grading_version: "revision-2", grading_status: "reviewed" } });
+      await firstSave.promise;
+    });
+    await waitFor(() => expect(calls).toBe(2));
+    expect(mocks.gradePaperAnswer).toHaveBeenLastCalledWith("p1", "a1", "math/q1", {
+      score: 3,
+      feedback: null,
+      is_correct: null,
+    }, "revision-2");
+
+    await act(async () => {
+      secondSave.resolve({ answer: { question_id: "math/q1", score: 3, feedback: "服务器评语", grading_version: "revision-3", grading_status: "reviewed" } });
+      await secondSave.promise;
+    });
+  });
+
+  it("keeps server grading available when local draft storage is blocked", async () => {
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: 2,
+      max_score: 5,
+      answers: [{ question_id: "math/q1", score: 2, grading_status: "reviewed", feedback: "服务器评语", images: [] }],
+    };
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [submission] });
+    mocks.gradePaperAnswer.mockResolvedValue({ answer: { question_id: "math/q1", score: 4, feedback: "服务器评语", grading_status: "reviewed" } });
+
+    render(<PapersWorkspace />);
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    const score = await screen.findByTestId("paper-grade-math/q1");
+    await userEvent.clear(score);
+    await userEvent.type(score, "4");
+    await screen.findByText("本地批改草稿暂不可用；仍可使用保存按钮将批改结果提交到服务器。");
+    await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
+
+    await waitFor(() => expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "math/q1", {
+      score: 4,
+      feedback: null,
+      is_correct: null,
+    }));
   });
 
   it("keeps score and feedback edited after a save request while its refresh is pending", async () => {
