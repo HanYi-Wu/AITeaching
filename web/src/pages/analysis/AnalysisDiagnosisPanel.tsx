@@ -28,6 +28,7 @@ interface AnalysisDiagnosisPanelProps {
 }
 
 export function AnalysisDiagnosisPanel({
+  selectedExamId,
   selectedBatchId,
   diagLoading,
   diagKd,
@@ -267,7 +268,7 @@ export function AnalysisDiagnosisPanel({
           ) : null}
 
           {/* Comparison card (C18) */}
-          <AnalysisComparisonCard className="mt-4" />
+          <AnalysisComparisonCard sourceExamId={selectedExamId || undefined} sourceBatchId={selectedBatchId || undefined} className="mt-4" />
         </>
       )}
     </div>

@@ -1,325 +1,130 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
-  BookOpen,
-  CheckCircle2,
-  Minus,
-  RefreshCw,
-  Search,
-  Users,
-} from "lucide-react";
+import { useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { loadSessionToken } from "../../platform/session";
 import {
+  fetchPracticePublications,
   fetchTeacherLearningProgressComparison,
+  type PracticePublicationChoice,
   type TeacherComparisonResponse,
 } from "../../platform/learningProgress";
 
 export interface AnalysisComparisonCardProps {
   practicePublicationId?: string;
+  sourceExamId?: string;
+  sourceBatchId?: string;
   classId?: string;
   studentId?: string;
   className?: string;
 }
 
+const percentage = (value: number | null) => value == null ? "—" : `${value.toFixed(1)}%`;
+const reasons: Record<string, string> = {
+  target_unsubmitted: "等待完成", target_ungraded: "等待批改", target_unreleased: "等待发布",
+  missing_baseline: "缺少首考基线", missing_target: "缺少有效答题", source_missing: "来源缺失",
+};
+
 export function AnalysisComparisonCard({
-  practicePublicationId: initialPubId = "",
-  classId,
-  studentId,
-  className,
+  practicePublicationId = "", sourceExamId, sourceBatchId, classId, studentId, className,
 }: AnalysisComparisonCardProps) {
-  const [pubIdInput, setPubIdInput] = useState(initialPubId);
-  const [activePubId, setActivePubId] = useState(initialPubId);
+  const [choices, setChoices] = useState<PracticePublicationChoice[]>([]);
+  const [selectedId, setSelectedId] = useState(practicePublicationId);
+  const [data, setData] = useState<TeacherComparisonResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<TeacherComparisonResponse | null>(null);
-  const [showStudentDetails, setShowStudentDetails] = useState(false);
-
-  const requestIdRef = useRef(0);
-
-  const loadComparison = useCallback(
-    async (targetPubId: string) => {
-      const cleanPubId = targetPubId.trim();
-      if (!cleanPubId) {
-        setData(null);
-        setError(null);
-        return;
-      }
-
-      const curId = ++requestIdRef.current;
-      setLoading(true);
-      setError(null);
-
-      try {
-        const res = await fetchTeacherLearningProgressComparison({
-          practicePublicationId: cleanPubId,
-          classId: classId || undefined,
-          studentId: studentId || undefined,
-        });
-        if (curId === requestIdRef.current) {
-          setData(res);
-          setActivePubId(cleanPubId);
-        }
-      } catch (err: any) {
-        if (curId === requestIdRef.current) {
-          setError(err?.message || "获取学习进展对照失败");
-          setData(null);
-        }
-      } finally {
-        if (curId === requestIdRef.current) {
-          setLoading(false);
-        }
-      }
-    },
-    [classId, studentId],
-  );
+  const [refresh, setRefresh] = useState(0);
+  const [showStudents, setShowStudents] = useState(false);
+  const sessionToken = loadSessionToken();
 
   useEffect(() => {
-    if (initialPubId) {
-      setPubIdInput(initialPubId);
-      void loadComparison(initialPubId);
-    }
-  }, [initialPubId, loadComparison]);
+    let active = true;
+    setData(null);
+    setError(null);
+    setChoices([]);
+    setSelectedId(practicePublicationId);
+    if (practicePublicationId) return () => { active = false; };
+    setLoading(true);
+    void fetchPracticePublications(sourceExamId, sourceBatchId).then((result) => {
+      if (!active || loadSessionToken() !== sessionToken) return;
+      setChoices(result.publications);
+      setSelectedId(result.publications[0]?.id || "");
+    }).catch((err) => {
+      if (active && loadSessionToken() === sessionToken) setError(err?.message || "获取关联复练失败");
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [practicePublicationId, sourceExamId, sourceBatchId, sessionToken]);
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    void loadComparison(pubIdInput);
-  };
+  useEffect(() => {
+    let active = true;
+    setData(null);
+    if (!selectedId) return () => { active = false; };
+    setLoading(true);
+    setError(null);
+    void fetchTeacherLearningProgressComparison({ practicePublicationId: selectedId, classId, studentId }).then((result) => {
+      if (active && loadSessionToken() === sessionToken) setData(result);
+    }).catch((err) => {
+      if (active && loadSessionToken() === sessionToken) setError(err?.message || "获取复练对照失败");
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [selectedId, sourceExamId, sourceBatchId, classId, studentId, refresh, sessionToken]);
 
-  const summaries = data?.class_comparison?.node_summaries ?? [];
-  const matchedStudents = data?.class_comparison?.matched_students ?? [];
-  const sourceStatus = data?.source_status;
-  const isModified = sourceStatus?.is_modified || data?.class_comparison?.is_source_modified;
-  const isMissing = sourceStatus?.is_missing || data?.class_comparison?.is_source_missing;
-
+  const summaries = data?.class_comparison?.node_summaries || [];
+  const studentEntries = Object.entries(data?.student_comparisons || {});
   return (
-    <div className={cn("rounded-lg border border-slate-200 bg-white p-4 shadow-sm", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+    <section className={cn("rounded-lg border border-slate-200 bg-white p-4", className)} aria-label="复练前后对照">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-slate-800">知识点复练前后得分率</h3>
         <div className="flex items-center gap-2">
-          <BookOpen className="h-5 w-5 text-indigo-600" />
-          <h3 className="text-sm font-semibold text-slate-800">靶向复练前后掌握率对照</h3>
-        </div>
-
-        <form onSubmit={handleSearchSubmit} className="flex items-center gap-2">
-          <input
-            type="text"
-            className="w-48 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 placeholder-slate-400 focus:border-indigo-500 focus:outline-none"
-            placeholder="输入复练批次 ID"
-            value={pubIdInput}
-            onChange={(e) => setPubIdInput(e.target.value)}
-            aria-label="复练发布批次 ID"
-          />
-          <button
-            type="submit"
-            disabled={loading || !pubIdInput.trim()}
-            className="inline-flex items-center gap-1 rounded bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {loading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
-            查询
+          {choices.length > 0 && (
+            <select aria-label="关联复练" value={selectedId} onChange={(e) => setSelectedId(e.target.value)} className="max-w-64 rounded border px-2 py-1 text-xs">
+              {choices.map((choice) => <option key={choice.id} value={choice.id}>{choice.title}</option>)}
+            </select>
+          )}
+          <button type="button" aria-label="刷新复练对照" disabled={loading || !selectedId} onClick={() => setRefresh((value) => value + 1)} className="rounded border p-1.5 disabled:opacity-50">
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
           </button>
-        </form>
+        </div>
       </div>
-
-      {loading && (
-        <div className="flex items-center justify-center py-6 text-xs text-slate-500">
-          <RefreshCw className="mr-2 h-4 w-4 animate-spin text-indigo-500" />
-          正在计算前后掌握率对照...
-        </div>
-      )}
-
-      {error && (
-        <div className="mt-3 flex items-center gap-2 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-red-500" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {!loading && !error && !data && (
-        <div className="py-6 text-center text-xs text-slate-400">
-          输入关联靶向练习的发布批次 ID 后，可查看本次诊断首考与后续复练的知识点掌握率对比。
-        </div>
-      )}
-
-      {!loading && !error && data && (
-        <div className="mt-4 space-y-4">
-          {/* Status notices */}
-          {isModified && (
-            <div className="flex items-center gap-2 rounded border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
-              <div>
-                <span className="font-semibold">来源首考成绩已被复核修改：</span>
-                对比基线仍严格保持生成练习时的冻结原值，已标注修改差异。
-              </div>
-            </div>
-          )}
-
-          {isMissing && (
-            <div className="flex items-center gap-2 rounded border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
-              <div>
-                <span className="font-semibold">来源考试或批次缺失：</span>
-                来源数据已被删除或撤回，历史基线已无法进行有效可比性校验。
-              </div>
-            </div>
-          )}
-
-          {/* Metadata bar */}
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            <div className="flex items-center gap-1.5">
-              <Users className="h-3.5 w-3.5 text-slate-500" />
-              <span>
-                配对样本数：<strong className="text-slate-800">{matchedStudents.length}</strong> 人
-              </span>
-            </div>
-            <div>
-              复练批次：<span className="font-mono text-slate-700">{activePubId}</span>
-            </div>
-          </div>
-
-          {/* Node summaries table */}
-          {summaries.length === 0 ? (
-            <div className="py-4 text-center text-xs text-slate-400">暂无知识点对照统计数据</div>
-          ) : (
-            <div className="overflow-x-auto rounded border border-slate-200">
+      {loading && <p className="mt-3 text-xs text-slate-500">正在读取复练对照…</p>}
+      {error && <p role="alert" className="mt-3 text-xs text-red-700">{error}</p>}
+      {!loading && !error && !selectedId && <p className="mt-3 text-xs text-slate-500">本次诊断尚无已发布的关联复练。发布后会在这里显示。</p>}
+      {data?.source_status.is_modified && <p className="mt-3 text-xs text-amber-800">首考成绩已复核，基线保持发布复练时的原值。</p>}
+      {data?.source_status.is_missing && <p className="mt-3 text-xs text-rose-700">无法核实来源，暂不计算提升。请确认来源项目和成绩批次仍可读取。</p>}
+      {!loading && data && (
+        <>
+          {summaries.length === 0 ? <p className="mt-3 text-xs text-slate-500">暂无可配对的知识点证据。</p> : (
+            <div className="mt-3 overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="border-b border-slate-200 bg-slate-50 font-medium text-slate-600">
-                  <tr>
-                    <th className="px-3 py-2">知识点</th>
-                    <th className="px-3 py-2 text-right">首考诊断掌握率</th>
-                    <th className="px-3 py-2 text-right">靶向复练掌握率</th>
-                    <th className="px-3 py-2 text-right">掌握率变化 (pp)</th>
-                    <th className="px-3 py-2 text-center">配对样本</th>
-                    <th className="px-3 py-2 text-center">题量对比 (前/后)</th>
-                    <th className="px-3 py-2">状态 / 说明</th>
+                <thead className="border-b text-slate-500"><tr><th className="py-2">知识点</th><th>首考</th><th>复练</th><th>变化</th><th>配对人数</th><th>题数（前/后）</th><th>待完成情况</th></tr></thead>
+                <tbody>{summaries.map((node) => (
+                  <tr key={node.knowledge_node_id} className="border-b border-slate-100">
+                    <td className="py-2 font-medium">{data.knowledge_names?.[node.knowledge_node_id] || "已归档知识点"}</td>
+                    <td>{percentage(node.pre_percentage)}</td><td>{percentage(node.post_percentage)}</td>
+                    <td>{node.delta_percentage_points == null ? "—" : `${node.delta_percentage_points > 0 ? "+" : ""}${node.delta_percentage_points.toFixed(1)} 个百分点`}</td>
+                    <td>{node.matched_student_count} 人</td><td>{node.pre_question_count} / {node.post_question_count}</td>
+                    <td>{Object.entries(node.unpaired_reasons).map(([reason, count]) => `${reasons[reason] || "不可比较"} ${count} 人`).join("，") || "已配对"}</td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {summaries.map((s) => {
-                    const delta = s.delta_percentage_points;
-                    return (
-                      <tr key={s.knowledge_node_id} className="hover:bg-slate-50/50">
-                        <td className="px-3 py-2 font-medium text-slate-800">
-                          {s.knowledge_node_id}
-                          {s.is_modified && (
-                            <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800">
-                              原分复核
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right font-mono">
-                          {s.pre_class_percentage !== null ? `${s.pre_class_percentage.toFixed(1)}%` : "-"}
-                        </td>
-                        <td className="px-3 py-2 text-right font-mono">
-                          {s.post_class_percentage !== null ? `${s.post_class_percentage.toFixed(1)}%` : "-"}
-                        </td>
-                        <td className="px-3 py-2 text-right font-mono font-semibold">
-                          {delta !== null ? (
-                            <span
-                              className={cn(
-                                "inline-flex items-center gap-0.5",
-                                delta > 0 ? "text-emerald-600" : delta < 0 ? "text-rose-600" : "text-slate-600",
-                              )}
-                            >
-                              {delta > 0 ? (
-                                <ArrowUpRight className="h-3 w-3" />
-                              ) : delta < 0 ? (
-                                <ArrowDownRight className="h-3 w-3" />
-                              ) : (
-                                <Minus className="h-3 w-3" />
-                              )}
-                              {delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)} pp
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-center text-slate-600">
-                          {s.matched_sample_size} 人
-                        </td>
-                        <td className="px-3 py-2 text-center text-slate-600">
-                          {s.pre_question_count} 题 / {s.post_question_count} 题
-                          {s.question_difference !== 0 && (
-                            <span className="ml-1 text-[10px] text-slate-400">
-                              ({s.question_difference > 0 ? `+${s.question_difference}` : s.question_difference})
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {s.incomparable_reason ? (
-                            <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[11px] text-rose-700">
-                              {s.incomparable_reason}
-                            </span>
-                          ) : s.status === "valid" ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700">
-                              <CheckCircle2 className="h-3 w-3" />
-                              可比
-                            </span>
-                          ) : (
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
-                              {s.status}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
+                ))}</tbody>
               </table>
             </div>
           )}
-
-          {/* Student breakdown toggle */}
-          {Object.keys(data.student_comparisons || {}).length > 0 && (
-            <div>
-              <button
-                type="button"
-                className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
-                onClick={() => setShowStudentDetails((v) => !v)}
-              >
-                {showStudentDetails ? "收起学生个人明细 ▲" : `查看学生个人明细 (${Object.keys(data.student_comparisons).length}人) ▼`}
-              </button>
-
-              {showStudentDetails && (
-                <div className="mt-3 space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
-                  {Object.entries(data.student_comparisons).map(([sid, sComp]) => (
-                    <div key={sid} className="rounded bg-white p-2.5 shadow-sm text-xs">
-                      <div className="font-semibold text-slate-700 mb-1">
-                        学生 ID: <span className="font-mono">{sid}</span>
-                        {sComp.status !== "valid" && (
-                          <span className="ml-2 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800">
-                            {sComp.status}
-                          </span>
-                        )}
-                      </div>
-                      <div className="divide-y divide-slate-100">
-                        {sComp.node_comparisons.map((nc) => (
-                          <div key={nc.knowledge_node_id} className="flex flex-wrap items-center justify-between py-1 text-slate-600">
-                            <span className="font-medium text-slate-800">{nc.knowledge_node_id}</span>
-                            <div className="flex items-center gap-3">
-                              <span>
-                                前: {nc.pre_percentage !== null ? `${nc.pre_percentage.toFixed(1)}%` : "-"}
-                              </span>
-                              <span>
-                                后: {nc.post_percentage !== null ? `${nc.post_percentage.toFixed(1)}%` : "-"}
-                              </span>
-                              <span className="font-semibold">
-                                {nc.delta_percentage_points !== null
-                                  ? `${nc.delta_percentage_points > 0 ? "+" : ""}${nc.delta_percentage_points.toFixed(1)} pp`
-                                  : (nc.incomparable_reason || "-")}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+          {studentEntries.length > 0 && (
+            <div className="mt-3 text-xs">
+              <button type="button" className="text-indigo-700" onClick={() => setShowStudents((shown) => !shown)}>{showStudents ? "收起学生明细" : "查看学生明细"}</button>
+              {showStudents && studentEntries.map(([id, comparison]) => (
+                <div key={id} className="mt-2 rounded bg-slate-50 p-2">
+                  <p className="font-medium">{data.student_names?.[id] || "学生"}</p>
+                  {comparison.node_comparisons.map((node) => <p key={node.knowledge_node_id} className="mt-1 text-slate-600">{data.knowledge_names?.[node.knowledge_node_id] || "已归档知识点"}：{percentage(node.pre_percentage)} → {percentage(node.post_percentage)}{node.incomparable_reason ? `（${node.incomparable_reason}）` : ""}</p>)}
                 </div>
-              )}
+              ))}
             </div>
           )}
-        </div>
+        </>
       )}
-    </div>
+    </section>
   );
 }

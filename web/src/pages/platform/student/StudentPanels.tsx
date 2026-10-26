@@ -11,6 +11,7 @@ import {
 } from "../../../platform/auth";
 import { AnswerRelationEditor } from '../../../components/AnswerRelationEditor';
 import { ANSWER_LOGIC_PREFIX } from '../../../lib/answerLogic';
+import { loadSessionToken } from "../../../platform/session";
 
 export function StudentNavButton({
   selected,
@@ -80,8 +81,10 @@ export function StudentPracticeComparisonCard({
   const [data, setData] = useState<StudentComparisonResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const requestIdRef = useRef(0);
+  const sessionToken = loadSessionToken();
 
   useEffect(() => {
+    setData(null);
     if (!publicationId) {
       setData(null);
       return;
@@ -91,7 +94,7 @@ export function StudentPracticeComparisonCard({
 
     fetchStudentLearningProgressComparison({ practicePublicationId: publicationId })
       .then((res) => {
-        if (curId === requestIdRef.current) {
+        if (curId === requestIdRef.current && loadSessionToken() === sessionToken) {
           setData(res);
         }
       })
@@ -105,7 +108,8 @@ export function StudentPracticeComparisonCard({
           setLoading(false);
         }
       });
-  }, [publicationId]);
+    return () => { requestIdRef.current += 1; };
+  }, [publicationId, sessionToken]);
 
   if (loading) {
     return (
@@ -128,9 +132,6 @@ export function StudentPracticeComparisonCard({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-100 pb-2">
         <div className="flex items-center gap-1.5 font-semibold text-indigo-950">
           <span>📚 知识点复练掌握率对照</span>
-        </div>
-        <div className="font-mono text-[11px] text-indigo-700">
-          批次：{publicationId}
         </div>
       </div>
 
@@ -167,7 +168,7 @@ export function StudentPracticeComparisonCard({
           return (
             <div key={node.knowledge_node_id} className="flex flex-wrap items-center justify-between py-1.5">
               <div>
-                <span className="font-medium text-slate-800">{node.knowledge_node_id}</span>
+                <span className="font-medium text-slate-800">{data.knowledge_names?.[node.knowledge_node_id] || "已归档知识点"}</span>
                 {node.is_modified && (
                   <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800">原分复核</span>
                 )}

@@ -1,8 +1,4 @@
-"""Learning progress and practice evidence package.
-
-G7 modules (aggregation, comparison, api) are developed independently by G7.
-This init is kept lightweight and does not import G7 modules.
-"""
+"""Frozen practice sources, baselines, and authoritative evidence readers."""
 
 from __future__ import annotations
 

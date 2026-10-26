@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from solaire.web.learning_progress.sources import (
     compute_batch_snapshot_hash,
     compute_online_source_snapshot_hash,
     get_graph_question_node_bindings,
+    question_node_ids,
     resolve_batch_student_scores,
 )
 from solaire.web.learning_progress.store import (
@@ -83,7 +85,9 @@ def freeze_publication_baseline(
         for qid, raw_score in scores.items():
             if raw_score is None:
                 continue
-            raw_max = float(raw_max_scores.get(qid) or 5.0)
+            raw_max = float(raw_max_scores.get(qid) or 0.0)
+            if not math.isfinite(raw_score) or not math.isfinite(raw_max) or raw_max <= 0:
+                continue
             bound_nodes = node_bindings.get(qid) or []
             if not bound_nodes:
                 continue
@@ -150,12 +154,12 @@ def freeze_personalized_baseline(
             # Check source attempt
             attempt_row = con.execute(
                 """
-                SELECT id, question_payload_json FROM student_attempts
+                SELECT id, question_payload_json, grading_completed_at FROM student_attempts
                 WHERE publication_id = ? AND student_id = ? AND status = 'submitted'
                 """,
                 (sp_id, plat_student_id),
             ).fetchone()
-            if attempt_row is None:
+            if attempt_row is None or not attempt_row["grading_completed_at"]:
                 continue
             src_attempt_id = str(attempt_row["id"])
             source_hash = compute_online_source_snapshot_hash(con, sp_id, plat_student_id)
@@ -174,17 +178,22 @@ def freeze_personalized_baseline(
                 q_payloads = json.loads(str(attempt_row["question_payload_json"] or "[]"))
             except Exception:
                 q_payloads = []
+            question_meta = {str(qp.get("question_id")): qp for qp in q_payloads if isinstance(qp, dict)}
             max_scores = {
-                str(qp.get("question_id")): float(qp.get("score_per_item") or 5.0)
+                str(qp.get("question_id")): float(qp.get("score_per_item") or 0.0)
                 for qp in q_payloads
                 if isinstance(qp, dict)
             }
 
             for ar in ans_rows:
                 qid = str(ar["question_id"])
-                raw_score = float(ar["score"]) if ar["score"] is not None else 0.0
-                raw_max = max_scores.get(qid, 5.0)
-                bound_nodes = node_bindings.get(qid) or []
+                if ar["score"] is None:
+                    continue
+                raw_score = float(ar["score"])
+                raw_max = max_scores.get(qid, 0.0)
+                if not math.isfinite(raw_score) or not math.isfinite(raw_max) or raw_max <= 0:
+                    continue
+                bound_nodes = question_node_ids(question_meta.get(qid, {"question_id": qid}), node_bindings)
                 if not bound_nodes:
                     continue
 

@@ -1,4 +1,4 @@
-"""Compatibility readers and authoritative comparison checks for learning progress."""
+"""Read frozen sources and current answers without changing historical evidence."""
 
 from __future__ import annotations
 
@@ -10,35 +10,16 @@ from solaire.web.learning_progress.sources import (
     compute_batch_snapshot_hash,
     compute_online_source_snapshot_hash,
     get_graph_question_node_bindings,
+    question_node_ids,
 )
-from solaire.web.learning_progress.store import (
-    get_frozen_baselines,
-    get_practice_sources,
-)
-from solaire.web.learning_progress.types import TargetEvidenceItem
-from solaire.web.platform_db import connect, row_to_dict
+from solaire.web.learning_progress.store import get_frozen_baselines, get_practice_sources
+from solaire.web.platform_db import connect
 
 
-def get_frozen_baseline(
-    root: Path,
-    *,
-    practice_publication_id: str,
-    student_id: str | None = None,
-) -> list[dict[str, Any]]:
-    """G7 Contract: Read frozen baseline items for a practice publication.
-
-    Returns list of dicts with:
-        student_id, knowledge_node_id, source_type, source_ref_id,
-        source_question_id, effective_score, effective_max_score,
-        weight, raw_score, raw_max_score, rule_version,
-        source_snapshot_hash, captured_at.
-    """
-    items = get_frozen_baselines(
-        root,
-        practice_publication_id=practice_publication_id,
-        student_id=student_id,
-    )
-    return [it.to_dict() for it in items]
+def get_frozen_baseline(root: Path, *, practice_publication_id: str, student_id: str | None = None) -> list[dict[str, Any]]:
+    return [item.to_dict() for item in get_frozen_baselines(
+        root, practice_publication_id=practice_publication_id, student_id=student_id,
+    )]
 
 
 def get_authoritative_source_status(
@@ -47,103 +28,45 @@ def get_authoritative_source_status(
     *,
     practice_publication_id: str,
     student_id: str | None = None,
+    allowed_student_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """G7 Contract: Check live source existence and authoritative digest match.
-
-    Returns:
-        {
-            "status": "valid" | "source_missing" | "source_modified",
-            "source_type": str,
-            "source_ref_id": str,
-            "is_modified": bool,
-            "is_missing": bool,
-            "reason": str | None,
-        }
-    """
     sources = get_practice_sources(root, practice_publication_id)
-    if not sources:
-        return {
-            "status": "source_missing",
-            "source_type": "unknown",
-            "source_ref_id": "",
-            "is_modified": False,
-            "is_missing": True,
-            "reason": "No practice source link recorded for this publication",
-        }
-
     baselines = get_frozen_baselines(root, practice_publication_id=practice_publication_id, student_id=student_id)
-    if not baselines:
-        return {
-            "status": "source_missing",
-            "source_type": sources[0].source_type,
-            "source_ref_id": sources[0].source_batch_id or sources[0].source_publication_id or "",
-            "is_modified": False,
-            "is_missing": True,
-            "reason": "No frozen baselines found for this publication",
-        }
-
-    src = sources[0]
-    expected_hash = baselines[0].source_snapshot_hash
-
-    if src.source_type == "diagnostic_batch":
-        if project_root is None:
-            return {
-                "status": "valid",
-                "source_type": "diagnostic_batch",
-                "source_ref_id": str(src.source_batch_id),
-                "is_modified": False,
-                "is_missing": False,
-                "reason": None,
-            }
-        try:
-            current_hash = compute_batch_snapshot_hash(
-                project_root,
-                str(src.source_exam_id),
-                str(src.source_batch_id),
-            )
-        except FileNotFoundError:
-            return {
-                "status": "source_missing",
-                "source_type": "diagnostic_batch",
-                "source_ref_id": str(src.source_batch_id),
-                "is_modified": False,
-                "is_missing": True,
-                "reason": "Source score batch directory was deleted",
-            }
-    else:
-        # online exam publication
-        pub_id = str(src.source_publication_id)
-        with connect(root) as con:
-            row = con.execute("SELECT id, status FROM exam_publications WHERE id = ?", (pub_id,)).fetchone()
-            if row is None or row["status"] == "revoked":
-                return {
-                    "status": "source_missing",
-                    "source_type": "exam_publication",
-                    "source_ref_id": pub_id,
-                    "is_modified": False,
-                    "is_missing": True,
-                    "reason": "Source exam publication was revoked or deleted",
-                }
-            current_hash = compute_online_source_snapshot_hash(con, pub_id, student_id)
-
-    if current_hash != expected_hash:
-        return {
-            "status": "source_modified",
-            "source_type": src.source_type,
-            "source_ref_id": str(src.source_batch_id or src.source_publication_id),
-            "is_modified": True,
-            "is_missing": False,
-            "reason": "Source scores were regraded or modified after practice baseline was frozen",
-        }
-
-    return {
-        "status": "valid",
-        "source_type": src.source_type,
-        "source_ref_id": str(src.source_batch_id or src.source_publication_id),
-        "is_modified": False,
-        "is_missing": False,
-        "reason": None,
+    if allowed_student_ids is not None:
+        baselines = [item for item in baselines if item.student_id in allowed_student_ids]
+    result = {
+        "status": "valid", "source_type": sources[0].source_type if sources else "unknown",
+        "source_ref_id": (sources[0].source_batch_id or sources[0].source_publication_id or "") if sources else "",
+        "is_modified": False, "is_missing": False, "reason": None,
     }
+    if not sources or not baselines:
+        return {**result, "status": "source_missing", "is_missing": True, "reason": "No verified frozen baseline"}
+
+    # Online baselines are frozen per source and student, not as one class-wide hash.
+    expected = {(item.source_type, item.source_ref_id, item.student_id): item.source_snapshot_hash for item in baselines}
+    with connect(root) as con:
+        for source in sources:
+            source_ref = str(source.source_batch_id or source.source_publication_id or "")
+            relevant = [(key, digest) for key, digest in expected.items() if key[:2] == (source.source_type, source_ref)]
+            if not relevant:
+                continue
+            if source.source_type == "diagnostic_batch":
+                if project_root is None:
+                    return {**result, "status": "source_missing", "is_missing": True, "reason": "Source project is not open"}
+                try:
+                    current = compute_batch_snapshot_hash(project_root, str(source.source_exam_id), source_ref)
+                except FileNotFoundError:
+                    return {**result, "status": "source_missing", "is_missing": True, "reason": "Source score batch was deleted"}
+                result["is_modified"] |= any(digest != current for _, digest in relevant)
+            else:
+                publication = con.execute("SELECT status FROM exam_publications WHERE id = ?", (source_ref,)).fetchone()
+                if publication is None or publication["status"] == "revoked":
+                    return {**result, "status": "source_missing", "is_missing": True, "reason": "Source publication was revoked or deleted"}
+                for key, digest in relevant:
+                    result["is_modified"] |= digest != compute_online_source_snapshot_hash(con, source_ref, key[2])
+    if result["is_modified"]:
+        result.update(status="source_modified", reason="Source scores were regraded or modified after the baseline was frozen")
+    return result
 
 
 def get_authoritative_target_evidence(
@@ -152,140 +75,59 @@ def get_authoritative_target_evidence(
     *,
     practice_publication_id: str,
     student_id: str | None = None,
+    include_unreleased: bool = False,
 ) -> list[dict[str, Any]]:
-    """G7 Contract: Read authoritative practice attempt scores and knowledge node evidence."""
-    node_bindings = get_graph_question_node_bindings(project_root) if project_root else {}
-
+    """Use each recipient's frozen questions and the existing explicit grade release."""
+    bindings = get_graph_question_node_bindings(project_root) if project_root else {}
     params: list[Any] = [practice_publication_id]
     student_clause = ""
     if student_id is not None:
         student_clause = " AND sa.student_id = ?"
         params.append(student_id)
-
     with connect(root) as con:
-        pub_row = con.execute("SELECT * FROM exam_publications WHERE id = ?", (practice_publication_id,)).fetchone()
-        if pub_row is None:
-            return []
-        pub = row_to_dict(pub_row) or {}
-        is_released = bool(pub.get("show_results_immediately")) or pub.get("status") == "closed"
-
-        query = f"""
-            SELECT sa.id as attempt_id, sa.student_id, sa.status as attempt_status,
-                   sa.question_payload_json,
-                   ans.question_id, ans.score, ans.is_correct, ans.grading_status
-            FROM student_attempts sa
-            LEFT JOIN student_answers ans ON ans.attempt_id = sa.id
-            WHERE sa.publication_id = ? {student_clause}
-            ORDER BY sa.student_id ASC, ans.question_id ASC
-        """
-        rows = con.execute(query, tuple(params)).fetchall()
-
-    results: list[dict[str, Any]] = []
-    attempts_seen: set[str] = set()
-
-    for r in rows:
-        st_id = str(r["student_id"])
-        att_id = str(r["attempt_id"])
-        att_status = str(r["attempt_status"])
-        attempts_seen.add(att_id)
-
-        qid = str(r["question_id"]) if r["question_id"] is not None else None
-        if not qid:
-            # Attempt with no answers yet
-            results.append(
-                TargetEvidenceItem(
-                    student_id=st_id,
-                    attempt_id=att_id,
-                    publication_id=practice_publication_id,
-                    question_id="",
-                    knowledge_node_id=None,
-                    score=None,
-                    max_score=0.0,
-                    weight=0.0,
-                    is_correct=None,
-                    submission_status=att_status,
-                    grading_status="pending",
-                    is_released=is_released,
-                    status="target_unsubmitted" if att_status != "submitted" else "target_ungraded",
-                    incomparable_reason="Practice attempt has not submitted answers",
-                ).to_dict()
-            )
-            continue
-
-        raw_score = float(r["score"]) if r["score"] is not None else None
-        is_corr = int(r["is_correct"]) if r["is_correct"] is not None else None
-        gr_status = str(r["grading_status"] or "pending")
-
-        # Parse question max score and potential embedded node_id from payload
+        attempts = con.execute(
+            f"SELECT sa.* FROM student_attempts sa WHERE sa.publication_id = ? {student_clause}", tuple(params),
+        ).fetchall()
+        answers = con.execute(
+            f"""SELECT ans.* FROM student_answers ans JOIN student_attempts sa ON sa.id = ans.attempt_id
+                WHERE sa.publication_id = ? {student_clause}""", tuple(params),
+        ).fetchall()
+    answer_map = {(row["attempt_id"], row["question_id"]): row for row in answers}
+    evidence: list[dict[str, Any]] = []
+    for attempt in attempts:
         try:
-            q_payloads = json.loads(str(r["question_payload_json"] or "[]"))
-        except Exception:
-            q_payloads = []
-        q_meta = next((qp for qp in q_payloads if isinstance(qp, dict) and str(qp.get("question_id")) == qid), {})
-        max_score = float(q_meta.get("score_per_item") or 5.0)
-
-        # Knowledge node resolution: check payload or project graph
-        embedded_nid = str(q_meta.get("knowledge_node_id") or q_meta.get("node_id") or "").strip() or None
-        bound_nodes = [embedded_nid] if embedded_nid else node_bindings.get(qid, [])
-
-        if not bound_nodes:
-            results.append(
-                TargetEvidenceItem(
-                    student_id=st_id,
-                    attempt_id=att_id,
-                    publication_id=practice_publication_id,
-                    question_id=qid,
-                    knowledge_node_id=None,
-                    score=raw_score,
-                    max_score=max_score,
-                    weight=1.0,
-                    is_correct=is_corr,
-                    submission_status=att_status,
-                    grading_status=gr_status,
-                    is_released=is_released,
-                    status="missing_knowledge_node",
-                    incomparable_reason=f"Question {qid} has no bound knowledge node in graph",
-                ).to_dict()
-            )
-            continue
-
-        unique_nodes = list(dict.fromkeys(bound_nodes))
-        m = len(unique_nodes)
-        weight = 1.0 / m
-        eff_score = round(raw_score / m, 4) if raw_score is not None else None
-        eff_max = round(max_score / m, 4)
-
-        for nid in unique_nodes:
-            if att_status != "submitted":
-                comp_status = "target_unsubmitted"
-                reason = "Practice attempt is not yet submitted"
-            elif gr_status != "graded":
-                comp_status = "target_ungraded"
-                reason = "Practice attempt is pending grading"
-            elif not is_released:
-                comp_status = "target_unreleased"
-                reason = "Practice publication results have not been released to students"
+            questions = json.loads(attempt["question_payload_json"] or "[]")
+        except json.JSONDecodeError:
+            questions = []
+        if not questions:
+            questions = [{"question_id": "", "knowledge_node_ids": []}]
+        for question in questions:
+            qid = str(question.get("question_id") or "")
+            answer = answer_map.get((attempt["id"], qid))
+            nodes = question_node_ids(question, bindings)
+            released = bool(attempt["grading_completed_at"])
+            grading = str(answer["grading_status"] or "pending") if answer else "pending"
+            if attempt["status"] != "submitted":
+                status, reason = "target_unsubmitted", "复练答卷尚未提交"
+            elif grading not in {"graded", "reviewed"}:
+                status, reason = "target_ungraded", "复练答卷正在批改中"
+            elif not released and not include_unreleased:
+                status, reason = "target_unreleased", "复练成绩尚未发布"
+            elif not nodes:
+                status, reason = "missing_knowledge_node", "题目缺少发布时的知识点绑定"
             else:
-                comp_status = "valid"
-                reason = None
-
-            results.append(
-                TargetEvidenceItem(
-                    student_id=st_id,
-                    attempt_id=att_id,
-                    publication_id=practice_publication_id,
-                    question_id=qid,
-                    knowledge_node_id=nid,
-                    score=eff_score,
-                    max_score=eff_max,
-                    weight=weight,
-                    is_correct=is_corr,
-                    submission_status=att_status,
-                    grading_status=gr_status,
-                    is_released=is_released,
-                    status=comp_status,
-                    incomparable_reason=reason,
-                ).to_dict()
-            )
-
-    return results
+                status, reason = "valid", None
+            weight = 1.0 / len(nodes) if nodes else 1.0
+            score = float(answer["score"]) if answer and answer["score"] is not None else None
+            maximum = float(question.get("score_per_item") or 0.0)
+            for node in nodes or [None]:
+                evidence.append({
+                    "student_id": str(attempt["student_id"]), "attempt_id": str(attempt["id"]),
+                    "publication_id": practice_publication_id, "question_id": qid, "knowledge_node_id": node,
+                    "score": score * weight if score is not None and (released or include_unreleased) else None,
+                    "max_score": maximum * weight, "weight": weight,
+                    "is_correct": answer["is_correct"] if answer and (released or include_unreleased) else None,
+                    "submission_status": attempt["status"], "grading_status": grading,
+                    "is_released": released, "status": status, "incomparable_reason": reason,
+                })
+    return evidence

@@ -97,7 +97,10 @@ def _publish_personalized(
             ),
         )
         con.execute("INSERT INTO publication_classes (publication_id, class_id) VALUES (?, ?)", (publication_id, class_id))
+        from solaire.web.learning_progress.sources import freeze_question_bindings
+
         for assignment in assignments:
+            questions = freeze_question_bindings(project_root, assignment["questions"])
             con.execute(
                 """
                 INSERT INTO student_attempts
@@ -109,7 +112,7 @@ def _publish_personalized(
                     _new_id(),
                     publication_id,
                     assignment["student_id"],
-                    json.dumps(assignment["questions"], ensure_ascii=False),
+                    json.dumps(questions, ensure_ascii=False),
                     json.dumps(assignment["answer_keys"], ensure_ascii=False),
                     json.dumps(
                         {

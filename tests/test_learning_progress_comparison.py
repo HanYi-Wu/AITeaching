@@ -7,6 +7,7 @@ from pathlib import Path
 
 from solaire.web.learning_progress.comparison import get_practice_comparison
 from solaire.web.learning_progress.store import insert_frozen_baseline_items, record_practice_source
+from solaire.web.learning_progress.sources import compute_batch_snapshot_hash
 from solaire.web.platform_db import connect, init_platform_db
 
 
@@ -135,7 +136,7 @@ def test_comparison_source_regraded_baseline_frozen_marked_modified(tmp_path: Pa
         )
 
     # Notice source snapshot hash in DB does NOT match batch directory current hash (source was modified)
-    res = get_practice_comparison(root, project_root, practice_publication_id="pub-prac-1", student_id="stu-1")
+    res = get_practice_comparison(root, project_root, practice_publication_id="pub-prac-1", student_id="stu-1", include_unreleased=True)
     assert res["source_status"]["status"] == "source_modified"
     assert res["source_status"]["is_modified"] is True
 
@@ -199,6 +200,9 @@ def test_comparison_source_deleted_marked_missing(tmp_path: Path) -> None:
 
 def test_comparison_target_regrading_deduplication(tmp_path: Path) -> None:
     root, project_root = _setup_comparison_db(tmp_path)
+    batch = project_root / "exams" / "math" / "fractions" / "scores" / "b1"
+    batch.mkdir(parents=True)
+    (batch / "scores.csv").write_text("姓名,学号,1.1\nStudent 1,S001,1\n", encoding="utf-8")
 
     b_item = {
         "id": "fb-dedup",
@@ -215,7 +219,7 @@ def test_comparison_target_regrading_deduplication(tmp_path: Path) -> None:
         "raw_score": 1.0,
         "raw_max_score": 2.0,
         "rule_version": "v1_equal_split",
-        "source_snapshot_hash": "batch-v1:hash",
+        "source_snapshot_hash": compute_batch_snapshot_hash(project_root, "math/fractions", "b1"),
         "captured_at": "2026-10-26T10:00:00Z",
     }
     with connect(root) as con:
@@ -248,7 +252,7 @@ def test_comparison_target_regrading_deduplication(tmp_path: Path) -> None:
         )
 
     # Class comparison should have exactly 1 student, 1 node, and not double-counted
-    res = get_practice_comparison(root, None, practice_publication_id="pub-prac-1", class_id="cls-1")
+    res = get_practice_comparison(root, project_root, practice_publication_id="pub-prac-1", class_id="cls-1", include_unreleased=True)
     cls_comp = res["class_comparison"]
     assert len(cls_comp["node_summaries"]) == 1
     summary = cls_comp["node_summaries"][0]

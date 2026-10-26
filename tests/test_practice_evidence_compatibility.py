@@ -260,9 +260,14 @@ def test_unsubmitted_ungraded_and_unreleased_states_in_target_evidence(
     assert len(evidence3) == 1
     assert evidence3[0]["status"] == "target_unreleased"
 
-    # 4. Release publication results -> valid
+    # Publication display settings alone do not publish a teacher's draft grade.
     with connect(tmp_path) as con:
         con.execute("UPDATE exam_publications SET show_results_immediately = 1 WHERE id = ?", (pub_id,))
+    assert get_authoritative_target_evidence(tmp_path, tmp_path, practice_publication_id=pub_id)[0]["status"] == "target_unreleased"
+
+    # 4. Explicitly finish grading using the existing release marker.
+    with connect(tmp_path) as con:
+        con.execute("UPDATE student_attempts SET grading_completed_at = datetime('now') WHERE id = ?", (att_id,))
 
     evidence4 = get_authoritative_target_evidence(tmp_path, tmp_path, practice_publication_id=pub_id, student_id=ctx["student_id"])
     assert len(evidence4) == 1

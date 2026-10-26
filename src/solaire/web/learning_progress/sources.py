@@ -24,6 +24,7 @@ def compute_batch_snapshot_hash(project_root: Path, exam_id: str, batch_id: str)
     dir_path = workspace_dir(project_root, exam_id)
     assert_within_project(project_root, dir_path)
     scores_csv = dir_path / "scores" / batch_id / "scores.csv"
+    assert_within_project(dir_path / "scores", scores_csv)
     if not scores_csv.is_file():
         raise FileNotFoundError(f"Score batch file not found: {batch_id}")
     content = scores_csv.read_bytes()
@@ -72,7 +73,7 @@ def get_graph_question_node_bindings(project_root: Path) -> dict[str, list[str]]
     """Return mapping from question_qualified_id -> list of bound knowledge node_ids."""
     mapping: dict[str, list[str]] = {}
     try:
-        state = load_graph(project_root)
+        state = load_graph(_evidence_graph_root(project_root))
         for binding in state.bindings:
             qid = binding.question_qualified_id
             nid = binding.node_id
@@ -81,6 +82,37 @@ def get_graph_question_node_bindings(project_root: Path) -> dict[str, list[str]]
     except Exception:
         pass
     return mapping
+
+
+def question_node_ids(question: dict[str, Any], bindings: dict[str, list[str]]) -> list[str]:
+    """Prefer the publication snapshot; consult current bindings only for old records."""
+    if "knowledge_node_ids" in question:
+        return list(dict.fromkeys(str(node) for node in question["knowledge_node_ids"] if node))
+    embedded = question.get("knowledge_node_id") or question.get("node_id")
+    if embedded:
+        return [str(embedded)]
+    return list(dict.fromkeys(bindings.get(str(question.get("question_id")), [])))
+
+
+def freeze_question_bindings(project_root: Path | None, questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    bindings = get_graph_question_node_bindings(project_root) if project_root else {}
+    names = {}
+    if project_root:
+        graph = load_graph(_evidence_graph_root(project_root))
+        names = {node.id: node.canonical_name for node in graph.nodes}
+    frozen = []
+    for question in questions:
+        node_ids = question_node_ids(question, bindings)
+        frozen.append({**question, "knowledge_node_ids": node_ids,
+                       "knowledge_node_names": {node_id: names[node_id] for node_id in node_ids if node_id in names}})
+    return frozen
+
+
+def _evidence_graph_root(project_root: Path) -> Path:
+    from solaire.common.actor_context import actor
+    from solaire.web.actor_scope import teacher_graph_root
+
+    return teacher_graph_root(project_root, actor.get())
 
 
 def resolve_batch_student_scores(
@@ -110,6 +142,7 @@ def resolve_batch_student_scores(
     max_scores = {q.question_id: q.score_per_item for q in questions}
 
     scores_csv = dir_path / "scores" / batch_id / "scores.csv"
+    assert_within_project(dir_path / "scores", scores_csv)
     if not scores_csv.is_file():
         raise FileNotFoundError(f"Score batch not found: {batch_id}")
 

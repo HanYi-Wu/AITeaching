@@ -25,7 +25,7 @@ def calculate_knowledge_score_rate(items: list[dict[str, Any]]) -> dict[str, Any
 
     for item in items:
         status = item.get("status")
-        if status in {"missing_knowledge_node", "incomparable_identity", "target_unsubmitted", "target_ungraded"}:
+        if status in {"missing_knowledge_node", "incomparable_identity", "target_unsubmitted", "target_ungraded", "target_unreleased"}:
             excluded_items.append({"item": item, "reason": item.get("incomparable_reason") or status})
             continue
 
@@ -138,13 +138,7 @@ def calculate_student_comparison(
 
         # Check statuses in target
         target_statuses = {it.get("status") for it in t_list}
-        if is_source_missing:
-            comp_status = "source_missing"
-            reason = "来源考试已被删除或撤回，历史基线不可比"
-        elif not b_list or pre_agg["score_rate"] is None:
-            comp_status = "missing_baseline"
-            reason = "缺少首考基线数据"
-        elif "target_unsubmitted" in target_statuses:
+        if "target_unsubmitted" in target_statuses:
             comp_status = "target_unsubmitted"
             reason = "复练答卷尚未提交"
         elif "target_ungraded" in target_statuses:
@@ -153,6 +147,12 @@ def calculate_student_comparison(
         elif "target_unreleased" in target_statuses:
             comp_status = "target_unreleased"
             reason = "复练成绩尚未发布"
+        elif is_source_missing:
+            comp_status = "source_missing"
+            reason = "来源项目或考试无法核实，历史基线暂不可比"
+        elif not b_list or pre_agg["score_rate"] is None:
+            comp_status = "missing_baseline"
+            reason = "缺少首考基线数据"
         elif is_source_modified:
             comp_status = "source_modified"
             reason = "来源首考成绩已被教师复核修改（基线保持冻结原值）"
@@ -171,12 +171,12 @@ def calculate_student_comparison(
             "knowledge_node_id": nid,
             "status": comp_status,
             "is_modified": is_source_modified,
-            "pre_score": pre_agg["total_score"],
-            "pre_max_score": pre_agg["total_max_score"],
+            "pre_score": pre_agg["total_score"] if pre_agg["valid_count"] else None,
+            "pre_max_score": pre_agg["total_max_score"] if pre_agg["valid_count"] else None,
             "pre_rate": pre_agg["score_rate"],
             "pre_percentage": pre_agg["percentage"],
-            "post_score": post_agg["total_score"],
-            "post_max_score": post_agg["total_max_score"],
+            "post_score": post_agg["total_score"] if post_agg["valid_count"] else None,
+            "post_max_score": post_agg["total_max_score"] if post_agg["valid_count"] else None,
             "post_rate": post_agg["score_rate"],
             "post_percentage": post_agg["percentage"],
             "delta_percentage_points": delta_pp,
@@ -186,8 +186,11 @@ def calculate_student_comparison(
             "incomparable_reason": reason,
         })
 
+    statuses = {item["status"] for item in node_comparisons}
+    default_status = "source_missing" if is_source_missing else ("missing_baseline" if not node_comparisons else "valid")
+    overall_status = next((status for status in ("target_unsubmitted", "target_ungraded", "target_unreleased", "source_missing", "missing_baseline", "missing_target", "source_modified") if status in statuses), default_status)
     return {
-        "status": "source_missing" if is_source_missing else ("source_modified" if is_source_modified else "valid"),
+        "status": overall_status,
         "is_source_modified": is_source_modified,
         "is_source_missing": is_source_missing,
         "node_comparisons": node_comparisons,
@@ -241,13 +244,6 @@ def calculate_class_comparison(
             pre_agg = calculate_knowledge_score_rate(b_items)
             post_agg = calculate_knowledge_score_rate(t_items)
 
-            for it in b_items:
-                if it.get("source_question_id"):
-                    pre_all_questions.add(str(it["source_question_id"]))
-            for it in t_items:
-                if it.get("question_id"):
-                    post_all_questions.add(str(it["question_id"]))
-
             target_statuses = {it.get("status") for it in t_items}
 
             if is_source_missing:
@@ -276,6 +272,8 @@ def calculate_class_comparison(
 
             # Student is fully paired
             paired_students.append(sid)
+            pre_all_questions.update(str(it["source_question_id"]) for it in b_items if it.get("source_question_id"))
+            post_all_questions.update(str(it["question_id"]) for it in t_items if it.get("question_id"))
             pre_scores.append(pre_agg["total_score"])
             pre_max_scores.append(pre_agg["total_max_score"])
             post_scores.append(post_agg["total_score"])

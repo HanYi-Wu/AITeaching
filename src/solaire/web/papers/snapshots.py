@@ -104,7 +104,9 @@ def _load_exam_question_payloads(project_root: Path, exam_id: str) -> tuple[list
         preview = "、".join(unresolved[:3])
         suffix = " 等" if len(unresolved) > 3 else ""
         raise ValueError(f"题目内容未找到：{preview}{suffix}。请检查题库后重新发布试卷")
-    return questions, answer_keys
+    from solaire.web.learning_progress.sources import freeze_question_bindings
+
+    return freeze_question_bindings(project_root, questions), answer_keys
 
 
 def _is_placeholder_question(payload: dict[str, Any]) -> bool:

@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from solaire.web.learning_progress.store import insert_frozen_baseline_items, record_practice_source
+from solaire.web.learning_progress.sources import compute_batch_snapshot_hash
 from solaire.web.platform_db import connect, init_platform_db
 from solaire.web.routers.learning_progress import router as lp_router
 
@@ -25,6 +26,10 @@ def _setup_api_db(tmp_path: Path) -> Path:
     root = tmp_path / "platform_root"
     root.mkdir()
     init_platform_db(root)
+    batch = root / "exams" / "math" / "exam" / "scores" / "b1"
+    batch.mkdir(parents=True)
+    (batch / "scores.csv").write_text("姓名,学号,1.1\nStudent 1,S001,2\n", encoding="utf-8")
+    source_digest = compute_batch_snapshot_hash(root, "math/exam", "b1")
 
     with connect(root) as con:
         con.execute(
@@ -136,7 +141,7 @@ def _setup_api_db(tmp_path: Path) -> Path:
                         "raw_score": 2.0,
                         "raw_max_score": 4.0,
                         "rule_version": "v1_equal_split",
-                        "source_snapshot_hash": "batch-v1:hash",
+                        "source_snapshot_hash": source_digest,
                         "captured_at": "2026-10-26T10:00:00Z",
                     }
                 ],
@@ -157,6 +162,8 @@ def _setup_api_db(tmp_path: Path) -> Path:
                 """,
                 (f"ans-{pub_id}", att_id),
             )
+            if pub_id == "pub-released":
+                con.execute("UPDATE student_attempts SET grading_completed_at = '2026-10-26T12:00:00Z' WHERE id = ?", (att_id,))
 
     return root
 
@@ -164,7 +171,7 @@ def _setup_api_db(tmp_path: Path) -> Path:
 def test_teacher_authorized_and_unauthorized_access(tmp_path: Path, monkeypatch: Any) -> None:
     root = _setup_api_db(tmp_path)
     monkeypatch.setattr("solaire.web.routers.learning_progress.require_platform_root", lambda: root)
-    monkeypatch.setattr("solaire.web.routers.learning_progress._content_root", lambda: None)
+    monkeypatch.setattr("solaire.web.routers.learning_progress._content_root", lambda: root)
 
     # 1. Teacher 1 accesses their own publication -> 200 OK
     app = FastAPI()
@@ -197,7 +204,7 @@ def test_teacher_authorized_and_unauthorized_access(tmp_path: Path, monkeypatch:
 def test_student_self_access_and_rejection_of_others(tmp_path: Path, monkeypatch: Any) -> None:
     root = _setup_api_db(tmp_path)
     monkeypatch.setattr("solaire.web.routers.learning_progress.require_platform_root", lambda: root)
-    monkeypatch.setattr("solaire.web.routers.learning_progress._content_root", lambda: None)
+    monkeypatch.setattr("solaire.web.routers.learning_progress._content_root", lambda: root)
 
     app = FastAPI()
     current_user_holder = {"user": {"id": "u-stu-1", "role": "student", "school_id": "sch-1"}}
@@ -224,7 +231,7 @@ def test_student_self_access_and_rejection_of_others(tmp_path: Path, monkeypatch
 def test_student_unreleased_scores_are_not_leaked(tmp_path: Path, monkeypatch: Any) -> None:
     root = _setup_api_db(tmp_path)
     monkeypatch.setattr("solaire.web.routers.learning_progress.require_platform_root", lambda: root)
-    monkeypatch.setattr("solaire.web.routers.learning_progress._content_root", lambda: None)
+    monkeypatch.setattr("solaire.web.routers.learning_progress._content_root", lambda: root)
 
     app = FastAPI()
     current_user_holder = {"user": {"id": "u-stu-1", "role": "student", "school_id": "sch-1"}}

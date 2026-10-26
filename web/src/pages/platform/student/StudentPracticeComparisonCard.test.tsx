@@ -20,7 +20,7 @@ describe("StudentPracticeComparisonCard", () => {
   it("renders valid progress comparison with pre, post, and delta pp", async () => {
     const mockData: lpApi.StudentComparisonResponse = {
       practice_publication_id: "pub-prac",
-      student_id: "stu-1",
+      student_id: "stu-1", knowledge_names: { "math/geometry": "几何", "math/algebra": "代数", fast_node: "新知识点", slow_node: "旧知识点", "math/functions": "函数" },
       source_status: {
         status: "valid",
         source_type: "diagnostic_batch",
@@ -61,7 +61,7 @@ describe("StudentPracticeComparisonCard", () => {
     render(<StudentPracticeComparisonCard publicationId="pub-prac" />);
 
     await waitFor(() => {
-      expect(screen.getByText("math/geometry")).toBeInTheDocument();
+      expect(screen.getByText("几何")).toBeInTheDocument();
     });
 
     expect(screen.getByText("首考: 50.0%")).toBeInTheDocument();
@@ -72,7 +72,7 @@ describe("StudentPracticeComparisonCard", () => {
   it("displays distinct status for unsubmitted practice, never showing fake 0%", async () => {
     const mockData: lpApi.StudentComparisonResponse = {
       practice_publication_id: "pub-unsub",
-      student_id: "stu-1",
+      student_id: "stu-1", knowledge_names: { "math/geometry": "几何", "math/algebra": "代数", fast_node: "新知识点", slow_node: "旧知识点", "math/functions": "函数" },
       source_status: {
         status: "valid",
         source_type: "diagnostic_batch",
@@ -113,7 +113,7 @@ describe("StudentPracticeComparisonCard", () => {
     render(<StudentPracticeComparisonCard publicationId="pub-unsub" />);
 
     await waitFor(() => {
-      expect(screen.getByText("math/algebra")).toBeInTheDocument();
+      expect(screen.getByText("代数")).toBeInTheDocument();
     });
 
     expect(screen.getByText("首考: 50.0%")).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe("StudentPracticeComparisonCard", () => {
   it("displays distinct status for unreleased scores, protecting post numbers", async () => {
     const mockData: lpApi.StudentComparisonResponse = {
       practice_publication_id: "pub-unrel",
-      student_id: "stu-1",
+      student_id: "stu-1", knowledge_names: { "math/geometry": "几何", "math/algebra": "代数", fast_node: "新知识点", slow_node: "旧知识点", "math/functions": "函数" },
       source_status: {
         status: "valid",
         source_type: "diagnostic_batch",
@@ -168,7 +168,7 @@ describe("StudentPracticeComparisonCard", () => {
     render(<StudentPracticeComparisonCard publicationId="pub-unrel" />);
 
     await waitFor(() => {
-      expect(screen.getByText("math/algebra")).toBeInTheDocument();
+      expect(screen.getByText("代数")).toBeInTheDocument();
     });
 
     expect(screen.getByText("首考: 50.0%")).toBeInTheDocument();
@@ -180,7 +180,7 @@ describe("StudentPracticeComparisonCard", () => {
   it("displays missing baseline notice without forcing 0%", async () => {
     const mockData: lpApi.StudentComparisonResponse = {
       practice_publication_id: "pub-nobase",
-      student_id: "stu-1",
+      student_id: "stu-1", knowledge_names: { "math/geometry": "几何", "math/algebra": "代数", fast_node: "新知识点", slow_node: "旧知识点", "math/functions": "函数" },
       source_status: {
         status: "valid",
         source_type: "diagnostic_batch",
@@ -221,7 +221,7 @@ describe("StudentPracticeComparisonCard", () => {
     render(<StudentPracticeComparisonCard publicationId="pub-nobase" />);
 
     await waitFor(() => {
-      expect(screen.getByText("math/functions")).toBeInTheDocument();
+      expect(screen.getByText("函数")).toBeInTheDocument();
     });
 
     expect(screen.getByText("首考: 无基线")).toBeInTheDocument();
@@ -242,7 +242,7 @@ describe("StudentPracticeComparisonCard", () => {
 
     const fastData: lpApi.StudentComparisonResponse = {
       practice_publication_id: "pub-fast",
-      student_id: "stu-1",
+      student_id: "stu-1", knowledge_names: { "math/geometry": "几何", "math/algebra": "代数", fast_node: "新知识点", slow_node: "旧知识点", "math/functions": "函数" },
       source_status: {
         status: "valid",
         source_type: "exam_publication",
@@ -283,13 +283,13 @@ describe("StudentPracticeComparisonCard", () => {
     rerender(<StudentPracticeComparisonCard publicationId="pub-fast" />);
 
     await waitFor(() => {
-      expect(screen.getByText("fast_node")).toBeInTheDocument();
+      expect(screen.getByText("新知识点")).toBeInTheDocument();
     });
 
     await act(async () => {
       resolveSlow({
         practice_publication_id: "pub-slow",
-        student_id: "stu-1",
+        student_id: "stu-1", knowledge_names: { "math/geometry": "几何", "math/algebra": "代数", fast_node: "新知识点", slow_node: "旧知识点", "math/functions": "函数" },
         source_status: {
           status: "valid",
           source_type: "exam_publication",
@@ -326,7 +326,7 @@ describe("StudentPracticeComparisonCard", () => {
       });
     });
 
-    expect(screen.getByText("fast_node")).toBeInTheDocument();
-    expect(screen.queryByText("slow_node")).not.toBeInTheDocument();
+    expect(screen.getByText("新知识点")).toBeInTheDocument();
+    expect(screen.queryByText("旧知识点")).not.toBeInTheDocument();
   });
 });

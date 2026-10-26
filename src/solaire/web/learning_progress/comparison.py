@@ -31,30 +31,6 @@ def _class_student_ids(root: Path, class_id: str) -> set[str]:
     return {str(r["student_id"]) for r in rows}
 
 
-def _deduplicate_target_evidence(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Ensure student target answers are not accumulated repeatedly.
-
-    If multiple answer records exist for the same student, attempt, question and knowledge node,
-    keep the latest valid graded entry.
-    """
-    deduped: dict[tuple[str, str, str, str | None], dict[str, Any]] = {}
-    for item in items:
-        key = (
-            str(item.get("student_id")),
-            str(item.get("attempt_id")),
-            str(item.get("question_id")),
-            item.get("knowledge_node_id"),
-        )
-        existing = deduped.get(key)
-        if existing is None:
-            deduped[key] = item
-        else:
-            # Prefer graded over pending
-            if existing.get("grading_status") != "graded" and item.get("grading_status") == "graded":
-                deduped[key] = item
-    return list(deduped.values())
-
-
 def get_practice_comparison(
     root: Path,
     project_root: Path | None,
@@ -62,10 +38,12 @@ def get_practice_comparison(
     practice_publication_id: str,
     student_id: str | None = None,
     class_id: str | None = None,
+    allowed_student_ids: set[str] | None = None,
+    include_unreleased: bool = False,
 ) -> dict[str, Any]:
     """Compute on-demand authoritative comparison for a practice publication.
 
-    Reads frozen baselines and live target answers via authoritative G6 functions,
+    Reads frozen baselines and live target answers via authoritative storage readers,
     detects modified or deleted sources, and computes mastery comparison.
     """
     # 1. Authoritative source status
@@ -74,6 +52,7 @@ def get_practice_comparison(
         project_root,
         practice_publication_id=practice_publication_id,
         student_id=student_id,
+        allowed_student_ids=allowed_student_ids,
     )
 
     # 2. Frozen baseline
@@ -84,13 +63,17 @@ def get_practice_comparison(
     )
 
     # 3. Target evidence
-    target_raw_items = get_authoritative_target_evidence(
+    target_items = get_authoritative_target_evidence(
         root,
         project_root,
         practice_publication_id=practice_publication_id,
         student_id=student_id,
+        include_unreleased=include_unreleased,
     )
-    target_items = _deduplicate_target_evidence(target_raw_items)
+
+    if allowed_student_ids is not None:
+        baseline_items = [it for it in baseline_items if str(it.get("student_id")) in allowed_student_ids]
+        target_items = [it for it in target_items if str(it.get("student_id")) in allowed_student_ids]
 
     # 4. Optional class scope filtering
     if class_id:

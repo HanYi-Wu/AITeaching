@@ -34,9 +34,11 @@ export interface ClassNodeSummary {
   knowledge_node_id: string;
   status: string;
   is_modified: boolean;
-  matched_sample_size: number;
-  pre_class_percentage: number | null;
-  post_class_percentage: number | null;
+  matched_student_count: number;
+  unpaired_student_count: number;
+  unpaired_reasons: Record<string, number>;
+  pre_percentage: number | null;
+  post_percentage: number | null;
   delta_percentage_points: number | null;
   pre_question_count: number;
   post_question_count: number;
@@ -48,11 +50,13 @@ export interface ClassComparisonDetail {
   status: string;
   is_source_modified: boolean;
   is_source_missing: boolean;
-  matched_students: string[];
+  total_student_count: number;
   node_summaries: ClassNodeSummary[];
 }
 
 export interface TeacherComparisonResponse {
+  student_names?: Record<string, string>;
+  knowledge_names?: Record<string, string>;
   practice_publication_id: string;
   class_id?: string | null;
   source_status: {
@@ -68,6 +72,7 @@ export interface TeacherComparisonResponse {
 }
 
 export interface StudentComparisonResponse {
+  knowledge_names?: Record<string, string>;
   practice_publication_id: string;
   student_id: string;
   source_status: {
@@ -79,6 +84,19 @@ export interface StudentComparisonResponse {
     reason: string | null;
   };
   comparison: StudentComparisonDetail;
+}
+
+export interface PracticePublicationChoice {
+  id: string;
+  title: string;
+  created_at: string;
+}
+
+export function fetchPracticePublications(sourceExamId?: string, sourceBatchId?: string) {
+  const query = new URLSearchParams();
+  if (sourceExamId) query.set("source_exam_id", sourceExamId);
+  if (sourceBatchId) query.set("source_batch_id", sourceBatchId);
+  return apiGet<{ publications: PracticePublicationChoice[] }>(`/api/learning-progress/teacher/publications?${query}`);
 }
 
 export async function fetchTeacherLearningProgressComparison(params: {
