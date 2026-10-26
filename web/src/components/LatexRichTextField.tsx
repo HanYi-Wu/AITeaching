@@ -9,14 +9,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { MathfieldElement } from "mathlive";
-import "mathlive";
-import "mathlive/fonts.css";
+import {
+  createMathLiveBridge,
+  type MathLiveBridgeInstance,
+} from "./latexField/mathLiveBridge";
 import { Shapes, Table2 } from "lucide-react";
 
 import { resourceApiUrl } from "../api/client";
 import { tokenizeContent, type ContentToken } from "../lib/contentTokenizer";
-import { canonicalizeLatex } from "../lib/latexCanon";
 import { renderMathToHtmlSimple } from "../lib/katexRender";
 import { lintMathContent, type MathLintResult } from "../lib/mathLint";
 import { initMermaid } from "../lib/mermaidInit";
@@ -509,7 +509,7 @@ export function LatexRichTextField({
   const [mathPopup, setMathPopup] = useState<MathPopupState>(null);
   const [mathPopupPos, setMathPopupPos] = useState({ top: 0, left: 0 });
   const mathPopupHostRef = useRef<HTMLDivElement>(null);
-  const mfRef = useRef<MathfieldElement | null>(null);
+  const mathBridgeRef = useRef<MathLiveBridgeInstance | null>(null);
   const mathPopupStateRef = useRef<MathPopupState>(null);
   mathPopupStateRef.current = mathPopup;
 
@@ -638,9 +638,8 @@ export function LatexRichTextField({
   const closeMathPopup = useCallback((confirm: boolean) => {
     const popup = mathPopupStateRef.current;
     if (!popup) return;
-    if (confirm && mfRef.current) {
-      const rawLatex = mfRef.current.getValue("latex").trim();
-      const latex = canonicalizeLatex(rawLatex);
+    if (confirm && mathBridgeRef.current) {
+      const latex = mathBridgeRef.current.getCanonicalLatex();
       const isDisplay = popup.widget.classList.contains(DISPLAY_MATH_WIDGET_CLASS);
       if (latex) {
         popup.widget.dataset.latex = latex;
@@ -652,7 +651,8 @@ export function LatexRichTextField({
       popup.widget.remove();
     }
     setMathPopup(null);
-    mfRef.current = null;
+    mathBridgeRef.current?.destroy();
+    mathBridgeRef.current = null;
     const root = editorRef.current;
     if (root) {
       const next = serializeEditor(root);
@@ -665,26 +665,16 @@ export function LatexRichTextField({
   useEffect(() => {
     if (!mathPopup || !mathPopupHostRef.current) return;
     const host = mathPopupHostRef.current;
-    const mf = new MathfieldElement();
-    mf.className =
-      "w-full min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-base text-slate-900 outline-none focus:ring-2 focus:ring-blue-400";
-    host.innerHTML = "";
-    host.appendChild(mf);
-    mfRef.current = mf;
-    requestAnimationFrame(() => {
-      if (mathPopup.latex) mf.setValue(mathPopup.latex);
-      mf.focus();
+    const bridge = createMathLiveBridge({
+      host,
+      initialLatex: mathPopup.latex,
+      onConfirm: () => closeMathPopup(true),
+      onCancel: () => closeMathPopup(false),
     });
-    const handleMfKey = (e: globalThis.KeyboardEvent) => {
-      if (isImeComposingKeyboardEvent(e)) return;
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); closeMathPopup(true); }
-      if (e.key === "Escape") { e.preventDefault(); closeMathPopup(false); }
-    };
-    mf.addEventListener("keydown", handleMfKey);
+    mathBridgeRef.current = bridge;
     return () => {
-      mf.removeEventListener("keydown", handleMfKey);
-      mfRef.current = null;
-      host.innerHTML = "";
+      bridge.destroy();
+      mathBridgeRef.current = null;
     };
   }, [mathPopup, closeMathPopup]);
 
