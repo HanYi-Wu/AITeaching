@@ -23,6 +23,19 @@ from solaire.agent_layer.tools import analysis_tools
 ToolHandler = Callable[[InvocationContext, dict[str, Any]], ToolResult]
 
 
+def compose_tool_catalog(groups, order):
+    """Reject duplicate or unlisted schemas before indexing erases their origin."""
+    by_name = {}
+    for group in groups:
+        for tool in group:
+            if tool.name in by_name:
+                raise ValueError(f"Duplicate tool schema: {tool.name}")
+            by_name[tool.name] = tool
+    if len(order) != len(set(order)) or set(by_name) != set(order):
+        raise ValueError("Tool schema catalog and selection order do not match.")
+    return [by_name[name] for name in order]
+
+
 
 _S = {"type": "string"}
 

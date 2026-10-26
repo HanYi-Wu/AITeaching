@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from solaire.agent_layer.models import SessionState
+from solaire.common.atomic_files import write_text_atomic
 
 
 def sessions_dir(project_root: Path) -> Path:
@@ -47,7 +48,7 @@ def load_session(project_root: Path, session_id: str) -> SessionState | None:
 
 def save_session(project_root: Path, session: SessionState) -> None:
     p = session_path(project_root, session.session_id)
-    p.write_text(session.model_dump_json(indent=2), encoding="utf-8")
+    write_text_atomic(p, session.model_dump_json(indent=2))
 
 
 def create_session(project_root: Path, *, owner_user_id: str | None = None) -> SessionState:

@@ -420,8 +420,16 @@ def invoke_registered_tool(name: str, args: dict[str, Any], ctx: InvocationConte
     from solaire.common.actor_context import actor
     token = actor.set(ctx.platform_user)
     try:
+        from solaire.agent_layer.task_tracker import verify_authoritative_actor_and_policy
+        from solaire.agent_layer.failure_recovery import is_tool_ai_powered
+        verify_authoritative_actor_and_policy(
+            ctx.platform_root or ctx.project_root, ctx.platform_user,
+            is_ai_call=is_tool_ai_powered(name),
+        )
         return rt.handler(ctx, args)
     except PermissionError as exc:
         return ToolResult(status="failed", error_code="permission_denied", error_message=str(exc))
+    except OSError as exc:
+        return ToolResult(status="failed", error_code="io_error", error_message=str(exc))
     finally:
         actor.reset(token)

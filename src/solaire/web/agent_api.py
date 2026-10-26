@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from solaire.web.auth_api import require_platform_root
+
 import asyncio
 import re
 import time
@@ -531,6 +533,7 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
             not is_public or bool(getattr(request.state, "host_control_authorized", False))
         ),
         "_platform_user": platform_user,
+        "_platform_root": require_platform_root(),
     }
     if body.page_context is not None:
         ctx = {**ctx, "page_context": body.page_context.model_dump(exclude_none=True)}

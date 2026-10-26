@@ -48,7 +48,7 @@ def test_agent_task_projection_lifecycle(tmp_path: Path) -> None:
     # 1. Start turn
     rec = adapter.on_turn_start(attempt=1)
     assert rec.status == "running"
-    assert rec.progress == 0.05
+    assert rec.progress is None
     assert rec.stage == "turn_started"
     assert rec.task_id == f"agent:{session_id}:turn_{turn_id}"
     assert rec.event_version == 1
@@ -56,7 +56,7 @@ def test_agent_task_projection_lifecycle(tmp_path: Path) -> None:
     # 2. Thinking
     rec = adapter.on_event("thinking", {"thought": "analyzing user question..."})
     assert rec.status == "running"
-    assert rec.progress == 0.15
+    assert rec.progress is None
     assert rec.stage == "reasoning"
     assert rec.event_version == 2
 
@@ -79,8 +79,7 @@ def test_agent_task_projection_lifecycle(tmp_path: Path) -> None:
     ]
     rec = adapter.on_event("task_update", {"steps": steps})
     assert rec.status == "running"
-    # progress should be 0.20 + 0.75 * (1/3) = 0.45
-    assert rec.progress == pytest.approx(0.45, abs=0.01)
+    assert rec.progress == pytest.approx(1 / 3, abs=0.001)
     assert "生成变式题" in rec.stage
     assert rec.result_summary["completed_steps"] == 1
     assert rec.result_summary["total_steps"] == 3

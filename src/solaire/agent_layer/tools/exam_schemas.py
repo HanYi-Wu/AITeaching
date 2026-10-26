@@ -1,458 +1,229 @@
 from __future__ import annotations
 
-
-
 from solaire.agent_layer.models import ToolRisk
-
 from solaire.agent_layer.tools import exam_tools, teacher_tools
-
 from solaire.agent_layer.tools.schema_builder import RegisteredTool, _S, _fn, _teacher_schema
 
-
-
 EXAM_TOOLS: list[RegisteredTool] = [
-
     _fn(
-
             "exam.list_templates",
-
             "列出内容目录中的试卷模板（路径、小节与版式信息）。",
-
             {"type": "object", "properties": {}, "additionalProperties": False},
-
             exam_tools.tool_list_templates,
-
             risk=ToolRisk.READ,
-
             ui_label="正在读取试卷模板…",
-
         ),
-
     _fn(
-
             "exam.get_template_preview",
-
             "读取指定模板 YAML 的结构化预览。",
-
             {
-
                 "type": "object",
-
                 "properties": {"template_path": {"type": "string"}},
-
                 "required": ["template_path"],
-
                 "additionalProperties": False,
-
             },
-
             exam_tools.tool_template_preview,
-
             risk=ToolRisk.READ,
-
             ui_label="正在预览模板结构…",
-
         ),
-
     _fn(
-
             "exam.validate_paper",
-
             "校验当前选题与试卷模板是否匹配（卷面结构、题目是否存在等），并写入临时校验用配置。"
-
             "默认不做试卷版式编译；将 include_latex_check 设为 true 时，会额外试跑与导出相同的版式编译以提前发现版式错误。"
-
             "返回中的 math_warnings 为题干内数学公式定界符等静态提示，不能替代完整导出。",
-
             {
-
                 "type": "object",
-
                 "properties": {
-
                     "template_ref": {"type": "string"},
-
                     "template_path": {"type": "string"},
-
                     "include_latex_check": {
-
                         "type": "boolean",
-
                         "description": "为 true 时试跑版式编译（较慢，需本机已安装 latexmk）",
-
                     },
-
                     "include_math_static": {
-
                         "type": "boolean",
-
                         "description": "为 false 时跳过题干内数学公式定界符静态检查（默认 true）",
-
                     },
-
                     "selected_items": {
-
                         "type": "array",
-
                         "items": {
-
                             "type": "object",
-
                             "properties": {
-
                                 "section_id": {"type": "string"},
-
                                 "question_ids": {"type": "array", "items": {"type": "string"}},
-
                             },
-
                             "required": ["section_id", "question_ids"],
-
                         },
-
                     },
-
                 },
-
                 "required": ["template_ref", "template_path", "selected_items"],
-
                 "additionalProperties": False,
-
             },
-
             exam_tools.tool_validate_paper,
-
             ui_label="正在校验组卷…",
-
         ),
-
     _fn(
-
             "exam.export_paper",
-
             "校验通过后导出学生版与教师版 PDF（高影响操作，需确认）。",
-
             {
-
                 "type": "object",
-
                 "properties": {
-
                     "template_ref": {"type": "string"},
-
                     "template_path": {"type": "string"},
-
                     "selected_items": {
-
                         "type": "array",
-
                         "items": {
-
                             "type": "object",
-
                             "properties": {
-
                                 "section_id": {"type": "string"},
-
                                 "question_ids": {"type": "array", "items": {"type": "string"}},
-
                             },
-
                             "required": ["section_id", "question_ids"],
-
                         },
-
                     },
-
                     "export_label": {"type": "string"},
-
                     "subject": {"type": "string"},
-
                     "metadata_title": {"type": "string"},
-
                     "allow_replace_conflicting_export": {
-
                         "type": "boolean",
-
                         "description": "当已有其他目录占用相同试卷说明与学科时，是否仍允许导出（请谨慎）",
-
                     },
-
                 },
-
                 "required": ["template_ref", "template_path", "selected_items", "export_label", "subject"],
-
                 "additionalProperties": False,
-
             },
-
             exam_tools.tool_export_paper,
-
             risk=ToolRisk.DESTRUCTIVE,
-
             ui_label="正在准备导出试卷…",
-
             vivace_fast_review=True,
-
         ),
-
     _fn(
-
             "exam.publish_online_paper",
-
             "发布已生成的试卷到指定班级，可选择线上答题、图片人工批改或图片 OCR+AI 批改提交方式。",
-
             {
-
                 "type": "object",
-
                 "properties": {
-
                     "paper_id": {"type": "string"},
-
                     "paper_title": {"type": "string", "description": "试卷标题或标题中的关键词；当用户没有给出 paper_id 时使用。"},
-
                     "exam_id": {"type": "string", "description": "考试目录标识，例如 midterm/Math；当用户按考试名称发布时使用。"},
-
                     "class_ids": {"type": "array", "items": {"type": "string"}},
-
                     "student_ids": {"type": "array", "items": {"type": "string"}, "description": "指定学生 ID；必须与所选唯一班级对应，发布前逐人确认。"},
-
                     "student_names": {"type": "array", "items": {"type": "string"}, "description": "学生姓名或学号；名称歧义时工具会要求选择。"},
-
                     "folder_id": {"type": "string", "description": "必选试卷归类文件夹 ID；指定学生时须是试卷文件夹。"},
-
                     "folder_name": {"type": "string", "description": "文件夹名称；名称歧义时须先查询 content.folders 并使用 ID。"},
-
                     "class_names": {
-
                         "type": "array",
-
                         "items": {"type": "string"},
-
                         "description": "班级名称或名称关键词；当用户没有给出 class_ids 时使用。",
-
                     },
-
                     "title": {"type": "string"},
-
                     "subject": {"type": "string", "description": "教师设置多个学科时必填，必须选择本次发布所属学科。"},
-
                     "description": {"type": "string"},
-
                     "start_at": {"type": "string"},
-
                     "end_at": {"type": "string"},
-
                     "time_limit_minutes": {"type": "integer", "minimum": 0, "maximum": 1440},
-
                     "submission_mode": {
-
                         "type": "string",
-
                         "enum": ["online", "image_manual", "image_ai"],
-
                         "description": "online 为网页答题，image_manual 为图片提交人工批改，image_ai 为图片提交后 AI 建议批改并由教师审核。",
-
                     },
-
                     "max_screen_switches": {"type": "integer", "minimum": 0, "maximum": 999},
-
                     "show_results_immediately": {"type": "boolean"},
-
                 },
-
                 "additionalProperties": False,
-
             },
-
             exam_tools.tool_publish_online_paper,
-
             ui_label="正在发布线上试卷...",
-
             action_label="发布线上试卷",
-
             requires_confirmation_override=True,
-
         ),
-
     _fn("exam.workspace_list", "列出组卷工作区草稿。", _teacher_schema(), teacher_tools.tool_exam_workspace_list, risk=ToolRisk.READ),
-
     _fn("exam.workspace_get", "读取一份组卷工作区草稿。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_get, risk=ToolRisk.READ),
-
     _fn("exam.workspace_save", "创建或更新组卷工作区草稿。selected_items 每小节可设置 required_count、score_per_item 和 score_overrides，模板题量只是默认值。", _teacher_schema({"exam_id": _S, "name": _S, "subject": _S, "export_label": _S, "template_ref": _S, "template_path": _S, "selected_items": {"type": "array", "items": {"type": "object"}}}, ["subject", "export_label", "template_path", "selected_items"]), teacher_tools.tool_exam_workspace_save),
-
     _fn("exam.workspace_delete", "删除试卷/组卷草稿文件（移至回收站），必须先 workspace_list 核对 exam_id，再由用户确认。已有发布记录不能删除源卷，改用 paper.update_publication 撤销发布。", _teacher_schema({"exam_id": _S}, ["exam_id"]), teacher_tools.tool_exam_workspace_delete, risk=ToolRisk.DESTRUCTIVE, requires_confirmation_override=True),
-
     _fn("exam.workspace_copy", "从现有试卷复制一份新的组卷工作区。", _teacher_schema({"source_exam_id": _S, "export_label": _S}, ["source_exam_id", "export_label"]), teacher_tools.tool_exam_workspace_copy),
-
     _fn("template.list", "列出当前项目中的试卷模板文件。", _teacher_schema(), teacher_tools.tool_template_list, risk=ToolRisk.READ),
-
     _fn("template.get", "读取一个试卷模板文件。", _teacher_schema({"path": _S}, ["path"]), teacher_tools.tool_template_get, risk=ToolRisk.READ),
-
     _fn("template.create", "创建试卷模板文件。", _teacher_schema({"path": _S, "content": _S}, ["path", "content"]), teacher_tools.tool_template_create),
-
     _fn("template.update", "更新试卷模板文件。", _teacher_schema({"path": _S, "content": _S}, ["path", "content"]), teacher_tools.tool_template_update),
-
     _fn("template.rename", "重命名试卷模板文件。", _teacher_schema({"path": _S, "new_path": _S}, ["path", "new_path"]), teacher_tools.tool_template_rename),
-
     _fn("template.delete", "删除试卷模板文件。", _teacher_schema({"path": _S}, ["path"]), teacher_tools.tool_template_delete, risk=ToolRisk.DESTRUCTIVE),
-
     _fn("paper.list", "按关键字、学科、状态和交付模式查询当前教师的试卷。", _teacher_schema({"q": _S, "delivery_mode": _S, "status": _S, "subject": _S, "page": {"type": "integer"}, "page_size": {"type": "integer"}}), teacher_tools.tool_paper_list, risk=ToolRisk.READ),
-
     _fn("paper.analyze", "按发布批次和班级分析试卷，默认最近一次有效发布；可传 publication_id 查询历史批次、class_id 查询指定班级。需要批改答卷标识时调用 paper.find_submissions。", _teacher_schema({"paper_id": _S, "publication_id": _S, "class_id": _S}, ["paper_id"]), teacher_tools.tool_paper_analyze, risk=ToolRisk.READ),
-
     _fn("paper.publications", "列出试卷的发布记录。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_publications, risk=ToolRisk.READ),
-
     _fn("paper.folder_analyze", "按实际接收学生分析试卷文件夹，不将个人练习混入班级成绩。", _teacher_schema({"folder_id": _S}, ["folder_id"]), teacher_tools.tool_paper_folder_analyze, risk=ToolRisk.READ),
-
     _fn(
-
                 "paper.practice_history",
-
                 "查询班级可用于历史错题卷和专项巩固卷的发布记录与三卷资格。",
-
                 _teacher_schema({"class_id": _S}, ["class_id"]),
-
                 teacher_tools.tool_paper_practice_history,
-
                 risk=ToolRisk.READ,
-
             ),
-
     _fn(
-
                 "paper.publish_wrong_question_practice",
-
                 "按每位学生在一条历史发布中的错题，发布个性化历史错题卷。",
-
                 _teacher_schema(
-
                     {
-
                         "class_id": _S,
-
                         "source_publication_id": _S,
-
                         "title": _S,
-
                         "max_questions_per_student": {"type": "integer", "minimum": 1, "maximum": 100},
-
                         "start_at": _S,
-
                         "end_at": _S,
-
                         "show_results_immediately": {"type": "boolean"},
-
                         "submission_mode": _S,
-
                         "max_screen_switches": {"type": "integer", "minimum": 0, "maximum": 999},
-
                         "time_limit_minutes": {"type": "integer", "minimum": 0, "maximum": 1440},
-
                     },
-
                     ["class_id", "source_publication_id", "title"],
-
                 ),
-
                 teacher_tools.tool_paper_publish_wrong_question_practice,
-
             ),
-
     _fn(
-
                 "paper.publish_reinforcement_practice",
-
                 "根据同一班级至少三条历史发布中每位学生的错题或全对题目，调用 AI 生成并发布举一反三专项巩固卷。",
-
                 _teacher_schema(
-
                     {
-
                         "class_id": _S,
-
                         "source_publication_ids": {"type": "array", "items": _S, "minItems": 3},
-
                         "title": _S,
-
                         "questions_per_student": {"type": "integer", "minimum": 1, "maximum": 20},
-
                         "start_at": _S,
-
                         "end_at": _S,
-
                         "show_results_immediately": {"type": "boolean"},
-
                         "submission_mode": _S,
-
                         "max_screen_switches": {"type": "integer", "minimum": 0, "maximum": 999},
-
                         "time_limit_minutes": {"type": "integer", "minimum": 0, "maximum": 1440},
-
                     },
-
                     ["class_id", "source_publication_ids", "title"],
-
                 ),
-
                 teacher_tools.tool_paper_publish_reinforcement_practice,
-
             ),
-
     _fn(
-
                 "paper.find_submissions",
-
                 "按学生、提交状态或批改状态定位答卷。返回的 attempt_id 是后续 AI/人工批改唯一可用的答卷标识；publication_id 只是发布记录标识，绝不能当作 attempt_id。",
-
                 _teacher_schema(
-
                     {
-
                         "paper_id": _S,
-
                         "student_query": _S,
-
                         "status": _S,
-
                         "grading_status": _S,
-
                         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-
                     },
-
                     ["paper_id"],
-
                 ),
-
                 teacher_tools.tool_paper_find_submissions,
-
                 risk=ToolRisk.READ,
-
             ),
-
     _fn(
-
                 "paper.offline_upload_guide",
-
                 "说明如何下载并使用线下答卷采集器、支持格式和上传限制。",
-
                 _teacher_schema({}, []),
-
                 teacher_tools.tool_paper_offline_upload_guide,
-
                 risk=ToolRisk.READ,
-
             ),
-
     _fn("paper.submissions", "列出试卷答卷及答案。", _teacher_schema({"paper_id": _S}, ["paper_id"]), teacher_tools.tool_paper_submissions, risk=ToolRisk.READ),
-
     _fn("paper.update_delivery", "修改试卷的线上或线下交付模式。", _teacher_schema({"paper_id": _S, "delivery_mode": _S}, ["paper_id", "delivery_mode"]), teacher_tools.tool_paper_update_delivery),
-
     _fn("paper.update_publication", "修改考试发布的标题、时间、时长、结果展示和状态。", _teacher_schema({"paper_id": _S, "publication_id": _S, "title": _S, "description": _S, "start_at": _S, "end_at": _S, "time_limit_minutes": {"type": "integer"}, "show_results_immediately": {"type": "boolean"}, "status": _S}, ["paper_id", "publication_id"]), teacher_tools.tool_paper_update_publication),
-
     _fn("paper.revoke_publication", "撤销考试发布。", _teacher_schema({"paper_id": _S, "publication_id": _S}, ["paper_id", "publication_id"]), teacher_tools.tool_paper_revoke_publication, risk=ToolRisk.DESTRUCTIVE),
-
 ]
-

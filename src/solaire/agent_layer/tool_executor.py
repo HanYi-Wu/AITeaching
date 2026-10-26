@@ -188,6 +188,7 @@ async def _post_tool_events(
     append_audit(project_root, session_id=session_id, tool_name=name, status=status, detail=detail)
     event_payload = {
         "tool_name": name,
+        "tool_call_id": tid,
         "status": status,
         "summary": summarize_tool_result(name, payload),
     }
@@ -258,7 +259,7 @@ async def _execute_single_tool(
     # --- Stage 1.5: Authoritative user & school AI verification ---
     is_ai = is_tool_ai_powered(name)
     try:
-        verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=is_ai)
+        verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=is_ai)
     except Exception as err:
         err_msg = str(err)
         err_code = "school_ai_disabled" if ("School AI" in err_msg or "AI API" in err_msg) else "user_inactive"
@@ -281,7 +282,7 @@ async def _execute_single_tool(
 
     # --- Stage 2: Emit start ---
     await emit("thinking", {"message": thinking_label_for_tool(name)})
-    await emit("tool_start", {"tool_name": name, "arguments": args})
+    await emit("tool_start", {"tool_name": name, "tool_call_id": tid, "arguments": args})
 
     # --- Stage 3: Subagent ---
     if name == SUBTASK_TOOL_NAME:
@@ -361,6 +362,12 @@ async def _execute_single_tool(
                 continue
             break
     else:
+        result_index = len(session.draft_tool_results)
+        session.draft_tool_results.append(_build_tool_result_dict(tid, name, {
+            "error_code": "write_interrupted_requires_verification", "needs_verification": True,
+            "error": "操作已开始，若未收到结果请核对数据，不能自动重放。",
+        }))
+        save_session(project_root, session)
         tr = invoke_registered_tool(name, args, ctx)
 
     if tr.status == "succeeded":
@@ -372,7 +379,11 @@ async def _execute_single_tool(
             payload = {**tr.data, "error": tr.error_message, "error_code": tr.error_code}
 
     result = _build_tool_result_dict(tid, name, payload)
-    session.draft_tool_results.append(result)
+    if tool_risk == ToolRisk.READ:
+        session.draft_tool_results.append(result)
+    else:
+        session.draft_tool_results[result_index] = result
+        save_session(project_root, session)
     await _post_tool_events(
         emit=emit, project_root=project_root, session_id=sid,
         name=name, tid=tid, status=tr.status, payload=payload, ctx=ctx,
@@ -409,7 +420,7 @@ async def run_draft_tool_loop(
         read_batch = consecutive_read_tool_indices(tcs, k, ctx, safety_mode)
         if len(read_batch) >= 2:
             try:
-                verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=False)
+                verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=False)
             except Exception as err:
                 err_msg = str(err)
                 await emit("error", {"code": "user_inactive", "message": f"权限复核未通过: {err_msg}"})
@@ -443,7 +454,7 @@ async def run_draft_tool_loop(
                 name0 = fn0.get("name") or ""
                 args0, _ = _parse_args(fn0.get("arguments"))
                 await emit("thinking", {"message": thinking_label_for_tool(name0)})
-                await emit("tool_start", {"tool_name": name0, "arguments": args0})
+                await emit("tool_start", {"tool_name": name0, "tool_call_id": tc0.get("id") or f"call-{idx}", "arguments": args0})
 
             parts = await asyncio.gather(*[_invoke_read(i) for i in read_batch])
             for _i, name, tid, tr in sorted(parts, key=lambda x: x[0]):
@@ -461,7 +472,7 @@ async def run_draft_tool_loop(
         subtask_batch = consecutive_subtask_tool_indices(tcs, k, ctx, safety_mode)
         if len(subtask_batch) >= 2:
             try:
-                verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=True)
+                verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=True)
             except Exception as err:
                 err_msg = str(err)
                 err_code = "school_ai_disabled" if ("School AI" in err_msg or "AI API" in err_msg) else "user_inactive"
@@ -477,7 +488,7 @@ async def run_draft_tool_loop(
                 name0 = fn0.get("name") or ""
                 args0, _ = _parse_args(fn0.get("arguments"))
                 await emit("thinking", {"message": thinking_label_for_tool(name0)})
-                await emit("tool_start", {"tool_name": name0, "arguments": args0})
+                await emit("tool_start", {"tool_name": name0, "tool_call_id": tc0.get("id") or f"call-{idx}", "arguments": args0})
 
             async def _run_subtask_one(i: int) -> tuple[int, str, str]:
                 tc_i = tcs[i]

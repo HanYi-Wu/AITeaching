@@ -186,23 +186,26 @@ describe("AgentChatPanel", () => {
     });
 
     // Emit tool_start
-    streamCallback!("tool_start", { tool_name: "bank.search", label: "检索题库" });
+    streamCallback!("tool_start", { tool_name: "bank.search", tool_call_id: "call-one", label: "检索题库" });
     expect(await screen.findByText("检索题库")).toBeInTheDocument();
 
     // Emit tool_result
     streamCallback!("tool_result", {
-      tool_name: "bank.search",
+      tool_name: "bank.search", tool_call_id: "call-one",
       summary: "找到 3 道匹配题目",
     });
     expect(await screen.findByText("找到 3 道匹配题目")).toBeInTheDocument();
 
     // Emit duplicate tool_result for same tool
     streamCallback!("tool_result", {
-      tool_name: "bank.search",
+      tool_name: "bank.search", tool_call_id: "call-one",
       summary: "找到 3 道匹配题目",
     });
 
     const toolCards = screen.getAllByText("找到 3 道匹配题目");
     expect(toolCards).toHaveLength(1);
+    streamCallback!("tool_start", { tool_name: "bank.search", tool_call_id: "call-two", label: "检索题库" });
+    streamCallback!("tool_result", { tool_name: "bank.search", tool_call_id: "call-two", summary: "找到 3 道匹配题目" });
+    await waitFor(() => expect(screen.getAllByText("找到 3 道匹配题目")).toHaveLength(2));
   });
 });

@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import suppress
+from contextlib import suppress, aclosing
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +102,7 @@ class StreamDispatcher:
             yield format_sse_event(ev, data)
 
 
-async def dispatch_agent_turn_sse(
+async def _dispatch_agent_turn_sse(
     project_root: Path,
     session: SessionState,
     run_turn_fn: Callable[..., Awaitable[None]],
@@ -112,6 +113,22 @@ async def dispatch_agent_turn_sse(
     from solaire.agent_layer.session import save_session
 
     dispatcher = StreamDispatcher(heartbeat_seconds=heartbeat_seconds)
+    from solaire.agent_layer.task_projection_adapter import attach_agent_task_projection
+    from solaire.web.task_tracking.live_tasks import mark_live, mark_finished
+    from solaire.web.task_tracking.contract import get_task_projection
+    from solaire.web.task_tracking.models import normalize_owner
+
+    owner = (kwargs.get("project_ctx") or {}).get("_platform_user")
+    if not kwargs.get("confirm_action_id") or not session.active_task_turn_id:
+        session.active_task_turn_id = uuid.uuid4().hex
+    adapter = attach_agent_task_projection(dispatcher, project_root, owner, session.session_id,
+                                            turn_id=session.active_task_turn_id)
+    mark_live(project_root, adapter.task_id)
+    try:
+        adapter.on_turn_start()
+    except Exception:
+        logger.exception("Unable to start Agent task projection")
+    save_session(project_root, session)
 
     async def runner() -> None:
         try:
@@ -122,6 +139,7 @@ async def dispatch_agent_turn_sse(
             if session is not None:
                 session.draft_assistant = None
                 session.draft_tool_results = []
+                session.pending_confirmations.clear()
                 with suppress(Exception):
                     save_session(project_root, session)
             raise
@@ -130,6 +148,11 @@ async def dispatch_agent_turn_sse(
             await dispatcher.emit("error", {"code": "internal", "message": str(e)})
             await dispatcher.emit("done", {"usage": {}})
         finally:
+            mark_finished(project_root, adapter.task_id)
+            current = get_task_projection(project_root, adapter.task_id, normalize_owner(owner))
+            if current and current.status in {"succeeded", "failed", "cancelled"}:
+                session.active_task_turn_id = None
+                save_session(project_root, session)
             await dispatcher.close()
 
     task = asyncio.create_task(runner())
@@ -138,8 +161,32 @@ async def dispatch_agent_turn_sse(
             yield chunk
         await task
     finally:
-        dispatcher.notify_disconnect()
         if not task.done():
+            dispatcher.notify_disconnect()
             task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
+
+async def dispatch_agent_turn_sse(project_root, session, run_turn_fn, heartbeat_seconds=SSE_HEARTBEAT_SECONDS, **kwargs):
+    """Serialize a session and reload persisted confirmations before consuming them."""
+    from solaire.web.export_lock import FileLease, ExportBusyError
+    from solaire.agent_layer.session import load_session
+    lease = FileLease(project_root / ".solaire" / "agent" / "turn-locks" / f"{session.session_id}.lock")
+    try:
+        lease.__enter__()
+    except ExportBusyError:
+        yield format_sse_event("error", {"code": "session_busy", "message": "当前会话仍在处理，请稍后重试。"})
+        yield format_sse_event("done", {"usage": {}})
+        return
+    try:
+        if kwargs.get("confirm_action_id"):
+            latest = load_session(project_root, session.session_id)
+            if latest is not None:
+                session = latest
+        async with aclosing(_dispatch_agent_turn_sse(project_root, session, run_turn_fn,
+                                                    heartbeat_seconds, **kwargs)) as stream:
+            async for chunk in stream:
+                yield chunk
+    finally:
+        lease.close()

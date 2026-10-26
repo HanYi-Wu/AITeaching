@@ -73,6 +73,7 @@ class SessionState(BaseModel):
     execution_plan_path: str | None = None
     # 最近一次助手 `plan_ready` 对应的计划路径（规范化相对路径）；须与 execution 请求匹配
     pending_plan_path: str | None = None
+    active_task_turn_id: str | None = None
     # Phase 6: 已在本会话中激活的技能（去重）
     activated_skills: list[str] = Field(default_factory=list)
 
@@ -94,6 +95,7 @@ class InvocationContext(BaseModel):
     public_mode: bool = False
     host_control_authorized: bool = True
     platform_user: dict[str, Any] | None = None
+    platform_root: Path | None = None
 
     def approved_key(self, tool_name: str, args: dict[str, Any]) -> str:
         import json

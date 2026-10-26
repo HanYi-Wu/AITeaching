@@ -88,14 +88,14 @@ def test_wrap_write_failure_payload() -> None:
     assert payload_non_idempotent["idempotent"] is False
     assert payload_non_idempotent["error_code"] == "write_interrupted_requires_verification"
 
-    # Idempotent write with token
+    # A token is not proof that file.write actually deduplicates writes.
     payload_idempotent = wrap_write_failure_payload(
         "file.write",
         {"path": "test.txt", "content": "data", "idempotency_token": "token-xyz"},
         "timeout",
     )
-    assert payload_idempotent["idempotent"] is True
-    assert payload_idempotent.get("needs_verification") is not True
+    assert payload_idempotent["idempotent"] is False
+    assert payload_idempotent["needs_verification"] is True
 
 
 def test_read_retry_has_upper_limit_and_does_not_restart_turn(tmp_path: Path, monkeypatch) -> None:

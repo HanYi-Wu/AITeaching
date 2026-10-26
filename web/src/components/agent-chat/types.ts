@@ -11,11 +11,12 @@ export type ChatLine =
       kind: "tool";
       tool_name: string;
       summary: string;
+      tool_call_id?: string;
       subagent?: boolean;
       download_url?: string;
       filename?: string;
     }
-  | { kind: "tool_pending"; tool_name: string; label: string; key: string }
+  | { kind: "tool_pending"; tool_call_id?: string; tool_name: string; label: string; key: string }
   | {
       kind: "confirm";
       action_id: string;

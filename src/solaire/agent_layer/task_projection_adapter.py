@@ -1,13 +1,8 @@
-"""Agent turn, tool, and plan step projection adapter for unified task tracking (D14).
-
-Maps Agent session/turn lifecycles to durable G12 TaskProjection without storing
-tokens or full prompts/answers. Respects G9 cancel protocols and monotonic event versions.
-"""
+"""Persist finite Agent turn metadata without storing prompts or responses."""
 
 from __future__ import annotations
 
 import logging
-import math
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +57,10 @@ class AgentTaskProjectionAdapter:
         self._current_progress: float = 0.0
         self._current_stage: str = "initialized"
         self._terminal_reached: bool = False
+        current = get_task_projection(self.project_root, self.task_id, self.owner)
+        if current is not None:
+            self._event_version = current.event_version + 1
+            self._terminal_reached = current.status in {"succeeded", "failed", "cancelled"}
 
     @property
     def current_status(self) -> TaskStatus:
@@ -97,8 +96,7 @@ class AgentTaskProjectionAdapter:
                 return current
 
         self._current_status = status
-        if progress is not None:
-            self._current_progress = normalize_progress(progress) or 0.0
+        self._current_progress = normalize_progress(progress)
         if stage is not None:
             self._current_stage = stage
 
@@ -129,7 +127,6 @@ class AgentTaskProjectionAdapter:
         self._terminal_reached = False
         return self._record(
             status="running",
-            progress=0.05,
             stage="turn_started",
         )
 
@@ -142,20 +139,19 @@ class AgentTaskProjectionAdapter:
         if event_name == "thinking":
             return self._record(
                 status="running",
-                progress=0.15,
                 stage="reasoning",
             )
 
         if event_name == "tool_start":
-            tool_name = str(data.get("tool") or data.get("name") or "unknown_tool")
+            tool_name = str(data.get("tool_name") or data.get("tool") or data.get("name") or "unknown_tool")
             return self._record(
                 status="running",
                 stage=f"tool_start:{tool_name}",
             )
 
         if event_name == "tool_result":
-            tool_name = str(data.get("tool") or data.get("name") or "unknown_tool")
-            success = bool(data.get("success", True))
+            tool_name = str(data.get("tool_name") or data.get("tool") or data.get("name") or "unknown_tool")
+            success = data.get("status", "succeeded") == "succeeded"
             stage = f"tool_done:{tool_name}" if success else f"tool_failed:{tool_name}"
             return self._record(
                 status="running",
@@ -167,7 +163,7 @@ class AgentTaskProjectionAdapter:
             return self.on_plan_update(steps)
 
         if event_name == "confirm_needed":
-            tool_name = str(data.get("tool") or "unknown_tool")
+            tool_name = str(data.get("tool_name") or data.get("tool") or "unknown_tool")
             return self._record(
                 status="running",
                 stage=f"awaiting_confirmation:{tool_name}",
@@ -175,10 +171,10 @@ class AgentTaskProjectionAdapter:
             )
 
         if event_name == "error":
-            detail = str(data.get("error") or data.get("detail") or "Agent回合异常中止")
+            detail = str(data.get("message") or data.get("error") or data.get("detail") or "Agent回合异常中止")
             code = data.get("code")
             return self._record(
-                status="failed",
+                status="cancelled" if code == "cancelled" else "failed",
                 stage="error",
                 error_summary={"code": code, "detail": detail[:500]},
             )
@@ -208,8 +204,7 @@ class AgentTaskProjectionAdapter:
         completed = sum(1 for s in steps if str(s.get("status") or "") in {"completed", "done", "succeeded"})
         running_steps = [s for s in steps if str(s.get("status") or "") == "running"]
 
-        # Base progress from 0.20 to 0.95 across plan steps
-        progress_val = round(0.20 + 0.75 * (completed / total), 2)
+        progress_val = round(completed / total, 4)
         if running_steps:
             stage_title = str(running_steps[0].get("title") or running_steps[0].get("name") or f"step_{completed+1}")
             stage_str = f"step_{completed+1}/{total}: {stage_title}"
@@ -228,7 +223,7 @@ class AgentTaskProjectionAdapter:
         return self._record(
             status="cancelled",
             stage="cancelled_client_disconnect",
-            error_summary={"detail": "客户端断开或操作已主动取消"},
+            error_summary={"detail": "客户端断开或操作已主动取消；已完成的写入保留，请核对结果。", "needs_verification": True},
         )
 
 
@@ -256,6 +251,8 @@ def attach_agent_task_projection(
     original_emit = dispatcher.emit
 
     async def hooked_emit(event: str, data: dict[str, Any]) -> None:
+        if dispatcher.is_closed or dispatcher.terminal_reached:
+            return
         try:
             adapter.on_event(event, data)
         except Exception as exc:

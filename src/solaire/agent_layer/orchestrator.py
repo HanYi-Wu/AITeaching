@@ -335,6 +335,7 @@ async def run_agent_turn(
         public_mode=bool(project_ctx.get("_public_mode")),
         host_control_authorized=bool(project_ctx.get("_host_control_authorized", True)),
         platform_user=project_ctx.get("_platform_user") if isinstance(project_ctx.get("_platform_user"), dict) else None,
+        platform_root=project_ctx.get("_platform_root"),
     )
     cm = ContextManager(include_subtask_tool=True)
     full_ctx = {**project_ctx, "_project_root": project_root}
@@ -357,7 +358,7 @@ async def run_agent_turn(
     page_context_brief = format_page_context_brief(page_ctx_dict if page_ctx_dict else None)
 
     try:
-        verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=False)
+        verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=False)
     except Exception as e:
         await emit("error", {"code": "user_inactive", "message": f"权限复核未通过: {e}"})
         save_session(project_root, session)
@@ -510,7 +511,7 @@ async def run_agent_turn(
         peak_context_est = max(peak_context_est, prompt_token_est)
 
         try:
-            verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=True)
+            verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=True)
         except Exception as e:
             err_msg = str(e)
             code = "school_ai_disabled" if ("School AI" in err_msg or "AI API" in err_msg) else "user_inactive"

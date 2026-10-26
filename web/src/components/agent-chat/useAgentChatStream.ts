@@ -126,21 +126,23 @@ export function useAgentChatStream({
               assistantSegmentClosedRef.current = true;
               setThinkingText(null);
               const tool_name = String(data.tool_name ?? "");
+              const tool_call_id = typeof data.tool_call_id === "string" ? data.tool_call_id : undefined;
               const label =
                 typeof data.label === "string" ? data.label : formatToolLineLabel(tool_name);
               const key = `${tool_name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
               setLines((prev) => {
                 // Prevent duplicate pending tool cards for the same active tool
-                if (prev.some((l) => l.kind === "tool_pending" && l.tool_name === tool_name)) {
+                if (tool_call_id && prev.some((l) => (l.kind === "tool_pending" || l.kind === "tool") && l.tool_call_id === tool_call_id)) {
                   return prev;
                 }
-                return [...prev, { kind: "tool_pending", tool_name, label, key }];
+                return [...prev, { kind: "tool_pending", tool_name, tool_call_id, label, key }];
               });
             }
             if (ev === "tool_result") {
               assistantSegmentClosedRef.current = true;
               setThinkingText(null);
               const tool_name = String(data.tool_name ?? "");
+              const tool_call_id = typeof data.tool_call_id === "string" ? data.tool_call_id : undefined;
               notifyAgentContentChanged(tool_name, String(data.status ?? ""));
               const summary = String(data.summary ?? data.status ?? "");
               const subagent = Boolean(data.subagent);
@@ -149,27 +151,18 @@ export function useAgentChatStream({
               const filename = typeof data.filename === "string" ? data.filename : undefined;
 
               setLines((prev) => {
+                if (tool_call_id && prev.some((l) => l.kind === "tool" && l.tool_call_id === tool_call_id)) return prev;
                 const next = [...prev];
                 const idx = next.findIndex(
-                  (l) => l.kind === "tool_pending" && l.tool_name === tool_name,
+                  (l) => l.kind === "tool_pending" && (tool_call_id ? l.tool_call_id === tool_call_id : l.tool_name === tool_name),
                 );
                 if (idx >= 0) {
                   next.splice(idx, 1);
-                } else {
-                  // If no matching pending and last line is already identical tool card, skip duplicate
-                  const last = next[next.length - 1];
-                  if (
-                    last?.kind === "tool" &&
-                    last.tool_name === tool_name &&
-                    last.summary === summary &&
-                    last.download_url === download_url
-                  ) {
-                    return prev;
-                  }
                 }
                 next.push({
                   kind: "tool",
                   tool_name,
+                  tool_call_id,
                   summary,
                   subagent,
                   download_url,
@@ -281,14 +274,8 @@ export function useAgentChatStream({
               const plan_file_path = String(data.plan_file_path ?? "");
               const content = String(data.content ?? "");
               setLines((prev) => {
-                // Prevent duplicate plan card for the same plan_file_path
-                if (
-                  prev.some(
-                    (l) => l.kind === "plan_ready" && l.plan_file_path === plan_file_path,
-                  )
-                ) {
-                  return prev;
-                }
+                const index = prev.findIndex((l) => l.kind === "plan_ready" && l.plan_file_path === plan_file_path && !l.resolved);
+                if (index >= 0) return prev.map((l, i) => i === index ? { kind: "plan_ready", plan_file_path, content } : l);
                 return [...prev, { kind: "plan_ready", plan_file_path, content }];
               });
               if (!sidebarOpen) {

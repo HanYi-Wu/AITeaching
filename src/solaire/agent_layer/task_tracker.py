@@ -85,12 +85,10 @@ def verify_authoritative_actor_and_policy(
         if str(user_row.get("status") or "") != "active":
             raise PermissionError("当前用户账号已被禁用或失效")
 
-        db_role = str(user_row.get("role") or "")
-        if db_role:
-            platform_user["role"] = db_role
-        platform_user["status"] = user_row.get("status")
+        for key in ("role", "status", "school_id"):
+            platform_user[key] = user_row.get(key)
 
-        school_id = user_row.get("school_id") or platform_user.get("school_id")
+        school_id = user_row.get("school_id")
         if is_ai_call and school_id:
             check_school_ai_allowed(project_root, school_id=str(school_id), _connection=con)
 
@@ -167,12 +165,8 @@ async def resolve_plan_and_execution_path(
 
 def _tool_requires_ai(tool_name: str) -> bool:
     """Check if tool execution requires AI invocation."""
-    return tool_name in (
-        "agent.run_subtask",
-        "agent.run_tool_pipeline",
-        "exam.ai_generate_questions",
-        "teacher.ai_suggest_rubric",
-    )
+    from solaire.agent_layer.failure_recovery import is_tool_ai_powered
+    return is_tool_ai_powered(tool_name)
 
 
 async def handle_confirmation_resume(
@@ -215,7 +209,7 @@ async def handle_confirmation_resume(
     # Re-verify live actor validity and school AI policy
     try:
         is_ai = _tool_requires_ai(pending.tool_name)
-        verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=is_ai)
+        verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=is_ai)
     except Exception as err:
         err_msg = str(err)
         err_code = "school_ai_disabled" if ("School AI" in err_msg or "AI API" in err_msg) else "user_inactive"
@@ -226,7 +220,6 @@ async def handle_confirmation_resume(
         await emit("done", {"usage": {}})
         return None
 
-    register_approval(session, ctx, pending.tool_name, pending.arguments)
     ran_ok = True
     if pending.tool_name == "analysis.save_script" and pending.arguments.get("code"):
         ok, err = analysis_tools.validate_python_syntax(str(pending.arguments["code"]))
@@ -253,25 +246,36 @@ async def handle_confirmation_resume(
                 "tool_result",
                 {
                     "tool_name": pending.tool_name,
+                "tool_call_id": pending.tool_call_id,
                     "status": "failed",
                     "summary": err[:200],
                 },
             )
 
     if ran_ok:
+        result_index = len(session.draft_tool_results)
+        session.draft_tool_results.append({
+            "tool_call_id": pending.tool_call_id, "name": pending.tool_name,
+            "content": json.dumps({"error_code": "write_interrupted_requires_verification",
+                                   "needs_verification": True,
+                                   "error": "操作已开始，若未收到结果请核对数据，不能自动重放。"}, ensure_ascii=False),
+        })
+        save_session(project_root, session)
+        register_approval(session, ctx, pending.tool_name, pending.arguments)
         tr = invoke_registered_tool(pending.tool_name, pending.arguments, ctx)
         payload = (
             tr.data
             if tr.status == "succeeded"
             else {**tr.data, "error": tr.error_message, "error_code": tr.error_code}
         )
-        session.draft_tool_results.append(
+        session.draft_tool_results[result_index] = (
             {
                 "tool_call_id": pending.tool_call_id,
                 "name": pending.tool_name,
                 "content": tool_result_to_content(pending.tool_name, payload),
             }
         )
+        save_session(project_root, session)
         append_audit(
             project_root,
             session_id=session.session_id,
@@ -283,6 +287,7 @@ async def handle_confirmation_resume(
             "tool_result",
             {
                 "tool_name": pending.tool_name,
+                "tool_call_id": pending.tool_call_id,
                 "status": tr.status,
                 "summary": summarize_tool_result(pending.tool_name, payload),
             },

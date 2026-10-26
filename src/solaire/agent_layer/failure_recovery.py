@@ -24,11 +24,10 @@ class FailureCategory(str, Enum):
 
 def is_tool_ai_powered(tool_name: str) -> bool:
     """Determine if a tool relies on AI invocation."""
-    if tool_name in ("agent.run_subtask", "agent.run_tool_pipeline"):
-        return True
-    if "ai_" in tool_name or "generate" in tool_name or "grading" in tool_name:
-        return True
-    return False
+    return tool_name in {
+        "agent.run_subtask", "agent.run_tool_pipeline", "exam.ai_grade_submission",
+        "paper.ai_grade_pending", "paper.publish_reinforcement_practice", "bank.adapt_answers",
+    }
 
 
 def get_tool_risk(tool_name: str) -> ToolRisk:
@@ -46,9 +45,7 @@ def is_idempotent_tool_call(tool_name: str, args: dict[str, Any]) -> bool:
     risk = get_tool_risk(tool_name)
     if risk == ToolRisk.READ:
         return True
-    for token_key in ("idempotency_token", "idempotency_key", "client_mutation_id", "nonce"):
-        if args.get(token_key):
-            return True
+    # An arbitrary argument is not proof that the handler enforces deduplication.
     return False
 
 
