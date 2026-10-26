@@ -10,10 +10,12 @@ import {
   buildBankFolderIndex,
   canMoveBankFolder,
   canMoveBankQuestions,
+  isDescendantOrSelfFolder,
   validateBankFolderPath,
 } from '../pages/bank/bankModel';
 import {
   boxSelection,
+  pruneStaleSelection,
   rangeSelection,
   toggleFolderOrFilteredSelection,
   toggleSingleSelection,
@@ -23,13 +25,14 @@ export type { BankFolders };
 type Item = { qualified_id: string; content_preview?: string };
 const buttonClass = 'rounded border border-slate-300 px-2 py-1.5 text-xs hover:bg-slate-100 disabled:opacity-50';
 
-export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, onChange, onError, renderItem, onSelectIds, onOpenItem, onRefresh }: {
-  data: BankFolders; items: T[]; selectedIds: string[]; onChange: (data: BankFolders) => void;
+export function BankFolderExplorer<T extends Item>({ data, items, allItems, selectedIds, onChange, onError, renderItem, onSelectIds, onOpenItem, onRefresh }: {
+  data: BankFolders; items: T[]; allItems?: T[]; selectedIds: string[]; onChange: (data: BankFolders) => void;
   onError: (message: string | null) => void; renderItem: (item: T) => ReactNode;
   onSelectIds?: (ids: string[]) => void;
   onOpenItem?: (id: string) => void;
   onRefresh?: () => void | Promise<void>;
 }) {
+  const availableItems = allItems ?? items;
   const [selectedFolder, setSelectedFolder] = useState('');
   const [name, setName] = useState('');
   const [destination, setDestination] = useState('');
@@ -58,20 +61,67 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
       target: body.target,
       qualified_ids: body.qualified_ids ? [...body.qualified_ids] : undefined,
     };
+    let warningMsg: string | null = null;
     if (snapshot.action === 'move_folder') {
+      if (!data.folders.includes(snapshot.path)) {
+        onError('源目录不存在或已失效');
+        return;
+      }
+      if (snapshot.target && !data.folders.includes(snapshot.target)) {
+        onError('目标目录不存在或已失效');
+        return;
+      }
       const check = canMoveBankFolder(snapshot.path, snapshot.target ?? '', data.folders);
       if (!check.ok) { onError(check.reason ?? '移动目录失败'); return; }
     } else if (snapshot.action === 'move') {
-      const check = canMoveBankQuestions(snapshot.qualified_ids ?? [], snapshot.path, data.folders);
+      if (snapshot.path && !data.folders.includes(snapshot.path)) {
+        onError('目标目录不存在或已失效');
+        return;
+      }
+      const currentItemIds = new Set(availableItems.map((it) => it.qualified_id));
+      const { valid, stale } = pruneStaleSelection(snapshot.qualified_ids ?? [], currentItemIds);
+      if (stale.length > 0) {
+        onSelectIds?.(valid);
+        if (valid.length === 0) {
+          onError('所选题目已不存在或已失效，未执行移动');
+          return;
+        }
+        warningMsg = `部分题目（${stale.length} 道）已不存在或已失效，仅移动尚有效的题目`;
+        onError(warningMsg);
+      }
+      snapshot.qualified_ids = valid;
+      const check = canMoveBankQuestions(snapshot.qualified_ids, snapshot.path, data.folders);
       if (!check.ok) { onError(check.reason ?? '移动题目失败'); return; }
     } else if (snapshot.action === 'create') {
       const check = validateBankFolderPath(snapshot.path);
       if (!check.ok) { onError(check.reason ?? '目录路径无效'); return; }
+      if (data.folders.includes(snapshot.path)) {
+        onError('目录已存在');
+        return;
+      }
     } else if (snapshot.action === 'rename') {
       const check = validateBankFolderPath(snapshot.target ?? '');
       if (!check.ok) { onError(check.reason ?? '目录路径无效'); return; }
+      if (snapshot.target === snapshot.path) {
+        setEditing(null);
+        return;
+      }
+      if (snapshot.target && isDescendantOrSelfFolder(snapshot.target, snapshot.path)) {
+        onError('不能将目录重命名为自身的子目录');
+        return;
+      }
+      if (snapshot.target && data.folders.includes(snapshot.target)) {
+        onError('目标目录已存在，不允许重命名覆盖');
+        return;
+      }
+    } else if (snapshot.action === 'remove') {
+      if (!data.folders.includes(snapshot.path)) {
+        onError('所选目录不存在或已失效');
+        return;
+      }
     }
-    setBusy(true); onError(null);
+    setBusy(true);
+    if (!warningMsg) onError(null);
     try {
       const result = await apiPost<BankFolders>('/api/bank/folders/actions', snapshot);
       onChange(result);
@@ -158,23 +208,64 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
     const snapSelectedFolder = selectedFolder;
     const snapSelectedIds = [...selectedIds];
 
-    if (action === 'create' || action === 'rename') {
+    let warningMsg: string | null = null;
+    let validIdsToMove = snapSelectedIds;
+    if (action === 'create') {
       const check = validateBankFolderPath(snapName);
       if (!check.ok) { onError(check.reason ?? '目录路径无效'); return; }
+      if (data.folders.includes(snapName)) {
+        onError('目录已存在');
+        return;
+      }
+    }
+    if (action === 'rename') {
+      const check = validateBankFolderPath(snapName);
+      if (!check.ok) { onError(check.reason ?? '目录路径无效'); return; }
+      if (snapName === snapSelectedFolder) {
+        setName('');
+        return;
+      }
+      if (isDescendantOrSelfFolder(snapName, snapSelectedFolder)) {
+        onError('不能将目录重命名为自身的子目录');
+        return;
+      }
+      if (data.folders.includes(snapName)) {
+        onError('目标目录已存在，不允许重命名覆盖');
+        return;
+      }
     }
     if (action === 'move') {
-      const check = canMoveBankQuestions(snapSelectedIds, snapDestination, data.folders);
+      if (snapDestination && !data.folders.includes(snapDestination)) {
+        onError('目标目录不存在或已失效');
+        return;
+      }
+      const currentItemIds = new Set(availableItems.map((it) => it.qualified_id));
+      const { valid, stale } = pruneStaleSelection(snapSelectedIds, currentItemIds);
+      if (stale.length > 0) {
+        onSelectIds?.(valid);
+        if (valid.length === 0) {
+          onError('所选题目已不存在或已失效，未执行移动');
+          return;
+        }
+        warningMsg = `部分题目（${stale.length} 道）已不存在或已失效，仅移动尚有效的题目`;
+        onError(warningMsg);
+      }
+      validIdsToMove = valid;
+      const check = canMoveBankQuestions(validIdsToMove, snapDestination, data.folders);
       if (!check.ok) { onError(check.reason ?? '移动题目失败'); return; }
     }
     if (action === 'remove') {
-      if (!snapSelectedFolder) return;
+      if (!snapSelectedFolder || !data.folders.includes(snapSelectedFolder)) {
+        onError('所选目录不存在或已失效');
+        return;
+      }
       if (!(await confirmDialog('删除此目录及子目录？题目会移到父目录，不会删除题目。'))) return;
       if (busy) return;
     }
     setBusy(true);
-    onError(null);
+    if (!warningMsg) onError(null);
     try {
-      const body = action === 'move' ? { action, path: snapDestination, qualified_ids: snapSelectedIds }
+      const body = action === 'move' ? { action, path: snapDestination, qualified_ids: validIdsToMove }
         : action === 'create' ? { action, path: snapName }
         : { action, path: snapSelectedFolder, target: snapName };
       const result = await apiPost<BankFolders>('/api/bank/folders/actions', body);
@@ -182,7 +273,7 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
       setSelectedFolder(action === 'remove' ? '' : action === 'create' || action === 'rename' ? snapName : snapSelectedFolder);
       setName('');
       if (snapDestination && !result.folders.includes(snapDestination)) setDestination('');
-      setMessage(action === 'move' ? `已移动 ${snapSelectedIds.length} 道题目` : '目录已保存');
+      setMessage(action === 'move' ? `已移动 ${validIdsToMove.length} 道题目` : '目录已保存');
       notifyContentLibraryChanged('question');
     } catch (error) { onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
@@ -257,10 +348,11 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
       {shareCode ? <label className="mb-2 text-xs">邀请CDK（7天有效）<input readOnly value={shareCode} aria-label="文件管理器邀请码" onFocus={e => e.target.select()} className="ml-2 rounded border p-1" /></label> : null}
       {editing ? <form className="mb-3 flex flex-wrap items-center gap-2 rounded border bg-blue-50 p-2" onSubmit={e => { e.preventDefault(); void perform(editing.action === 'create' ? { action: 'create', path: editing.value.trim() } : { action: 'rename', path: editing.path, target: editing.value.trim() }); }}><label className="text-xs">{editing.action === 'create' ? '新目录路径' : '新路径'}<input autoFocus aria-label="文件管理器目录路径" value={editing.value} onChange={e => setEditing({ ...editing, value: e.target.value })} className="ml-2 rounded border p-1" /></label><button className={buttonClass} disabled={busy || !editing.value.trim()}>保存目录</button><button type="button" className={buttonClass} onClick={() => setEditing(null)}>取消</button></form> : null}
       <div ref={grid} data-file-area tabIndex={0} aria-label="题库文件区域" className="relative min-h-0 flex-1 select-none overflow-auto bg-slate-50 p-3" onDragOver={e => e.preventDefault()} onDrop={e => drop(e, selectedFolder)} onContextMenu={e => { if (!(e.target as HTMLElement).closest('[data-question],[data-folder]')) { e.preventDefault(); setFocusedFolder(''); setMenu({ x: e.clientX, y: e.clientY, folder: null }); } }} onKeyDown={e => {
+        if ((e.target as HTMLElement).closest('input, textarea, select')) return;
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); toggleAll(selectedFolder); }
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); if (!busy) cut(); }
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); if (!busy) paste(); }
-        if (e.key === 'Escape') { e.stopPropagation(); onSelectIds?.([]); setFocusedFolder(''); setMenu(null); }
+        if (e.key === 'Escape') { e.stopPropagation(); onSelectIds?.([]); setFocusedFolder(''); setMenu(null); setClipboard(null); }
       }} onPointerDown={event => {
         if (event.button !== 0 || (event.target as HTMLElement).closest('button,input,[data-question]')) return;
         drag.current = { x: event.clientX, y: event.clientY, base: event.ctrlKey || event.metaKey ? selectedIds : [] };

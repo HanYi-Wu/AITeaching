@@ -56,7 +56,7 @@ import {
   type MetadataFilters,
 } from "../../lib/metadataFilters";
 import { defaultItemsForNewGroup, type BankListItem, type BankCollectionRow } from "./bankModel";
-import { toggleSingleSelection } from "./bankOperationModel";
+import { pruneStaleSelection, toggleSingleSelection } from "./bankOperationModel";
 
 export function BankWorkspace({
   onError,
@@ -922,16 +922,29 @@ export function BankWorkspace({
 
   async function doExportSelection() {
     if (busy) return;
-    const targetIds = [...selectedExportIds];
-    if (targetIds.length === 0) {
+    const currentItemIds = new Set(items.map((it) => it.qualified_id));
+    const { valid, stale } = pruneStaleSelection(selectedExportIds, currentItemIds);
+
+    if (stale.length > 0) {
+      setSelectedExportIds(valid);
+      if (valid.length === 0) {
+        onError("所选题目已不存在或已失效，请重新选择");
+        return;
+      }
+      onError(`部分已选题目（${stale.length} 道）已失效，已自动保留有效题目`);
+    } else {
+      onError(null);
+    }
+
+    if (valid.length === 0) {
       onError("请在左侧勾选需要导出的题目");
       return;
     }
+
     setBusy(true);
-    onError(null);
     try {
       const result = await apiPost<{ download_url: string; filename: string; question_count: number }>("/api/bank/export-selection", {
-        qualified_ids: targetIds,
+        qualified_ids: valid,
         title: "我的题目导出",
       });
       const blob = await downloadPlatformBlob(result.download_url);
@@ -993,6 +1006,7 @@ export function BankWorkspace({
     try {
       await apiPost("/api/bank/delete-collection", { namespace });
       const prefix = `${namespace}/`;
+      setSelectedExportIds((prev) => prev.filter((id) => id !== namespace && !id.startsWith(prefix)));
       setSelectedId((cur) => (cur && (cur.startsWith(prefix) || cur === namespace) ? null : cur));
       setOpenTabs((tabs) => tabs.filter((id) => id !== namespace && !id.startsWith(prefix)));
       if (filterCollection === namespace) {
@@ -1028,7 +1042,13 @@ export function BankWorkspace({
         ? `?storage_path=${encodeURIComponent(detail.storage_path)}`
         : "";
       await apiDelete(`/api/bank/items/${enc}${sp}`);
-      setOpenTabs((prev) => prev.filter((x) => x !== selectedId));
+      const currentItem = items.find((x) => x.qualified_id === selectedId);
+      const removedIds = new Set([
+        selectedId,
+        ...(currentItem?.group_member_qualified_ids ?? []),
+      ]);
+      setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
+      setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
       delete baselineRef.current[selectedId];
       setSelectedId(null);
       setDetail(null);
@@ -1049,9 +1069,14 @@ export function BankWorkspace({
         ? `?storage_path=${encodeURIComponent(item.storage_path)}`
         : "";
       await apiDelete(`/api/bank/items/${enc}${sp}`);
-      setOpenTabs((prev) => prev.filter((x) => x !== item.qualified_id));
+      const removedIds = new Set([
+        item.qualified_id,
+        ...(item.group_member_qualified_ids ?? []),
+      ]);
+      setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
+      setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
       delete baselineRef.current[item.qualified_id];
-      if (selectedId === item.qualified_id) {
+      if (selectedId && removedIds.has(selectedId)) {
         setSelectedId(null);
         setDetail(null);
         setEditorModalOpen(false);
@@ -1669,7 +1694,7 @@ export function BankWorkspace({
         <div className="border-b border-slate-100 p-3">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("title")}</h2>
         </div>
-        <BankFolderExplorer data={folders} items={filtered} selectedIds={selectedExportIds}
+        <BankFolderExplorer data={folders} items={filtered} allItems={items} selectedIds={selectedExportIds}
           onOpenItem={openOrFocusTab} onRefresh={loadList}
           onSelectIds={setSelectedExportIds}
           onChange={setFolders} onError={onError} renderItem={(it) => {

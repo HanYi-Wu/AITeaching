@@ -103,4 +103,102 @@ test('retains clipboard and selection when move action fails', async () => {
   expect(pasteBtn).not.toBeDisabled();
 });
 
+test('prunes stale questions and warns user before moving', async () => {
+  const onError = vi.fn();
+  const onSelect = vi.fn();
+  vi.mocked(apiPost).mockResolvedValueOnce({ folders: ['数学'], assignments: { q1: '数学' } });
+  render(
+    <BankFolderExplorer
+      data={{ folders: ['数学'], assignments: {} }}
+      items={[{ qualified_id: 'q1' }]} // q2 is missing / stale
+      selectedIds={['q1', 'stale_q2']}
+      onChange={vi.fn()}
+      onError={onError}
+      onSelectIds={onSelect}
+      renderItem={(item) => <div>{item.qualified_id}</div>}
+    />
+  );
+  fireEvent.change(screen.getByLabelText('移动到目录'), { target: { value: '数学' } });
+  fireEvent.click(screen.getByRole('button', { name: '移动已选 2 题' }));
+
+  expect(onError).toHaveBeenCalledWith(expect.stringContaining('仅移动尚有效的题目'));
+  expect(onSelect).toHaveBeenCalledWith(['q1']);
+  expect(apiPost).toHaveBeenCalledWith('/api/bank/folders/actions', {
+    action: 'move',
+    path: '数学',
+    qualified_ids: ['q1'],
+  });
+});
+
+test('supports moving questions that were selected before search filter using allItems', async () => {
+  const onError = vi.fn();
+  vi.mocked(apiPost).mockResolvedValueOnce({ folders: ['数学'], assignments: { q1: '数学' } });
+  render(
+    <BankFolderExplorer
+      data={{ folders: ['数学'], assignments: {} }}
+      items={[{ qualified_id: 'q2' }]} // current filtered search view
+      allItems={[{ qualified_id: 'q1' }, { qualified_id: 'q2' }]} // complete library
+      selectedIds={['q1']} // selected earlier before searching
+      onChange={vi.fn()}
+      onError={onError}
+      onSelectIds={vi.fn()}
+      renderItem={(item) => <div>{item.qualified_id}</div>}
+    />
+  );
+  fireEvent.change(screen.getByLabelText('移动到目录'), { target: { value: '数学' } });
+  fireEvent.click(screen.getByRole('button', { name: '移动已选 1 题' }));
+
+  expect(onError).toHaveBeenCalledWith(null);
+  expect(apiPost).toHaveBeenCalledWith('/api/bank/folders/actions', {
+    action: 'move',
+    path: '数学',
+    qualified_ids: ['q1'],
+  });
+});
+
+test('prevents renaming folder to child of itself or existing folder without calling api', async () => {
+  vi.mocked(apiPost).mockClear();
+  const onError = vi.fn();
+  const { container } = render(
+    <BankFolderExplorer
+      data={{ folders: ['数学', '物理'], assignments: {} }}
+      items={[] as { qualified_id: string }[]}
+      selectedIds={[]}
+      onChange={vi.fn()}
+      onError={onError}
+      renderItem={(item) => <div>{item.qualified_id}</div>}
+    />
+  );
+  fireEvent.click(container.querySelector('[data-folder="数学"]')!);
+  fireEvent.change(screen.getByLabelText('目录名称 / 子目录路径'), { target: { value: '物理' } });
+  fireEvent.click(screen.getByRole('button', { name: '重命名' }));
+  expect(onError).toHaveBeenCalledWith('目标目录已存在，不允许重命名覆盖');
+  expect(apiPost).not.toHaveBeenCalled();
+
+  fireEvent.change(screen.getByLabelText('目录名称 / 子目录路径'), { target: { value: '数学/代数' } });
+  fireEvent.click(screen.getByRole('button', { name: '重命名' }));
+  expect(onError).toHaveBeenCalledWith('不能将目录重命名为自身的子目录');
+  expect(apiPost).not.toHaveBeenCalled();
+});
+
+test('typing inside text input does not trigger explorer keyboard shortcuts', () => {
+  const onSelectIds = vi.fn();
+  render(
+    <BankFolderExplorer
+      data={{ folders: ['数学'], assignments: { q1: '数学' } }}
+      items={[{ qualified_id: 'q1' }]}
+      selectedIds={[]}
+      onChange={vi.fn()}
+      onError={vi.fn()}
+      onSelectIds={onSelectIds}
+      renderItem={(item) => <div>{item.qualified_id}</div>}
+    />
+  );
+  const input = screen.getByLabelText('目录名称 / 子目录路径');
+  fireEvent.keyDown(input, { key: 'a', ctrlKey: true });
+  expect(onSelectIds).not.toHaveBeenCalled();
+});
+
+
+
 
