@@ -409,6 +409,7 @@ describe("StudentWorkspace", () => {
       await userEvent.click(screen.getByTestId("student-start-pub-img"));
       const file = new File(["fake"], "answer.png", { type: "image/png" });
       await userEvent.upload(await screen.findByTestId("student-image-math/q1"), file);
+      expect(await screen.findByText("本机图片存储暂不可用，图片只保留在当前页面；请及时保存到服务器。")).toBeInTheDocument();
       await userEvent.click(screen.getByTestId("student-submit-attempt"));
       await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
 
@@ -426,6 +427,8 @@ describe("StudentWorkspace", () => {
           }),
         ),
       );
+      expect(await screen.findByText("查看未确认的本机图片：Image Exam")).toBeInTheDocument();
+      expect(screen.getByRole("img", { name: "math/q1 未确认的答题图片" })).toBeInTheDocument();
     } finally {
       FileReader.prototype.readAsDataURL = originalReadAsDataURL;
     }

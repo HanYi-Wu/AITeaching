@@ -41,6 +41,10 @@ import {
   persistStudentTextDraft, restoreStudentTextDraft, studentDraftKey,
   type StudentDraftScope, type TextDraftIssue,
 } from "./studentTextDraft";
+import {
+  acknowledgeStudentImageDraft, persistStudentImageDraft, restoreStudentImageDraft,
+  retainUnconfirmedStudentImageDraft, type ImageDraftIssue,
+} from "./studentImageDraft";
 
 type Props = {
   user: PlatformUser;
@@ -103,6 +107,10 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const questionsRef = useRef<StudentQuestionRecord[]>([]);
   const answersRef = useRef<Record<string, string>>({});
   const imageAnswersRef = useRef<Record<string, StudentAnswerImage[]>>({});
+  const imageScopeRef = useRef<StudentDraftScope | null>(null);
+  const imageBaselineRef = useRef<Record<string, StudentAnswerImage[]>>({});
+  const imageSentRef = useRef<Record<string, StudentAnswerImage[]>>({});
+  const imageConflictsRef = useRef<Record<string, StudentAnswerImage[]>>({});
   const answersUrlRef = useRef<string | null>(null);
   const remainingBaselineRef = useRef<number | null>(null);
   const submitInFlightRef = useRef(false);
@@ -118,6 +126,11 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [textDraftIssue, setTextDraftIssue] = useState<TextDraftIssue>(null);
   const [localTextRestored, setLocalTextRestored] = useState(false);
   const [unconfirmedTexts, setUnconfirmedTexts] = useState<Record<string, { title: string; answers: Record<string, string>; issue: TextDraftIssue }>>({});
+  const [imageDraftIssue, setImageDraftIssue] = useState<ImageDraftIssue>(null);
+  const [imageDraftStored, setImageDraftStored] = useState(false);
+  const [localImagesRestored, setLocalImagesRestored] = useState(false);
+  const [imageConflicts, setImageConflicts] = useState<Record<string, StudentAnswerImage[]>>({});
+  const [unconfirmedImages, setUnconfirmedImages] = useState<Record<string, { title: string; images: Record<string, StudentAnswerImage[]>; issue: ImageDraftIssue }>>({});
 
   const pendingPapers = useMemo(
     () => papers.filter((paper) => paper.status !== "submitted" && paper.status !== "completed"),
@@ -309,15 +322,16 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setSaveStatus("saving");
       const payload = buildAnswerPayload(questionsRef.current, answersRef.current, imageAnswersRef.current);
       const localSave = beginTextSave(questionsRef.current, answersRef.current);
-      void saveStudentAnswers(attempt.id, payload)
+      const localImageSave = beginImageSave(questionsRef.current, imageAnswersRef.current);
+      void persistImages(imageAnswersRef.current, localImageSave.sent)
+        .then(() => saveStudentAnswers(attempt.id, payload))
         .then(() => {
           confirmTextSave(localSave);
+          void confirmImageSave(localImageSave);
           setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty");
         })
         .catch(() => setSaveStatus("error"))
-        .finally(() => {
-          draftSaveInFlightRef.current = false;
-        });
+        .finally(() => { draftSaveInFlightRef.current = false; });
     }, 30_000);
     return () => window.clearInterval(timer);
     // buildAnswerPayload only reads refs; restarting the timer on every keypress is intentional.
@@ -390,19 +404,31 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         snapshotVersion: data.attempt.snapshot_version ?? "",
       };
       textScopeRef.current = studentDraftKey(scope) ? scope : null;
+      imageScopeRef.current = textScopeRef.current ? scope : null;
       textBaselineRef.current = restoredAnswers;
       textSentRef.current = {};
+      imageBaselineRef.current = restoredImages;
+      imageSentRef.current = {};
       const local = textScopeRef.current && data.attempt.status === "in_progress"
         ? restoreStudentTextDraft(scope, restoredAnswers, data.questions.map((item) => item.question_id))
         : { answers: restoredAnswers, conflicts: {}, restored: false, issue: textScopeRef.current ? null : "unavailable" as const };
+      const localImages = imageScopeRef.current && data.attempt.status === "in_progress"
+        ? await restoreStudentImageDraft(scope, restoredImages, data.questions.map((item) => item.question_id))
+        : { images: restoredImages, conflicts: {}, restored: false, issue: null as ImageDraftIssue };
       textConflictsRef.current = local.conflicts;
       setTextConflicts(local.conflicts);
       setTextDraftIssue(local.issue);
       setLocalTextRestored(local.restored);
       answersRef.current = local.answers;
       setAnswers(local.answers);
-      setImageAnswers(restoredImages);
-      setSaveStatus(local.restored ? "dirty" : (data.saved_answers?.length ?? 0) > 0 ? "restored" : "saved");
+      imageAnswersRef.current = localImages.images;
+      imageConflictsRef.current = localImages.conflicts;
+      setImageAnswers(localImages.images);
+      setImageConflicts(localImages.conflicts);
+      setImageDraftIssue(localImages.issue);
+      setLocalImagesRestored(localImages.restored);
+      setImageDraftStored(localImages.restored);
+      setSaveStatus(local.restored || localImages.restored ? "dirty" : (data.saved_answers?.length ?? 0) > 0 ? "restored" : "saved");
       setSubmitReviewOpen(false);
       answerRevisionRef.current = 0;
       autoSubmitTriggeredRef.current = false;
@@ -455,6 +481,28 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     }
   }
 
+  function beginImageSave(sourceQuestions: StudentQuestionRecord[], sourceImages: Record<string, StudentAnswerImage[]>): {
+    scope: StudentDraftScope | null; sent: Record<string, StudentAnswerImage[]>;
+  } {
+    const sent = Object.fromEntries(sourceQuestions.map((question) => [
+      question.question_id, (sourceImages[question.question_id] ?? []).map((image) => ({ ...image })),
+    ]));
+    imageSentRef.current = sent;
+    return { scope: imageScopeRef.current, sent };
+  }
+
+  async function confirmImageSave(localSave: ReturnType<typeof beginImageSave>): Promise<ImageDraftIssue> {
+    if (!localSave.scope) return "unavailable";
+    imageBaselineRef.current = { ...imageBaselineRef.current, ...localSave.sent };
+    imageSentRef.current = {};
+    const issue = await acknowledgeStudentImageDraft(localSave.scope, localSave.sent);
+    setImageDraftIssue(issue);
+    const pending = hasPendingImageDraft(imageAnswersRef.current, imageBaselineRef.current);
+    setImageDraftStored(issue === null && pending);
+    if (!pending) setLocalImagesRestored(false);
+    return issue;
+  }
+
   function recoverConflictingText() {
     const next = { ...answersRef.current, ...textConflictsRef.current };
     textConflictsRef.current = {};
@@ -473,10 +521,69 @@ export function StudentWorkspace({ user, onLogout }: Props) {
 
   async function setQuestionImages(questionId: string, files: FileList | null) {
     const selected = Array.from(files ?? []);
-    const images = await Promise.all(selected.map(readImageFile));
+    if (selected.length > 10) {
+      setMessage("每题最多上传 10 张图片；本次选择未加入。");
+      return;
+    }
+    let images: StudentAnswerImage[];
+    try { images = await Promise.all(selected.map(readImageFile)); }
+    catch (error) {
+      setMessage(error instanceof Error ? `读取图片失败：${error.message}` : "读取图片失败");
+      return;
+    }
+    if (images.some((image) => image.data_url.length > 5_000_000)) {
+      setMessage("图片超过服务器允许的大小；本次选择未加入。");
+      return;
+    }
     answerRevisionRef.current += 1;
-    setImageAnswers((current) => ({ ...current, [questionId]: images }));
+    const next = { ...imageAnswersRef.current };
+    if (images.length) next[questionId] = images;
+    else delete next[questionId];
+    imageAnswersRef.current = next;
+    setImageAnswers(next);
+    const conflicts = { ...imageConflictsRef.current };
+    delete conflicts[questionId];
+    imageConflictsRef.current = conflicts;
+    setImageConflicts(conflicts);
     setSaveStatus("dirty");
+    const issue = await persistImages(next, imageSentRef.current);
+    setImageDraftStored(issue === null && hasPendingImageDraft(next, imageBaselineRef.current));
+    setLocalImagesRestored(false);
+  }
+
+  function cloneImages(images: Record<string, StudentAnswerImage[]>): Record<string, StudentAnswerImage[]> {
+    return Object.fromEntries(Object.entries(images).map(([id, value]) => [id, value.map((image) => ({ ...image }))]));
+  }
+
+  function hasPendingImageDraft(current: Record<string, StudentAnswerImage[]>, baseline: Record<string, StudentAnswerImage[]>): boolean {
+    const ids = new Set([...Object.keys(current), ...Object.keys(baseline)]);
+    return [...ids].some((id) => JSON.stringify(current[id] ?? []) !== JSON.stringify(baseline[id] ?? []));
+  }
+
+  async function persistImages(current: Record<string, StudentAnswerImage[]>, sent: Record<string, StudentAnswerImage[]> = {}): Promise<ImageDraftIssue> {
+    const scope = imageScopeRef.current;
+    if (!scope) {
+      setImageDraftIssue("unavailable");
+      return "unavailable";
+    }
+    const issue = await persistStudentImageDraft(
+      scope, current, imageBaselineRef.current, sent, Object.keys(imageConflictsRef.current),
+    );
+    setImageDraftIssue(issue);
+    return issue;
+  }
+
+  function recoverConflictingImages() {
+    const next = { ...imageAnswersRef.current, ...imageConflictsRef.current };
+    imageAnswersRef.current = next;
+    setImageAnswers(next);
+    imageConflictsRef.current = {};
+    setImageConflicts({});
+    answerRevisionRef.current += 1;
+    setSaveStatus("dirty");
+    void persistImages(next, imageSentRef.current).then((issue) => {
+      setImageDraftStored(issue === null && hasPendingImageDraft(next, imageBaselineRef.current));
+    });
   }
 
   function buildAnswerPayload(
@@ -507,6 +614,8 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     };
     const payload = buildAnswerPayload(questionsRef.current, answersRef.current, imageAnswersRef.current);
     beginTextSave(questionsRef.current, answersRef.current);
+    const localImageSave = beginImageSave(questionsRef.current, imageAnswersRef.current);
+    void persistImages(imageAnswersRef.current, localImageSave.sent);
     void fetch(answersUrl, {
       method: "POST",
       headers,
@@ -520,10 +629,13 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     draftSaveInFlightRef.current = true;
     const revision = answerRevisionRef.current;
     const localSave = beginTextSave(questions, answers);
+    const localImageSave = beginImageSave(questions, imageAnswers);
     setSaveStatus("saving");
     try {
+      await persistImages(imageAnswers, localImageSave.sent);
       await saveStudentAnswers(activeAttempt.id, buildAnswerPayload(questions, answers, imageAnswers));
       confirmTextSave(localSave);
+      await confirmImageSave(localImageSave);
       setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty");
     } catch (e) {
       setSaveStatus("error");
@@ -541,10 +653,19 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     setMessage(null);
     const submittedScope = textScopeRef.current;
     const submittedText = Object.fromEntries(questions.map((question) => [question.question_id, answers[question.question_id] ?? ""]));
+    const submittedImages = cloneImages(imageAnswersRef.current);
+    const localImageSave = beginImageSave(questions, submittedImages);
     const submittedConflicts = { ...textConflictsRef.current };
+    const submittedImageConflicts = { ...imageConflictsRef.current };
     try {
       const payload = buildAnswerPayload(questions, answers, imageAnswers);
+      await persistImages(submittedImages, localImageSave.sent);
       const result = await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsedSeconds(), answers: payload });
+      const accepted = result.attempt.submitted_answers_accepted === true;
+      const latestImages = imageScopeRef.current && localImageSave.scope &&
+        studentDraftKey(imageScopeRef.current) === studentDraftKey(localImageSave.scope)
+        ? cloneImages(imageAnswersRef.current) : submittedImages;
+      const latestImagesWithConflicts = { ...latestImages, ...submittedImageConflicts };
       let retained = false;
       if (submittedScope) {
         let issue: TextDraftIssue;
@@ -579,21 +700,43 @@ export function StudentWorkspace({ user, onLogout }: Props) {
           [`unscoped:${user.id}:${activeAttempt.id}`]: { title: activeAttempt.title, answers: pending, issue: "unavailable" },
         }));
       }
+      let imageIssue: ImageDraftIssue = "unavailable";
+      if (localImageSave.scope) {
+        imageIssue = accepted
+          ? await confirmImageSave(localImageSave)
+          : await retainUnconfirmedStudentImageDraft(localImageSave.scope, submittedImages, latestImagesWithConflicts);
+      }
+      const unconfirmedImageValues = accepted
+        ? Object.fromEntries(Object.entries(latestImagesWithConflicts).filter(([id, value]) => JSON.stringify(value) !== JSON.stringify(submittedImages[id] ?? [])))
+        : Object.fromEntries(Object.entries(submittedImages).filter(([, value]) => value.length > 0));
+      if (Object.keys(unconfirmedImageValues).length) {
+        retained = true;
+        const key = localImageSave.scope ? studentDraftKey(localImageSave.scope)! : `unscoped:${user.id}:${activeAttempt.id}`;
+        setUnconfirmedImages((current) => ({
+          ...current, [key]: { title: activeAttempt.title, images: unconfirmedImageValues, issue: imageIssue },
+        }));
+      }
       textScopeRef.current = null;
+      imageScopeRef.current = null;
       setTextConflicts({});
       textConflictsRef.current = {};
+      setImageConflicts({});
+      imageConflictsRef.current = {};
       setLocalTextRestored(false);
+      setLocalImagesRestored(false);
       setTextDraftIssue(null);
+      setImageDraftIssue(null);
       setActiveAttempt(null);
       setQuestions([]);
       setAnswers({});
       setImageAnswers({});
+      imageAnswersRef.current = {};
       setRemainingSeconds(null);
       setSaveStatus("saved");
       setSubmitReviewOpen(false);
       startedAtRef.current = null;
       await refresh();
-      setMessage(retained ? "试卷已提交；未确认的本机文本仍保留，可在下方查看。" : "试卷已提交");
+      setMessage(retained ? "试卷已提交；未确认的本机作答仍保留，可在下方查看。" : "试卷已提交");
       setActiveView("results");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -645,11 +788,20 @@ export function StudentWorkspace({ user, onLogout }: Props) {
             </div>
           </div>
           {localTextRestored ? <p className="mb-3 text-sm text-amber-800" role="status">已恢复本机文本草稿，等待保存到服务器。</p> : null}
+          {localImagesRestored ? <p className="mb-3 text-sm text-amber-800" role="status">已恢复本机图片草稿，等待保存到服务器。</p> : null}
           {Object.keys(textConflicts).length ? <div className="mb-3 text-sm text-amber-800" role="status">
             服务器答案已有其他更新，本机文本草稿仍保留。
             <button type="button" onClick={recoverConflictingText} className="ml-2 underline">恢复本机文本草稿</button>
           </div> : null}
           {textDraftIssue ? <p className="mb-3 text-sm text-amber-800" role="status">本机文本草稿暂不可用，请及时保存到服务器。</p> : null}
+          {Object.keys(imageConflicts).length ? <div className="mb-3 text-sm text-amber-800" role="status">
+            服务器图片答案已有其他更新，本机图片草稿仍保留。
+            <button type="button" onClick={recoverConflictingImages} className="ml-2 underline">恢复本机图片草稿</button>
+          </div> : null}
+          {imageDraftIssue === "unavailable" ? <p className="mb-3 text-sm text-amber-800" role="status">本机图片存储暂不可用，图片只保留在当前页面；请及时保存到服务器。</p> : null}
+          {imageDraftIssue === "too_large" ? <p className="mb-3 text-sm text-amber-800" role="status">本机图片草稿超过 20 MB 限额，未能暂存；请及时保存到服务器。</p> : null}
+          {imageDraftIssue === "corrupt" ? <p className="mb-3 text-sm text-amber-800" role="status">本机图片草稿损坏，未自动恢复；请检查图片后保存到服务器。</p> : null}
+          {imageDraftStored && !imageDraftIssue ? <p className="mb-3 text-sm text-slate-600" role="status">图片已暂存在本机，尚未确认保存到服务器。</p> : null}
           <nav className="mb-4 flex flex-wrap gap-2" aria-label="答题导航">
             {questions.map((question, index) => (
               <a
@@ -905,6 +1057,15 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                 <summary>查看未确认的本机文本：{entry.title}</summary>
                 {entry.issue ? <p className="mt-2">本机存储暂不可用，请在离开本页前复制以下文本。</p> : null}
                 <pre className="mt-2 whitespace-pre-wrap break-words">{Object.entries(entry.answers).map(([id, value]) => `${id}: ${value || "（空答案）"}`).join("\n")}</pre>
+              </details>)}
+              {Object.entries(unconfirmedImages).map(([key, entry]) => <details key={key} className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+                <summary>查看未确认的本机图片：{entry.title}</summary>
+                {entry.issue ? <p className="mt-2">本机图片存储不可用或提交未确认；图片只在当前页面内存中保留。</p> : null}
+                <div className="mt-2 space-y-3">
+                  {Object.entries(entry.images).flatMap(([id, images]) => images.map((image, index) => (
+                    <div key={`${id}:${index}`}><p>{id} · {image.name}</p><img src={image.data_url} alt={`${id} 未确认的答题图片`} className="mt-1 max-h-48 max-w-full rounded border border-amber-200 object-contain" /></div>
+                  )))}
+                </div>
               </details>)}
               <div className="mb-3 flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-slate-600" />
