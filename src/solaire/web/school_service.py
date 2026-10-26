@@ -1,15 +1,21 @@
-"""School, teacher, class, and student management services."""
+"""School domain management facade.
+
+Maintains complete backward-compatible exports for school, teacher, class,
+student, roster, import, and policy services.
+"""
 
 from __future__ import annotations
 
-import secrets
-import uuid
-from pathlib import Path
-from typing import Any
-
-from solaire.web.auth_service import hash_password, utc_now
-from solaire.web.platform_db import connect, init_platform_db, row_to_dict
-
+from solaire.web.school.accounts import (
+    bulk_update_students,
+    bulk_update_teachers,
+    create_school_user,
+    create_teacher,
+    create_user,
+    reset_student_password,
+    reset_teacher_password,
+    update_teacher,
+)
 from solaire.web.school.common import (
     MAX_PAGE_SIZE,
     VALID_ACCOUNT_STATUSES,
@@ -21,27 +27,7 @@ from solaire.web.school.common import (
     _new_student_password,
     _new_student_username,
     _page,
-)
-from solaire.web.school.accounts import (
-    bulk_update_students,
-    bulk_update_teachers,
-    create_school_user,
-    create_teacher,
-    create_user,
-    reset_student_password,
-    reset_teacher_password,
-    update_teacher,
-)
-from solaire.web.school.roster import (
-    assign_teacher_class,
-    list_students,
-    list_teacher_class_assignments,
-    list_teachers,
-    query_students,
-    query_teachers,
-    remove_teacher_class_assignment,
-    set_teacher_subjects,
-    update_student,
+    _student_with_account,
 )
 from solaire.web.school.importer import (
     import_classes,
@@ -60,53 +46,72 @@ from solaire.web.school.organization import (
     query_schools,
     update_class,
 )
+from solaire.web.school.policy import (
+    check_admin_ai_available,
+    check_school_ai_allowed,
+    get_school_ai_status,
+    get_school_management_context,
+    get_school_management_stats,
+    update_school_ai_enabled,
+)
+from solaire.web.school.roster import (
+    assign_teacher_class,
+    list_students,
+    list_teacher_class_assignments,
+    list_teachers,
+    query_students,
+    query_teachers,
+    remove_teacher_class_assignment,
+    set_teacher_subjects,
+    update_student,
+)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def update_school_ai_enabled(root: Path, *, school_id: str, ai_enabled: bool) -> dict[str, Any]:
-    init_platform_db(root)
-    now = utc_now()
-    with connect(root) as con:
-        existing = con.execute("SELECT 1 FROM schools WHERE id = ?", (school_id,)).fetchone()
-        if existing is None:
-            raise ValueError("school not found")
-        con.execute(
-            "UPDATE schools SET ai_enabled = ?, updated_at = ? WHERE id = ?",
-            (1 if ai_enabled else 0, now, school_id),
-        )
-        row = con.execute("SELECT * FROM schools WHERE id = ?", (school_id,)).fetchone()
-    school = row_to_dict(row)
-    if school is None:
-        raise RuntimeError("failed to update school")
-    return school
+__all__ = [
+    "MAX_PAGE_SIZE",
+    "VALID_ACCOUNT_STATUSES",
+    "_cell_text",
+    "_clean_status",
+    "_contains_query",
+    "_fetch_required",
+    "_new_id",
+    "_new_student_password",
+    "_new_student_username",
+    "_page",
+    "_student_with_account",
+    "assign_teacher_class",
+    "bulk_update_students",
+    "bulk_update_teachers",
+    "check_admin_ai_available",
+    "check_school_ai_allowed",
+    "create_class",
+    "create_school",
+    "create_school_user",
+    "create_teacher",
+    "create_user",
+    "delete_class",
+    "get_school",
+    "get_school_ai_status",
+    "get_school_management_context",
+    "get_school_management_stats",
+    "import_classes",
+    "import_students",
+    "import_teacher_class_assignments",
+    "import_teachers",
+    "list_classes",
+    "list_schools",
+    "list_students",
+    "list_teacher_class_assignments",
+    "list_teachers",
+    "query_classes",
+    "query_schools",
+    "query_students",
+    "query_teachers",
+    "remove_teacher_class_assignment",
+    "reset_student_password",
+    "reset_teacher_password",
+    "set_teacher_subjects",
+    "update_class",
+    "update_school_ai_enabled",
+    "update_student",
+    "update_teacher",
+]
