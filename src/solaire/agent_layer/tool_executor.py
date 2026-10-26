@@ -33,6 +33,7 @@ from solaire.agent_layer.models import (
     ToolRisk,
 )
 from solaire.agent_layer.registry import (
+    all_registered_tools,
     SUBTASK_TOOL_NAME,
     get_registered_tool,
     invoke_registered_tool,
@@ -43,6 +44,14 @@ from solaire.agent_layer.tools import analysis_tools
 from solaire.agent_layer.tools.tool_definitions import RegisteredTool
 from solaire.agent_layer.tool_validator import validate_tool_call
 from solaire.agent_layer.utils import parse_tool_arguments as _parse_args
+from solaire.agent_layer.failure_recovery import (
+    MAX_READ_RETRIES,
+    FailureCategory,
+    classify_tool_failure,
+    is_tool_ai_powered,
+    wrap_write_failure_payload,
+)
+from solaire.agent_layer.task_tracker import verify_authoritative_actor_and_policy
 
 logger = logging.getLogger(__name__)
 
@@ -218,8 +227,18 @@ async def _execute_single_tool(
     raw_args = fn.get("arguments")
     tid = tc.get("id") or f"call-{index}"
 
+    # --- Stage 0: Cancel check ---
+    if is_cancelled(sid):
+        clear_cancel(sid)
+        session.draft_assistant = None
+        session.draft_tool_results = []
+        await emit("error", {"code": "cancelled", "message": "已按您的操作停止。"})
+        await emit("done", {"usage": {}, "cancelled": True})
+        save_session(project_root, session)
+        return True, None
+
     # --- Stage 1: Validate ---
-    available = dtc.tools or []
+    available = dtc.tools if dtc.tools is not None else all_registered_tools()
     validated = validate_tool_call(raw_name, raw_args, available)
     name = validated.tool_name
     args = validated.arguments
@@ -235,6 +254,30 @@ async def _execute_single_tool(
             name=name, tid=tid, status="failed", payload=error_payload, ctx=ctx,
         )
         return False, None
+
+    # --- Stage 1.5: Authoritative user & school AI verification ---
+    is_ai = is_tool_ai_powered(name)
+    try:
+        verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=is_ai)
+    except Exception as err:
+        err_msg = str(err)
+        err_code = "school_ai_disabled" if ("School AI" in err_msg or "AI API" in err_msg) else "user_inactive"
+        error_payload = {
+            "error": f"安全复核拦截: {err_msg}",
+            "error_code": err_code,
+            "blocked": True,
+        }
+        result = _build_tool_result_dict(tid, name, error_payload)
+        session.draft_tool_results.append(result)
+        await _post_tool_events(
+            emit=emit, project_root=project_root, session_id=sid,
+            name=name, tid=tid, status="failed", payload=error_payload, ctx=ctx,
+        )
+        await emit("error", {"code": err_code, "message": f"权限复核未通过: {err_msg}"})
+        session.draft_assistant = None
+        save_session(project_root, session)
+        await emit("done", {"usage": {}})
+        return True, None
 
     # --- Stage 2: Emit start ---
     await emit("thinking", {"message": thinking_label_for_tool(name)})
@@ -302,9 +345,32 @@ async def _execute_single_tool(
             session.draft_tool_results.append(result)
             return False, None
 
-    # --- Stage 6: Execute ---
-    tr = invoke_registered_tool(name, args, ctx)
-    payload = tr.data if tr.status == "succeeded" else {**tr.data, "error": tr.error_message, "error_code": tr.error_code}
+    # --- Stage 6: Execute with bounded read retry and non-idempotent write protection ---
+    rt = get_registered_tool(name)
+    tool_risk = rt.risk if rt and hasattr(rt, "risk") else ToolRisk.WRITE
+
+    if tool_risk == ToolRisk.READ:
+        tr = None
+        for attempt in range(MAX_READ_RETRIES + 1):
+            tr = invoke_registered_tool(name, args, ctx)
+            if tr.status == "succeeded":
+                break
+            cat = classify_tool_failure(name, tr.error_message or "", error_code=tr.error_code)
+            if cat == FailureCategory.READ_TRANSIENT and attempt < MAX_READ_RETRIES:
+                await asyncio.sleep(0.05 * (attempt + 1))
+                continue
+            break
+    else:
+        tr = invoke_registered_tool(name, args, ctx)
+
+    if tr.status == "succeeded":
+        payload = tr.data
+    else:
+        if tool_risk in (ToolRisk.WRITE, ToolRisk.DESTRUCTIVE):
+            payload = wrap_write_failure_payload(name, args, tr.error_message or "操作失败", original_code=tr.error_code)
+        else:
+            payload = {**tr.data, "error": tr.error_message, "error_code": tr.error_code}
+
     result = _build_tool_result_dict(tid, name, payload)
     session.draft_tool_results.append(result)
     await _post_tool_events(
@@ -342,6 +408,16 @@ async def run_draft_tool_loop(
         # --- Batch read tools (parallel, skip guardrails) ---
         read_batch = consecutive_read_tool_indices(tcs, k, ctx, safety_mode)
         if len(read_batch) >= 2:
+            try:
+                verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=False)
+            except Exception as err:
+                err_msg = str(err)
+                await emit("error", {"code": "user_inactive", "message": f"权限复核未通过: {err_msg}"})
+                session.draft_assistant = None
+                session.draft_tool_results = []
+                save_session(project_root, session)
+                await emit("done", {"usage": {}})
+                return True
             async def _invoke_read(i: int) -> tuple[int, str, str, Any]:
                 tc_i = tcs[i]
                 fn_i = tc_i.get("function") or {}
@@ -349,7 +425,7 @@ async def run_draft_tool_loop(
                 raw_args = fn_i.get("arguments")
                 tid_i = tc_i.get("id") or f"call-{i}"
                 # Pre-validate for batch reads
-                available = dtc.tools or []
+                available = dtc.tools if dtc.tools is not None else all_registered_tools()
                 validated = validate_tool_call(raw_name, raw_args, available)
                 n = validated.tool_name
                 a = validated.arguments
@@ -384,6 +460,17 @@ async def run_draft_tool_loop(
         # --- Batch subtask tools (parallel) ---
         subtask_batch = consecutive_subtask_tool_indices(tcs, k, ctx, safety_mode)
         if len(subtask_batch) >= 2:
+            try:
+                verify_authoritative_actor_and_policy(project_root, ctx.platform_user, is_ai_call=True)
+            except Exception as err:
+                err_msg = str(err)
+                err_code = "school_ai_disabled" if ("School AI" in err_msg or "AI API" in err_msg) else "user_inactive"
+                await emit("error", {"code": err_code, "message": f"权限复核未通过: {err_msg}"})
+                session.draft_assistant = None
+                session.draft_tool_results = []
+                save_session(project_root, session)
+                await emit("done", {"usage": {}})
+                return True
             for idx in subtask_batch:
                 tc0 = tcs[idx]
                 fn0 = tc0.get("function") or {}
