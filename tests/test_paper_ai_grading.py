@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -65,6 +67,89 @@ def test_ai_adapter_returns_bounded_teacher_review_suggestion(
     )
 
 
+def test_ocr_timeout_is_reported_as_unreadable_image(monkeypatch) -> None:
+    from PIL import Image
+
+    captured: dict[str, Any] = {}
+
+    class FakePytesseract:
+        @staticmethod
+        def image_to_string(_image, *, lang: str, timeout: int) -> str:
+            captured["lang"] = lang
+            captured["timeout"] = timeout
+            raise RuntimeError("Tesseract process timeout")
+
+    image_data = BytesIO()
+    Image.new("RGB", (2, 2), color="white").save(image_data, format="PNG")
+    monkeypatch.setitem(sys.modules, "pytesseract", FakePytesseract)
+
+    text, errors = ai_grading.ocr_images([{"content": image_data.getvalue()}])
+
+    assert text == ""
+    assert captured == {"lang": "chi_sim+eng", "timeout": 60}
+    assert len(errors) == 1
+    assert "timeout" in errors[0].lower()
+
+
+def test_ai_chat_timeout_degrades_to_pending_without_final_score(
+    web_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    context = _submitted_attempt(web_client, tmp_path)
+    root = default_platform_root()
+    with connect(root) as con:
+        con.execute(
+            """
+            INSERT INTO student_answers (id, attempt_id, question_id, answer_payload, responded_at)
+            VALUES (?, ?, 'math/q1', ?, '2026-10-26T00:00:00+00:00')
+            """,
+            (
+                "timeout-answer",
+                context["attempt_id"],
+                json.dumps({"answer": "A normal student response"}),
+            ),
+        )
+
+    class FakeAdapter:
+        async def chat(self, _messages, **_kwargs):
+            await asyncio.Event().wait()
+
+    class FakeRouter:
+        def __init__(self, *, settings):
+            self.settings = settings
+
+        def fast(self):
+            return FakeAdapter()
+
+    settings = SimpleNamespace(api_key="configured")
+    monkeypatch.setattr(llm_router, "load_llm_settings", lambda _root: settings)
+    monkeypatch.setattr(llm_router, "ModelRouter", FakeRouter)
+    monkeypatch.setattr(ai_grading, "AI_CHAT_TIMEOUT_SECONDS", 0.01)
+
+    suggestions = paper_service.suggest_ai_grades_for_attempt(
+        root,
+        tmp_path,
+        paper_id=context["paper_id"],
+        attempt_id=context["attempt_id"],
+        user={"id": context["teacher_id"], "role": "teacher"},
+        question_ids=["math/q1"],
+    )
+
+    assert len(suggestions) == 1
+    assert suggestions[0]["status"] == "pending"
+    assert suggestions[0]["suggested_score"] is None
+    assert "等待超过 60 秒" in suggestions[0]["feedback"]
+    with connect(root) as con:
+        answer = con.execute(
+            "SELECT score, ai_suggested_score, grading_status FROM student_answers WHERE id = ?",
+            ("timeout-answer",),
+        ).fetchone()
+    assert answer["score"] is None
+    assert answer["ai_suggested_score"] is None
+    assert answer["grading_status"] == "pending"
+
+
 def test_scan_ocr_adapter_keeps_page_budget(
     web_client: TestClient,
     tmp_path: Path,
@@ -96,7 +181,7 @@ def test_scan_ocr_adapter_keeps_page_budget(
         ocr_images_fn=fake_ocr,
     )
     assert len(seen_pages) == 10
-    assert text.splitlines() == [f"page-{index}" for index in range(1, 11)]
+    assert text.split("\n\n") == [f"page-{index}" for index in range(1, 11)]
     assert len(errors) == 1
     assert "仅处理前 10 页" in errors[0]
 

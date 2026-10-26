@@ -418,6 +418,15 @@ def _score_percent(score: object, max_score: object) -> float | None:
     return score_percent(score, max_score, legacy_zero_max=True)
 
 
+def _attempt_status_group(attempt: dict[str, Any]) -> str:
+    status = str(attempt.get("status") or "not_started")
+    if status in {"submitted", "completed"} or attempt.get("submitted_at"):
+        return "completed"
+    if status == "in_progress" or attempt.get("started_at"):
+        return "in_progress"
+    return "not_started"
+
+
 def _risk_level(value: float | None) -> str:
     return paper_analysis.risk_level(value)
 
