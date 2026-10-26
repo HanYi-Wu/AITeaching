@@ -12,6 +12,12 @@ import {
   canMoveBankQuestions,
   validateBankFolderPath,
 } from '../pages/bank/bankModel';
+import {
+  boxSelection,
+  rangeSelection,
+  toggleFolderOrFilteredSelection,
+  toggleSingleSelection,
+} from '../pages/bank/bankOperationModel';
 
 export type { BankFolders };
 type Item = { qualified_id: string; content_preview?: string };
@@ -127,8 +133,7 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
   }
   function toggleAll(path: string) {
     const ids = items.filter(item => !path || (data.assignments[item.qualified_id] ?? '') === path || (data.assignments[item.qualified_id] ?? '').startsWith(path + '/')).map(item => item.qualified_id);
-    onSelectIds?.(ids.every(id => selectedIds.includes(id))
-      ? selectedIds.filter(id => !ids.includes(id)) : [...new Set([...selectedIds, ...ids])]);
+    onSelectIds?.(toggleFolderOrFilteredSelection(selectedIds, ids));
   }
   const index = useMemo(() => buildBankFolderIndex(data, items), [data, items]);
 
@@ -243,14 +248,14 @@ export function BankFolderExplorer<T extends Item>({ data, items, selectedIds, o
         const box = { x: Math.min(drag.current.x, event.clientX), y: Math.min(drag.current.y, event.clientY), right: Math.max(drag.current.x, event.clientX), bottom: Math.max(drag.current.y, event.clientY) };
         setRectangle(box);
         const ids = [...(grid.current?.querySelectorAll<HTMLElement>('[data-question]') ?? [])].filter(element => { const rect = element.getBoundingClientRect(); return rect.right >= box.x && rect.left <= box.right && rect.bottom >= box.y && rect.top <= box.bottom; }).map(element => element.dataset.question!);
-        onSelectIds?.([...new Set([...drag.current.base, ...ids])]);
+        onSelectIds?.(boxSelection(drag.current.base, ids));
       }} onPointerUp={() => { drag.current = null; setRectangle(null); }} onPointerCancel={() => { drag.current = null; setRectangle(null); }}>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {(index.children.get(selectedFolder) ?? []).map(path => <button key={path} data-folder={path} draggable onDragStart={e => startDrag(e, undefined, path)} onDragOver={e => e.preventDefault()} onDrop={e => drop(e, path)} onContextMenu={e => { e.preventDefault(); setFocusedFolder(path); onSelectIds?.([]); setMenu({ x: e.clientX, y: e.clientY, folder: path }); }} className={`rounded border p-3 text-left ${focusedFolder === path || dropHighlight === path ? 'border-blue-500 bg-blue-100' : 'bg-amber-50'}`} onClick={() => { setFocusedFolder(path); onSelectIds?.([]); }} onDoubleClick={() => { setSelectedFolder(path); setName(path); setFocusedFolder(''); }}><Folder className="h-6 w-6 text-amber-600" />{path.split('/').at(-1)}</button>)}
           {(index.questions.get(selectedFolder) ?? []).map(item => <div key={item.qualified_id} data-question={item.qualified_id} draggable onDragStart={e => startDrag(e, item.qualified_id)} onContextMenu={e => { e.preventDefault(); if (!selectedIds.includes(item.qualified_id)) onSelectIds?.([item.qualified_id]); setFocusedFolder(''); setMenu({ x: e.clientX, y: e.clientY, folder: null, id: item.qualified_id }); }} onDoubleClick={() => { onOpenItem?.(item.qualified_id); setExploring(false); }} role="checkbox" aria-checked={selectedIds.includes(item.qualified_id)} tabIndex={0} title={item.content_preview || item.qualified_id}
             className={`min-h-24 cursor-pointer break-all rounded border p-3 text-xs ${selectedIds.includes(item.qualified_id) ? 'border-blue-500 bg-blue-100' : 'bg-white'}`}
-            onClick={event => { setFocusedFolder(''); const visible = (index.questions.get(selectedFolder) ?? []).map(q => q.qualified_id); const from = visible.indexOf(anchor.current ?? ''), to = visible.indexOf(item.qualified_id); onSelectIds?.(event.shiftKey && from >= 0 ? [...new Set([...selectedIds, ...visible.slice(Math.min(from,to),Math.max(from,to)+1)])] : event.ctrlKey || event.metaKey ? selectedIds.includes(item.qualified_id) ? selectedIds.filter(id => id !== item.qualified_id) : [...selectedIds, item.qualified_id] : [item.qualified_id]); anchor.current = item.qualified_id; }}
-            onKeyDown={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); onSelectIds?.(selectedIds.includes(item.qualified_id) ? selectedIds.filter(id => id !== item.qualified_id) : [...selectedIds, item.qualified_id]); } }}>
+            onClick={event => { setFocusedFolder(''); const visible = (index.questions.get(selectedFolder) ?? []).map(q => q.qualified_id); onSelectIds?.(event.shiftKey ? rangeSelection(selectedIds, visible, anchor.current, item.qualified_id) : event.ctrlKey || event.metaKey ? toggleSingleSelection(selectedIds, item.qualified_id) : [item.qualified_id]); anchor.current = item.qualified_id; }}
+            onKeyDown={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); onSelectIds?.(toggleSingleSelection(selectedIds, item.qualified_id)); } }}>
             <p className="mb-2 font-semibold">{item.qualified_id}</p><p className="line-clamp-4">{item.content_preview}</p>
           </div>)}
         </div>

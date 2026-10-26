@@ -56,6 +56,7 @@ import {
   type MetadataFilters,
 } from "../../lib/metadataFilters";
 import { defaultItemsForNewGroup, type BankListItem, type BankCollectionRow } from "./bankModel";
+import { toggleSingleSelection } from "./bankOperationModel";
 
 export function BankWorkspace({
   onError,
@@ -1685,7 +1686,7 @@ export function BankWorkspace({
                     type="checkbox"
                     aria-label={`选择导出 ${it.qualified_id}`}
                     checked={selectedExportIds.includes(it.qualified_id)}
-                    onChange={() => setSelectedExportIds((current) => current.includes(it.qualified_id) ? current.filter((id) => id !== it.qualified_id) : [...current, it.qualified_id])}
+                    onChange={() => setSelectedExportIds((current) => toggleSingleSelection(current, it.qualified_id))}
                     className="absolute right-7 top-2 h-4 w-4"
                   />
                   <button
