@@ -2,25 +2,14 @@ import analysisPrintCss from "./analysisPrint.css?raw";
 import { ChangeEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
-  CheckCircle2,
   ClipboardList,
   Download,
-  FileImage,
-  History,
-  PauseCircle,
-  PlayCircle,
   RefreshCw,
-  Search,
-  Trash2,
   Upload,
-  Wifi,
   X,
 } from "lucide-react";
-import { apiDownloadBlob } from "../../../api/client";
-import { ContentFolderHelp, ContentFolders } from "../../../components/ContentFolders";
-import { ContentTags, TagChips } from "../../../components/ContentTags";
-import { formatLocaleDateTime } from "../../../lib/locale";
-import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
+import { apiDownloadBlob, apiGet } from "../../../api/client";
+import { ContentTags } from "../../../components/ContentTags";
 import {
   analyzePlatformPaper,
   completePaperAttemptGrading,
@@ -59,15 +48,35 @@ import {
 import { PlatformPaperAnalysisCharts } from "../AnalysisCharts";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import {
+  applyGradingSuggestions,
+  getGradingDraft,
+  gradingFeedbackForSave,
+  markGradingDraftSaved,
+  parseGradingScore,
+  reconcileGradingDrafts,
+  restoreGradingDraft,
+  updateGradingDraft,
+  type GradingDraftSource,
+  type GradingDrafts,
+} from "./gradingModel";
+import { usePaperGrading } from "./usePaperGrading";
+import { PaperListSidebar } from "./PaperListSidebar";
+import { PaperClassPublishPanel } from "./PaperClassPublishPanel";
+import { PaperPublishingSidebar } from "./PaperPublishingSidebar";
+import GradingQuestionCard from "./GradingQuestionCard";
+import { GradingWorkspace } from "./GradingWorkspace";
+import { PaperSubmissionDetail } from "./PaperSubmissionDetail";
+import {
+  readGradingDraft,
+  writeGradingDraft,
+  type GradingDraftStorageScope,
+} from "./gradingDraftStorage";
+import {
   type PaperQuery,
   type PageMeta,
-  deliveryLabel,
-  mergePaper,
   mergeMeta,
   htmlEscape,
   downloadBlob,
-  publicationWindowLabel,
-  submissionStatusLabel,
   gradingStatusLabel,
   formatStudentAnswer,
 } from "./paperHelpers";
@@ -82,6 +91,15 @@ type Props = {
   onError?: (message: string | null) => void;
   assignStudent?: { classId: string; studentId: string; name: string } | null;
   onAssignStudentConsumed?: () => void;
+};
+
+type AcceptedAiSuggestion = {
+  attemptId: string;
+  questionId: string;
+  status?: string;
+  suggestedScore?: number | null;
+  feedback?: string | null;
+  fields: Array<"score" | "feedback">;
 };
 
 export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError, assignStudent, onAssignStudentConsumed }: Props) {
@@ -106,8 +124,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const [publishStartAt, setPublishStartAt] = useState("");
   const [publishEndAt, setPublishEndAt] = useState("");
   const [paperDetailView, setPaperDetailView] = useState<"manage" | "grading">("manage");
-  const [gradeDrafts, setGradeDrafts] = useState<Record<string, string>>({});
-  const [feedbackDrafts, setFeedbackDrafts] = useState<Record<string, string>>({});
+  const [gradingDraftState, setGradingDraftState] = useState<{ ownerKey: string; drafts: GradingDrafts }>({ ownerKey: "", drafts: {} });
   const [selectedPaperId, setSelectedPaperId] = useState("");
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
   const [folders, setFolders] = useState<ContentFolder[]>([]);
@@ -130,6 +147,21 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const scanObjectUrlsRef = useRef<string[]>([]);
   const publicationRequestIdRef = useRef(0);
   const submissionRequestIdRef = useRef(0);
+  const [gradingAccountId, setGradingAccountId] = useState<string | null>(null);
+  const [gradingProjectId, setGradingProjectId] = useState<string | null>(null);
+  const [gradingDraftStorageWarning, setGradingDraftStorageWarning] = useState<{ ownerKey: string; visible: boolean }>({ ownerKey: "", visible: false });
+  const gradingDraftSourceVersionsRef = useRef(new Map<string, string | null>());
+  const restoredGradingDraftKeysRef = useRef(new Set<string>());
+  const pendingGradingDraftRestoreKeysRef = useRef(new Set<string>());
+
+  function setGradingDrafts(update: GradingDrafts | ((current: GradingDrafts) => GradingDrafts)) {
+    setGradingDraftState((current) => {
+      if (gradingDraftOwnerRef.current !== gradingOwnerKey) return current;
+      const existing = current.ownerKey === gradingOwnerKey ? current.drafts : {};
+      const drafts = typeof update === "function" ? update(existing) : update;
+      return { ownerKey: gradingOwnerKey, drafts };
+    });
+  }
 
   const clearScanObjectUrls = useCallback(() => {
     scanObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -145,11 +177,26 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     void getAccountProfile()
       .then(({ profile }) => {
         const subjects = profile.subjects ?? [];
+        setGradingAccountId(profile.id || null);
         setTeacherSubjects(subjects);
         setSelectedSubject((current) => current || (subjects.length === 1 ? subjects[0] : ""));
       })
       .catch(reportError);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void apiGet<{ bound?: boolean; root?: string | null; project_id?: string | null }>("/api/project/info")
+      .then((info) => {
+        if (!active) return;
+        const projectId = info.bound
+          ? (info.project_id || info.root || "").trim().replace(/\\/g, "/").replace(/\/+$/, "")
+          : "";
+        setGradingProjectId(projectId || null);
+      })
+      .catch(() => { if (active) setGradingProjectId(null); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -170,6 +217,81 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     () => papers.find((paper) => paper.paper_id === selectedPaperId) ?? papers[0] ?? null,
     [papers, selectedPaperId],
   );
+  const gradingOwnerKey = [gradingAccountId ?? "account-unavailable", gradingProjectId ?? "project-unavailable", selectedPaper?.paper_id ?? selectedPaperId].join("/");
+  const gradingDraftOwnerRef = useRef(gradingOwnerKey);
+  if (gradingDraftOwnerRef.current !== gradingOwnerKey) {
+    gradingDraftOwnerRef.current = gradingOwnerKey;
+    gradingDraftSourceVersionsRef.current.clear();
+    restoredGradingDraftKeysRef.current.clear();
+    pendingGradingDraftRestoreKeysRef.current.clear();
+  }
+  const gradingDrafts = gradingDraftState.ownerKey === gradingOwnerKey ? gradingDraftState.drafts : {};
+  const gradingRequests = usePaperGrading(gradingOwnerKey);
+  const gradingStorageScope = gradingAccountId && gradingProjectId && selectedPaper
+    ? { accountId: gradingAccountId, projectId: gradingProjectId, paperId: selectedPaper.paper_id }
+    : null;
+
+  useEffect(() => {
+    if (!gradingStorageScope) return;
+    const restoreEntries: Array<{
+      key: string;
+      storageKey: string;
+      source: GradingDraftSource;
+      record: NonNullable<ReturnType<typeof readGradingDraft>["draft"]>;
+    }> = [];
+    submissions.forEach((submission) => submission.answers.forEach((answer) => {
+      const key = gradeKey(submission.attempt_id, answer.question_id);
+      const storageScope = gradingDraftStorageScope(gradingStorageScope, submission.attempt_id, answer.question_id);
+      const storageKey = `${gradingOwnerKey}/${submission.attempt_id}/${answer.question_id}`;
+      if (restoredGradingDraftKeysRef.current.has(storageKey)) return;
+      restoredGradingDraftKeysRef.current.add(storageKey);
+      const result = readGradingDraft(storageScope);
+      if (result.status === "corrupted" || result.status === "unavailable") setGradingDraftStorageWarning({ ownerKey: gradingOwnerKey, visible: true });
+      if (!result.draft) return;
+      if (!gradingDraftSourceVersionsRef.current.has(key)) {
+        gradingDraftSourceVersionsRef.current.set(key, result.draft.sourceVersion);
+      }
+      pendingGradingDraftRestoreKeysRef.current.add(storageKey);
+      restoreEntries.push({ key, storageKey, source: toGradingDraftSource(answer), record: result.draft });
+    }));
+    if (restoreEntries.length > 0) {
+      setGradingDrafts((current) => {
+        const next = { ...current };
+        restoreEntries.forEach(({ key, source, record }) => {
+          next[key] = restoreGradingDraft(
+            getGradingDraft(current, key, source),
+            record,
+          );
+        });
+        return next;
+      });
+    }
+  }, [gradingStorageScope?.accountId, gradingStorageScope?.projectId, gradingStorageScope?.paperId, gradingOwnerKey, submissions]);
+
+  useEffect(() => {
+    if (!gradingStorageScope) return;
+    submissions.forEach((submission) => submission.answers.forEach((answer) => {
+      const key = gradeKey(submission.attempt_id, answer.question_id);
+      const storageKey = `${gradingOwnerKey}/${submission.attempt_id}/${answer.question_id}`;
+      if (pendingGradingDraftRestoreKeysRef.current.has(storageKey)) {
+        pendingGradingDraftRestoreKeysRef.current.delete(storageKey);
+        return;
+      }
+      const draft = gradingDrafts[key];
+      if (!draft) return;
+      if (!draft.score.dirty && !draft.feedback.dirty) {
+        gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+      } else if (!gradingDraftSourceVersionsRef.current.has(key)) {
+        gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+      }
+      const ok = writeGradingDraft(
+        gradingDraftStorageScope(gradingStorageScope, submission.attempt_id, answer.question_id),
+        draft,
+        gradingDraftSourceVersionsRef.current.get(key) ?? null,
+      );
+      if (!ok) setGradingDraftStorageWarning({ ownerKey: gradingOwnerKey, visible: true });
+    }));
+  }, [gradingDrafts, gradingStorageScope?.accountId, gradingStorageScope?.projectId, gradingStorageScope?.paperId, submissions]);
   const activePublishedClassIds = useMemo(() => {
     const ids = new Set<string>();
     publications
@@ -250,6 +372,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
   useEffect(() => {
     submissionRequestIdRef.current += 1;
+    setBusy((current) => current?.startsWith("grade:") || current?.startsWith("ai-grade:") || current?.startsWith("submissions:") ? null : current);
     if (selectedPaperId) {
       void loadPublications(selectedPaperId);
     } else {
@@ -257,8 +380,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     }
     setSubmissions([]);
     setSelectedGradingAttemptId("");
-    setGradeDrafts({});
-    setFeedbackDrafts({});
+    setGradingDrafts({});
     clearScanObjectUrls();
     setSelectedClassIds(assignStudent && selectedPaperId ? [assignStudent.classId] : []);
     setPublishFolderId("");
@@ -273,7 +395,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     try {
       const updated = await updatePlatformPaperDeliveryMode(paper.paper_id, mode);
       setPapers((current) =>
-        current.map((item) => (item.paper_id === paper.paper_id ? mergePaper(item, updated.paper) : item)),
+        current.map((item) => (item.paper_id === paper.paper_id ? { ...item, delivery_mode: updated.paper.delivery_mode } : item)),
       );
     } catch (e) {
       reportError(e);
@@ -503,13 +625,32 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   async function loadSelectedSubmissions() {
     if (!selectedPaper) return;
     const requestId = ++submissionRequestIdRef.current;
+    const gradingRefresh = gradingRequests.beginRefresh();
     clearScanObjectUrls();
     setBusy(`submissions:${selectedPaper.paper_id}`);
     setMessage(null);
     try {
       const result = await listPaperSubmissions(selectedPaper.paper_id);
-      if (submissionRequestIdRef.current === requestId) {
-        setSubmissions(result.submissions);
+      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) {
+        const sources = result.submissions.flatMap((submission) =>
+          submission.answers.map((answer) => ({
+            key: gradeKey(submission.attempt_id, answer.question_id),
+            source: toGradingDraftSource(answer),
+          })),
+        );
+        const refreshableFields = new Map<string, { score: boolean; feedback: boolean }>();
+        sources.forEach(({ key }) => {
+          refreshableFields.set(key, {
+            score: gradingRequests.acceptRefreshField(gradingRefresh, key, "score"),
+            feedback: gradingRequests.acceptRefreshField(gradingRefresh, key, "feedback"),
+          });
+        });
+        setSubmissions((current) => reconcileSubmissionSnapshot(current, result.submissions, refreshableFields));
+        setGradingDrafts((current) => reconcileGradingDrafts(
+          current,
+          sources,
+          (key, field) => refreshableFields.get(key)?.[field] ?? true,
+        ));
         setSelectedGradingAttemptId((current) => {
           if (result.submissions.some((item) => item.attempt_id === current)) return current;
           return (
@@ -520,9 +661,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         });
       }
     } catch (e) {
-      if (submissionRequestIdRef.current === requestId) reportError(e);
+      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) reportError(e);
     } finally {
-      setBusy(null);
+      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) {
+        setBusy((current) => current === `submissions:${selectedPaper.paper_id}` ? null : current);
+      }
     }
   }
 
@@ -542,21 +685,51 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     if (!selectedPaper) return;
     const key = gradeKey(submission.attempt_id, questionId);
     const answer = submission.answers.find((item) => item.question_id === questionId);
-    const rawScore = gradeDrafts[key] ?? String(answer?.score ?? answer?.ai_suggested_score ?? "");
-    const score = Number(rawScore);
-    if (!rawScore.trim() || !Number.isFinite(score)) {
+    const source = answer ? toGradingDraftSource(answer) : {};
+    const draft = getGradingDraft(gradingDrafts, key, source);
+    const score = parseGradingScore(draft.score.value);
+    if (score === null) {
       setMessage("请输入有效分数。");
       return;
     }
-    const feedback = feedbackDrafts[key] ?? null;
+    const feedback = gradingFeedbackForSave(draft.feedback);
+    const currentVersion = answer?.grading_version ?? null;
+    const sourceVersion = gradingDraftSourceVersionsRef.current.has(key)
+      ? gradingDraftSourceVersionsRef.current.get(key) ?? null
+      : currentVersion;
+    const versionChanged = gradingDraftSourceVersionsRef.current.has(key) && sourceVersion !== currentVersion;
+    if (versionChanged && !window.confirm("服务器批改版本已变化。本地分数或评语基于较早版本，继续保存将以当前服务器版本为准覆盖相应内容，是否继续？")) {
+      setMessage("已取消保存；本地批改草稿仍保留，请核对服务器内容后再试。");
+      return;
+    }
+    const confirmedVersion = versionChanged ? answer?.grading_version : undefined;
+    const gradingSave = gradingRequests.beginSave(key);
     setBusy(`grade:${key}`);
     setMessage(null);
     try {
-      const result = await gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, {
+      const payload = {
         score,
         feedback,
         is_correct: null,
+      };
+      const queuedSave = await gradingRequests.enqueueSave(gradingSave, async () => {
+        const latestSourceVersion = gradingDraftSourceVersionsRef.current.get(key);
+        const queueAdvancedVersion = latestSourceVersion !== undefined && latestSourceVersion !== sourceVersion && latestSourceVersion !== null
+          ? latestSourceVersion
+          : undefined;
+        const expectedVersion = queueAdvancedVersion ?? confirmedVersion ?? latestSourceVersion ?? currentVersion ?? undefined;
+        const result = expectedVersion
+          ? await gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, payload, expectedVersion)
+          : await gradePaperAnswer(selectedPaper.paper_id, submission.attempt_id, questionId, payload);
+        if (gradingRequests.isCurrentScope(gradingSave.scopeVersion)) {
+          gradingDraftSourceVersionsRef.current.set(key, result.answer.grading_version ?? expectedVersion ?? null);
+        }
+        return result;
       });
+      if (!queuedSave.started) return;
+      const result = queuedSave.value;
+      const accepted = gradingRequests.acceptSave(gradingSave);
+      if (!accepted.current) return;
       setSubmissions((current) =>
         current.map((item) =>
           item.attempt_id === submission.attempt_id
@@ -569,13 +742,24 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
             : item,
         ),
       );
-      setGradeDrafts((current) => ({ ...current, [key]: String(result.answer.score ?? "") }));
+      setGradingDrafts((current) => ({
+        ...current,
+        [key]: markGradingDraftSaved(
+          current[key] ?? draft,
+          {
+            score: String(result.answer.score ?? score),
+            feedback: result.answer.feedback ?? feedback ?? "",
+          },
+          (Object.keys(accepted.fields) as Array<keyof typeof accepted.fields>).filter((field) => accepted.fields[field]),
+        ),
+      }));
       await loadSelectedSubmissions();
-      setMessage("已保存批改结果");
+      if (gradingRequests.isCurrentSave(gradingSave)) setMessage(gradingSaveMessage(accepted.fields));
     } catch (e) {
-      reportError(e);
+      gradingRequests.finishSave(gradingSave);
+      if (gradingRequests.isCurrentSave(gradingSave)) reportError(e);
     } finally {
-      setBusy(null);
+      if (gradingRequests.isCurrentSave(gradingSave)) setBusy((current) => current === `grade:${key}` ? null : current);
     }
   }
 
@@ -608,11 +792,37 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       return;
     }
     const questionIds = pendingQuestionIds.slice(0, 50);
+    const gradingAiRequest = gradingRequests.beginAiRequest(questionIds.map((id) => gradeKey(submission.attempt_id, id)));
     setBusy(`ai-grade:${submission.attempt_id}`);
     setMessage(null);
     try {
       const result = await suggestAiGradesForAttempt(selectedPaper.paper_id, submission.attempt_id, questionIds);
-      const suggestions = new Map(result.suggestions.map((item) => [item.question_id, item]));
+      let filteredSuggestionFieldCount = 0;
+      let fullyFilteredSuggestionCount = 0;
+      const acceptedSuggestions: AcceptedAiSuggestion[] = result.suggestions.flatMap((suggestion) => {
+        const key = gradeKey(submission.attempt_id, suggestion.question_id);
+        const offeredFields = [
+          ...(suggestion.suggested_score != null ? ["score" as const] : []),
+          ...(suggestion.feedback ? ["feedback" as const] : []),
+        ];
+        if (offeredFields.length === 0) return [];
+        const fields = gradingRequests.isCurrentAiRequest(gradingAiRequest, key)
+          ? gradingRequests.acceptAiFields(gradingAiRequest, key, offeredFields)
+          : [];
+        filteredSuggestionFieldCount += offeredFields.length - fields.length;
+        if (fields.length === 0) fullyFilteredSuggestionCount += 1;
+        return fields.length > 0
+          ? [{
+              attemptId: submission.attempt_id,
+              questionId: suggestion.question_id,
+              status: suggestion.status,
+              suggestedScore: suggestion.suggested_score,
+              feedback: suggestion.feedback,
+              fields,
+            }]
+          : [];
+      });
+      const suggestions = new Map(acceptedSuggestions.map((item) => [item.questionId, item]));
       setSubmissions((current) =>
         current.map((item) =>
           item.attempt_id === submission.attempt_id
@@ -624,8 +834,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                     ? {
                         ...answer,
                         grading_status: suggestion.status || "needs_review",
-                        ai_suggested_score: suggestion.suggested_score ?? null,
-                        ai_feedback: suggestion.feedback ?? null,
+                        ...(suggestion.fields.includes("score") ? { ai_suggested_score: suggestion.suggestedScore ?? null } : {}),
+                        ...(suggestion.fields.includes("feedback") ? { ai_feedback: suggestion.feedback ?? null } : {}),
                       }
                     : answer;
                 }),
@@ -633,36 +843,29 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
             : item,
         ),
       );
-      setGradeDrafts((current) => {
-        const next = { ...current };
-        result.suggestions.forEach((suggestion) => {
-          if (suggestion.suggested_score != null) {
-            next[gradeKey(submission.attempt_id, suggestion.question_id)] = String(suggestion.suggested_score);
-          }
-        });
-        return next;
-      });
-      setFeedbackDrafts((current) => {
-        const next = { ...current };
-        result.suggestions.forEach((suggestion) => {
-          if (suggestion.feedback) {
-            next[gradeKey(submission.attempt_id, suggestion.question_id)] = suggestion.feedback;
-          }
-        });
-        return next;
-      });
-      const generatedCount = result.suggestions.filter((item) => item.status === "needs_review" || !item.status).length;
-      const retryableCount = result.suggestions.length - generatedCount;
+      setGradingDrafts((current) => applyGradingSuggestions(current, acceptedSuggestions.map((suggestion) => ({
+        key: gradeKey(suggestion.attemptId, suggestion.questionId),
+        score: suggestion.fields.includes("score") ? suggestion.suggestedScore : null,
+        feedback: suggestion.fields.includes("feedback") ? suggestion.feedback : null,
+      }))));
+      const generatedCount = acceptedSuggestions.filter((item) => item.status === "needs_review" || !item.status).length;
+      const retryableCount = acceptedSuggestions.filter((item) => item.status === "pending").length;
       const remainingCount = Math.max(0, pendingQuestionIds.length - questionIds.length);
-      setMessage(
-        generatedCount > 0
-          ? `已生成 ${generatedCount} 条 AI 预批改建议；${retryableCount + remainingCount} 题仍待处理，请教师复核后保存。`
-          : `本次未生成有效 AI 建议，${retryableCount + remainingCount} 题仍保持待处理，可检查模型/OCR 后重试。`,
-      );
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) {
+        const filteredNotice = filteredSuggestionFieldCount > 0 ? `；忽略了 ${filteredSuggestionFieldCount} 个过期字段` : "";
+        const message = acceptedSuggestions.length === 0 && fullyFilteredSuggestionCount > 0
+          ? "AI 预批改结果已过期，当前分数和评语未被覆盖；请重新发起预批改。"
+          : generatedCount > 0
+            ? `已生成 ${generatedCount} 条 AI 预批改建议${filteredNotice}；${retryableCount + remainingCount} 题仍待处理，请教师复核后保存。`
+            : `本次未生成有效 AI 建议${filteredNotice}，${retryableCount + remainingCount} 题仍保持待处理，可检查模型/OCR 后重试。`;
+        setMessage(message);
+      }
     } catch (e) {
-      reportError(e);
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) reportError(e);
     } finally {
-      setBusy(null);
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) {
+        setBusy((current) => current === `ai-grade:${submission.attempt_id}` ? null : current);
+      }
     }
   }
 
@@ -692,6 +895,9 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       .filter((item) => item.questionIds.length > 0);
     const plannedQuestionCount = batchPlan.reduce((total, item) => total + item.questionIds.length, 0);
     if (!window.confirm(`将为 ${batchPlan.length} 份答卷的 ${plannedQuestionCount} 道题生成 AI 建议（本次最多 50 题），是否继续？`)) return;
+    const gradingAiRequest = gradingRequests.beginAiRequest(batchPlan.flatMap(({ submission, questionIds }) =>
+      questionIds.map((questionId) => gradeKey(submission.attempt_id, questionId)),
+    ));
     setBusy("ai-grade:batch");
     setMessage(null);
     const completed: Array<{
@@ -699,8 +905,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       suggestions: Array<{ question_id: string; suggested_score?: number | null; feedback?: string | null; status: string }>;
     }> = [];
     let failed = 0;
+    let filteredSuggestionFieldCount = 0;
+    let fullyFilteredSuggestionCount = 0;
     try {
       for (const { submission, questionIds } of batchPlan) {
+        if (!gradingRequests.isCurrentAiBatch(gradingAiRequest)) break;
         try {
           const result = await suggestAiGradesForAttempt(selectedPaper.paper_id, submission.attempt_id, questionIds);
           completed.push({ attemptId: submission.attempt_id, suggestions: result.suggestions });
@@ -708,7 +917,37 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           failed += 1;
         }
       }
-      const byAttempt = new Map(completed.map((item) => [item.attemptId, new Map(item.suggestions.map((s) => [s.question_id, s]))]));
+      const acceptedSuggestions: AcceptedAiSuggestion[] = completed.flatMap(({ attemptId, suggestions }) =>
+        suggestions.flatMap((suggestion) => {
+          const key = gradeKey(attemptId, suggestion.question_id);
+          const offeredFields = [
+            ...(suggestion.suggested_score != null ? ["score" as const] : []),
+            ...(suggestion.feedback ? ["feedback" as const] : []),
+          ];
+          if (offeredFields.length === 0) return [];
+          const fields = gradingRequests.isCurrentAiRequest(gradingAiRequest, key)
+            ? gradingRequests.acceptAiFields(gradingAiRequest, key, offeredFields)
+            : [];
+          filteredSuggestionFieldCount += offeredFields.length - fields.length;
+          if (fields.length === 0) fullyFilteredSuggestionCount += 1;
+          return fields.length > 0
+            ? [{
+                attemptId,
+                questionId: suggestion.question_id,
+                status: suggestion.status,
+                suggestedScore: suggestion.suggested_score,
+                feedback: suggestion.feedback,
+                fields,
+              }]
+            : [];
+        }),
+      );
+      const byAttempt = new Map<string, Map<string, AcceptedAiSuggestion>>();
+      acceptedSuggestions.forEach((suggestion) => {
+        const byQuestion = byAttempt.get(suggestion.attemptId) ?? new Map<string, AcceptedAiSuggestion>();
+        byQuestion.set(suggestion.questionId, suggestion);
+        byAttempt.set(suggestion.attemptId, byQuestion);
+      });
       setSubmissions((current) =>
         current.map((submission) => {
           const suggestions = byAttempt.get(submission.attempt_id);
@@ -721,43 +960,32 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                 ? {
                     ...answer,
                     grading_status: suggestion.status || "needs_review",
-                    ai_suggested_score: suggestion.suggested_score ?? null,
-                    ai_feedback: suggestion.feedback ?? null,
+                    ...(suggestion.fields.includes("score") ? { ai_suggested_score: suggestion.suggestedScore ?? null } : {}),
+                    ...(suggestion.fields.includes("feedback") ? { ai_feedback: suggestion.feedback ?? null } : {}),
                   }
                 : answer;
             }),
           };
         }),
       );
-      setGradeDrafts((current) => {
-        const next = { ...current };
-        completed.forEach(({ attemptId, suggestions }) =>
-          suggestions.forEach((suggestion) => {
-            if (suggestion.suggested_score != null) next[gradeKey(attemptId, suggestion.question_id)] = String(suggestion.suggested_score);
-          }),
-        );
-        return next;
-      });
-      setFeedbackDrafts((current) => {
-        const next = { ...current };
-        completed.forEach(({ attemptId, suggestions }) =>
-          suggestions.forEach((suggestion) => {
-            if (suggestion.feedback) next[gradeKey(attemptId, suggestion.question_id)] = suggestion.feedback;
-          }),
-        );
-        return next;
-      });
-      const generatedCount = completed.reduce(
-        (total, item) => total + item.suggestions.filter((suggestion) => suggestion.status === "needs_review" || !suggestion.status).length,
-        0,
-      );
-      const retryableCount = completed.reduce(
-        (total, item) => total + item.suggestions.filter((suggestion) => suggestion.status === "pending").length,
-        0,
-      );
-      setMessage(`AI 批量预批改完成：生成 ${generatedCount} 条建议，${retryableCount} 题可重试${failed ? `，${failed} 份处理失败` : ""}。请教师逐题复核。`);
+      setGradingDrafts((current) => applyGradingSuggestions(current, acceptedSuggestions.map((suggestion) => ({
+        key: gradeKey(suggestion.attemptId, suggestion.questionId),
+        score: suggestion.fields.includes("score") ? suggestion.suggestedScore : null,
+        feedback: suggestion.fields.includes("feedback") ? suggestion.feedback : null,
+      }))));
+      const generatedCount = acceptedSuggestions.filter((suggestion) => suggestion.status === "needs_review" || !suggestion.status).length;
+      const retryableCount = acceptedSuggestions.filter((suggestion) => suggestion.status === "pending").length;
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) {
+        const filteredNotice = filteredSuggestionFieldCount > 0 ? `，忽略 ${filteredSuggestionFieldCount} 个过期字段` : "";
+        const message = acceptedSuggestions.length === 0 && fullyFilteredSuggestionCount > 0
+          ? `AI 批量预批改结果已过期，当前批改内容未被覆盖${failed ? `，${failed} 份处理失败` : ""}。`
+          : `AI 批量预批改完成：生成 ${generatedCount} 条建议，${retryableCount} 题可重试${filteredNotice}${failed ? `，${failed} 份处理失败` : ""}。请教师逐题复核。`;
+        setMessage(message);
+      }
     } finally {
-      setBusy(null);
+      if (gradingRequests.isCurrentAiOperation(gradingAiRequest)) {
+        setBusy((current) => current === "ai-grade:batch" ? null : current);
+      }
     }
   }
 
@@ -842,91 +1070,29 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,390px)_minmax(0,1fr)] overflow-hidden">
-        <aside className="flex min-h-0 flex-col overflow-hidden border-r border-slate-200 bg-white p-3">
-          <ContentFolders scope="paper" folders={folders} selectedId={browserFolderId} onSelect={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }} onCreated={(folder) => setFolders((current) => [...current, folder])} onUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }} onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)} onError={(error) => reportError(error)} allowPaperFolder />
-          {browserFolderId ? <div className="my-2 flex gap-2 text-xs"><button type="button" onClick={() => void analyzePaperFolder(browserFolderId).then(setFolderAnalysis).catch(reportError)} className="rounded border px-2 py-1 hover:bg-slate-50">分析此文件夹</button></div> : null}
-          <div className="mb-3 shrink-0 space-y-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
-              <input
-                className="w-full rounded-md border border-slate-300 py-2 pl-8 pr-2 text-sm"
-                placeholder="搜索试卷"
-                value={paperQuery.q}
-                onChange={(event) => updatePaperQuery({ q: event.target.value })}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <select
-                className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
-                value={paperQuery.deliveryMode}
-                onChange={(event) => updatePaperQuery({ deliveryMode: event.target.value as PaperQuery["deliveryMode"] })}
-              >
-                <option value="all">全部</option>
-                <option value="online">线上</option>
-                <option value="offline">线下</option>
-              </select>
-              <select
-                className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
-                value={paperQuery.status}
-                onChange={(event) => updatePaperQuery({ status: event.target.value })}
-              >
-                <option value="all">全部状态</option>
-                <option value="draft">草稿</option>
-                <option value="published">已发布</option>
-              </select>
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-auto">
-            {papers.map((paper) => (
-              <button
-                key={paper.paper_id}
-                type="button"
-                draggable
-                onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "paper", id: paper.paper_id }))}
-                onClick={() => {
-                  setSelectedPaperId(paper.paper_id);
-                  setAnalysis(null);
-                }}
-                className={`w-full rounded-lg border p-3 text-left transition ${
-                  selectedPaper?.paper_id === paper.paper_id
-                    ? "border-slate-900 bg-slate-50"
-                    : "border-slate-200 bg-white hover:border-slate-300"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="min-w-0 truncate text-sm font-semibold">
-                    {paper.title}
-                    {paper.subject ? ` · ${paper.subject}` : ""}
-                  </p>
-                  <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
-                      paper.delivery_mode === "online"
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-slate-100 text-slate-600"
-                    }`}
-                  >
-                    {deliveryLabel(paper.delivery_mode)}
-                  </span>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                  {(taggedItems[paper.paper_id]?.length ?? 0) > 0 ? <TagChips tags={taggedItems[paper.paper_id]} /> : null}
-                  <span>{paper.subject}</span>
-                  <span>{paper.question_count} 题</span>
-                  <span>{paper.submitted_student_count ?? 0} 份已提交</span>
-                  <span>{paper.published_student_count ?? paper.graded_student_count ?? 0} 份批改并发布</span>
-                  {paper.score_batch_count > 0 ? <span>{paper.score_batch_count} 批线下成绩</span> : null}
-                  <span>{paper.publication_count} 次发布</span>
-                </div>
-              </button>
-            ))}
-            {!loading && papers.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">
-                暂无已导出的试卷
-              </div>
-            ) : null}
-          </div>
-          <Pager meta={paperMeta} onPage={(page) => updatePaperQuery({ page })} onPageSize={(pageSize) => updatePaperQuery({ pageSize })} />
-        </aside>
+        <PaperListSidebar
+          papers={papers}
+          selectedPaper={selectedPaper}
+          loading={loading}
+          query={paperQuery}
+          meta={paperMeta}
+          folders={folders}
+          selectedFolderId={browserFolderId}
+          taggedItems={taggedItems}
+          onSelectFolder={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }}
+          onFolderCreated={(folder) => setFolders((current) => [...current, folder])}
+          onFolderUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
+          onFolderDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }}
+          onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)}
+          onError={reportError}
+          onAnalyzeFolder={(folderId) => void analyzePaperFolder(folderId).then(setFolderAnalysis).catch(reportError)}
+          onSearchChange={(q) => updatePaperQuery({ q })}
+          onDeliveryModeChange={(deliveryMode) => updatePaperQuery({ deliveryMode })}
+          onStatusChange={(status) => updatePaperQuery({ status })}
+          onSelectPaper={(paper) => { setSelectedPaperId(paper.paper_id); setAnalysis(null); }}
+          onPage={(page) => updatePaperQuery({ page })}
+          onPageSize={(pageSize) => updatePaperQuery({ pageSize })}
+        />
 
         <main className="min-h-0 overflow-auto p-6">
           {selectedPaper ? (
@@ -1012,191 +1178,62 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
               {paperDetailView === "manage" ? (
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-                <section className="space-y-5">
-                  <Panel title="发布试卷" icon={<Wifi className="h-5 w-5 text-slate-600" />}>
-                    <div className="mb-4 flex gap-2"><button type="button" onClick={() => { setRecipientScope("class"); setSelectedStudentIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${recipientScope === "class" ? "bg-slate-900 text-white" : "bg-white"}`}>发布到班级</button><button type="button" onClick={() => { setRecipientScope("student"); setSelectedClassIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${recipientScope === "student" ? "bg-slate-900 text-white" : "bg-white"}`}>指定学生</button></div>
-                    <ContentFolderHelp paper /><label className="mb-3 block text-sm">试卷归类（必选）<select aria-label="发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option value="">请选择文件夹</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
-                    {recipientScope === "student" && publishFolderId && folders.find((folder) => folder.id === publishFolderId)?.kind === "category" ? <button type="button" className="mb-3 rounded border border-violet-300 px-2 py-1 text-xs text-violet-700" onClick={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch(reportError)}>将空文件夹转为试卷文件夹</button> : null}
-                    <div className="mb-4 flex gap-2"><input aria-label="新文件夹名称" value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} className="min-w-0 flex-1 rounded border px-2 py-1 text-sm" placeholder="新建文件夹名称" /><button type="button" disabled={!newFolderName.trim()} className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={() => { const parent = folders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? folders.find((folder) => folder.kind === "category" && !folder.parent_id); void createContentFolder({ scope: "paper", name: newFolderName.trim(), kind: recipientScope === "student" ? "paper" : "category", parent_id: recipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => { setFolders((current) => [...current, folder]); setPublishFolderId(folder.id); setNewFolderName(""); }).catch(reportError); }}>新建并选择</button></div>
-                    <label className="mb-4 block text-sm font-medium text-slate-700">
-                      发布学科
-                      <select
-                        data-testid="paper-publish-subject"
-                        value={selectedSubject || (teacherSubjects.length === 1 ? teacherSubjects[0] : "")}
-                        onChange={(event) => setSelectedSubject(event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                      >
-                        {teacherSubjects.length > 1 ? <option value="">请选择学科</option> : null}
-                        {teacherSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                        {teacherSubjects.length === 0 ? <option value={selectedPaper.subject}>{selectedPaper.subject || "通用"}</option> : null}
-                      </select>
-                    </label>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {classes.map((klass) => {
-                        const alreadyPublished = recipientScope === "class" && activePublishedClassIds.has(klass.id);
-                        return (
-                        <label
-                          key={klass.id}
-                          className={`flex items-center gap-3 rounded-md border px-3 py-2 text-sm ${
-                            alreadyPublished
-                              ? "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
-                              : "cursor-pointer border-slate-200 hover:border-slate-300"
-                          }`}
-                        >
-                          <input
-                            data-testid={`paper-class-${klass.id}`}
-                          type={recipientScope === "student" ? "radio" : "checkbox"}
-                          name={recipientScope === "student" ? "personal-publish-class" : undefined}
-                            disabled={alreadyPublished}
-                            checked={selectedClassIds.includes(klass.id)}
-                            onChange={() => toggleClass(klass.id)}
-                            className="h-4 w-4"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-medium">{klass.name}</span>
-                            <span className="block truncate text-xs text-slate-500">
-                              {alreadyPublished
-                                ? "已发布到该班"
-                                : [klass.grade, klass.subject ?? klass.subject_hint].filter(Boolean).join(" · ")}
-                            </span>
-                          </span>
-                        </label>
-                        );
-                      })}
-                      {classes.length === 0 ? (
-                        <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
-                          暂无可发布班级
-                        </div>
-                      ) : null}
-                    </div>
-                    {recipientScope === "student" && selectedClassIds.length === 1 ? <div className="mt-3 rounded-lg border border-slate-200 p-3"><input aria-label="搜索指定学生" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} placeholder="按姓名或学号搜索" className="mb-2 w-full rounded border px-2 py-1.5 text-sm" /><div className="max-h-40 space-y-1 overflow-auto">{classStudents.filter((student) => `${student.display_name} ${student.student_no}`.toLowerCase().includes(studentSearch.toLowerCase())).map((student) => <label key={student.id} className="flex items-center gap-2 rounded p-1 text-sm hover:bg-slate-50"><input type="checkbox" checked={selectedStudentIds.includes(student.id)} onChange={() => setSelectedStudentIds((ids) => ids.includes(student.id) ? ids.filter((id) => id !== student.id) : [...ids, student.id])} />{student.display_name} · {student.student_no}</label>)}</div><p className="mt-1 text-xs text-slate-500">已选 {selectedStudentIds.length} 人；每人在所选试卷文件夹内最多收到一份。</p></div> : null}
-                    <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                      {[
-                        ["online", "网页答题"],
-                        ["image_manual", "图片人工批改"],
-                        ["image_ai", "图片 OCR+AI"],
-                      ].map(([mode, label]) => (
-                        <label
-                          key={mode}
-                          className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${
-                            submissionMode === mode ? "border-slate-900 bg-slate-50" : "border-slate-200 bg-white"
-                          }`}
-                        >
-                          <input
-                            data-testid={`paper-submission-${mode.replace("_", "-")}`}
-                            type="radio"
-                            name="paper-submission-mode"
-                            value={mode}
-                            checked={submissionMode === mode}
-                            onChange={() => setSubmissionMode(mode as PaperSubmissionMode)}
-                          />
-                          <span>{label}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <label className="mt-4 block text-sm font-medium text-slate-700">
-                      允许切屏次数
-                      <input
-                        type="number"
-                        min={0}
-                        max={999}
-                        value={maxScreenSwitches}
-                        onChange={(event) => setMaxScreenSwitches(Math.max(0, Number(event.target.value || 0)))}
-                        className="mt-1 w-36 rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                      />
-                    </label>
-                    <div className="mt-4 grid gap-3 md:grid-cols-3">
-                      <label className="block text-sm font-medium text-slate-700">
-                        开始时间
-                        <input
-                          type="datetime-local"
-                          value={publishStartAt}
-                          onChange={(event) => setPublishStartAt(event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                        />
-                      </label>
-                      <label className="block text-sm font-medium text-slate-700">
-                        结束时间
-                        <input
-                          type="datetime-local"
-                          value={publishEndAt}
-                          onChange={(event) => setPublishEndAt(event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                        />
-                      </label>
-                      <label className="block text-sm font-medium text-slate-700">
-                        做题时长（分钟）
-                        <input
-                          data-testid="paper-time-limit"
-                          type="number"
-                          min={0}
-                          max={1440}
-                          value={timeLimitMinutes}
-                          onChange={(event) => setTimeLimitMinutes(Math.max(0, Number(event.target.value || 0)))}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                        />
-                      </label>
-                    </div>
-                    {selectedPaper.question_count <= 0 ? (
-                      <p className="mt-3 text-sm text-amber-700">试卷至少需要包含 1 道题后才能发布。</p>
-                    ) : null}
-                    {selectedClassIds.length === 0 ? (
-                      <p className="mt-3 text-sm text-slate-500">请选择至少一个未发布过的班级。</p>
-                    ) : null}
-                    <button
-                      type="button"
-                      data-testid="paper-publish"
-                      disabled={!canPublish}
-                      onClick={() => void publishSelectedPaper()}
-                      className="mt-4 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      {recipientScope === "student" ? "布置个人练习" : "发布到班级"}
-                    </button>
-                  </Panel>
-
-                  <Panel title="发布记录" icon={<History className="h-5 w-5 text-slate-600" />}>
-                    <div className="space-y-3">
-                      {publications.map(publication => (
-                        <article key={publication.id} className="min-w-0 rounded-lg border border-slate-200 p-3">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <h3 className="min-w-0 break-all text-sm font-semibold">{publication.title}</h3>
-                            <span className="rounded bg-slate-100 px-2 py-1 text-xs">{publicationWindowLabel(publication, clock)}</span>
-                          </div>
-                          <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                            <div className="break-all">{publication.recipient_scope === "student" ? "指定学生" : "班级"}：{((publication.recipient_scope === "student" ? publication.student_names : publication.class_names) ?? []).join("、") || "-"}</div>
-                            <div>提交进度：<span>{publication.submitted_count ?? 0}/{publication.attempt_count ?? 0}</span></div>
-                            <div>允许切屏：{publication.max_screen_switches ?? 0} 次</div>
-                            <div>限时 {publication.time_limit_minutes ? `${publication.time_limit_minutes} 分钟` : "不限"}</div>
-                            <div className="break-all sm:col-span-2">{publication.start_at || "未设置"} - {publication.end_at || "未设置"}</div>
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                            <button type="button" aria-label={publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
-                              disabled={busy === `pause:${publication.id}` || publication.status === "revoked" || publication.status === "closed"}
-                              onClick={() => void togglePublicationPause(publication)}
-                              className="inline-flex min-h-10 items-center gap-1 rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50">
-                              {publication.status === "paused" ? <PlayCircle className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
-                              {publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
-                            </button>
-                            <button type="button" aria-label="撤回发布"
-                              disabled={busy === `revoke:${publication.id}` || publication.status === "revoked"}
-                              onClick={() => void revokePublication(publication)}
-                              className="inline-flex min-h-10 items-center gap-1 rounded border border-red-200 px-3 py-2 text-xs text-red-700 disabled:opacity-50">
-                              <Trash2 className="h-4 w-4" />取消发布
-                            </button>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                    {publications.length === 0 ? (
-                      <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
-                        暂无发布记录
-                      </p>
-                    ) : null}
-                  </Panel>
-
-                </section>
-
+                <PaperPublishingSidebar
+                  publishPanel={
+                    <PaperClassPublishPanel
+                      selectedPaper={selectedPaper}
+                      folders={folders}
+                      publishFolderId={publishFolderId}
+                      newFolderName={newFolderName}
+                      recipientScope={recipientScope}
+                      selectedClassIds={selectedClassIds}
+                      selectedStudentIds={selectedStudentIds}
+                      studentSearch={studentSearch}
+                      classStudents={classStudents}
+                      teacherSubjects={teacherSubjects}
+                      selectedSubject={selectedSubject}
+                      classes={classes}
+                      alreadyPublishedClassIds={activePublishedClassIds}
+                      submissionMode={submissionMode}
+                      maxScreenSwitches={maxScreenSwitches}
+                      publishStartAt={publishStartAt}
+                      publishEndAt={publishEndAt}
+                      timeLimitMinutes={timeLimitMinutes}
+                      canPublish={canPublish}
+                      onRecipientScopeChange={(scope) => {
+                        setRecipientScope(scope);
+                        if (scope === "class") setSelectedStudentIds([]);
+                        else setSelectedClassIds([]);
+                      }}
+                      onFolderChange={setPublishFolderId}
+                      onConvertFolder={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch(reportError)}
+                      onNewFolderNameChange={setNewFolderName}
+                      onCreateFolder={() => {
+                        const parent = folders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? folders.find((folder) => folder.kind === "category" && !folder.parent_id);
+                        void createContentFolder({ scope: "paper", name: newFolderName.trim(), kind: recipientScope === "student" ? "paper" : "category", parent_id: recipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => {
+                          setFolders((current) => [...current, folder]);
+                          setPublishFolderId(folder.id);
+                          setNewFolderName("");
+                        }).catch(reportError);
+                      }}
+                      onSubjectChange={setSelectedSubject}
+                      onToggleClass={toggleClass}
+                      onStudentSearchChange={setStudentSearch}
+                      onToggleStudent={(studentId) => setSelectedStudentIds((ids) => ids.includes(studentId) ? ids.filter((id) => id !== studentId) : [...ids, studentId])}
+                      onSubmissionModeChange={setSubmissionMode}
+                      onMaxScreenSwitchesChange={setMaxScreenSwitches}
+                      onPublishStartAtChange={setPublishStartAt}
+                      onPublishEndAtChange={setPublishEndAt}
+                      onTimeLimitMinutesChange={setTimeLimitMinutes}
+                      onPublish={() => void publishSelectedPaper()}
+                    />
+                  }
+                  publications={publications}
+                  clock={clock}
+                  busy={busy}
+                  onTogglePause={togglePublicationPause}
+                  onRevoke={revokePublication}
+                />
                 <aside className="space-y-4">
                   <Panel title="线下成绩" icon={<Upload className="h-5 w-5 text-slate-600" />}>
                     <div className="flex flex-col gap-2">
@@ -1236,225 +1273,59 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                 </aside>
               </div>
               ) : (
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-slate-950">线上提交批改</h3>
-                      <p className="mt-1 text-sm text-slate-500">图片提交在这里审核，最终分数以教师保存为准。</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        data-testid="paper-ai-grade-batch"
-                        disabled={busy === "ai-grade:batch" || submissions.length === 0}
-                        onClick={() => void suggestLoadedPendingGrades()}
-                        className="rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-                      >
-                        {busy === "ai-grade:batch" ? "AI 批量处理中..." : "AI 批量预批改"}
-                      </button>
-                      <button
-                        type="button"
-                        data-testid="paper-load-submissions"
-                        disabled={submissionsBusy}
-                        onClick={() => void loadSelectedSubmissions()}
-                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                        {submissionsBusy ? "加载中..." : "刷新提交"}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    {submissions.length > 0 ? (
-                      <label className="block rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-medium text-slate-700">
-                        选择学生答卷
-                        <select
-                          data-testid="paper-grading-student-select"
-                          value={selectedGradingSubmission?.attempt_id ?? ""}
-                          onChange={(event) => setSelectedGradingAttemptId(event.target.value)}
-                          className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                        >
-                          {submissions.map((submission) => (
-                            <option key={submission.attempt_id} value={submission.attempt_id}>
-                              {[submission.student_no, submission.student_name, submission.grading_completed_at ? "已发布" : submissionStatusLabel(submission.status)].filter(Boolean).join(" · ")}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    ) : null}
-                    {selectedGradingSubmission ? [selectedGradingSubmission].map((submission) => (
-                      <article key={submission.attempt_id} className="rounded-lg border border-slate-200 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
-                          <div className="min-w-0">
-                            <p className="font-medium text-slate-950">{submission.student_name || submission.student_no}</p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {[submission.student_no, submission.grading_completed_at ? "已发布" : submissionStatusLabel(submission.status), submission.submitted_at ? formatLocaleDateTime(submission.submitted_at) : null].filter(Boolean).join(" · ")}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              data-testid={`paper-ai-grade-${submission.attempt_id}`}
-                              disabled={
-                                busy === `ai-grade:${submission.attempt_id}` ||
-                                submission.status !== "submitted" ||
-                                !submission.answers.some((answer) => (answer.grading_status || "pending") === "pending")
-                              }
-                              onClick={() => void suggestSubmissionGrades(submission)}
-                              className="rounded-md border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-                            >
-                              {busy === `ai-grade:${submission.attempt_id}` ? "AI 处理中..." : "AI 预批改"}
-                            </button>
-                            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                              {submission.score ?? "-"} / {submission.max_score ?? "-"}
-                            </span>
-                          </div>
-                        </div>
-                        {submission.scan_images && submission.scan_images.length > 0 ? (
-                          <div className="mt-4">
-                            <p className="mb-2 text-xs font-semibold text-slate-600">线下答卷原图（{submission.scan_images.length} 页）</p>
-                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                              {submission.scan_images.map((image, index) => (
-                                <div
-                                  key={`${submission.attempt_id}:scan:${index}`}
-                                  className="overflow-hidden rounded-md border border-slate-200 bg-white"
-                                >
-                                  {scanImageUrls[`${submission.attempt_id}:${image.page_index}`] ? (
-                                    <a href={scanImageUrls[`${submission.attempt_id}:${image.page_index}`]} target="_blank" rel="noreferrer">
-                                      <img src={scanImageUrls[`${submission.attempt_id}:${image.page_index}`]} alt={`答卷第 ${index + 1} 页`} className="aspect-[4/3] w-full object-contain" />
-                                    </a>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => void loadOfflineScanImage(submission, image.page_index)}
-                                      disabled={busy === `scan:${submission.attempt_id}:${image.page_index}`}
-                                      className="flex aspect-[4/3] w-full items-center justify-center bg-slate-50 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-60"
-                                    >
-                                      {busy === `scan:${submission.attempt_id}:${image.page_index}` ? "正在加载..." : `加载第 ${index + 1} 页`}
-                                    </button>
-                                  )}
-                                  <p className="truncate border-t border-slate-100 px-2 py-1 text-xs text-slate-500">第 {index + 1} 页 · {image.name}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-                        <div className="mt-4 space-y-4">
-                          {submission.answers.map((answer) => {
-                            const key = gradeKey(submission.attempt_id, answer.question_id);
-                            const value = gradeDrafts[key] ?? String(answer.score ?? answer.ai_suggested_score ?? "");
-                            const feedback = feedbackDrafts[key] ?? answer.feedback ?? answer.ai_feedback ?? "";
-                            return (
-                              <div key={answer.question_id} className="rounded-md bg-slate-50 p-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                                  <span className="font-medium">{answer.header || answer.question_id}</span>
-                                  <span className="text-xs text-slate-500">
-                                    本题 {answer.score_per_item ?? "-"} 分 · {gradingStatusLabel(answer.grading_status)}
-                                  </span>
-                                </div>
-                                {answer.content ? <KatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}
-                                <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-sm">
-                                  <span className="font-semibold">参考答案：</span>
-                                  <KatexText text={answer.correct_answer ?? '未配置参考答案'} className="inline" />
-                                </div>
-                                {answer.options && Object.keys(answer.options).length > 0 ? (
-                                  <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-                                    {Object.entries(answer.options).map(([optionKey, optionText]) => (
-                                      <div key={optionKey} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
-                                        <span className="mr-1 font-semibold">{optionKey}.</span>
-                                        <KatexText text={optionText} className="inline" />
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : null}
-                                <div className="mt-3 rounded-md border border-blue-100 bg-white p-3">
-                                  <p className="text-xs font-semibold text-blue-700">学生作答</p>
-                                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-900">
-                                    {formatStudentAnswer(answer.answer)}
-                                  </p>
-                                </div>
-                                {answer.images && answer.images.length > 0 ? (
-                                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                    {answer.images.map((image, index) => (
-                                      <a
-                                        key={`${answer.question_id}:${image.name}:${index}`}
-                                        href={image.data_url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="group block overflow-hidden rounded-md border border-slate-200 bg-white"
-                                      >
-                                        <img
-                                          data-testid={`paper-answer-image-${answer.question_id}`}
-                                          src={image.data_url}
-                                          alt={image.name || "学生提交图片"}
-                                          className="aspect-[4/3] w-full object-contain bg-white"
-                                        />
-                                        <div className="flex items-center gap-2 border-t border-slate-100 px-2 py-1 text-xs text-slate-500">
-                                          <FileImage className="h-3.5 w-3.5" />
-                                          <span className="truncate">{image.name || `image-${index + 1}`}</span>
-                                        </div>
-                                      </a>
-                                    ))}
-                                  </div>
-                                ) : null}
-                                <div className="mt-3 grid gap-2 sm:grid-cols-[120px_minmax(0,1fr)_auto]">
-                                  <input
-                                    data-testid={`paper-grade-${answer.question_id}`}
-                                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                    value={value}
-                                    placeholder="分数"
-                                    onChange={(event) =>
-                                      setGradeDrafts((current) => ({ ...current, [key]: event.target.value }))
-                                    }
-                                  />
-                                  <input
-                                    data-testid={`paper-feedback-${answer.question_id}`}
-                                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                    value={feedback}
-                                    placeholder="批改反馈"
-                                    onChange={(event) =>
-                                      setFeedbackDrafts((current) => ({ ...current, [key]: event.target.value }))
-                                    }
-                                  />
-                                  <button
-                                    type="button"
-                                    data-testid={`paper-save-grade-${answer.question_id}`}
-                                    disabled={busy === `grade:${key}`}
-                                    onClick={() => void saveGrade(submission, answer.question_id)}
-                                    className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                                  >
-                                    保存
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
-                          {submission.grading_completed_at ? (
-                            <span className="text-sm font-medium text-emerald-700">成绩已发布给学生</span>
-                          ) : (
-                            <span className="text-xs text-slate-500">{!submission.submitted_at && !["submitted", "completed"].includes(submission.status) ? "学生尚未提交答卷，提交后才能完成批改并发布成绩。" : "所有题目保存分数后，完成整卷批改才会向学生展示成绩。"}</span>
-                          )}
-                          <button
-                            type="button"
-                            data-testid={`paper-complete-grading-${submission.attempt_id}`}
-                            disabled={busy === `complete:${submission.attempt_id}` || (!submission.submitted_at && !["submitted", "completed"].includes(submission.status))}
-                            onClick={() => void completeGrading(submission)}
-                            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                          >
-                            {busy === `complete:${submission.attempt_id}` ? "正在发布..." : "完成批改并发布成绩"}
-                          </button>
-                        </div>
-                      </article>
-                    )) : null}
-                    {submissions.length === 0 ? (
-                      <p className="rounded-md border border-dashed border-slate-300 p-6 text-sm text-slate-500">
-                        暂无已加载提交
-                      </p>
-                    ) : null}
-                  </div>
-                </section>
+                <GradingWorkspace
+                  submissions={submissions}
+                  selectedSubmission={selectedGradingSubmission}
+                  batchBusy={busy === "ai-grade:batch"}
+                  submissionsBusy={submissionsBusy}
+                  storageWarning={gradingDraftStorageWarning.ownerKey === gradingOwnerKey && gradingDraftStorageWarning.visible}
+                  onBatch={() => void suggestLoadedPendingGrades()}
+                  onReload={() => void loadSelectedSubmissions()}
+                  onSelectSubmission={setSelectedGradingAttemptId}
+                >
+                  {selectedGradingSubmission ? (
+                    <PaperSubmissionDetail
+                      key={selectedGradingSubmission.attempt_id}
+                      submission={selectedGradingSubmission}
+                      busy={busy}
+                      scanImageUrls={scanImageUrls}
+                      onSuggest={() => void suggestSubmissionGrades(selectedGradingSubmission)}
+                      onLoadScan={(pageIndex) => void loadOfflineScanImage(selectedGradingSubmission, pageIndex)}
+                      onComplete={() => void completeGrading(selectedGradingSubmission)}
+                    >
+                      {selectedGradingSubmission.answers.map((answer) => {
+                        const key = gradeKey(selectedGradingSubmission.attempt_id, answer.question_id);
+                        const source = toGradingDraftSource(answer);
+                        const draft = getGradingDraft(gradingDrafts, key, source);
+                        const sourceVersion = gradingDraftSourceVersionsRef.current.get(key);
+                        const versionChanged = gradingDraftSourceVersionsRef.current.has(key) && sourceVersion !== (answer.grading_version ?? null);
+                        return (
+                          <GradingQuestionCard
+                            key={answer.question_id}
+                            answer={answer}
+                            scoreValue={draft.score.value}
+                            feedbackValue={draft.feedback.value}
+                            statusLabel={gradingStatusLabel(answer.grading_status)}
+                            studentAnswerText={formatStudentAnswer(answer.answer)}
+                            saving={busy === "grade:" + key}
+                            versionChanged={versionChanged && (draft.score.dirty || draft.feedback.dirty)}
+                            onScoreChange={(changedValue) => {
+                              gradingRequests.beginEdit(key, "score");
+                              if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+                              setGradingDrafts((current) => updateGradingDraft(current, key, source, "score", changedValue));
+                            }}
+                            onFeedbackChange={(changedValue) => {
+                              gradingRequests.beginEdit(key, "feedback");
+                              if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+                              setGradingDrafts((current) => updateGradingDraft(current, key, source, "feedback", changedValue));
+                            }}
+                            onSave={() => void saveGrade(selectedGradingSubmission, answer.question_id)}
+                          />
+                        );
+                      })}
+                    </PaperSubmissionDetail>
+                  ) : null}
+                </GradingWorkspace>
               )}
               {message ? (
                 <div className="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
@@ -1521,33 +1392,55 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   );
 }
 
-function Pager({ meta, onPage, onPageSize }: { meta: PageMeta; onPage: (page: number) => void; onPageSize: (pageSize: number) => void }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-sm text-slate-600">
-      <span>
-        第 {meta.page} / {meta.totalPages} 页，共 {meta.total} 条
-      </span>
-      <div className="flex gap-2">
-        <select aria-label="每页条数" className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm" value={meta.pageSize} onChange={(event) => onPageSize(Number(event.target.value))}><option value={10}>10 条</option><option value={20}>20 条</option><option value={50}>50 条</option></select>
-        <button
-          type="button"
-          disabled={meta.page <= 1}
-          onClick={() => onPage(meta.page - 1)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium disabled:opacity-50"
-        >
-          上一页
-        </button>
-        <button
-          type="button"
-          disabled={meta.page >= meta.totalPages}
-          onClick={() => onPage(meta.page + 1)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium disabled:opacity-50"
-        >
-          下一页
-        </button>
-      </div>
-    </div>
-  );
+function toGradingDraftSource(answer: PaperSubmissionRecord["answers"][number]): GradingDraftSource {
+  return {
+    score: answer.score,
+    aiSuggestedScore: answer.ai_suggested_score,
+    feedback: answer.feedback,
+    aiFeedback: answer.ai_feedback,
+  };
+}
+
+function gradingDraftStorageScope(
+  owner: { accountId: string; projectId: string; paperId: string },
+  attemptId: string,
+  questionId: string,
+): GradingDraftStorageScope {
+  return { ...owner, attemptId, questionId };
+}
+
+function reconcileSubmissionSnapshot(
+  current: PaperSubmissionRecord[],
+  incoming: PaperSubmissionRecord[],
+  refreshableFields: Map<string, { score: boolean; feedback: boolean }>,
+): PaperSubmissionRecord[] {
+  const currentByAttempt = new Map(current.map((submission) => [submission.attempt_id, submission]));
+  return incoming.map((submission) => {
+    const existing = currentByAttempt.get(submission.attempt_id);
+    if (!existing) return submission;
+    const existingAnswers = new Map(existing.answers.map((answer) => [answer.question_id, answer]));
+    return {
+      ...submission,
+      answers: submission.answers.map((answer) => {
+        const previous = existingAnswers.get(answer.question_id);
+        const refreshable = refreshableFields.get(`${submission.attempt_id}:${answer.question_id}`);
+        if (!previous || !refreshable) return answer;
+        return {
+          ...answer,
+          ...(refreshable.score ? {} : { score: previous.score, ai_suggested_score: previous.ai_suggested_score }),
+          ...(refreshable.feedback ? {} : { feedback: previous.feedback, ai_feedback: previous.ai_feedback }),
+          ...(!refreshable.score || !refreshable.feedback ? { grading_status: previous.grading_status } : {}),
+        };
+      }),
+    };
+  });
+}
+
+function gradingSaveMessage(fields: Record<"score" | "feedback", boolean>): string {
+  if (fields.score && fields.feedback) return "已保存批改结果";
+  if (!fields.score && !fields.feedback) return "已保存发出时的分数和评语；当前有更新的分数和评语未保存。";
+  if (!fields.score) return "已保存发出时的评语；当前有更新的分数未保存。";
+  return "已保存发出时的分数；当前有更新的评语未保存。";
 }
 
 function Panel({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {

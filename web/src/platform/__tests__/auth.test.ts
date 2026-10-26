@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listPlatformPapers } from "../auth";
+import { gradePaperAnswer, listPlatformPapers } from "../auth";
 
 vi.mock("../../api/client", () => ({
   resolveApiUrl: async (path: string) => path,
@@ -54,5 +54,20 @@ describe("listPlatformPapers", () => {
       graded_student_count: 3,
       published_student_count: 3,
     });
+  });
+
+  it("sends a grading precondition only when explicitly supplied", async () => {
+    localStorage.setItem("solaire.platform.session", "test-token");
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ answer: { score: 3, grading_version: "a1:2:new" } }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await gradePaperAnswer("paper", "attempt", "math/q1", { score: 3 }, "a1:1:old");
+    const conditional = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(conditional.headers).get("If-Match")).toBe('"a1:1:old"');
+    expect(new Headers(conditional.headers).get("Authorization")).toBe("Bearer test-token");
+    expect(JSON.parse(String(conditional.body))).toEqual({ score: 3 });
+    await gradePaperAnswer("paper", "attempt", "math/q1", { score: 3 });
+    expect(new Headers((fetchMock.mock.calls[1][1] as RequestInit).headers).get("If-Match")).toBeNull();
   });
 });

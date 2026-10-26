@@ -1,41 +1,31 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
   BarChart3,
   CheckCircle2,
   ClipboardList,
-  Clock,
   Eye,
   EyeOff,
   Home,
   RefreshCw,
   Save,
-  Send,
   UserCog,
 } from "lucide-react";
-import { resolveApiUrl } from "../../../api/client";
-import { compressImageFileToDataUrl } from "../../../lib/imageCompression";
 import { formatLocaleDateTime } from "../../../lib/locale";
 import {
-  loadSessionToken,
   updateAccountProfile,
   listStudentPapers,
   listStudentResults,
-  recordStudentProctorEvent,
-  saveStudentAnswers,
   startStudentPaper,
-  submitStudentAttempt,
   updateStudentAccount,
   type PlatformUser,
-  type StudentAttemptRecord,
-  type StudentAnswerImage,
   type StudentPaperRecord,
-  type StudentQuestionRecord,
   type StudentResultRecord,
 } from "../../../platform/auth";
 import { PlatformShell } from "../PlatformShell";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
-import { StudentNavButton, StudentAnalysisVisual, StudentResultDetails, QuestionAnswer } from "./StudentPanels";
+import { StudentNavButton, StudentAnalysisVisual, StudentResultDetails } from "./StudentPanels";
+import { StudentExamPanel } from "./StudentExamPanel";
+import { useStudentExam } from "./useStudentExam";
 
 type Props = {
   user: PlatformUser;
@@ -45,8 +35,6 @@ type Props = {
 type StudentView = "home" | "papers" | "results" | "account" | "exam";
 
 type AccountMode = "password" | "username";
-
-type SaveStatus = "saved" | "dirty" | "saving" | "error" | "restored";
 
 function statusLabel(status: string): string {
   if (status === "submitted" || status === "completed") return "已提交";
@@ -58,14 +46,6 @@ function scoreText(score?: number | null, maxScore?: number | null): string {
   if (score === null || score === undefined) return "待公布";
   if (maxScore === null || maxScore === undefined) return `${score}`;
   return `${score}/${maxScore}`;
-}
-
-function formatCountdown(seconds: number | null): string {
-  if (seconds === null) return "不限时";
-  const safe = Math.max(0, seconds);
-  const minutes = Math.floor(safe / 60);
-  const rest = safe % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
 
 export function StudentWorkspace({ user, onLogout }: Props) {
@@ -84,27 +64,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [papers, setPapers] = useState<StudentPaperRecord[]>([]);
   const [results, setResults] = useState<StudentResultRecord[]>([]);
-  const [activeAttempt, setActiveAttempt] = useState<StudentAttemptRecord | null>(null);
-  const [questions, setQuestions] = useState<StudentQuestionRecord[]>([]);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [imageAnswers, setImageAnswers] = useState<Record<string, StudentAnswerImage[]>>({});
-  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [loading, setLoading] = useState(true);
-  const [submitReviewOpen, setSubmitReviewOpen] = useState(false);
-  const startedAtRef = useRef<number | null>(null);
-  const hiddenAtRef = useRef<number | null>(null);
-  const activeAttemptRef = useRef<StudentAttemptRecord | null>(null);
-  const questionsRef = useRef<StudentQuestionRecord[]>([]);
-  const answersRef = useRef<Record<string, string>>({});
-  const imageAnswersRef = useRef<Record<string, StudentAnswerImage[]>>({});
-  const answersUrlRef = useRef<string | null>(null);
-  const remainingBaselineRef = useRef<number | null>(null);
-  const submitInFlightRef = useRef(false);
-  const autoSubmitTriggeredRef = useRef(false);
-  const answerRevisionRef = useRef(0);
-  const draftSaveInFlightRef = useRef(false);
-  const filePickerActiveRef = useRef(false);
 
   const pendingPapers = useMemo(
     () => papers.filter((paper) => paper.status !== "submitted" && paper.status !== "completed"),
@@ -112,14 +72,6 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   );
   const latestResult = results[0] ?? null;
   const mustChangePassword = Boolean(profile.must_change_password);
-  const answeredCount = useMemo(() => {
-    if (!activeAttempt) return 0;
-    return questions.filter(
-      (question) =>
-        Boolean((answers[question.question_id] ?? "").trim()) ||
-        (imageAnswers[question.question_id]?.length ?? 0) > 0,
-    ).length;
-  }, [activeAttempt, answers, imageAnswers, questions]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -134,6 +86,13 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setLoading(false);
     }
   }, []);
+
+  const onExamSubmitted = useCallback(async (submissionMessage: string) => {
+    await refresh();
+    setMessage(submissionMessage);
+    setActiveView("results");
+  }, [refresh]);
+  const exam = useStudentExam({ user, onMessage: setMessage, onSubmitted: onExamSubmitted });
 
   useEffect(() => {
     void refresh();
@@ -157,155 +116,6 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       setAccountMode("password");
     }
   }, [mustChangePassword]);
-
-  useEffect(() => {
-    if (!activeAttempt || activeAttempt.status !== "in_progress") {
-      return;
-    }
-    const attemptId = activeAttempt.id;
-    const sendEvent = (eventType: string, durationMs?: number | null, payload?: Record<string, unknown>) => {
-      void Promise.resolve(
-        recordStudentProctorEvent(attemptId, {
-          event_type: eventType,
-          duration_ms: durationMs ?? null,
-          payload: payload ?? null,
-        }),
-      ).catch(() => {
-        /* best effort proctor event */
-      });
-    };
-    const onVisibilityChange = () => {
-      if (filePickerActiveRef.current) {
-        hiddenAtRef.current = null;
-        return;
-      }
-      if (document.hidden) {
-        hiddenAtRef.current = Date.now();
-        sendEvent("visibility_hidden", 0, { source: "visibilitychange", phase: "hidden" });
-        return;
-      }
-      if (hiddenAtRef.current != null) {
-        const duration = Date.now() - hiddenAtRef.current;
-        hiddenAtRef.current = null;
-        sendEvent("visibility_return", duration, { source: "visibilitychange", phase: "visible" });
-      }
-    };
-    const onPageHide = () => {
-      if (!filePickerActiveRef.current) sendEvent("visibility_hidden", 0, { source: "pagehide", phase: "hidden" });
-    };
-    const onBlur = () => {
-      if (!filePickerActiveRef.current) sendEvent("window_blur", 0, { source: "window.blur" });
-    };
-    const onFocus = () => {
-      window.setTimeout(() => {
-        filePickerActiveRef.current = false;
-      }, 0);
-    };
-    const onCopy = () => sendEvent("copy", 0, { source: "document.copy" });
-    const onPaste = () => sendEvent("paste", 0, { source: "document.paste" });
-    const onContextMenu = () => sendEvent("context_menu", 0, { source: "document.contextmenu" });
-    const onFullscreenChange = () => {
-      if (!document.fullscreenElement) sendEvent("fullscreen_exit", 0, { source: "fullscreenchange" });
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    document.addEventListener("copy", onCopy);
-    document.addEventListener("paste", onPaste);
-    document.addEventListener("contextmenu", onContextMenu);
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    window.addEventListener("blur", onBlur);
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("pagehide", onPageHide);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      document.removeEventListener("copy", onCopy);
-      document.removeEventListener("paste", onPaste);
-      document.removeEventListener("contextmenu", onContextMenu);
-      document.removeEventListener("fullscreenchange", onFullscreenChange);
-      window.removeEventListener("blur", onBlur);
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("pagehide", onPageHide);
-    };
-  }, [activeAttempt]);
-
-  useEffect(() => {
-    activeAttemptRef.current = activeAttempt;
-    questionsRef.current = questions;
-    answersRef.current = answers;
-    imageAnswersRef.current = imageAnswers;
-  }, [activeAttempt, answers, imageAnswers, questions]);
-
-  useEffect(() => {
-    if (!activeAttempt) {
-      answersUrlRef.current = null;
-      setRemainingSeconds(null);
-      return;
-    }
-    void resolveApiUrl(`/api/student/attempts/${encodeURIComponent(activeAttempt.id)}/answers`).then((answersUrl) => {
-      if (activeAttemptRef.current?.id === activeAttempt.id) {
-        answersUrlRef.current = answersUrl;
-      }
-    });
-    const serverRemaining = activeAttempt.remaining_seconds;
-    const limitMinutes = Number(activeAttempt.time_limit_minutes || 0);
-    const initialRemaining = serverRemaining ?? (limitMinutes > 0 ? limitMinutes * 60 : null);
-    remainingBaselineRef.current = initialRemaining;
-    setRemainingSeconds(initialRemaining);
-  }, [activeAttempt]);
-
-  useEffect(() => {
-    const limitMinutes = Number(activeAttempt?.time_limit_minutes || 0);
-    if (!activeAttempt || activeAttempt.status !== "in_progress" || limitMinutes <= 0) {
-      return;
-    }
-    const tick = () => {
-      const elapsed = startedAtRef.current ? Math.floor((Date.now() - startedAtRef.current) / 1000) : 0;
-      const next = Math.max(0, Number(remainingBaselineRef.current ?? limitMinutes * 60) - elapsed);
-      setRemainingSeconds(next);
-      if (next <= 0 && !autoSubmitTriggeredRef.current) {
-        autoSubmitTriggeredRef.current = true;
-        void submitActiveAttempt();
-      }
-    };
-    tick();
-    const timer = window.setInterval(tick, 1000);
-    return () => window.clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeAttempt?.id, activeAttempt?.status, activeAttempt?.time_limit_minutes]);
-
-  useEffect(() => {
-    const onBeforeUnload = () => {
-      saveAttemptBestEffort();
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    window.addEventListener("pagehide", onBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", onBeforeUnload);
-      window.removeEventListener("pagehide", onBeforeUnload);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!activeAttempt || activeAttempt.status !== "in_progress") return;
-    const timer = window.setInterval(() => {
-      if (saveStatus !== "dirty" || draftSaveInFlightRef.current) return;
-      const attempt = activeAttemptRef.current;
-      if (!attempt) return;
-      draftSaveInFlightRef.current = true;
-      const revision = answerRevisionRef.current;
-      setSaveStatus("saving");
-      const payload = buildAnswerPayload(questionsRef.current, answersRef.current, imageAnswersRef.current);
-      void saveStudentAnswers(attempt.id, payload)
-        .then(() => setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty"))
-        .catch(() => setSaveStatus("error"))
-        .finally(() => {
-          draftSaveInFlightRef.current = false;
-        });
-    }, 30_000);
-    return () => window.clearInterval(timer);
-    // buildAnswerPayload only reads refs; restarting the timer on every keypress is intentional.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeAttempt?.id, activeAttempt?.status, saveStatus]);
 
   async function submitAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -359,23 +169,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     setMessage(null);
     try {
       const data = await startStudentPaper(paper.publication_id);
-      setActiveAttempt(data.attempt);
-      setQuestions(data.questions);
-      const restoredAnswers: Record<string, string> = {};
-      const restoredImages: Record<string, StudentAnswerImage[]> = {};
-      for (const item of data.saved_answers ?? []) {
-        if (item.answer !== null && item.answer !== undefined) restoredAnswers[item.question_id] = String(item.answer);
-        if (item.images?.length) restoredImages[item.question_id] = item.images;
-      }
-      setAnswers(restoredAnswers);
-      setImageAnswers(restoredImages);
-      setSaveStatus((data.saved_answers?.length ?? 0) > 0 ? "restored" : "saved");
-      setSubmitReviewOpen(false);
-      answerRevisionRef.current = 0;
-      autoSubmitTriggeredRef.current = false;
-      startedAtRef.current = Date.now();
-      remainingBaselineRef.current = data.attempt.remaining_seconds ?? null;
-      setRemainingSeconds(data.attempt.remaining_seconds ?? null);
+      await exam.open(data);
       setActiveView("exam");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -384,237 +178,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     }
   }
 
-  function setAnswer(questionId: string, value: string) {
-    answerRevisionRef.current += 1;
-    setAnswers((current) => ({ ...current, [questionId]: value }));
-    setSaveStatus("dirty");
+  if (activeView === "exam" && exam.activeAttempt) {
+    return <StudentExamPanel controller={exam} userName={profile.username} message={message} />;
   }
-
-  function readImageFile(file: File): Promise<StudentAnswerImage> {
-    return compressImageFileToDataUrl(file);
-  }
-
-  async function setQuestionImages(questionId: string, files: FileList | null) {
-    const selected = Array.from(files ?? []);
-    const images = await Promise.all(selected.map(readImageFile));
-    answerRevisionRef.current += 1;
-    setImageAnswers((current) => ({ ...current, [questionId]: images }));
-    setSaveStatus("dirty");
-  }
-
-  function buildAnswerPayload(
-    sourceQuestions: StudentQuestionRecord[],
-    sourceAnswers: Record<string, string>,
-    sourceImageAnswers: Record<string, StudentAnswerImage[]>,
-  ) {
-    return sourceQuestions.map((question) => ({
-      question_id: question.question_id,
-      answer: sourceAnswers[question.question_id] ?? "",
-      images: sourceImageAnswers[question.question_id] ?? [],
-    }));
-  }
-
-  function elapsedSeconds(): number | null {
-    return startedAtRef.current ? Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000)) : null;
-  }
-
-  function saveAttemptBestEffort() {
-    const attempt = activeAttemptRef.current;
-    if (!attempt || attempt.status !== "in_progress") return;
-    const token = loadSessionToken();
-    const answersUrl = answersUrlRef.current;
-    if (!token || !answersUrl) return;
-    const headers = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    };
-    const payload = buildAnswerPayload(questionsRef.current, answersRef.current, imageAnswersRef.current);
-    void fetch(answersUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ answers: payload }),
-      keepalive: true,
-    }).catch(() => undefined);
-  }
-
-  async function saveActiveDraft() {
-    if (!activeAttempt || draftSaveInFlightRef.current) return;
-    draftSaveInFlightRef.current = true;
-    const revision = answerRevisionRef.current;
-    setSaveStatus("saving");
-    try {
-      await saveStudentAnswers(activeAttempt.id, buildAnswerPayload(questions, answers, imageAnswers));
-      setSaveStatus(answerRevisionRef.current === revision ? "saved" : "dirty");
-    } catch (e) {
-      setSaveStatus("error");
-      setMessage(e instanceof Error ? e.message : String(e));
-    } finally {
-      draftSaveInFlightRef.current = false;
-    }
-  }
-
-  async function submitActiveAttempt() {
-    if (!activeAttempt) return;
-    if (submitInFlightRef.current) return;
-    submitInFlightRef.current = true;
-    setBusy("submit");
-    setMessage(null);
-    try {
-      const payload = buildAnswerPayload(questions, answers, imageAnswers);
-      await submitStudentAttempt(activeAttempt.id, { time_spent_seconds: elapsedSeconds(), answers: payload });
-      setActiveAttempt(null);
-      setQuestions([]);
-      setAnswers({});
-      setImageAnswers({});
-      setRemainingSeconds(null);
-      setSaveStatus("saved");
-      setSubmitReviewOpen(false);
-      startedAtRef.current = null;
-      await refresh();
-      setMessage("试卷已提交");
-      setActiveView("results");
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-      submitInFlightRef.current = false;
-    }
-  }
-
-  if (activeView === "exam" && activeAttempt) {
-    return (
-      <PlatformShell
-        roleLabel="学生端"
-        title={activeAttempt.title}
-        subtitle={`${activeAttempt.subject || "未分科"} · ${questions.length} 题`}
-        userName={profile.username}
-        compactMobile
-        hideLogout
-      >
-        <section className="mx-auto w-full max-w-4xl rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <h2 className="text-lg font-semibold text-slate-950">{activeAttempt.title}</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                {activeAttempt.subject || "未分科"} · {questions.length} 题
-              </p>
-              <p className="mt-2 text-sm font-medium text-slate-700">已作答 {answeredCount} / {questions.length}</p>
-              <p className="mt-1 text-xs text-slate-500" role="status">
-                {saveStatus === "restored"
-                  ? "草稿已恢复"
-                  : saveStatus === "dirty"
-                    ? "有未保存修改"
-                    : saveStatus === "saving"
-                      ? "正在保存草稿…"
-                      : saveStatus === "error"
-                        ? "草稿保存失败，请重试"
-                        : "草稿已保存"}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <div className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white">
-                <Clock className="h-4 w-4" />
-                {formatCountdown(remainingSeconds)}
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                <AlertTriangle className="h-4 w-4" />
-                已记录切屏、复制粘贴、右键与退出全屏；选择答题图片不会计为切屏
-              </div>
-            </div>
-          </div>
-          <nav className="mb-4 flex flex-wrap gap-2" aria-label="答题导航">
-            {questions.map((question, index) => (
-              <a
-                key={question.question_id}
-                href={`#student-question-${index + 1}`}
-                className={`inline-flex h-8 min-w-8 items-center justify-center rounded-md border px-2 text-xs font-semibold ${
-                  (Boolean((answers[question.question_id] ?? "").trim()) ||
-                    (imageAnswers[question.question_id]?.length ?? 0) > 0)
-                    ? "border-emerald-600 bg-emerald-50 text-emerald-800"
-                    : "border-slate-300 bg-white text-slate-600"
-                }`}
-              >
-                {index + 1}
-              </a>
-            ))}
-          </nav>
-          <div className="space-y-4">
-            {questions.map((question, index) => (
-              <QuestionAnswer
-                key={question.question_id}
-                anchorId={`student-question-${index + 1}`}
-                question={question}
-                value={answers[question.question_id] ?? ""}
-                onChange={(value) => setAnswer(question.question_id, value)}
-                imageMode={activeAttempt.submission_mode === "image_manual" || activeAttempt.submission_mode === "image_ai"}
-                images={imageAnswers[question.question_id] ?? []}
-                onImagesChange={(files) => void setQuestionImages(question.question_id, files)}
-                onFileDialogOpen={() => {
-                  filePickerActiveRef.current = true;
-                }}
-                onFileDialogClose={() => {
-                  window.setTimeout(() => {
-                    filePickerActiveRef.current = false;
-                  }, 0);
-                }}
-              />
-            ))}
-          </div>
-          <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-            <button
-              type="button"
-              data-testid="student-save-draft"
-              disabled={saveStatus === "saving"}
-              onClick={() => void saveActiveDraft()}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-60 sm:w-auto"
-            >
-              <Save className="h-4 w-4" />
-              保存草稿
-            </button>
-            <button
-              type="button"
-              data-testid="student-submit-attempt"
-              disabled={busy === "submit"}
-              onClick={() => setSubmitReviewOpen(true)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60 sm:w-auto"
-            >
-              <Send className="h-4 w-4" />
-              提交试卷
-            </button>
-          </div>
-          {message ? <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">{message}</div> : null}
-        </section>
-        {submitReviewOpen ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-label="提交前确认">
-            <section className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl sm:p-6">
-              <h2 className="text-lg font-semibold text-slate-950">提交前确认</h2>
-              <p className="mt-1 text-sm text-slate-600">提交后不能撤回，请核对答题进度。</p>
-              <div className="mt-5 grid grid-cols-2 gap-3">
-                <div className="rounded-lg bg-emerald-50 p-4">
-                  <p className="text-xs text-emerald-700">答题进度</p>
-                  <p className="mt-1 text-lg font-semibold text-emerald-900">已答 {answeredCount} 题</p>
-                </div>
-                <div className={`rounded-lg p-4 ${questions.length - answeredCount > 0 ? "bg-rose-50" : "bg-slate-50"}`}>
-                  <p className={`text-xs ${questions.length - answeredCount > 0 ? "text-rose-700" : "text-slate-600"}`}>需要检查</p>
-                  <p className={`mt-1 text-lg font-semibold ${questions.length - answeredCount > 0 ? "text-rose-900" : "text-slate-900"}`}>未答 {Math.max(0, questions.length - answeredCount)} 题</p>
-                </div>
-              </div>
-              <dl className="mt-4 space-y-2 rounded-lg border border-slate-200 p-4 text-sm">
-                <div className="flex justify-between gap-3"><dt className="text-slate-500">草稿状态</dt><dd className="text-right font-medium text-slate-800">{saveStatus === "dirty" ? "有未保存修改，将随提交一并保存" : saveStatus === "saving" ? "草稿正在保存，提交时会携带最新答案" : saveStatus === "error" ? "草稿保存失败，但提交时会携带当前答案" : saveStatus === "restored" ? "草稿已恢复，可安全提交" : "草稿已保存，可安全提交"}</dd></div>
-                <div className="flex justify-between gap-3"><dt className="text-slate-500">剩余时间</dt><dd className="font-medium text-slate-800">{formatCountdown(remainingSeconds)}</dd></div>
-              </dl>
-              {questions.length - answeredCount > 0 ? <p className="mt-4 text-sm font-medium text-rose-700">还有未答题，建议返回检查后再提交。</p> : null}
-              <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <button type="button" onClick={() => setSubmitReviewOpen(false)} className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">继续检查</button>
-                <button type="button" disabled={busy === "submit"} onClick={() => { setSubmitReviewOpen(false); void submitActiveAttempt(); }} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60">确认提交</button>
-              </div>
-            </section>
-          </div>
-        ) : null}
-      </PlatformShell>
-    );
-  }
-
   return (
     <PlatformShell
       roleLabel="学生端"
@@ -773,6 +339,20 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         {activeView === "results" && !mustChangePassword ? (
           <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              {Object.entries(exam.unconfirmedTexts).map(([key, entry]) => <details key={key} className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+                <summary>查看未确认的本机文本：{entry.title}</summary>
+                {entry.issue ? <p className="mt-2">本机存储暂不可用，请在离开本页前复制以下文本。</p> : null}
+                <pre className="mt-2 whitespace-pre-wrap break-words">{Object.entries(entry.answers).map(([id, value]) => `${id}: ${value || "（空答案）"}`).join("\n")}</pre>
+              </details>)}
+              {Object.entries(exam.unconfirmedImages).map(([key, entry]) => <details key={key} className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+                <summary>查看未确认的本机图片：{entry.title}</summary>
+                {entry.issue ? <p className="mt-2">本机图片存储结果未能确认或提交未确认，请检查下面保留的图片。</p> : null}
+                <div className="mt-2 space-y-3">
+                  {Object.entries(entry.images).flatMap(([id, images]) => images.map((image, index) => (
+                    <div key={`${id}:${index}`}><p>{id} · {image.name}</p><img src={image.data_url} alt={`${id} 未确认的答题图片`} className="mt-1 max-h-48 max-w-full rounded border border-amber-200 object-contain" /></div>
+                  )))}
+                </div>
+              </details>)}
               <div className="mb-3 flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-slate-600" />
                 <h2 className="font-semibold text-slate-950">成绩与分析</h2>

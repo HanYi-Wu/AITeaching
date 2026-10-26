@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import json
+import sqlite3
+from threading import Barrier
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -20,7 +23,8 @@ from solaire.web import recent_projects, state
 from solaire.web.app import ensure_project_layout
 from solaire.web.export_workflow import _assert_export_destination_owner
 from solaire.web.platform_db import connect, default_platform_root
-from solaire.web.paper_service import _contains_grading_prompt_injection
+from solaire.web.paper_service import _contains_grading_prompt_injection, publish_online_paper
+from solaire.web.papers import publication_service
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -228,11 +232,15 @@ def test_correcting_generic_subject_keeps_the_existing_publication_and_attempt(w
     with connect(platform_root) as con:
         attempt_id = con.execute("SELECT id FROM student_attempts WHERE publication_id = ?", (publication_id,)).fetchone()["id"]
         previous = dict(con.execute("SELECT * FROM paper_records WHERE id = ?", (paper["paper_id"],)).fetchone())
-        con.execute("UPDATE paper_records SET subject = '通用' WHERE id = ?", (paper["paper_id"],))
+        con.execute(
+            "UPDATE paper_records SET title = ' ', subject = '通用' WHERE id = ?",
+            (paper["paper_id"],),
+        )
 
     listed = web_client.get("/api/papers", headers=teacher_headers).json()["papers"]
     repaired = next(item for item in listed if item["exam_id"] == exam_id)
     assert repaired["paper_id"] == paper["paper_id"]
+    assert repaired["title"] == "Midterm"
     assert repaired["subject"] == "Math"
     assert repaired["publication_count"] == 1
     assert repaired["total_student_count"] == 1
@@ -294,6 +302,202 @@ def test_teacher_publishes_online_paper_to_assigned_classes(web_client: TestClie
     assert body["publication"]["paper_id"] == paper["paper_id"]
     assert body["publication"]["class_ids"] == [class_id]
     assert body["publication"]["max_screen_switches"] == 2
+
+
+def test_concurrent_multi_class_publication_commits_only_one_publication(
+    web_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    school_id, teacher_id, first_class_id = _create_school_teacher_class(web_client, admin_token)
+    school_login = web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"})
+    school_headers = _headers(str(school_login.json()["token"]))
+    second_class = web_client.post(
+        "/api/school/classes",
+        json={"name": "Class 2", "grade": "G10", "subject_hint": "Math"},
+        headers=school_headers,
+    )
+    assert second_class.status_code == 200
+    second_class_id = str(second_class.json()["class"]["id"])
+    assigned = web_client.post(
+        "/api/school/teacher-class-assignments",
+        json={"teacher_id": teacher_id, "class_id": second_class_id, "subject": "Math"},
+        headers=school_headers,
+    )
+    assert assigned.status_code == 200
+
+    _write_exam(tmp_path)
+    teacher_headers = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers", headers=teacher_headers).json()["papers"][0]
+    platform_root = default_platform_root()
+    user = {"id": teacher_id, "role": "teacher", "school_id": school_id}
+    class_ids = [first_class_id, second_class_id]
+    preflight = publication_service.ensure_class_not_already_published
+    barrier = Barrier(2)
+
+    def wait_until_both_prechecks_pass(root, *, paper_id: str, class_ids: list[str]) -> None:
+        preflight(root, paper_id=paper_id, class_ids=class_ids)
+        barrier.wait(timeout=10)
+
+    monkeypatch.setattr(publication_service, "ensure_class_not_already_published", wait_until_both_prechecks_pass)
+
+    def publish():
+        try:
+            return publish_online_paper(
+                platform_root,
+                paper_id=paper["paper_id"],
+                user=user,
+                class_ids=class_ids,
+                project_root=tmp_path,
+            )
+        except Exception as error:  # capture both thread outcomes for deterministic assertions
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _index: publish(), range(2)))
+
+    published = [item for item in outcomes if isinstance(item, dict)]
+    rejected = [item for item in outcomes if isinstance(item, ValueError)]
+    assert len(published) == 1
+    assert len(rejected) == 1
+    assert str(rejected[0]) == "paper already published to class: Class 1, Class 2"
+    with connect(platform_root) as con:
+        rows = con.execute(
+            "SELECT id FROM exam_publications WHERE paper_id = ? AND status <> 'revoked'",
+            (paper["paper_id"],),
+        ).fetchall()
+        assert len(rows) == 1
+        assigned_classes = con.execute(
+            "SELECT class_id FROM publication_classes WHERE publication_id = ? ORDER BY class_id",
+            (rows[0]["id"],),
+        ).fetchall()
+        assert {str(row["class_id"]) for row in assigned_classes} == set(class_ids)
+
+
+def test_publish_rechecks_teacher_assignment_before_writing(
+    web_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    school_id, teacher_id, class_id = _create_school_teacher_class(web_client, admin_token)
+    _write_exam(tmp_path)
+    teacher = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers", headers=teacher).json()["papers"][0]
+    platform_root = default_platform_root()
+    preflight = publication_service.ensure_class_not_already_published
+
+    def revoke_assignment_after_preflight(root, *, paper_id: str, class_ids: list[str]) -> None:
+        preflight(root, paper_id=paper_id, class_ids=class_ids)
+        with connect(root) as con:
+            con.execute(
+                "DELETE FROM teacher_class_assignments WHERE teacher_id = ? AND class_id = ?",
+                (teacher_id, class_id),
+            )
+
+    monkeypatch.setattr(
+        publication_service,
+        "ensure_class_not_already_published",
+        revoke_assignment_after_preflight,
+    )
+    with pytest.raises(PermissionError, match="Teacher is not assigned to one or more selected classes"):
+        publish_online_paper(
+            platform_root,
+            paper_id=paper["paper_id"],
+            user={"id": teacher_id, "role": "teacher", "school_id": school_id},
+            class_ids=[class_id],
+            project_root=tmp_path,
+        )
+
+    with connect(platform_root) as con:
+        assert con.execute("SELECT COUNT(*) FROM exam_publications WHERE paper_id = ?", (paper["paper_id"],)).fetchone()[0] == 0
+        current_paper = con.execute(
+            "SELECT delivery_mode, status FROM paper_records WHERE id = ?",
+            (paper["paper_id"],),
+        ).fetchone()
+    assert current_paper["delivery_mode"] == "offline"
+    assert current_paper["status"] == "draft"
+
+
+@pytest.mark.parametrize("failure_stage", ["class_mapping", "attempt_snapshot"])
+def test_publication_write_failure_rolls_back_the_entire_multi_class_batch(
+    web_client: TestClient,
+    tmp_path: Path,
+    failure_stage: str,
+) -> None:
+    admin_token = _bootstrap_admin(web_client)
+    school_id, teacher_id, first_class_id = _create_school_teacher_class(web_client, admin_token)
+    school_login = web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"})
+    school_headers = _headers(str(school_login.json()["token"]))
+    second_class = web_client.post(
+        "/api/school/classes",
+        json={"name": "Class 2", "grade": "G10", "subject_hint": "Math"},
+        headers=school_headers,
+    )
+    assert second_class.status_code == 200
+    second_class_id = str(second_class.json()["class"]["id"])
+    assigned = web_client.post(
+        "/api/school/teacher-class-assignments",
+        json={"teacher_id": teacher_id, "class_id": second_class_id, "subject": "Math"},
+        headers=school_headers,
+    )
+    assert assigned.status_code == 200
+    for class_id, student_no in ((first_class_id, "S001"), (second_class_id, "S002")):
+        imported = web_client.post(
+            "/api/school/students/import",
+            headers=school_headers,
+            json={"class_id": class_id, "students": [{"student_no": student_no, "display_name": student_no}]},
+        )
+        assert imported.status_code == 200
+
+    _write_exam(tmp_path)
+    teacher = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers", headers=teacher).json()["papers"][0]
+    platform_root = default_platform_root()
+    with connect(platform_root) as con:
+        before = dict(con.execute("SELECT * FROM paper_records WHERE id = ?", (paper["paper_id"],)).fetchone())
+        if failure_stage == "class_mapping":
+            con.execute(
+                """
+                CREATE TRIGGER inject_publication_class_failure
+                BEFORE INSERT ON publication_classes
+                WHEN (SELECT COUNT(*) FROM publication_classes WHERE publication_id=NEW.publication_id) >= 1
+                BEGIN SELECT RAISE(ABORT, 'injected class mapping failure'); END
+                """
+            )
+        else:
+            con.execute(
+                """
+                CREATE TRIGGER inject_attempt_snapshot_failure
+                BEFORE INSERT ON student_attempts
+                BEGIN SELECT RAISE(ABORT, 'injected attempt snapshot failure'); END
+                """
+            )
+
+    with pytest.raises(sqlite3.IntegrityError, match=f"injected {failure_stage.replace('_', ' ')} failure"):
+        publish_online_paper(
+            platform_root,
+            paper_id=paper["paper_id"],
+            user={"id": teacher_id, "role": "teacher", "school_id": school_id},
+            class_ids=[first_class_id, second_class_id],
+            project_root=tmp_path,
+        )
+
+    with connect(platform_root) as con:
+        assert con.execute("SELECT COUNT(*) FROM exam_publications WHERE paper_id = ?", (paper["paper_id"],)).fetchone()[0] == 0
+        assert con.execute(
+            "SELECT COUNT(*) FROM publication_classes pc JOIN exam_publications ep ON ep.id = pc.publication_id WHERE ep.paper_id = ?",
+            (paper["paper_id"],),
+        ).fetchone()[0] == 0
+        assert con.execute(
+            "SELECT COUNT(*) FROM student_attempts sa JOIN exam_publications ep ON ep.id = sa.publication_id WHERE ep.paper_id = ?",
+            (paper["paper_id"],),
+        ).fetchone()[0] == 0
+        after = dict(con.execute("SELECT * FROM paper_records WHERE id = ?", (paper["paper_id"],)).fetchone())
+    assert after["delivery_mode"] == before["delivery_mode"]
+    assert after["status"] == before["status"]
+    assert after["folder_id"] == before["folder_id"]
 
 
 def test_personal_paper_folder_targets_only_selected_student_and_rejects_duplicate(web_client: TestClient, tmp_path: Path) -> None:
@@ -582,6 +786,13 @@ def test_teacher_filters_papers_and_manages_publication_history(web_client: Test
     )
     assert revoked.status_code == 200
     assert revoked.json()["publication"]["status"] == "revoked"
+    reopen = web_client.patch(
+        f"/api/papers/{paper['paper_id']}/publications/{publication_id}",
+        json={"status": "published"},
+        headers=teacher_headers,
+    )
+    assert reopen.status_code == 400
+    assert reopen.json()["detail"] == "已撤回的发布不能直接恢复，请重新发布并重新校验接收人"
     refreshed = web_client.get("/api/papers?subject=Math", headers=teacher_headers).json()["papers"][0]
     assert refreshed["publication_count"] == 0
 

@@ -203,6 +203,14 @@ CREATE TABLE IF NOT EXISTS student_answers (
   UNIQUE(attempt_id, question_id)
 );
 
+CREATE TABLE IF NOT EXISTS paper_answer_grading_versions (
+  attempt_id TEXT NOT NULL REFERENCES student_attempts(id) ON DELETE CASCADE,
+  question_id TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(attempt_id, question_id)
+);
+
 CREATE TABLE IF NOT EXISTS attempt_scan_images (
   id TEXT PRIMARY KEY,
   attempt_id TEXT NOT NULL REFERENCES student_attempts(id) ON DELETE CASCADE,

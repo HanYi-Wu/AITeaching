@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StudentWorkspace } from "./StudentWorkspace";
+import { studentDraftKey } from "./studentTextDraft";
 
 const mocks = vi.hoisted(() => ({
   updateStudentAccount: vi.fn(),
@@ -14,6 +15,61 @@ const mocks = vi.hoisted(() => ({
   recordStudentProctorEvent: vi.fn(),
   apiGetBlob: vi.fn(),
 }));
+
+function delayedIndexedDb() {
+  const rows = new Map<string, unknown>();
+  let created = false;
+  let delayNextWrite = false;
+  let signalWrite!: () => void;
+  let releaseWrite: (() => void) | null = null;
+  let writeStarted = new Promise<void>((resolve) => { signalWrite = resolve; });
+  const database = {
+    objectStoreNames: { contains: () => created },
+    createObjectStore: () => { created = true; },
+    close: () => undefined,
+    transaction: (_storeName: string, mode: IDBTransactionMode) => {
+      const tx: {
+        error: DOMException | null; oncomplete: ((event: Event) => void) | null;
+        onerror: ((event: Event) => void) | null; onabort: ((event: Event) => void) | null;
+        objectStore: () => unknown;
+      } = { error: null, oncomplete: null, onerror: null, onabort: null, objectStore: () => store };
+      const complete = () => {
+        if (mode === "readwrite" && delayNextWrite) {
+          delayNextWrite = false;
+          signalWrite();
+          releaseWrite = () => tx.oncomplete?.(new Event("complete"));
+        } else queueMicrotask(() => tx.oncomplete?.(new Event("complete")));
+      };
+      const store = {
+        get: (key: string) => {
+          const request: { result?: unknown; error?: DOMException; onsuccess?: (event: Event) => void; onerror?: (event: Event) => void } = {};
+          queueMicrotask(() => { request.result = rows.get(key); request.onsuccess?.(new Event("success")); });
+          return request;
+        },
+        put: (value: { key: string }) => { rows.set(value.key, structuredClone(value)); complete(); },
+        delete: (key: string) => { rows.delete(key); complete(); },
+      };
+      return tx as unknown as IDBTransaction;
+    },
+  } as unknown as IDBDatabase;
+  const factory = {
+    open: () => {
+      const request = {} as IDBOpenDBRequest;
+      Object.defineProperty(request, "result", { configurable: true, get: () => database });
+      queueMicrotask(() => {
+        if (!created) request.onupgradeneeded?.(new Event("upgrade") as IDBVersionChangeEvent);
+        request.onsuccess?.(new Event("success"));
+      });
+      return request;
+    },
+  } as unknown as IDBFactory;
+  return {
+    factory,
+    arm() { delayNextWrite = true; writeStarted = new Promise<void>((resolve) => { signalWrite = resolve; }); },
+    waitForWrite() { return writeStarted; },
+    release() { releaseWrite?.(); releaseWrite = null; },
+  };
+}
 
 vi.mock('../../../api/client', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../api/client')>(), apiGetBlob: mocks.apiGetBlob,
@@ -36,6 +92,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
 describe("StudentWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     localStorage.setItem("solaire.platform.session", "test-token");
     mocks.listStudentPapers.mockResolvedValue({
       papers: [
@@ -407,6 +464,7 @@ describe("StudentWorkspace", () => {
       await userEvent.click(screen.getByTestId("student-start-pub-img"));
       const file = new File(["fake"], "answer.png", { type: "image/png" });
       await userEvent.upload(await screen.findByTestId("student-image-math/q1"), file);
+      expect(await screen.findByText("本机图片存储暂不可用，图片只保留在当前页面；请及时保存到服务器。")).toBeInTheDocument();
       await userEvent.click(screen.getByTestId("student-submit-attempt"));
       await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
 
@@ -424,6 +482,47 @@ describe("StudentWorkspace", () => {
           }),
         ),
       );
+      expect(await screen.findByText("查看未确认的本机图片：Image Exam")).toBeInTheDocument();
+      expect(screen.getByRole("img", { name: "math/q1 未确认的答题图片" })).toBeInTheDocument();
+    } finally {
+      FileReader.prototype.readAsDataURL = originalReadAsDataURL;
+    }
+  });
+
+  it("shows both submitted and newer unconfirmed images when submission has no acceptance receipt", async () => {
+    mocks.listStudentPapers.mockResolvedValue({ papers: [{
+      publication_id: "pub-img", attempt_id: "attempt-img", exam_id: "image/Math", title: "Image Exam", subject: "Math",
+      status: "not_started", question_count: 1, screen_switch_count: 0, screen_switch_limit: 0, time_spent_seconds: 0,
+      show_results: false, submission_mode: "image_ai",
+    }] });
+    mocks.listStudentResults.mockResolvedValue({ results: [] });
+    mocks.startStudentPaper.mockResolvedValue({
+      attempt: { id: "attempt-img", publication_id: "pub-img", title: "Image Exam", status: "in_progress", submission_mode: "image_ai" },
+      questions: [{ question_id: "math/q1", header: "1", section_id: "Work", score_per_item: 5, type: "short_answer", content: "Show work" }],
+    });
+    let finishSubmit!: (value: { attempt: { id: string; status: string } }) => void;
+    mocks.submitStudentAttempt.mockImplementationOnce(() => new Promise((resolve) => { finishSubmit = resolve; }));
+    const originalReadAsDataURL = FileReader.prototype.readAsDataURL;
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function readAsDataURL(this: FileReader, blob?: Blob) {
+      const name = blob instanceof File ? blob.name : "answer.png";
+      Object.defineProperty(this, "result", { value: `data:image/png;base64,${name}`, configurable: true });
+      this.onload?.({ target: this } as ProgressEvent<FileReader>);
+    });
+    try {
+      render(<StudentWorkspace user={{ id: "s1", role: "student", username: "student", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+      await userEvent.click(await screen.findByTestId("student-page-papers"));
+      await userEvent.click(screen.getByTestId("student-start-pub-img"));
+      const input = await screen.findByTestId("student-image-math/q1");
+      await userEvent.upload(input, new File(["first"], "first.png", { type: "image/png" }));
+      await userEvent.click(screen.getByTestId("student-submit-attempt"));
+      await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+      await waitFor(() => expect(mocks.submitStudentAttempt).toHaveBeenCalledTimes(1));
+      await userEvent.upload(input, new File(["newer"], "newer.png", { type: "image/png" }));
+      await waitFor(() => expect(screen.getByText("newer.png")).toBeInTheDocument());
+      await act(async () => finishSubmit({ attempt: { id: "attempt-img", status: "submitted" } }));
+      expect(await screen.findByText("查看未确认的本机图片：Image Exam")).toBeInTheDocument();
+      expect(screen.getByText("math/q1 · newer.png")).toBeInTheDocument();
+      expect(screen.getByText("math/q1 · first.png")).toBeInTheDocument();
     } finally {
       FileReader.prototype.readAsDataURL = originalReadAsDataURL;
     }
@@ -514,6 +613,104 @@ describe("StudentWorkspace", () => {
     await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
     await waitFor(() => expect(mocks.submitStudentAttempt).toHaveBeenCalledTimes(1));
     fetchSpy.mockRestore();
+  });
+
+  it("recovers newer text after a late save and retains it until submission succeeds", async () => {
+    const user = { id: "s1", role: "student" as const, username: "student", display_name: "Student", status: "active" };
+    const scope = { accountId: "s1", projectScope: "project-1", publicationId: "pub1", attemptId: "attempt1", snapshotVersion: "snapshot-1" };
+    const data = {
+      attempt: { id: "attempt1", publication_id: "pub1", exam_id: "midterm/Math", title: "Text Paper", status: "in_progress",
+        project_scope: scope.projectScope, snapshot_version: scope.snapshotVersion },
+      questions: [{ question_id: "math/q1", header: "1", section_id: "Work", score_per_item: 5, type: "fill", content: "Explain" }],
+      saved_answers: [] as Array<{ question_id: string; answer: string }>,
+    };
+    mocks.startStudentPaper.mockResolvedValue(data);
+    let finishSave!: (result: { answer_count: number }) => void;
+    mocks.saveStudentAnswers.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    const first = render(<StudentWorkspace user={user} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId("student-page-papers"));
+    await userEvent.click(screen.getByTestId("student-start-pub1"));
+    await userEvent.type(await screen.findByTestId("student-answer-math/q1"), "first");
+    await userEvent.click(screen.getByTestId("student-save-draft"));
+    await userEvent.type(screen.getByTestId("student-answer-math/q1"), " newest");
+    await act(async () => finishSave({ answer_count: 1 }));
+    expect(localStorage.getItem(studentDraftKey(scope)!)).toContain("first newest");
+    first.unmount();
+
+    mocks.startStudentPaper.mockResolvedValue({ ...data, saved_answers: [{ question_id: "math/q1", answer: "first" }] });
+    render(<StudentWorkspace user={user} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId("student-page-papers"));
+    await userEvent.click(screen.getByTestId("student-start-pub1"));
+    expect(await screen.findByTestId("student-answer-math/q1")).toHaveValue("first newest");
+    expect(screen.getByText("已恢复本机文本草稿，等待保存到服务器。")).toBeInTheDocument();
+    mocks.submitStudentAttempt.mockRejectedValueOnce(new Error("offline submission"));
+    await userEvent.click(screen.getByTestId("student-submit-attempt"));
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+    expect(await screen.findByText("offline submission")).toBeInTheDocument();
+    expect(localStorage.getItem(studentDraftKey(scope)!)).not.toBeNull();
+    mocks.submitStudentAttempt.mockResolvedValueOnce({ attempt: { id: "attempt1", status: "submitted", submitted_answers_accepted: true } });
+    await userEvent.click(screen.getByTestId("student-submit-attempt"));
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(localStorage.getItem(studentDraftKey(scope)!)).toBeNull());
+    expect(mocks.submitStudentAttempt).toHaveBeenLastCalledWith("attempt1", expect.objectContaining({
+      answers: [{ question_id: "math/q1", answer: "first newest", images: [] }],
+    }));
+  });
+
+  it.each([[false, true], [undefined, true], [false, false], [undefined, false]])("retains text when a submission response does not confirm this payload (accepted=%s, scope=%s)", async (accepted, withScope) => {
+    const scope = { accountId: "s1", projectScope: "project-1", publicationId: "pub1", attemptId: "attempt1", snapshotVersion: "snapshot-1" };
+    mocks.startStudentPaper.mockResolvedValue({
+      attempt: { id: "attempt1", publication_id: "pub1", exam_id: "midterm/Math", title: "Text Paper", status: "in_progress",
+        ...(withScope ? { project_scope: scope.projectScope, snapshot_version: scope.snapshotVersion } : {}) },
+      questions: [{ question_id: "math/q1", header: "1", section_id: "Work", score_per_item: 5, type: "fill", content: "Explain" }], saved_answers: [],
+    });
+    mocks.submitStudentAttempt.mockResolvedValue({ attempt: { id: "attempt1", status: "submitted", submitted_answers_accepted: accepted } });
+    render(<StudentWorkspace user={{ id: "s1", role: "student", username: "student", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId("student-page-papers"));
+    await userEvent.click(screen.getByTestId("student-start-pub1"));
+    await userEvent.type(await screen.findByTestId("student-answer-math/q1"), "local not submitted");
+    await userEvent.click(screen.getByTestId("student-submit-attempt"));
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+    expect(await screen.findByText("查看未确认的本机文本：Text Paper")).toBeInTheDocument();
+    if (withScope) expect(localStorage.getItem(studentDraftKey(scope)!)).toContain("local not submitted");
+    else expect(screen.getByText("本机存储暂不可用，请在离开本页前复制以下文本。")).toBeInTheDocument();
+    expect(screen.getByText("math/q1: local not submitted")).toBeInTheDocument();
+  });
+
+  it("keeps text entered while post-submit image draft confirmation is waiting", async () => {
+    const indexedDb = delayedIndexedDb();
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+    Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: indexedDb.factory });
+    const scope = { accountId: "s1", projectScope: "project-1", publicationId: "pub1", attemptId: "attempt1", snapshotVersion: "snapshot-1" };
+    mocks.startStudentPaper.mockResolvedValue({
+      attempt: { id: "attempt1", publication_id: "pub1", title: "Text Paper", status: "in_progress",
+        project_scope: scope.projectScope, snapshot_version: scope.snapshotVersion },
+      questions: [{ question_id: "math/q1", header: "1", section_id: "Work", score_per_item: 5, type: "fill", content: "Explain" }],
+      saved_answers: [],
+    });
+    mocks.submitStudentAttempt.mockImplementationOnce(() => {
+      indexedDb.arm();
+      return Promise.resolve({ attempt: { id: "attempt1", status: "submitted", submitted_answers_accepted: false } });
+    });
+    try {
+      render(<StudentWorkspace user={{ id: "s1", role: "student", username: "student", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+      await userEvent.click(await screen.findByTestId("student-page-papers"));
+      await userEvent.click(screen.getByTestId("student-start-pub1"));
+      const answer = await screen.findByTestId("student-answer-math/q1");
+      await userEvent.type(answer, "sent");
+      await userEvent.click(screen.getByTestId("student-submit-attempt"));
+      await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
+      await waitFor(() => expect(mocks.submitStudentAttempt).toHaveBeenCalledTimes(1));
+      await indexedDb.waitForWrite();
+      await userEvent.type(answer, " later");
+      indexedDb.release();
+      expect(await screen.findByText("查看未确认的本机文本：Text Paper")).toBeInTheDocument();
+      expect(screen.getByText("math/q1: sent later")).toBeInTheDocument();
+    } finally {
+      indexedDb.release();
+      if (previous) Object.defineProperty(globalThis, "indexedDB", previous);
+      else Reflect.deleteProperty(globalThis, "indexedDB");
+    }
   });
 
   it("auto-submits at zero without an unanswered confirmation", async () => {
