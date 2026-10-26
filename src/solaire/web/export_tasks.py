@@ -22,6 +22,14 @@ from solaire.web.export_lock import ExportBusyError, FileLease
 from solaire.web.platform_db import default_platform_root
 from solaire.web.schemas.exams import ExamExportBody
 from solaire.web.security import assert_within_project
+from solaire.web.task_tracking.export_adapter import project_export_task
+
+
+def _safe_project_export_task(root: Path, row, **kwargs) -> None:
+    try:
+        project_export_task(root, row, **kwargs)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Safe export projection failed: %s", exc)
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="exam-export")
 _PENDING = ("queued", "running")
@@ -109,6 +117,9 @@ class ExportTaskService:
                         "UPDATE export_tasks SET status='failed', error_json=?, updated_at=? WHERE id=? AND status IN ('queued','running')",
                         (error, _now(), row["id"]),
                     )
+                    failed_row = db.execute("SELECT * FROM export_tasks WHERE id=?", (row["id"],)).fetchone()
+                    if failed_row:
+                        _safe_project_export_task(self.root, failed_row, event_version=3)
             finally:
                 lease.close()
 
@@ -212,6 +223,7 @@ class ExportTaskService:
                             status_code=409, detail="同一请求标识已用于不同的导出内容。"
                         )
                     lease.close()
+                    _safe_project_export_task(self.root, existing)
                     return self._public(existing)
                 self._check_capacity(db, owner)
                 now = _now()
@@ -222,14 +234,18 @@ class ExportTaskService:
         except BaseException:
             lease.close()
             raise
+        new_row = self._row(task_id, owner)
+        _safe_project_export_task(self.root, new_row, event_version=1)
         self._dispatch(task_id, body.model_copy(deep=True), format, user, lease)
-        return self._public(self._row(task_id, owner))
+        return self._public(new_row)
 
     def get(self, task_id, *, user):
         owner = _owner(user)
         self._row(task_id, owner)
         self._recover_interrupted()
-        return self._public(self._row(task_id, owner))
+        row = self._row(task_id, owner)
+        _safe_project_export_task(self.root, row)
+        return self._public(row)
 
     def list(self, *, user, limit=20):
         owner = _owner(user)
@@ -239,6 +255,8 @@ class ExportTaskService:
                 "SELECT * FROM export_tasks WHERE owner=? ORDER BY created_at DESC, id DESC LIMIT ?",
                 (owner, max(1, min(100, limit))),
             ).fetchall()
+        for row in rows:
+            _safe_project_export_task(self.root, row)
         return [self._public(row) for row in rows]
 
     def retry(self, task_id, *, user):
@@ -291,8 +309,10 @@ class ExportTaskService:
         except BaseException:
             lease.close()
             raise
+        retried_row = self._row(task_id, owner)
+        _safe_project_export_task(self.root, retried_row, event_version=1)
         self._dispatch(task_id, body, row["format"], user, lease)
-        return self._public(self._row(task_id, owner))
+        return self._public(retried_row)
 
     def _dispatch(self, task_id, body, format, user, lease):
         context = contextvars.copy_context()
@@ -339,6 +359,9 @@ class ExportTaskService:
                     task_id,
                 ),
             )
+            finished_row = db.execute("SELECT * FROM export_tasks WHERE id=?", (task_id,)).fetchone()
+            if finished_row:
+                _safe_project_export_task(self.root, finished_row, event_version=3)
 
     def _run(self, task_id, body, format, user, platform_root, lease):
         token = None
@@ -348,6 +371,9 @@ class ExportTaskService:
                     "UPDATE export_tasks SET status='running', updated_at=? WHERE id=?",
                     (_now(), task_id),
                 )
+                running_row = db.execute("SELECT * FROM export_tasks WHERE id=?", (task_id,)).fetchone()
+                if running_row:
+                    _safe_project_export_task(self.root, running_row, event_version=2)
             if user:
                 try:
                     fresh = auth_service.get_user_profile(
