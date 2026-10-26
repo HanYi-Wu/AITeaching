@@ -96,7 +96,7 @@ export function BankRoute({
       </div>
     );
   }
-  return <BankWorkspace onError={onError} onOpenGraphNode={onOpenGraphNode} />;
+  return <BankWorkspace key={info.root || info.project_id || "unbound"} onError={onError} onOpenGraphNode={onOpenGraphNode} />;
 }
 
 export function TemplateRoute({
@@ -125,7 +125,7 @@ export function TemplateRoute({
       </div>
     );
   }
-  return <TemplateWorkspace onError={onError} />;
+  return <TemplateWorkspace key={info.root || info.project_id || "unbound"} onError={onError} />;
 }
 
 export function GraphRoute({

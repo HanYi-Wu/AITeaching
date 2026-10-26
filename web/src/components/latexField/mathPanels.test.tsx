@@ -113,7 +113,7 @@ describe("MathSymbolsPanel and MathEditPopup", () => {
 
     const popup = container.querySelector("#lrt-math-popup")!;
     const host = popup.firstElementChild!.children[1] as HTMLDivElement;
-    const field = host.firstElementChild as MockMathfieldElement;
+    const field = host.firstElementChild as InstanceType<typeof MockMathfieldElement>;
     field.latexValue = "typed formula";
 
     const nextConfirm = vi.fn();
@@ -144,7 +144,7 @@ describe("MathSymbolsPanel and MathEditPopup", () => {
 
     const dialog = getByRole("dialog");
     const host = dialog.firstElementChild!.children[2] as HTMLDivElement;
-    const field = host.firstElementChild as MockMathfieldElement;
+    const field = host.firstElementChild as InstanceType<typeof MockMathfieldElement>;
     field.latexValue = "typed formula";
 
     const nextConfirm = vi.fn();

@@ -63,6 +63,24 @@ def test_save_group_round_trip(tmp_path: Path) -> None:
     assert d2["question_group"]["items"][0]["content"] == "已改第一问"
 
 
+def test_save_mixed_group_round_trip(tmp_path: Path) -> None:
+    group = QuestionGroupRecord.model_validate({
+        "id": "mixed", "type": "group", "unified": False, "material": "共用材料",
+        "items": [
+            {"type": "single_choice", "content": "第一问", "options": {"A": "1", "B": "2"}, "answer": "A"},
+            {"type": "short_answer", "content": "第二问", "answer": "说明理由", "analysis": "解析"},
+        ],
+    })
+    qid = "数学/练习/mixed"
+    save_bank_record(tmp_path, qid, group)
+    detail = get_question_detail(tmp_path, qid)
+    saved = detail["question_group"]
+    assert saved["unified"] is False
+    assert [item["type"] for item in saved["items"]] == ["single_choice", "short_answer"]
+    assert saved["items"][1]["answer"] == "说明理由"
+    assert len(detail["question_group_preview"]["items"]) == 2
+
+
 def test_delete_group_removes_file(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _write_group_file(root)

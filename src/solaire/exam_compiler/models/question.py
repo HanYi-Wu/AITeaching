@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 from typing_extensions import Self
 
 ChoiceQuestionType = Literal["single_choice", "multiple_choice"]
@@ -189,6 +189,7 @@ GroupMixedSubItem = Annotated[
     Union[TaggedChoice, TaggedFill, TaggedJudge, TaggedShortAnswer, TaggedReasoning, TaggedEssay],
     Field(discriminator="type"),
 ]
+_MIXED_SUBITEM_ADAPTER = TypeAdapter(GroupMixedSubItem)
 
 
 class QuestionItem(BaseModel):
@@ -321,7 +322,7 @@ class QuestionGroupRecord(BaseModel):
             for it in self.items:
                 if isinstance(it, dict) and it.get("type") == "group":
                     raise ValueError("nested group is not allowed")
-                row = GroupMixedSubItem.model_validate(it)
+                row = _MIXED_SUBITEM_ADAPTER.validate_python(it)
                 parsed.append(row)
             object.__setattr__(self, "items", parsed)
             return self
