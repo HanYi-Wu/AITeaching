@@ -10,138 +10,29 @@ from typing import Any
 from solaire.web.auth_service import hash_password, utc_now
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 
-MAX_PAGE_SIZE = 100
-VALID_ACCOUNT_STATUSES = {"active", "disabled"}
-
-
-def _new_id() -> str:
-    return uuid.uuid4().hex
-
-
-def _new_student_password() -> str:
-    alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
-    return "".join(secrets.choice(alphabet) for _ in range(10))
-
-
-def _new_student_username(con, school_id: str) -> str:
-    """Generate a platform login username, not an exam taker number."""
-    for _ in range(20):
-        candidate = f"s{secrets.randbelow(90_000_000) + 10_000_000}"
-        row = con.execute("SELECT 1 FROM users WHERE username = ?", (candidate,)).fetchone()
-        if row is None:
-            return candidate
-    return f"stu_{school_id[:4]}_{uuid.uuid4().hex}"
-
-
-def _cell_text(value: object) -> str:
-    if value is None:
-        return ""
-    text = str(value).strip()
-    return "" if text.lower() == "none" else text
-
-
-def _fetch_required(root: Path, sql: str, params: tuple[object, ...], message: str) -> dict[str, Any]:
-    with connect(root) as con:
-        row = con.execute(sql, params).fetchone()
-    data = row_to_dict(row)
-    if data is None:
-        raise ValueError(message)
-    return data
-
-
-def _page(items: list[dict[str, Any]], *, page: int = 1, page_size: int = 10) -> dict[str, Any]:
-    clean_page = max(1, int(page or 1))
-    clean_page_size = max(1, min(MAX_PAGE_SIZE, int(page_size or 10)))
-    total = len(items)
-    total_pages = max(1, (total + clean_page_size - 1) // clean_page_size)
-    if clean_page > total_pages:
-        clean_page = total_pages
-    start = (clean_page - 1) * clean_page_size
-    return {
-        "items": items[start : start + clean_page_size],
-        "total": total,
-        "page": clean_page,
-        "page_size": clean_page_size,
-        "total_pages": total_pages,
-    }
-
-
-def _contains_query(item: dict[str, Any], query: str, fields: list[str]) -> bool:
-    needle = query.strip().lower()
-    if not needle:
-        return True
-    values: list[str] = []
-    for field in fields:
-        value = item.get(field)
-        if isinstance(value, list):
-            values.extend(str(part) for part in value)
-        elif value is not None:
-            values.append(str(value))
-    return needle in " ".join(values).lower()
-
-
-def _clean_status(status: str) -> str:
-    clean = status.strip() or "active"
-    if clean not in VALID_ACCOUNT_STATUSES:
-        raise ValueError("status must be active or disabled")
-    return clean
-
-
-def create_school(root: Path, *, name: str) -> dict[str, Any]:
-    init_platform_db(root)
-    clean_name = name.strip()
-    if not clean_name:
-        raise ValueError("school name is required")
-    now = utc_now()
-    school_id = _new_id()
-    with connect(root) as con:
-        con.execute(
-            """
-            INSERT INTO schools (id, name, status, ai_enabled, created_at, updated_at)
-            VALUES (?, ?, 'active', 0, ?, ?)
-            """,
-            (school_id, clean_name, now, now),
-        )
-        row = con.execute("SELECT * FROM schools WHERE id = ?", (school_id,)).fetchone()
-    school = row_to_dict(row)
-    if school is None:
-        raise RuntimeError("failed to create school")
-    return school
-
-
-def list_schools(root: Path) -> list[dict[str, Any]]:
-    init_platform_db(root)
-    with connect(root) as con:
-        rows = con.execute(
-            """
-            SELECT s.*,
-                   (SELECT COUNT(*) FROM users u WHERE u.school_id = s.id AND u.role = 'school') AS school_user_count
-            FROM schools s
-            ORDER BY s.created_at DESC
-            """
-        ).fetchall()
-    return [row_to_dict(row) or {} for row in rows]
-
-
-def query_schools(
-    root: Path,
-    *,
-    q: str | None = None,
-    status: str | None = None,
-    page: int = 1,
-    page_size: int = 10,
-) -> dict[str, Any]:
-    schools = list_schools(root)
-    if status and status != "all":
-        schools = [school for school in schools if str(school.get("status") or "") == status]
-    if q:
-        schools = [
-            school
-            for school in schools
-            if _contains_query(school, q, ["name", "status", "created_at", "updated_at"])
-        ]
-    result = _page(schools, page=page, page_size=page_size)
-    return {"schools": result.pop("items"), **result}
+from solaire.web.school.common import (
+    MAX_PAGE_SIZE,
+    VALID_ACCOUNT_STATUSES,
+    _cell_text,
+    _clean_status,
+    _contains_query,
+    _fetch_required,
+    _new_id,
+    _new_student_password,
+    _new_student_username,
+    _page,
+)
+from solaire.web.school.organization import (
+    create_class,
+    create_school,
+    delete_class,
+    get_school,
+    list_classes,
+    list_schools,
+    query_classes,
+    query_schools,
+    update_class,
+)
 
 
 def create_user(
@@ -445,140 +336,7 @@ def bulk_update_teachers(root: Path, *, school_id: str, teacher_ids: list[str], 
     return {"updated": int(cur.rowcount if cur.rowcount is not None else 0)}
 
 
-def create_class(root: Path, *, school_id: str, name: str, grade: str | None = None, subject_hint: str | None = None) -> dict[str, Any]:
-    init_platform_db(root)
-    clean_name = name.strip()
-    if not clean_name:
-        raise ValueError("class name is required")
-    now = utc_now()
-    class_id = _new_id()
-    with connect(root) as con:
-        school = con.execute("SELECT 1 FROM schools WHERE id = ? AND status = 'active'", (school_id,)).fetchone()
-        if school is None:
-            raise ValueError("school not found")
-        con.execute(
-            """
-            INSERT INTO classes (id, school_id, name, grade, subject_hint, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                class_id,
-                school_id,
-                clean_name,
-                grade.strip() if grade and grade.strip() else None,
-                subject_hint.strip() if subject_hint and subject_hint.strip() else None,
-                now,
-                now,
-            ),
-        )
-        row = con.execute("SELECT * FROM classes WHERE id = ?", (class_id,)).fetchone()
-    klass = row_to_dict(row)
-    if klass is None:
-        raise RuntimeError("failed to create class")
-    return klass
 
-
-def list_classes(root: Path, *, school_id: str) -> list[dict[str, Any]]:
-    init_platform_db(root)
-    with connect(root) as con:
-        rows = con.execute("SELECT * FROM classes WHERE school_id = ? ORDER BY created_at DESC", (school_id,)).fetchall()
-    return [row_to_dict(row) or {} for row in rows]
-
-
-def query_classes(
-    root: Path,
-    *,
-    school_id: str,
-    q: str | None = None,
-    page: int = 1,
-    page_size: int = 10,
-) -> dict[str, Any]:
-    classes = list_classes(root, school_id=school_id)
-    if classes:
-        ids = [str(klass["id"]) for klass in classes]
-        placeholders = ",".join("?" for _ in ids)
-        with connect(root) as con:
-            student_rows = con.execute(
-                f"""
-                SELECT class_id, COUNT(*) AS n
-                FROM class_students
-                WHERE class_id IN ({placeholders})
-                GROUP BY class_id
-                """,
-                tuple(ids),
-            ).fetchall()
-            teacher_rows = con.execute(
-                f"""
-                SELECT class_id, COUNT(DISTINCT teacher_id) AS n
-                FROM teacher_class_assignments
-                WHERE class_id IN ({placeholders})
-                GROUP BY class_id
-                """,
-                tuple(ids),
-            ).fetchall()
-        students_by_class = {str(row["class_id"]): int(row["n"]) for row in student_rows}
-        teachers_by_class = {str(row["class_id"]): int(row["n"]) for row in teacher_rows}
-        for klass in classes:
-            class_id = str(klass["id"])
-            klass["student_count"] = students_by_class.get(class_id, 0)
-            klass["teacher_count"] = teachers_by_class.get(class_id, 0)
-    if q:
-        classes = [klass for klass in classes if _contains_query(klass, q, ["name", "grade", "student_count", "teacher_count"])]
-    result = _page(classes, page=page, page_size=page_size)
-    return {"classes": result.pop("items"), **result}
-
-
-def update_class(
-    root: Path,
-    *,
-    school_id: str,
-    class_id: str,
-    name: str | None = None,
-    grade: str | None = None,
-) -> dict[str, Any]:
-    init_platform_db(root)
-    now = utc_now()
-    updates: list[str] = ["updated_at = ?"]
-    params: list[object] = [now]
-    if name is not None:
-        clean_name = name.strip()
-        if not clean_name:
-            raise ValueError("class name is required")
-        updates.append("name = ?")
-        params.append(clean_name)
-    if grade is not None:
-        updates.append("grade = ?")
-        params.append(grade.strip() or None)
-    params.extend([class_id, school_id])
-    with connect(root) as con:
-        existing = con.execute(
-            "SELECT 1 FROM classes WHERE id = ? AND school_id = ?",
-            (class_id, school_id),
-        ).fetchone()
-        if existing is None:
-            raise ValueError("class not found")
-        con.execute(
-            f"UPDATE classes SET {', '.join(updates)}, subject_hint = NULL WHERE id = ? AND school_id = ?",
-            tuple(params),
-        )
-        row = con.execute("SELECT * FROM classes WHERE id = ?", (class_id,)).fetchone()
-    klass = row_to_dict(row)
-    if klass is None:
-        raise RuntimeError("failed to update class")
-    return klass
-
-
-def delete_class(root: Path, *, school_id: str, class_id: str) -> dict[str, Any]:
-    init_platform_db(root)
-    with connect(root) as con:
-        existing = con.execute(
-            "SELECT 1 FROM classes WHERE id = ? AND school_id = ?",
-            (class_id, school_id),
-        ).fetchone()
-        if existing is None:
-            raise ValueError("class not found")
-        con.execute("DELETE FROM classes WHERE id = ? AND school_id = ?", (class_id, school_id))
-    return {"deleted": True, "class_id": class_id}
 
 
 def import_teachers(root: Path, *, school_id: str, teachers: list[dict[str, str]]) -> dict[str, Any]:
@@ -1189,9 +947,7 @@ def remove_teacher_class_assignment(
     return {"deleted": int(cur.rowcount if cur.rowcount is not None else 0)}
 
 
-def get_school(root: Path, *, school_id: str) -> dict[str, Any]:
-    init_platform_db(root)
-    return _fetch_required(root, "SELECT * FROM schools WHERE id = ?", (school_id,), "school not found")
+
 
 
 def update_school_ai_enabled(root: Path, *, school_id: str, ai_enabled: bool) -> dict[str, Any]:
