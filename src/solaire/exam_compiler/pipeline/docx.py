@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from solaire.common.answer_logic import display as display_answer
 import re
 import shutil
 import subprocess
@@ -14,10 +13,9 @@ from xml.etree import ElementTree as ET
 
 import yaml
 
-from solaire.exam_compiler.choice_layout import choice_option_pairs, resolve_choice_layout
 from solaire.exam_compiler.loaders.questions import LoadedQuestions, load_all_questions
 from solaire.exam_compiler.loaders.template_loader import load_template, resolve_template_yaml_path
-from solaire.exam_compiler.models import ExamConfig, is_choice_type
+from solaire.exam_compiler.models import ExamConfig
 from solaire.exam_compiler.paths import exam_parent_dir, work_dir_for_exam
 from solaire.exam_compiler.pipeline.diagram_expand import (
     ensure_mermaid_block_files,
@@ -29,6 +27,7 @@ from solaire.exam_compiler.pipeline.table_expand import expand_tables_for_docx_m
 from solaire.exam_compiler.pipeline.validate import validate_exam
 from solaire.exam_compiler.qualified_id import namespace_of_qualified
 from solaire.web.extension_registry import resolve_exe
+from . import docx_markdown as _docx_markdown
 
 _FENCE_RE = re.compile(r"```(primebrush|mermaid)\s*\n(.*?)```", re.DOTALL)
 _EMBED_RE = re.compile(r":::EMBED_IMG:([^:]+):::")
@@ -278,8 +277,7 @@ def _render_text(
 
 
 def _escape_table_cell(text: str) -> str:
-    text = text.replace("|", r"\|")
-    return "<br />".join(line.strip() for line in text.splitlines() if line.strip())
+    return _docx_markdown._escape_table_cell(text)
 
 
 def _append_options(
@@ -289,36 +287,14 @@ def _append_options(
     media_dir: Path,
     metadata: dict[str, Any],
 ) -> None:
-    q = hq.item
-    if not q.options or not is_choice_type(q.type):
-        return
-    options = dict(sorted(q.options.items()))
-    pairs = [(k, _render_text(v, hq, loaded, media_dir)) for k, v in choice_option_pairs(options)]
-    if any("```{=openxml}" in v for _k, v in pairs):
-        for k, v in pairs:
-            lines.append(f"**{k}.**")
-            if v:
-                lines.append(v)
-            lines.append("")
-        return
-    layout = resolve_choice_layout(metadata, options)
-    if layout == "inline_one_line":
-        lines.append("    ".join(f"**{k}.** {v}" for k, v in pairs))
-        lines.append("")
-        return
-    if layout == "grid_two_rows" and 2 <= len(pairs) <= 4:
-        lines.extend(["|  |  |", "|---|---|"])
-        for i in range(0, len(pairs), 2):
-            left = pairs[i]
-            right = pairs[i + 1] if i + 1 < len(pairs) else ("", "")
-            left_cell = _escape_table_cell(f"**{left[0]}.** {left[1]}")
-            right_cell = _escape_table_cell(f"**{right[0]}.** {right[1]}") if right[0] else ""
-            lines.append(f"| {left_cell} | {right_cell} |")
-        lines.append("")
-        return
-    for k, v in pairs:
-        lines.append(f"- **{k}.** {v}")
-    lines.append("")
+    _docx_markdown._append_options(
+        lines,
+        hq,
+        loaded,
+        media_dir,
+        metadata,
+        render_text=_render_text,
+    )
 
 
 def _append_teacher_solution(
@@ -329,16 +305,14 @@ def _append_teacher_solution(
     *,
     show_answers: bool,
 ) -> None:
-    if not show_answers:
-        return
-    answer = _render_text(display_answer(hq.item.answer), hq, loaded, media_dir)
-    analysis = _render_text(hq.item.analysis or "", hq, loaded, media_dir)
-    if answer:
-        lines.append(f"**【答案】** {answer}")
-        lines.append("")
-    if analysis:
-        lines.append(f"**【解析】** {analysis}")
-        lines.append("")
+    _docx_markdown._append_teacher_solution(
+        lines,
+        hq,
+        loaded,
+        media_dir,
+        show_answers=show_answers,
+        render_text=_render_text,
+    )
 
 
 def _append_question(
@@ -351,14 +325,16 @@ def _append_question(
     *,
     show_answers: bool,
 ) -> None:
-    body = _render_text(hq.item.content, hq, loaded, media_dir)
-    if body:
-        lines.append(f"**{label}.** {body}")
-    else:
-        lines.append(f"**{label}.**")
-    lines.append("")
-    _append_options(lines, hq, loaded, media_dir, metadata)
-    _append_teacher_solution(lines, hq, loaded, media_dir, show_answers=show_answers)
+    _docx_markdown._append_question(
+        lines,
+        label,
+        hq,
+        loaded,
+        media_dir,
+        metadata,
+        show_answers=show_answers,
+        render_text=_render_text,
+    )
 
 
 def _append_group_material(
@@ -368,13 +344,14 @@ def _append_group_material(
     loaded: LoadedQuestions,
     media_dir: Path,
 ) -> None:
-    material = _render_text(hq.item.group_material or "", hq, loaded, media_dir)
-    if not material:
-        return
-    lines.append(f"**{label}. 【材料】**")
-    lines.append("")
-    lines.append(material)
-    lines.append("")
+    _docx_markdown._append_group_material(
+        lines,
+        label,
+        hq,
+        loaded,
+        media_dir,
+        render_text=_render_text,
+    )
 
 
 def _append_section_questions(
@@ -386,61 +363,15 @@ def _append_section_questions(
     *,
     show_answers: bool,
 ) -> None:
-    global_n = 0
-    i = 0
-    n = len(questions)
-    while i < n:
-        hq = questions[i]
-        q = hq.item
-        if q.group_root_id is None:
-            global_n += 1
-            _append_question(
-                lines,
-                str(global_n),
-                hq,
-                loaded,
-                media_dir,
-                metadata,
-                show_answers=show_answers,
-            )
-            i += 1
-            continue
-
-        j = i + 1
-        while j < n and questions[j].qualified_id == hq.qualified_id:
-            j += 1
-        run = questions[i:j]
-        if q.unified is False:
-            global_n += 1
-            major = global_n
-            _append_group_material(lines, str(major), hq, loaded, media_dir)
-            for idx, row in enumerate(run, start=1):
-                _append_question(
-                    lines,
-                    f"{major}.{idx}",
-                    row,
-                    loaded,
-                    media_dir,
-                    metadata,
-                    show_answers=show_answers,
-                )
-            i = j
-            continue
-
-        for idx, row in enumerate(run):
-            global_n += 1
-            if idx == 0:
-                _append_group_material(lines, str(global_n), row, loaded, media_dir)
-            _append_question(
-                lines,
-                str(global_n),
-                row,
-                loaded,
-                media_dir,
-                metadata,
-                show_answers=show_answers,
-            )
-        i = j
+    _docx_markdown._append_section_questions(
+        lines,
+        questions,
+        loaded,
+        media_dir,
+        metadata,
+        show_answers=show_answers,
+        render_text=_render_text,
+    )
 
 
 def _render_docx_markdown(
@@ -450,34 +381,14 @@ def _render_docx_markdown(
     *,
     show_answers: bool,
 ) -> str:
-    meta = hydrated.metadata
-    title = str(meta.get("title") or hydrated.exam_id).strip() or hydrated.exam_id
-    lines: list[str] = [f"# {title}", ""]
-    school = str(meta.get("school") or "").strip()
-    subject = str(meta.get("subject") or "").strip()
-    if school:
-        lines.extend([school, ""])
-    if subject:
-        lines.extend([f"**科目：** {subject}", ""])
-    if bool(meta.get("show_name_column")):
-        lines.extend(["姓名：________    班级：________    学号：________", ""])
-    notices = _clean_latex_for_markdown(str(meta.get("preamble_notices") or "").strip())
-    if notices:
-        lines.extend([notices, ""])
-
-    for sec in hydrated.sections:
-        lines.extend([f"## {sec.section_id}", ""])
-        if sec.describe:
-            lines.extend([_clean_latex_for_markdown(sec.describe), ""])
-        _append_section_questions(
-            lines,
-            sec.questions,
-            loaded,
-            media_dir,
-            meta,
-            show_answers=show_answers,
-        )
-    return "\n".join(lines).rstrip() + "\n"
+    return _docx_markdown.render_docx_markdown(
+        hydrated,
+        loaded,
+        media_dir,
+        show_answers=show_answers,
+        render_text=_render_text,
+        clean_text=_clean_latex_for_markdown,
+    )
 
 
 def _w(name: str) -> str:
