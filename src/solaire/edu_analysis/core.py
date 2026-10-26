@@ -49,6 +49,14 @@ _DIAGNOSIS_BUILTIN_FNS: dict[str, Any] = {
 }
 
 
+def _safe_project_analysis_job(project_root: Path, job: dict[str, Any], **kwargs) -> None:
+    try:
+        from solaire.web.task_tracking.analysis_adapter import project_analysis_job
+        project_analysis_job(project_root, job, **kwargs)
+    except Exception:
+        pass
+
+
 def list_tools() -> list[dict[str, Any]]:
     return TOOL_SPECS
 
@@ -153,6 +161,12 @@ def run_builtin(
         "output_ref": None,
     }
     save_job(project_root, job)
+    try:
+        from solaire.web.task_tracking.analysis_adapter import mark_analysis_job_active, mark_analysis_job_inactive
+        mark_analysis_job_active(job_id)
+    except Exception:
+        mark_analysis_job_inactive = None
+    _safe_project_analysis_job(project_root, job, event_version=1)
     if request_id:
         bind_request_to_job(project_root, request_id, job_id)
     start = time.perf_counter()
@@ -186,6 +200,7 @@ def run_builtin(
         job["output_ref"] = output_ref
         job["duration_ms"] = int((time.perf_counter() - start) * 1000)
         save_job(project_root, job)
+        _safe_project_analysis_job(project_root, job, event_version=2)
         append_audit_record(
             project_root,
             {
@@ -204,6 +219,7 @@ def run_builtin(
         job["error_code"] = "runtime_error"
         job["duration_ms"] = int((time.perf_counter() - start) * 1000)
         save_job(project_root, job)
+        _safe_project_analysis_job(project_root, job, event_version=2)
         append_audit_record(
             project_root,
             {
@@ -216,6 +232,9 @@ def run_builtin(
             },
         )
         raise
+    finally:
+        if 'mark_analysis_job_inactive' in locals() and mark_analysis_job_inactive:
+            mark_analysis_job_inactive(job_id)
 
 
 def save_script_doc(
@@ -325,6 +344,12 @@ def run_script_with_request_id(
         "killed_reason": None,
     }
     save_job(project_root, job)
+    try:
+        from solaire.web.task_tracking.analysis_adapter import mark_analysis_job_active, mark_analysis_job_inactive
+        mark_analysis_job_active(job_id)
+    except Exception:
+        mark_analysis_job_inactive = None
+    _safe_project_analysis_job(project_root, job, event_version=1)
     if request_id:
         bind_request_to_job(project_root, request_id, job_id)
     start = time.perf_counter()
@@ -369,6 +394,7 @@ def run_script_with_request_id(
         job["killed_reason"] = execution.get("killed_reason")
         job["duration_ms"] = duration_ms
         save_job(project_root, job)
+        _safe_project_analysis_job(project_root, job, event_version=2)
         append_audit_record(
             project_root,
             {
@@ -380,6 +406,8 @@ def run_script_with_request_id(
                 "duration_ms": duration_ms,
             },
         )
+        if 'mark_analysis_job_inactive' in locals() and mark_analysis_job_inactive:
+            mark_analysis_job_inactive(job_id)
         return {"job_id": job_id, "status": "succeeded", "output": output}
 
     job["status"] = "failed"
@@ -390,6 +418,7 @@ def run_script_with_request_id(
     job["killed_reason"] = execution.get("killed_reason")
     job["duration_ms"] = duration_ms
     save_job(project_root, job)
+    _safe_project_analysis_job(project_root, job, event_version=2)
     append_audit_record(
         project_root,
         {
@@ -401,6 +430,8 @@ def run_script_with_request_id(
             "duration_ms": duration_ms,
         },
     )
+    if 'mark_analysis_job_inactive' in locals() and mark_analysis_job_inactive:
+        mark_analysis_job_inactive(job_id)
     return {
         "job_id": job_id,
         "status": "failed",
@@ -412,6 +443,7 @@ def run_script_with_request_id(
 
 def get_job(project_root: Path, *, job_id: str, include_output: bool = True) -> dict[str, Any]:
     job = load_job(project_root, job_id)
+    _safe_project_analysis_job(project_root, job)
     out: dict[str, Any] = {"job": job}
     if include_output and job.get("output_ref"):
         out["output"] = load_output(project_root, job["output_ref"])
@@ -467,4 +499,7 @@ def delete_script_api(project_root: Path, script_id: str) -> dict[str, Any]:
 
 
 def list_jobs_api(project_root: Path, limit: int = 50) -> dict[str, Any]:
-    return {"jobs": list_jobs(project_root, limit=limit)}
+    jobs = list_jobs(project_root, limit=limit)
+    for j in jobs:
+        _safe_project_analysis_job(project_root, j)
+    return {"jobs": jobs}
