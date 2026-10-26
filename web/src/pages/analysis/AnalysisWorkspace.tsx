@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  apiAnalysisDiagnosisHeatmap,
-  apiAnalysisDiagnosisKnowledge,
-  apiAnalysisDiagnosisStudent,
-  apiAnalysisDiagnosisSuggestions,
-  apiAnalysisCreateRemediationDraft,
-  apiAnalysisRemediationDraftPreview,
   apiAnalysisListJobs,
   apiAnalysisListFolderScripts,
   apiAnalysisListTools,
@@ -19,8 +13,6 @@ import {
   resolveApiUrl,
   type AnalysisFolderScript,
   type AnalysisJob,
-  type AnalysisRemediationDraftPreviewResponse,
-  type AnalysisRemediationDraftResponse,
 } from "../../api/client";
 import {
   analyzePlatformPaper,
@@ -40,10 +32,8 @@ import {
   BarChart3,
   CheckCircle,
   Download,
-  FileSpreadsheet,
   RefreshCw,
   Search,
-  Sparkles,
   TrendingUp,
   Trash2,
   Upload,
@@ -59,6 +49,10 @@ import {
   type ChartSeries,
 } from "./analysisTypes";
 import { SvgBarChart } from "./SvgBarChart";
+import { AnalysisBatchSelector } from "./AnalysisBatchSelector";
+import { useAnalysisDiagnosis } from "./useAnalysisDiagnosis";
+import { AnalysisDiagnosisPanel } from "./AnalysisDiagnosisPanel";
+import { AnalysisResultView } from "./AnalysisResultView";
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -90,15 +84,6 @@ export function AnalysisWorkspace({
   const [importWarnings, setImportWarnings] = useState<ImportResult["warnings"]>([]);
   const [tab, setTab] = useState<"overview" | "questions" | "nodes" | "students" | "diagnosis">("overview");
   const [questionSectionFilter, setQuestionSectionFilter] = useState("all");
-  const [diagLoading, setDiagLoading] = useState(false);
-  const [diagKd, setDiagKd] = useState<any | null>(null);
-  const [diagHeat, setDiagHeat] = useState<any | null>(null);
-  const [diagSug, setDiagSug] = useState<any | null>(null);
-  const [diagStudents, setDiagStudents] = useState<any[]>([]);
-  const [diagStudentPick, setDiagStudentPick] = useState<string>("");
-  const [remediationBusy, setRemediationBusy] = useState(false);
-  const [remediationPreview, setRemediationPreview] = useState<AnalysisRemediationDraftPreviewResponse | null>(null);
-  const [remediationResult, setRemediationResult] = useState<AnalysisRemediationDraftResponse | null>(null);
   const [folderScripts, setFolderScripts] = useState<AnalysisFolderScript[]>([]);
   const [jobs, setJobs] = useState<AnalysisJob[]>([]);
   const [tools, setTools] = useState<ToolSpec[]>([]);
@@ -114,7 +99,43 @@ export function AnalysisWorkspace({
   const onlineAnalysisRequestIdRef = useRef(0);
   const legacyDetailRequestIdRef = useRef(0);
   const legacyAnalysisRequestIdRef = useRef(0);
-  const { setPageContext, requestAgentPrefill } = useAgentContext();
+  const { setPageContext } = useAgentContext();
+
+  const loadExams = useCallback(async () => {
+    setLoadingExams(true);
+    try {
+      const data = await apiGet<{ exams: ExamResult[] }>("/api/exams/analysis-list");
+      setExams(data.exams ?? []);
+    } catch (e) {
+      console.error("loadExams failed", e);
+    } finally {
+      setLoadingExams(false);
+    }
+  }, []);
+
+  const {
+    diagLoading,
+    diagKd,
+    diagHeat,
+    diagSug,
+    diagStudents,
+    diagStudentPick,
+    setDiagStudentPick,
+    remediationBusy,
+    remediationPreview,
+    remediationResult,
+    loadDiagnosis,
+    invalidateDiagnosis,
+    handleCreateRemediationDraft,
+    handleAiAssistRemediation,
+  } = useAnalysisDiagnosis({
+    selectedExamId,
+    selectedBatchId,
+    tab,
+    loadExams,
+    onOpenExamInCompose,
+    setImportError,
+  });
 
   useEffect(() => {
     const onlinePaper = onlinePapers.find((paper) => paper.paper_id === selectedOnlinePaperId);
@@ -125,7 +146,7 @@ export function AnalysisWorkspace({
         current_page: "analysis",
         selected_resource_type: "paper",
         selected_resource_id: selectedOnlinePaperId,
-        summary: `试卷分析：${onlinePaper.title}；${submitted} 份已提交，${inProgress} 份答题中`,
+        summary: `试卷分析：${onlinePaper.title}（${submitted} 份已提交，${inProgress} 份答题中）`,
       });
     } else if (selectedExamId && examSummary) {
       setPageContext({
@@ -142,18 +163,6 @@ export function AnalysisWorkspace({
     }
     return () => setPageContext(null);
   }, [selectedExamId, examSummary, selectedOnlinePaperId, onlinePapers, onlineAnalysis, setPageContext, t]);
-
-  const loadExams = useCallback(async () => {
-    setLoadingExams(true);
-    try {
-      const data = await apiGet<{ exams: ExamResult[] }>("/api/exams/analysis-list");
-      setExams(data.exams ?? []);
-    } catch (e) {
-      console.error("loadExams failed", e);
-    } finally {
-      setLoadingExams(false);
-    }
-  }, []);
 
   useEffect(() => {
     void loadExams();
@@ -213,6 +222,7 @@ export function AnalysisWorkspace({
     const requestId = ++onlineAnalysisRequestIdRef.current;
     legacyDetailRequestIdRef.current += 1;
     legacyAnalysisRequestIdRef.current += 1;
+    invalidateDiagnosis();
     setSelectedOnlinePaperId(paper.paper_id);
     setSelectedExamId(null);
     setExamSummary(null);
@@ -234,12 +244,13 @@ export function AnalysisWorkspace({
         setLoadingOnlineAnalysis(false);
       }
     }
-  }, []);
+  }, [invalidateDiagnosis]);
 
   const loadExamDetail = useCallback(async (examId: string) => {
     const requestId = ++legacyDetailRequestIdRef.current;
     legacyAnalysisRequestIdRef.current += 1;
     onlineAnalysisRequestIdRef.current += 1;
+    invalidateDiagnosis();
     setLoadingDetail(true);
     setAnalysis(null);
     setSelectedOnlinePaperId(null);
@@ -258,7 +269,7 @@ export function AnalysisWorkspace({
     } finally {
       if (legacyDetailRequestIdRef.current === requestId) setLoadingDetail(false);
     }
-  }, []);
+  }, [invalidateDiagnosis]);
 
   const loadAnalysis = useCallback(
     async (examId: string, batchId: string) => {
@@ -305,82 +316,6 @@ export function AnalysisWorkspace({
       void loadAnalysis(selectedExamId, selectedBatchId);
     }
   }, [selectedExamId, selectedBatchId, loadAnalysis]);
-
-  const loadDiagnosis = useCallback(async (examId: string, batchId: string) => {
-    setDiagLoading(true);
-    setDiagKd(null);
-    setDiagHeat(null);
-    setDiagSug(null);
-    setDiagStudents([]);
-    setRemediationPreview(null);
-    setRemediationResult(null);
-    try {
-      const [kd, hm, sg, st, rp] = await Promise.all([
-        apiAnalysisDiagnosisKnowledge(examId, batchId),
-        apiAnalysisDiagnosisHeatmap(examId, batchId),
-        apiAnalysisDiagnosisSuggestions(examId, batchId),
-        apiAnalysisDiagnosisStudent(examId, batchId),
-        apiAnalysisRemediationDraftPreview(examId, batchId, {
-          weak_limit: 5,
-          practice_per_node: 4,
-          exclude_source_exam_questions: true,
-        }),
-      ]);
-      setDiagKd(kd);
-      setDiagHeat(hm);
-      setDiagSug(sg);
-      setRemediationPreview(rp);
-      const studs = st.students ?? [];
-      setDiagStudents(studs);
-      setDiagStudentPick((prev) => {
-        if (!studs.length) return "";
-        const ids = studs.map((s: { student_id?: string }) => String(s.student_id ?? ""));
-        if (prev && ids.includes(prev)) return prev;
-        return ids[0] ?? "";
-      });
-    } catch (e) {
-      console.error("loadDiagnosis failed", e);
-    } finally {
-      setDiagLoading(false);
-    }
-  }, []);
-
-  const handleCreateRemediationDraft = useCallback(async () => {
-    if (!selectedExamId || !selectedBatchId) return;
-    setRemediationBusy(true);
-    setImportError(null);
-    setRemediationResult(null);
-    try {
-      const res = await apiAnalysisCreateRemediationDraft({
-        exam_id: selectedExamId,
-        batch_id: selectedBatchId,
-        weak_limit: 5,
-        practice_per_node: 4,
-        exclude_source_exam_questions: true,
-      });
-      setRemediationResult(res);
-      await loadExams();
-      dispatchExamsChanged({ examId: res.exam_id });
-      onOpenExamInCompose?.(res.exam_id);
-    } catch (e) {
-      setImportError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRemediationBusy(false);
-    }
-  }, [selectedExamId, selectedBatchId, loadExams, onOpenExamInCompose]);
-
-  const handleAiAssistRemediation = useCallback(() => {
-    const prompt = remediationPreview?.ai_assist_payload?.prompt;
-    if (!prompt) return;
-    requestAgentPrefill(prompt, { newChat: true });
-  }, [remediationPreview, requestAgentPrefill]);
-
-  useEffect(() => {
-    if (tab !== "diagnosis" || !selectedExamId || !selectedBatchId) {
-      return;
-    }
-    void loadDiagnosis(selectedExamId, selectedBatchId);
-  }, [tab, selectedExamId, selectedBatchId, loadDiagnosis]);
 
   const loadEduAnalysisMeta = useCallback(async () => {
     try {
@@ -489,12 +424,13 @@ export function AnalysisWorkspace({
       setExamSummary(null);
       setSelectedBatchId(null);
       setAnalysis(null);
+      invalidateDiagnosis();
       await loadExams();
       dispatchExamsChanged({ examId: deletedId });
     } catch (e) {
       setImportError(e instanceof Error ? e.message : String(e));
     }
-  }, [selectedExamId, loadExams, t]);
+  }, [selectedExamId, loadExams, invalidateDiagnosis, t]);
 
   const handleRunBuiltinStudio = useCallback(async () => {
     if (!selectedExamId || !selectedBatchId) return;
@@ -549,6 +485,7 @@ export function AnalysisWorkspace({
   const firstBarSpec = outputChartSpecs.find((s) => s.type === "bar" && s.series_id);
   const firstBarSeries = firstBarSpec ? outputSeries.find((s) => s.id === firstBarSpec.series_id) : null;
   const firstBarPoints = firstBarSeries?.points ?? [];
+
   const handleDownloadMetadata = useCallback(async () => {
     if (!jobOutput) return;
     const blob = new Blob([JSON.stringify(jobOutput, null, 2)], { type: "application/json;charset=utf-8" });
@@ -839,40 +776,15 @@ export function AnalysisWorkspace({
             </div>
 
             {/* Batch selector */}
-            {examSummary.score_batches.length > 0 && (
-              <div className="shrink-0 border-b border-slate-200 bg-slate-50 px-6 py-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-500">{t("batchLabel")}</span>
-                  <div className="flex gap-1">
-                    {examSummary.score_batches.map((b) => (
-                      <button
-                        key={b.batch_id}
-                        onClick={() => setSelectedBatchId(b.batch_id)}
-                        className={cn(
-                          "flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",
-                          selectedBatchId === b.batch_id
-                            ? "bg-blue-600 text-white"
-                            : "bg-white text-slate-600 hover:bg-slate-200",
-                        )}
-                      >
-                        <FileSpreadsheet className="h-3 w-3" />
-                        {formatLocaleDate(b.imported_at)}
-                        <span className="opacity-70">({t("students", { n: b.student_count })})</span>
-                      </button>
-                    ))}
-                  </div>
-                  {selectedBatchId && (
-                    <button
-                      onClick={() => void handleDeleteBatch()}
-                      className="ml-2 flex items-center gap-1 rounded border border-red-200 bg-white px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-50"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                      {t("deleteBatch")}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
+            <AnalysisBatchSelector
+              batches={examSummary.score_batches}
+              selectedBatchId={selectedBatchId}
+              onSelectBatch={(batchId) => {
+                setSelectedBatchId(batchId);
+                invalidateDiagnosis();
+              }}
+              onDeleteBatch={() => void handleDeleteBatch()}
+            />
 
             {/* Stats tabs */}
             {!selectedBatchId ? (
@@ -883,495 +795,39 @@ export function AnalysisWorkspace({
                 </div>
               </div>
             ) : analysis ? (
-              <div className="min-h-0 flex-1 overflow-y-auto p-6">
-                {/* Summary cards */}
-                <div className="mb-4 grid grid-cols-3 gap-4">
-                  <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                    <div className="text-2xl font-bold text-slate-800">{analysis.student_count}</div>
-                    <div className="text-xs text-slate-500">{t("studentCount")}</div>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                    <div className="text-2xl font-bold text-blue-600">
-                      {(analysis.class_avg_ratio * 100).toFixed(1)}%
-                    </div>
-                    <div className="text-xs text-slate-500">{t("classAvgRatio")}</div>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                    <div className="text-2xl font-bold text-purple-600">
-                      {(analysis.class_avg_fuzzy * 100).toFixed(1)}%
-                    </div>
-                    <div className="text-xs text-slate-500">{t("classAvgFuzzy")}</div>
-                  </div>
-                </div>
-
-                {/* Tab nav */}
-                <div className="mb-4 flex flex-wrap gap-1 border-b border-slate-200">
-                  {(["overview", "questions", "nodes", "students", "diagnosis"] as const).map((tabKey) => (
-                    <button
-                      key={tabKey}
-                      onClick={() => setTab(tabKey)}
-                      className={cn(
-                        "border-b-2 px-4 py-1.5 text-sm transition-colors",
-                        tab === tabKey
-                          ? "border-blue-600 font-medium text-blue-600"
-                          : "border-transparent text-slate-500 hover:text-slate-700",
-                      )}
-                    >
-                      {tabKey === "overview"
-                        ? t("tabOverview")
-                        : tabKey === "questions"
-                          ? t("tabQuestionErr")
-                          : tabKey === "nodes"
-                            ? t("tabKnowledge")
-                            : tabKey === "students"
-                              ? t("tabRanking")
-                              : t("tabDiagnosis")}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Tab content */}
-                {tab === "overview" && (
-                  <div className="space-y-4">
-                    <SvgBarChart
-                      data={analysis.question_stats
-                        .filter((q) => q.error_rate !== null)
-                        .slice(0, 20)
-                        .map((q) => ({
-                          label: q.header,
-                          value: q.error_rate ?? 0,
-                        }))}
-                      title={t("chartQuestionErr")}
-                      colorFn={(v) => errorColorFn(v)}
-                      maxVal={1}
-                      formatVal={formatPct}
-                    />
-                    {analysis.node_stats.length > 0 && (
-                      <SvgBarChart
-                        data={analysis.node_stats.map((n) => ({
-                          label: n.node_id.split("/").pop() ?? n.node_id,
-                          value: n.error_rate,
-                        }))}
-                        title={t("chartKnowledgeErr")}
-                        colorFn={(v) => errorColorFn(v)}
-                        maxVal={1}
-                        formatVal={formatPct}
-                        warning={t("knowledgeBindHint")}
-                      />
-                    )}
-                    {analysis.warnings.length > 0 && (
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                        <h4 className="mb-2 flex items-center gap-2 font-semibold text-amber-700">
-                          <AlertTriangle className="h-4 w-4" />
-                          {t("knowledgeMissingTitle")}
-                        </h4>
-                        <ul className="space-y-1 text-sm text-amber-700">
-                          {analysis.warnings.map((w) => (
-                            <li key={w.question_id}>
-                              <span className="font-mono font-semibold">{w.header}</span>
-                              {" — "}{w.message}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {tab === "questions" && (
-                  <div className="space-y-3">
-                    <label className="flex items-center gap-2 text-sm text-slate-600">题目维度
-                      <select aria-label="按题组查看题目维度" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm" value={questionSectionFilter} onChange={(event) => setQuestionSectionFilter(event.target.value)}>
-                        <option value="all">全部题组</option>
-                        {[...new Set(analysis.question_stats.map((question) => question.section_id))].map((sectionId) => <option key={sectionId} value={sectionId}>{sectionId}</option>)}
-                      </select>
-                    </label>
-                  <div className="overflow-x-auto rounded-lg border border-slate-200">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-50 text-xs text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-medium">{t("thQid")}</th>
-                          <th className="px-3 py-2 text-left font-medium">{t("thSection")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("thFullScore")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("thAnswered")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("thAvgScore")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("thErrRate")}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {analysis.question_stats.filter((question) => questionSectionFilter === "all" || question.section_id === questionSectionFilter).map((q) => (
-                          <tr key={q.question_id} className="hover:bg-slate-50">
-                            <td className="px-3 py-2 font-mono font-semibold text-slate-700">{q.header}</td>
-                            <td className="px-3 py-2 text-slate-500">{q.section_id}</td>
-                            <td className="px-3 py-2 text-right text-slate-600">{q.score_per_item}</td>
-                            <td className="px-3 py-2 text-right text-slate-600">{q.answered_count}</td>
-                            <td className="px-3 py-2 text-right text-slate-600">
-                              {q.avg_raw_score !== null ? q.avg_raw_score.toFixed(2) : "—"}
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              {q.error_rate !== null ? (
-                                <span
-                                  className="rounded px-1.5 py-0.5 text-xs font-semibold"
-                                  style={{
-                                    backgroundColor: errorColorFn(q.error_rate) + "22",
-                                    color: errorColorFn(q.error_rate),
-                                  }}
-                                >
-                                  {formatPct(q.error_rate)}
-                                </span>
-                              ) : (
-                                <span className="text-slate-400">—</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  </div>
-                )}
-
-                {tab === "nodes" && (
-                  <div>
-                    {analysis.node_stats.length === 0 ? (
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 text-center text-sm text-amber-700">
-                        <AlertTriangle className="mx-auto mb-2 h-8 w-8 text-amber-400" />
-                        <p>
-                          {t("noKnowledgeStats")}
-                          <br />
-                          {t("bindInGraph")}
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        <SvgBarChart
-                          data={analysis.node_stats.map((n) => ({
-                            label: n.node_id.split("/").pop() ?? n.node_id,
-                            value: n.error_rate,
-                          }))}
-                          title={t("chartKnowledgeTitle")}
-                          colorFn={(v) => errorColorFn(v)}
-                          maxVal={1}
-                          formatVal={formatPct}
-                        />
-                        <div className="overflow-x-auto rounded-lg border border-slate-200">
-                          <table className="w-full text-sm">
-                            <thead className="bg-slate-50 text-xs text-slate-500">
-                              <tr>
-                                <th className="px-3 py-2 text-left font-medium">{t("thNode")}</th>
-                                <th className="px-3 py-2 text-right font-medium">{t("thBoundQ")}</th>
-                                <th className="px-3 py-2 text-right font-medium">{t("thFuzzy")}</th>
-                                <th className="px-3 py-2 text-right font-medium">{t("thErrRate")}</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                              {analysis.node_stats.map((n) => (
-                                <tr key={n.node_id} className="hover:bg-slate-50">
-                                  <td className="px-3 py-2 font-mono text-slate-700">{n.node_id}</td>
-                                  <td className="px-3 py-2 text-right text-slate-600">{n.bound_question_count}</td>
-                                  <td className="px-3 py-2 text-right text-slate-600">
-                                    {(n.mastery_fuzzy * 100).toFixed(1)}%
-                                  </td>
-                                  <td className="px-3 py-2 text-right">
-                                    <span
-                                      className="rounded px-1.5 py-0.5 text-xs font-semibold"
-                                      style={{
-                                        backgroundColor: errorColorFn(n.error_rate) + "22",
-                                        color: errorColorFn(n.error_rate),
-                                      }}
-                                    >
-                                      {formatPct(n.error_rate)}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {tab === "students" && (
-                  <div className="overflow-x-auto rounded-lg border border-slate-200">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-50 text-xs text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 text-right font-medium">{t("thRank")}</th>
-                          <th className="px-3 py-2 text-left font-medium">{t("thName")}</th>
-                          <th className="px-3 py-2 text-left font-medium">{t("thStudentId")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("thRawTotal")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("thScoreRate")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("thFuzzyScore")}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {[...analysis.student_stats]
-                          .sort((a, b) => a.rank - b.rank)
-                          .map((s) => (
-                            <tr key={`${s.name}-${s.student_id}`} className="hover:bg-slate-50">
-                              <td className="px-3 py-2 text-right">
-                                <span
-                                  className={cn(
-                                    "inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold",
-                                    s.rank <= 3
-                                      ? "bg-amber-100 text-amber-700"
-                                      : "bg-slate-100 text-slate-500",
-                                  )}
-                                >
-                                  {s.rank}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 font-medium text-slate-700">{s.name}</td>
-                              <td className="px-3 py-2 text-slate-500">{s.student_id}</td>
-                              <td className="px-3 py-2 text-right font-mono text-slate-600">
-                                {s.raw_total}
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                <span className="rounded px-1.5 py-0.5 text-xs font-semibold bg-blue-100 text-blue-700">
-                                  {formatPct(s.score_ratio)}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                <span className="rounded px-1.5 py-0.5 text-xs font-semibold bg-purple-100 text-purple-700">
-                                  {formatPct(s.fuzzy_score)}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {tab === "diagnosis" && (
-                  <div className="space-y-6">
-                    {diagLoading ? (
-                      <p className="text-sm text-slate-500">{t("loadingDiagnosis")}</p>
-                    ) : (
-                      <>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
-                            onClick={() =>
-                              selectedExamId &&
-                              selectedBatchId &&
-                              void loadDiagnosis(selectedExamId, selectedBatchId)
-                            }
-                          >
-                            {t("refreshDiagnosis")}
-                          </button>
-                          <span className="text-xs text-slate-500">{t("diagnosisDeps")}</span>
-                        </div>
-
-                        {diagKd?.nodes?.length ? (
-                          <SvgBarChart
-                            data={(diagKd.nodes as any[]).map((n) => ({
-                              label: String(n.canonical_name ?? n.node_id).slice(0, 12),
-                              value: Number(n.error_rate ?? 0),
-                            }))}
-                            title={t("classWeakTitle")}
-                            colorFn={(v) => errorColorFn(v)}
-                            maxVal={1}
-                            formatVal={formatPct}
-                          />
-                        ) : (
-                          <p className="text-sm text-amber-700">{t("noDiagnosisData")}</p>
-                        )}
-
-                        {diagHeat?.matrix?.length && diagHeat?.columns?.length ? (
-                          <div className="rounded-lg border border-slate-200 bg-white p-4">
-                            <h4 className="mb-2 text-sm font-semibold text-slate-700">{t("heatmapTitle")}</h4>
-                            <div className="max-h-[360px] overflow-auto">
-                              <table className="border-collapse text-[10px]">
-                                <thead>
-                                  <tr>
-                                    <th className="sticky left-0 z-10 border border-slate-200 bg-slate-100 px-1 py-1 text-left">
-                                      {t("studentCol")}
-                                    </th>
-                                    {(diagHeat.columns as any[]).map((c) => (
-                                      <th
-                                        key={c.node_id}
-                                        className="min-w-[3rem] max-w-[4rem] border border-slate-200 bg-slate-50 px-0.5 py-1 text-center font-normal leading-tight text-slate-600"
-                                        title={c.canonical_name}
-                                      >
-                                        {String(c.canonical_name ?? c.node_id).slice(0, 4)}
-                                      </th>
-                                    ))}
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {(diagHeat.matrix as (number | null)[][]).map((row, ri) => {
-                                    const rinfo = (diagHeat.rows as any[])[ri];
-                                    return (
-                                      <tr key={ri}>
-                                        <td className="sticky left-0 z-10 border border-slate-200 bg-white px-1 py-0.5 text-slate-700">
-                                          {rinfo?.name ?? ri}
-                                        </td>
-                                        {row.map((cell, ci) => (
-                                          <td
-                                            key={ci}
-                                            className="border border-slate-200 px-0 py-0 text-center"
-                                            style={{
-                                              backgroundColor:
-                                                cell == null
-                                                  ? "#e2e8f0"
-                                                  : `hsl(${cell * 120}, 65%, ${45 + (1 - cell) * 15}%)`,
-                                            }}
-                                            title={cell == null ? t("noCellData") : `${(cell * 100).toFixed(0)}%`}
-                                          >
-                                            {cell == null ? "·" : ""}
-                                          </td>
-                                        ))}
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        ) : null}
-
-                        <div className="rounded-lg border border-slate-200 bg-white p-4">
-                          <h4 className="mb-2 text-sm font-semibold text-slate-700">{t("studentProfileTitle")}</h4>
-                          {diagStudents.length ? (
-                            <>
-                              <label className="mb-2 block text-xs text-slate-600">
-                                {t("pickStudent")}
-                                <select
-                                  className="ml-2 rounded border border-slate-300 px-2 py-1 text-sm"
-                                  value={diagStudentPick}
-                                  onChange={(e) => setDiagStudentPick(e.target.value)}
-                                >
-                                  {diagStudents.map((s) => (
-                                    <option key={`${s.student_id}-${s.name}`} value={String(s.student_id ?? "")}>
-                                      {s.name} ({s.student_id || t("noStudentId")})
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                              {(() => {
-                                const st = diagStudents.find(
-                                  (s) => String(s.student_id ?? "") === diagStudentPick,
-                                );
-                                const bn = st?.by_node as Record<string, { mastery: number; canonical_name: string }> | undefined;
-                                const pts = bn
-                                  ? Object.values(bn).map((v) => ({
-                                      label: String(v.canonical_name).slice(0, 10),
-                                      value: 1 - v.mastery,
-                                    }))
-                                  : [];
-                                return pts.length ? (
-                                  <SvgBarChart
-                                    data={pts}
-                                    title={t("lossChartTitle")}
-                                    colorFn={(v) => errorColorFn(v)}
-                                    maxVal={1}
-                                    formatVal={formatPct}
-                                  />
-                                ) : (
-                                  <p className="text-xs text-slate-500">{t("noStudentKData")}</p>
-                                );
-                              })()}
-                            </>
-                          ) : (
-                            <p className="text-xs text-slate-500">{t("noStudentData")}</p>
-                          )}
-                        </div>
-
-                        {diagSug?.retell_priority?.length ? (
-                          <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-4">
-                            <h4 className="mb-2 text-sm font-semibold text-indigo-900">{t("retitleTitle")}</h4>
-                            <ol className="list-decimal space-y-1 pl-5 text-sm text-indigo-950">
-                              {(diagSug.retell_priority as any[]).map((x) => (
-                                <li key={x.node_id}>
-                                  <span className="font-medium">{x.canonical_name}</span>
-                                  <span className="text-indigo-700">
-                                    {t("errRateParen", { rate: formatPct(Number(x.error_rate ?? 0)) })}
-                                  </span>
-                                </li>
-                              ))}
-                            </ol>
-                          </div>
-                        ) : null}
-
-                        {remediationPreview?.nodes?.length ? (
-                          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-4">
-                            <h4 className="mb-2 text-sm font-semibold text-emerald-900">{t("practiceDraftTitle")}</h4>
-                            <ul className="space-y-3 text-sm text-emerald-950">
-                              {remediationPreview.nodes.map((d) => (
-                                <li key={d.node_id}>
-                                  <div className="font-medium">{d.canonical_name}</div>
-                                  <div className="mt-1 font-mono text-xs text-emerald-800">
-                                    {(d.selected_question_ids ?? []).join(" · ") || t("noLinkedQuestions")}
-                                  </div>
-                                  {(d.excluded_source_question_ids?.length ?? 0) > 0 ? (
-                                    <div className="mt-1 text-[11px] text-emerald-700">
-                                      {t("excludedSourceQuestions", {
-                                        count: d.excluded_source_question_ids?.length ?? 0,
-                                      })}
-                                    </div>
-                                  ) : null}
-                                </li>
-                              ))}
-                            </ul>
-                            {remediationPreview.low_count ? (
-                              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                                <div className="font-medium">
-                                  {t("remediationLowCount", {
-                                    count: remediationPreview.selected_count,
-                                    threshold: remediationPreview.low_count_threshold,
-                                  })}
-                                </div>
-                                <button
-                                  type="button"
-                                  className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
-                                  onClick={handleAiAssistRemediation}
-                                >
-                                  <Sparkles className="h-3.5 w-3.5" />
-                                  {t("aiAssistRemediation")}
-                                </button>
-                              </div>
-                            ) : null}
-                            <p className="mt-2 text-[11px] text-emerald-800">{t("practiceHint")}</p>
-                            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-emerald-200/70 pt-3">
-                              <button
-                                type="button"
-                                className="inline-flex items-center gap-1.5 rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
-                                disabled={remediationBusy || !selectedBatchId || remediationPreview.selected_count <= 0}
-                                onClick={() => void handleCreateRemediationDraft()}
-                              >
-                                {remediationBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
-                                {remediationBusy ? t("creatingRemediation") : t("createRemediationDraft")}
-                              </button>
-                              <span className="text-[11px] text-emerald-800">{t("createRemediationHint")}</span>
-                            </div>
-                            {remediationResult ? (
-                              <div className="mt-3 rounded-md border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-900">
-                                <div className="font-medium">
-                                  {t("remediationCreated", {
-                                    examId: remediationResult.exam_id,
-                                    count: remediationResult.selected_count,
-                                  })}
-                                </div>
-                                {remediationResult.warnings.length > 0 ? (
-                                  <ul className="mt-1 list-disc space-y-0.5 pl-4 text-amber-700">
-                                    {remediationResult.warnings.map((w) => (
-                                      <li key={w}>{w}</li>
-                                    ))}
-                                  </ul>
-                                ) : null}
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+              <AnalysisResultView
+                analysis={analysis}
+                tab={tab}
+                onTabChange={setTab}
+                questionSectionFilter={questionSectionFilter}
+                onQuestionSectionFilterChange={setQuestionSectionFilter}
+                errorColorFn={errorColorFn}
+                formatPct={formatPct}
+              >
+                <AnalysisDiagnosisPanel
+                  selectedExamId={selectedExamId}
+                  selectedBatchId={selectedBatchId}
+                  diagLoading={diagLoading}
+                  diagKd={diagKd}
+                  diagHeat={diagHeat}
+                  diagSug={diagSug}
+                  diagStudents={diagStudents}
+                  diagStudentPick={diagStudentPick}
+                  onStudentPickChange={setDiagStudentPick}
+                  remediationBusy={remediationBusy}
+                  remediationPreview={remediationPreview}
+                  remediationResult={remediationResult}
+                  onRefreshDiagnosis={() => {
+                    if (selectedExamId && selectedBatchId) {
+                      void loadDiagnosis(selectedExamId, selectedBatchId);
+                    }
+                  }}
+                  onCreateRemediationDraft={() => void handleCreateRemediationDraft()}
+                  onAiAssistRemediation={handleAiAssistRemediation}
+                  errorColorFn={errorColorFn}
+                  formatPct={formatPct}
+                />
+              </AnalysisResultView>
             ) : (
               <div className="flex flex-1 items-center justify-center text-slate-400">
                 <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
@@ -1413,7 +869,7 @@ export function AnalysisWorkspace({
                 {t("recompute")}
               </button>
               <button onClick={() => void handleDeleteBatch()} disabled={!selectedBatchId} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50">
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-3 w-3" />
                 {t("deleteCurrentBatch")}
               </button>
               <button onClick={() => void handleDeleteExam()} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm text-red-700 hover:bg-red-50">

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+﻿import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 
 import { AgentProvider, useAgentContext } from "../../contexts/AgentContext";
@@ -348,5 +348,132 @@ describe("AnalysisWorkspace", () => {
     fireEvent.click(runBtn);
 
     expect(await screen.findByText("运行失败")).toBeInTheDocument();
+  });
+
+  it("keeps the latest batch analysis when switching batches out of order", async () => {
+    let resolveB1!: (val: any) => void;
+    let resolveB2!: (val: any) => void;
+    let initialB1Resolved = false;
+
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/api/exams/analysis-list") {
+        return {
+          exams: [
+            {
+              exam_id: "e1",
+              exam_title: "期末考试",
+              subject: "数学",
+              question_count: 3,
+              section_count: 1,
+              score_batch_count: 2,
+              has_score: true,
+              latest_batch_id: "b1",
+              exam_dir: "e1",
+              mtime: new Date().toISOString(),
+            },
+          ],
+        };
+      }
+      if (path === "/api/exams/e1/summary") {
+        return {
+          exam_id: "e1",
+          exam_title: "期末考试",
+          subject: "数学",
+          question_count: 3,
+          section_count: 1,
+          score_batch_count: 2,
+          has_score: true,
+          latest_batch_id: "b1",
+          exam_dir: "e1",
+          mtime: new Date().toISOString(),
+          questions: [],
+          score_batches: [
+            {
+              batch_id: "b1",
+              imported_at: "2026-10-01T10:00:00Z",
+              student_count: 2,
+              question_count: 3,
+            },
+            {
+              batch_id: "b2",
+              imported_at: "2026-10-02T10:00:00Z",
+              student_count: 5,
+              question_count: 3,
+            },
+          ],
+        };
+      }
+      if (path === "/api/exams/e1/scores/b1") {
+        if (!initialB1Resolved) {
+          initialB1Resolved = true;
+          return {
+            batch_id: "b1",
+            exam_id: "e1",
+            student_count: 2,
+            question_count: 3,
+            warnings: [],
+            question_stats: [],
+            node_stats: [],
+            student_stats: [],
+            class_avg_ratio: 0.7,
+            class_avg_fuzzy: 0.65,
+          };
+        }
+        return new Promise((resolve) => { resolveB1 = resolve; });
+      }
+      if (path === "/api/exams/e1/scores/b2") {
+        return new Promise((resolve) => { resolveB2 = resolve; });
+      }
+      throw new Error(`unexpected apiGet path: ${path}`);
+    });
+
+    renderWs();
+
+    const examButton = await screen.findByRole("button", { name: /期末考试/ });
+    fireEvent.click(examButton);
+
+    expect(await screen.findByText("2")).toBeInTheDocument();
+
+    const b2Button = await screen.findByRole("button", { name: /5人/ });
+    fireEvent.click(b2Button);
+    await waitFor(() => expect(resolveB2).toBeDefined());
+
+    const b1Button = screen.getByRole("button", { name: /2人/ });
+    fireEvent.click(b1Button);
+    await waitFor(() => expect(resolveB1).toBeDefined());
+
+    await act(async () => {
+      resolveB1({
+        batch_id: "b1",
+        exam_id: "e1",
+        student_count: 2,
+        question_count: 3,
+        warnings: [],
+        question_stats: [],
+        node_stats: [],
+        student_stats: [],
+        class_avg_ratio: 0.7,
+        class_avg_fuzzy: 0.65,
+      });
+    });
+
+    expect(await screen.findByText("2")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveB2({
+        batch_id: "b2",
+        exam_id: "e1",
+        student_count: 5,
+        question_count: 3,
+        warnings: [],
+        question_stats: [],
+        node_stats: [],
+        student_stats: [],
+        class_avg_ratio: 0.85,
+        class_avg_fuzzy: 0.8,
+      });
+    });
+
+    expect(screen.getByText("2")).toBeInTheDocument();
   });
 });
