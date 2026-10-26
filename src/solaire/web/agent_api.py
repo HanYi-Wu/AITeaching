@@ -28,6 +28,7 @@ from solaire.agent_layer.llm.router import ModelRouter, load_llm_settings
 from solaire.agent_layer.llm.errors import llm_error_message as _llm_connection_error_message
 from solaire.agent_layer.memory import list_topic_filenames, read_index, read_topic, write_index, write_topic
 from solaire.agent_layer.cancel_signal import clear_cancel, request_cancel
+from solaire.agent_layer.stream_dispatcher import format_sse_event
 from solaire.agent_layer.orchestrator import iter_agent_turn_sse
 from solaire.agent_layer.skills import list_skills_public
 from solaire.agent_layer.context_meter import context_meter_for_session
@@ -558,9 +559,7 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
         user_msg += "\n".join(attachment_lines)
 
     async def gen():
-        import json as _json
-
-        yield f"event: session\ndata: {_json.dumps({'session_id': s.session_id}, ensure_ascii=False)}\n\n"
+        yield format_sse_event("session", {"session_id": s.session_id})
         async with aclosing(iter_agent_turn_sse(
             root,
             s,

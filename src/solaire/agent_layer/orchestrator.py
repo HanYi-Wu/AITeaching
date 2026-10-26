@@ -55,6 +55,13 @@ from solaire.agent_layer.prompts import (
 )
 from solaire.agent_layer.task_tracker import build_task_plan_dynamic_block
 
+from solaire.agent_layer.stream_dispatcher import (
+    StreamDispatcher,
+    dispatch_agent_turn_sse,
+    format_sse_comment,
+    format_sse_event,
+)
+
 logger = logging.getLogger(__name__)
 
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -830,48 +837,20 @@ async def run_agent_turn(
 SSE_HEARTBEAT_SECONDS = 10
 
 
-async def iter_agent_turn_sse(
+def iter_agent_turn_sse(
     project_root: Path,
     session: SessionState,
     **kwargs: Any,
 ) -> AsyncIterator[str]:
     """Stream SSE as events are produced."""
-    import json as _json
-
-    queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
-
-    async def emit(ev: str, data: dict[str, Any]) -> None:
-        await queue.put((ev, data))
-
     emit_kw = kwargs.pop("emit", None)
     if emit_kw is not None:
         raise ValueError("emit is reserved")
 
-    async def runner() -> None:
-        try:
-            await run_agent_turn(project_root, session, emit=emit, **kwargs)
-        except Exception as e:
-            await emit("error", {"code": "internal", "message": str(e)})
-            await emit("done", {"usage": {}})
-        finally:
-            await queue.put(None)
-
-    task = asyncio.create_task(runner())
-    try:
-        while True:
-            try:
-                item = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
-            except TimeoutError:
-                # SSE comments keep proxies alive without adding chat text/tokens.
-                yield ": keepalive\n\n"
-                continue
-            if item is None:
-                break
-            ev, data = item
-            yield f"event: {ev}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
-        await task
-    finally:
-        if not task.done():
-            task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+    return dispatch_agent_turn_sse(
+        project_root,
+        session,
+        run_turn_fn=lambda *a, **kw: run_agent_turn(*a, **kw),
+        heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
+        **kwargs,
+    )
