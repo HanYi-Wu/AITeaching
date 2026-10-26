@@ -25,6 +25,11 @@ from solaire.knowledge_forge import (
     update_concept_node,
     update_node_relation,
 )
+from solaire.knowledge_forge.service import (
+    bind_question_nodes_batch,
+    create_concept_nodes_batch,
+    create_node_relations_batch,
+)
 
 
 def _get_graph(args: dict[str, Any]) -> str | None:
@@ -298,67 +303,32 @@ def tool_batch_create_nodes(ctx: InvocationContext, args: dict[str, Any]) -> Too
         return ToolResult(status="failed", error_code="invalid_arguments", error_message="nodes 须为非空数组")
     root = _root(ctx)
     graph = _get_graph(args)
-    created: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    for i, item in enumerate(raw):
-        if not isinstance(item, dict):
-            errors.append({"index": i, "error": "条目须为对象"})
-            continue
-        body = _node_payload_from_args(item)
-        canonical_name = str(body.get("canonical_name") or "").strip()
-        if not canonical_name:
-            errors.append({"index": i, "error": "canonical_name 必填"})
-            continue
-        node_id = str(item.get("id") or "").strip() or None
-        parent = str(item.get("parent_node_id") or "").strip() or None
-        g = str(item.get("graph") or "").strip() or graph
-        payload = {k: v for k, v in body.items() if k != "id"}
-        try:
-            if not node_id:
-                if not parent:
-                    errors.append({"index": i, "error": "需提供 parent_node_id 或 id"})
-                    continue
-                nid = generate_unique_node_id(root, parent, canonical_name)
-                payload["id"] = nid
-                if "primary_parent_id" not in payload:
-                    payload["primary_parent_id"] = parent
-                create_concept_node(root, payload, graph=g)
-                create_node_relation(
-                    root,
-                    {"from_node_id": nid, "to_node_id": parent, "relation_type": "part_of"},
-                    graph=g,
-                )
-                created.append({"index": i, "node_id": nid})
-            else:
-                payload["id"] = node_id
-                create_concept_node(root, payload, graph=g)
-                if parent:
-                    if "primary_parent_id" not in payload:
-                        payload["primary_parent_id"] = parent
-                    create_node_relation(
-                        root,
-                        {"from_node_id": node_id, "to_node_id": parent, "relation_type": "part_of"},
-                        graph=g,
-                    )
-                created.append({"index": i, "node_id": node_id})
-        except ValueError as e:
-            errors.append({"index": i, "error": str(e)})
-    ok_n, err_n = len(created), len(errors)
-    data: dict[str, Any] = {
-        "created": created,
-        "errors": errors,
-        "ok_count": ok_n,
-        "error_count": err_n,
-        "partial_success": ok_n > 0 and err_n > 0,
-    }
-    if ok_n == 0 and err_n > 0:
+    try:
+        nids = create_concept_nodes_batch(root, raw, graph=graph)
+        created = [{"index": i, "node_id": nid} for i, nid in enumerate(nids)]
+        return ToolResult(
+            status="succeeded",
+            data={
+                "created": created,
+                "errors": [],
+                "ok_count": len(created),
+                "error_count": 0,
+                "partial_success": False,
+            },
+        )
+    except ValueError as e:
         return ToolResult(
             status="failed",
             error_code="batch_all_failed",
-            error_message="批量创建要点全部未成功，请查看 errors 明细。",
-            data=data,
+            error_message=f"批量创建要点校验失败，未执行部分写入：{e}",
+            data={
+                "created": [],
+                "errors": [{"error": str(e)}],
+                "ok_count": 0,
+                "error_count": len(raw),
+                "partial_success": False,
+            },
         )
-    return ToolResult(status="succeeded", data=data)
 
 
 def tool_batch_bind_questions(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
@@ -367,50 +337,31 @@ def tool_batch_bind_questions(ctx: InvocationContext, args: dict[str, Any]) -> T
         return ToolResult(status="failed", error_code="invalid_arguments", error_message="bindings 须为非空数组")
     root = _root(ctx)
     graph = _get_graph(args)
-    by_node: dict[str, list[str]] = {}
-    errors: list[dict[str, Any]] = []
-    for i, item in enumerate(raw):
-        if not isinstance(item, dict):
-            errors.append({"index": i, "error": "条目须为对象"})
-            continue
-        qid = str(item.get("question_qualified_id") or "").strip()
-        nid = str(item.get("node_id") or "").strip()
-        if not qid or not nid:
-            errors.append({"index": i, "error": "question_qualified_id 与 node_id 必填"})
-            continue
-        by_node.setdefault(nid, []).append(qid)
-    batches: list[dict[str, Any]] = []
-    for node_id, qids in by_node.items():
-        try:
-            stats = bind_questions_batch(root, node_id=node_id, qualified_ids=qids, graph=graph)
-            batches.append({"node_id": node_id, **stats})
-        except ValueError as e:
-            batches.append({"node_id": node_id, "error": str(e)})
-    ok_batches = [b for b in batches if "error" not in b]
-    failed_batches = [b for b in batches if "error" in b]
-    parse_err_n = len(errors)
-    data = {
-        "batches": batches,
-        "parse_errors": errors,
-        "ok_count": len(ok_batches),
-        "error_count": len(failed_batches) + parse_err_n,
-        "partial_success": (len(failed_batches) > 0 or parse_err_n > 0) and len(ok_batches) > 0,
-    }
-    if not batches and errors:
+    try:
+        stats = bind_question_nodes_batch(root, raw, graph=graph)
+        return ToolResult(
+            status="succeeded",
+            data={
+                "batches": [{"status": "applied", **stats}],
+                "parse_errors": [],
+                "ok_count": stats.get("added", 0),
+                "error_count": 0,
+                "partial_success": False,
+            },
+        )
+    except ValueError as e:
         return ToolResult(
             status="failed",
             error_code="batch_all_failed",
-            error_message="未能解析任何有效的题目与要点绑定项。",
-            data=data,
+            error_message=f"批量挂接题目校验失败，未执行部分写入：{e}",
+            data={
+                "batches": [],
+                "parse_errors": [{"error": str(e)}],
+                "ok_count": 0,
+                "error_count": len(raw),
+                "partial_success": False,
+            },
         )
-    if batches and not ok_batches:
-        return ToolResult(
-            status="failed",
-            error_code="batch_all_failed",
-            error_message="按要点批量挂接全部未成功，请查看 batches 中的 error。",
-            data=data,
-        )
-    return ToolResult(status="succeeded", data=data)
 
 
 def tool_batch_create_relations(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
@@ -419,39 +370,29 @@ def tool_batch_create_relations(ctx: InvocationContext, args: dict[str, Any]) ->
         return ToolResult(status="failed", error_code="invalid_arguments", error_message="relations 须为非空数组")
     root = _root(ctx)
     graph = _get_graph(args)
-    created: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    for i, item in enumerate(raw):
-        if not isinstance(item, dict):
-            errors.append({"index": i, "error": "条目须为对象"})
-            continue
-        g = str(item.get("graph") or "").strip() or graph
-        try:
-            rel_id = create_node_relation(
-                root,
-                {
-                    "from_node_id": str(item.get("from_node_id") or ""),
-                    "to_node_id": str(item.get("to_node_id") or ""),
-                    "relation_type": str(item.get("relation_type") or ""),
-                },
-                graph=g,
-            )
-            created.append({"index": i, "relation_id": rel_id})
-        except ValueError as e:
-            errors.append({"index": i, "error": str(e)})
-    ok_n, err_n = len(created), len(errors)
-    data = {
-        "created": created,
-        "errors": errors,
-        "ok_count": ok_n,
-        "error_count": err_n,
-        "partial_success": ok_n > 0 and err_n > 0,
-    }
-    if ok_n == 0 and err_n > 0:
+    try:
+        rids = create_node_relations_batch(root, raw, graph=graph)
+        created = [{"index": i, "relation_id": rid} for i, rid in enumerate(rids)]
+        return ToolResult(
+            status="succeeded",
+            data={
+                "created": created,
+                "errors": [],
+                "ok_count": len(created),
+                "error_count": 0,
+                "partial_success": False,
+            },
+        )
+    except ValueError as e:
         return ToolResult(
             status="failed",
             error_code="batch_all_failed",
-            error_message="批量建立关联全部未成功，请查看 errors 明细。",
-            data=data,
+            error_message=f"批量建立关联校验失败，未执行部分写入：{e}",
+            data={
+                "created": [],
+                "errors": [{"error": str(e)}],
+                "ok_count": 0,
+                "error_count": len(raw),
+                "partial_success": False,
+            },
         )
-    return ToolResult(status="succeeded", data=data)

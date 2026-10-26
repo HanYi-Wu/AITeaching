@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from solaire.knowledge_forge.concurrency import graph_lock
 from solaire.knowledge_forge.cache import (
     _graph_root_key,
     _invalidate_graph_cache,
@@ -59,11 +60,14 @@ from solaire.knowledge_forge.repository import (
     _save_subject_state,
     attach_file_to_node,
     bind_question_to_node,
+    bind_question_nodes_batch,
     bind_questions_batch,
     count_nodes_by_kind,
     create_concept_node,
+    create_concept_nodes_batch,
     create_graph,
     create_node_relation,
+    create_node_relations_batch,
     delete_concept_node,
     delete_graph,
     delete_node_relation,
@@ -116,16 +120,19 @@ __all__ = [
     "count_nodes_by_kind",
     "get_concept_node",
     "create_concept_node",
+    "create_concept_nodes_batch",
     "update_concept_node",
     "delete_concept_node",
     "generate_unique_node_id",
     # 关系操作
     "list_node_relations",
     "create_node_relation",
+    "create_node_relations_batch",
     "delete_node_relation",
     "update_node_relation",
     # 题目绑定
     "bind_question_to_node",
+    "bind_question_nodes_batch",
     "unbind_question_from_node",
     "list_questions_for_node",
     "list_nodes_for_question",
@@ -137,6 +144,7 @@ __all__ = [
     "attach_file_to_node",
     "detach_file_link",
     "load_graph",
+    "graph_lock",
     # 内部兼容项
     "_load_meta",
     "_save_meta",
