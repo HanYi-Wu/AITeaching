@@ -2,23 +2,15 @@ import analysisPrintCss from "./analysisPrint.css?raw";
 import { ChangeEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
-  CheckCircle2,
   ClipboardList,
   Download,
   FileImage,
-  History,
-  PauseCircle,
-  PlayCircle,
   RefreshCw,
-  Search,
-  Trash2,
   Upload,
-  Wifi,
   X,
 } from "lucide-react";
 import { apiDownloadBlob, apiGet } from "../../../api/client";
-import { ContentFolderHelp, ContentFolders } from "../../../components/ContentFolders";
-import { ContentTags, TagChips } from "../../../components/ContentTags";
+import { ContentTags } from "../../../components/ContentTags";
 import { formatLocaleDateTime } from "../../../lib/locale";
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
 import {
@@ -71,6 +63,9 @@ import {
   type GradingDrafts,
 } from "./gradingModel";
 import { usePaperGrading } from "./usePaperGrading";
+import { PaperListSidebar } from "./PaperListSidebar";
+import { PaperClassPublishPanel } from "./PaperClassPublishPanel";
+import { PaperPublishingSidebar } from "./PaperPublishingSidebar";
 import {
   readGradingDraft,
   writeGradingDraft,
@@ -79,12 +74,10 @@ import {
 import {
   type PaperQuery,
   type PageMeta,
-  deliveryLabel,
   mergePaper,
   mergeMeta,
   htmlEscape,
   downloadBlob,
-  publicationWindowLabel,
   submissionStatusLabel,
   gradingStatusLabel,
   formatStudentAnswer,
@@ -1065,91 +1058,29 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,390px)_minmax(0,1fr)] overflow-hidden">
-        <aside className="flex min-h-0 flex-col overflow-hidden border-r border-slate-200 bg-white p-3">
-          <ContentFolders scope="paper" folders={folders} selectedId={browserFolderId} onSelect={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }} onCreated={(folder) => setFolders((current) => [...current, folder])} onUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))} onDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }} onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)} onError={(error) => reportError(error)} allowPaperFolder />
-          {browserFolderId ? <div className="my-2 flex gap-2 text-xs"><button type="button" onClick={() => void analyzePaperFolder(browserFolderId).then(setFolderAnalysis).catch(reportError)} className="rounded border px-2 py-1 hover:bg-slate-50">分析此文件夹</button></div> : null}
-          <div className="mb-3 shrink-0 space-y-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
-              <input
-                className="w-full rounded-md border border-slate-300 py-2 pl-8 pr-2 text-sm"
-                placeholder="搜索试卷"
-                value={paperQuery.q}
-                onChange={(event) => updatePaperQuery({ q: event.target.value })}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <select
-                className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
-                value={paperQuery.deliveryMode}
-                onChange={(event) => updatePaperQuery({ deliveryMode: event.target.value as PaperQuery["deliveryMode"] })}
-              >
-                <option value="all">全部</option>
-                <option value="online">线上</option>
-                <option value="offline">线下</option>
-              </select>
-              <select
-                className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
-                value={paperQuery.status}
-                onChange={(event) => updatePaperQuery({ status: event.target.value })}
-              >
-                <option value="all">全部状态</option>
-                <option value="draft">草稿</option>
-                <option value="published">已发布</option>
-              </select>
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-auto">
-            {papers.map((paper) => (
-              <button
-                key={paper.paper_id}
-                type="button"
-                draggable
-                onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "paper", id: paper.paper_id }))}
-                onClick={() => {
-                  setSelectedPaperId(paper.paper_id);
-                  setAnalysis(null);
-                }}
-                className={`w-full rounded-lg border p-3 text-left transition ${
-                  selectedPaper?.paper_id === paper.paper_id
-                    ? "border-slate-900 bg-slate-50"
-                    : "border-slate-200 bg-white hover:border-slate-300"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="min-w-0 truncate text-sm font-semibold">
-                    {paper.title}
-                    {paper.subject ? ` · ${paper.subject}` : ""}
-                  </p>
-                  <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
-                      paper.delivery_mode === "online"
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-slate-100 text-slate-600"
-                    }`}
-                  >
-                    {deliveryLabel(paper.delivery_mode)}
-                  </span>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                  {(taggedItems[paper.paper_id]?.length ?? 0) > 0 ? <TagChips tags={taggedItems[paper.paper_id]} /> : null}
-                  <span>{paper.subject}</span>
-                  <span>{paper.question_count} 题</span>
-                  <span>{paper.submitted_student_count ?? 0} 份已提交</span>
-                  <span>{paper.published_student_count ?? paper.graded_student_count ?? 0} 份批改并发布</span>
-                  {paper.score_batch_count > 0 ? <span>{paper.score_batch_count} 批线下成绩</span> : null}
-                  <span>{paper.publication_count} 次发布</span>
-                </div>
-              </button>
-            ))}
-            {!loading && papers.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">
-                暂无已导出的试卷
-              </div>
-            ) : null}
-          </div>
-          <Pager meta={paperMeta} onPage={(page) => updatePaperQuery({ page })} onPageSize={(pageSize) => updatePaperQuery({ pageSize })} />
-        </aside>
+        <PaperListSidebar
+          papers={papers}
+          selectedPaper={selectedPaper}
+          loading={loading}
+          query={paperQuery}
+          meta={paperMeta}
+          folders={folders}
+          selectedFolderId={browserFolderId}
+          taggedItems={taggedItems}
+          onSelectFolder={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }}
+          onFolderCreated={(folder) => setFolders((current) => [...current, folder])}
+          onFolderUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
+          onFolderDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }}
+          onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)}
+          onError={reportError}
+          onAnalyzeFolder={(folderId) => void analyzePaperFolder(folderId).then(setFolderAnalysis).catch(reportError)}
+          onSearchChange={(q) => updatePaperQuery({ q })}
+          onDeliveryModeChange={(deliveryMode) => updatePaperQuery({ deliveryMode })}
+          onStatusChange={(status) => updatePaperQuery({ status })}
+          onSelectPaper={(paper) => { setSelectedPaperId(paper.paper_id); setAnalysis(null); }}
+          onPage={(page) => updatePaperQuery({ page })}
+          onPageSize={(pageSize) => updatePaperQuery({ pageSize })}
+        />
 
         <main className="min-h-0 overflow-auto p-6">
           {selectedPaper ? (
@@ -1235,191 +1166,62 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
               {paperDetailView === "manage" ? (
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-                <section className="space-y-5">
-                  <Panel title="发布试卷" icon={<Wifi className="h-5 w-5 text-slate-600" />}>
-                    <div className="mb-4 flex gap-2"><button type="button" onClick={() => { setRecipientScope("class"); setSelectedStudentIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${recipientScope === "class" ? "bg-slate-900 text-white" : "bg-white"}`}>发布到班级</button><button type="button" onClick={() => { setRecipientScope("student"); setSelectedClassIds([]); }} className={`rounded border px-3 py-1.5 text-sm ${recipientScope === "student" ? "bg-slate-900 text-white" : "bg-white"}`}>指定学生</button></div>
-                    <ContentFolderHelp paper /><label className="mb-3 block text-sm">试卷归类（必选）<select aria-label="发布文件夹" value={publishFolderId} onChange={(event) => setPublishFolderId(event.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option value="">请选择文件夹</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} · {folder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}</option>)}</select></label>
-                    {recipientScope === "student" && publishFolderId && folders.find((folder) => folder.id === publishFolderId)?.kind === "category" ? <button type="button" className="mb-3 rounded border border-violet-300 px-2 py-1 text-xs text-violet-700" onClick={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch(reportError)}>将空文件夹转为试卷文件夹</button> : null}
-                    <div className="mb-4 flex gap-2"><input aria-label="新文件夹名称" value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} className="min-w-0 flex-1 rounded border px-2 py-1 text-sm" placeholder="新建文件夹名称" /><button type="button" disabled={!newFolderName.trim()} className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={() => { const parent = folders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? folders.find((folder) => folder.kind === "category" && !folder.parent_id); void createContentFolder({ scope: "paper", name: newFolderName.trim(), kind: recipientScope === "student" ? "paper" : "category", parent_id: recipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => { setFolders((current) => [...current, folder]); setPublishFolderId(folder.id); setNewFolderName(""); }).catch(reportError); }}>新建并选择</button></div>
-                    <label className="mb-4 block text-sm font-medium text-slate-700">
-                      发布学科
-                      <select
-                        data-testid="paper-publish-subject"
-                        value={selectedSubject || (teacherSubjects.length === 1 ? teacherSubjects[0] : "")}
-                        onChange={(event) => setSelectedSubject(event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                      >
-                        {teacherSubjects.length > 1 ? <option value="">请选择学科</option> : null}
-                        {teacherSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                        {teacherSubjects.length === 0 ? <option value={selectedPaper.subject}>{selectedPaper.subject || "通用"}</option> : null}
-                      </select>
-                    </label>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {classes.map((klass) => {
-                        const alreadyPublished = recipientScope === "class" && activePublishedClassIds.has(klass.id);
-                        return (
-                        <label
-                          key={klass.id}
-                          className={`flex items-center gap-3 rounded-md border px-3 py-2 text-sm ${
-                            alreadyPublished
-                              ? "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
-                              : "cursor-pointer border-slate-200 hover:border-slate-300"
-                          }`}
-                        >
-                          <input
-                            data-testid={`paper-class-${klass.id}`}
-                          type={recipientScope === "student" ? "radio" : "checkbox"}
-                          name={recipientScope === "student" ? "personal-publish-class" : undefined}
-                            disabled={alreadyPublished}
-                            checked={selectedClassIds.includes(klass.id)}
-                            onChange={() => toggleClass(klass.id)}
-                            className="h-4 w-4"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-medium">{klass.name}</span>
-                            <span className="block truncate text-xs text-slate-500">
-                              {alreadyPublished
-                                ? "已发布到该班"
-                                : [klass.grade, klass.subject ?? klass.subject_hint].filter(Boolean).join(" · ")}
-                            </span>
-                          </span>
-                        </label>
-                        );
-                      })}
-                      {classes.length === 0 ? (
-                        <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
-                          暂无可发布班级
-                        </div>
-                      ) : null}
-                    </div>
-                    {recipientScope === "student" && selectedClassIds.length === 1 ? <div className="mt-3 rounded-lg border border-slate-200 p-3"><input aria-label="搜索指定学生" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} placeholder="按姓名或学号搜索" className="mb-2 w-full rounded border px-2 py-1.5 text-sm" /><div className="max-h-40 space-y-1 overflow-auto">{classStudents.filter((student) => `${student.display_name} ${student.student_no}`.toLowerCase().includes(studentSearch.toLowerCase())).map((student) => <label key={student.id} className="flex items-center gap-2 rounded p-1 text-sm hover:bg-slate-50"><input type="checkbox" checked={selectedStudentIds.includes(student.id)} onChange={() => setSelectedStudentIds((ids) => ids.includes(student.id) ? ids.filter((id) => id !== student.id) : [...ids, student.id])} />{student.display_name} · {student.student_no}</label>)}</div><p className="mt-1 text-xs text-slate-500">已选 {selectedStudentIds.length} 人；每人在所选试卷文件夹内最多收到一份。</p></div> : null}
-                    <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                      {[
-                        ["online", "网页答题"],
-                        ["image_manual", "图片人工批改"],
-                        ["image_ai", "图片 OCR+AI"],
-                      ].map(([mode, label]) => (
-                        <label
-                          key={mode}
-                          className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${
-                            submissionMode === mode ? "border-slate-900 bg-slate-50" : "border-slate-200 bg-white"
-                          }`}
-                        >
-                          <input
-                            data-testid={`paper-submission-${mode.replace("_", "-")}`}
-                            type="radio"
-                            name="paper-submission-mode"
-                            value={mode}
-                            checked={submissionMode === mode}
-                            onChange={() => setSubmissionMode(mode as PaperSubmissionMode)}
-                          />
-                          <span>{label}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <label className="mt-4 block text-sm font-medium text-slate-700">
-                      允许切屏次数
-                      <input
-                        type="number"
-                        min={0}
-                        max={999}
-                        value={maxScreenSwitches}
-                        onChange={(event) => setMaxScreenSwitches(Math.max(0, Number(event.target.value || 0)))}
-                        className="mt-1 w-36 rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                      />
-                    </label>
-                    <div className="mt-4 grid gap-3 md:grid-cols-3">
-                      <label className="block text-sm font-medium text-slate-700">
-                        开始时间
-                        <input
-                          type="datetime-local"
-                          value={publishStartAt}
-                          onChange={(event) => setPublishStartAt(event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                        />
-                      </label>
-                      <label className="block text-sm font-medium text-slate-700">
-                        结束时间
-                        <input
-                          type="datetime-local"
-                          value={publishEndAt}
-                          onChange={(event) => setPublishEndAt(event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                        />
-                      </label>
-                      <label className="block text-sm font-medium text-slate-700">
-                        做题时长（分钟）
-                        <input
-                          data-testid="paper-time-limit"
-                          type="number"
-                          min={0}
-                          max={1440}
-                          value={timeLimitMinutes}
-                          onChange={(event) => setTimeLimitMinutes(Math.max(0, Number(event.target.value || 0)))}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700"
-                        />
-                      </label>
-                    </div>
-                    {selectedPaper.question_count <= 0 ? (
-                      <p className="mt-3 text-sm text-amber-700">试卷至少需要包含 1 道题后才能发布。</p>
-                    ) : null}
-                    {selectedClassIds.length === 0 ? (
-                      <p className="mt-3 text-sm text-slate-500">请选择至少一个未发布过的班级。</p>
-                    ) : null}
-                    <button
-                      type="button"
-                      data-testid="paper-publish"
-                      disabled={!canPublish}
-                      onClick={() => void publishSelectedPaper()}
-                      className="mt-4 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      {recipientScope === "student" ? "布置个人练习" : "发布到班级"}
-                    </button>
-                  </Panel>
-
-                  <Panel title="发布记录" icon={<History className="h-5 w-5 text-slate-600" />}>
-                    <div className="space-y-3">
-                      {publications.map(publication => (
-                        <article key={publication.id} className="min-w-0 rounded-lg border border-slate-200 p-3">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <h3 className="min-w-0 break-all text-sm font-semibold">{publication.title}</h3>
-                            <span className="rounded bg-slate-100 px-2 py-1 text-xs">{publicationWindowLabel(publication, clock)}</span>
-                          </div>
-                          <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                            <div className="break-all">{publication.recipient_scope === "student" ? "指定学生" : "班级"}：{((publication.recipient_scope === "student" ? publication.student_names : publication.class_names) ?? []).join("、") || "-"}</div>
-                            <div>提交进度：<span>{publication.submitted_count ?? 0}/{publication.attempt_count ?? 0}</span></div>
-                            <div>允许切屏：{publication.max_screen_switches ?? 0} 次</div>
-                            <div>限时 {publication.time_limit_minutes ? `${publication.time_limit_minutes} 分钟` : "不限"}</div>
-                            <div className="break-all sm:col-span-2">{publication.start_at || "未设置"} - {publication.end_at || "未设置"}</div>
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                            <button type="button" aria-label={publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
-                              disabled={busy === `pause:${publication.id}` || publication.status === "revoked" || publication.status === "closed"}
-                              onClick={() => void togglePublicationPause(publication)}
-                              className="inline-flex min-h-10 items-center gap-1 rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50">
-                              {publication.status === "paused" ? <PlayCircle className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
-                              {publication.status === "paused" ? "恢复收取提交" : "暂停收取提交"}
-                            </button>
-                            <button type="button" aria-label="撤回发布"
-                              disabled={busy === `revoke:${publication.id}` || publication.status === "revoked"}
-                              onClick={() => void revokePublication(publication)}
-                              className="inline-flex min-h-10 items-center gap-1 rounded border border-red-200 px-3 py-2 text-xs text-red-700 disabled:opacity-50">
-                              <Trash2 className="h-4 w-4" />取消发布
-                            </button>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                    {publications.length === 0 ? (
-                      <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
-                        暂无发布记录
-                      </p>
-                    ) : null}
-                  </Panel>
-
-                </section>
-
+                <PaperPublishingSidebar
+                  publishPanel={
+                    <PaperClassPublishPanel
+                      selectedPaper={selectedPaper}
+                      folders={folders}
+                      publishFolderId={publishFolderId}
+                      newFolderName={newFolderName}
+                      recipientScope={recipientScope}
+                      selectedClassIds={selectedClassIds}
+                      selectedStudentIds={selectedStudentIds}
+                      studentSearch={studentSearch}
+                      classStudents={classStudents}
+                      teacherSubjects={teacherSubjects}
+                      selectedSubject={selectedSubject}
+                      classes={classes}
+                      alreadyPublishedClassIds={activePublishedClassIds}
+                      submissionMode={submissionMode}
+                      maxScreenSwitches={maxScreenSwitches}
+                      publishStartAt={publishStartAt}
+                      publishEndAt={publishEndAt}
+                      timeLimitMinutes={timeLimitMinutes}
+                      canPublish={canPublish}
+                      onRecipientScopeChange={(scope) => {
+                        setRecipientScope(scope);
+                        if (scope === "class") setSelectedStudentIds([]);
+                        else setSelectedClassIds([]);
+                      }}
+                      onFolderChange={setPublishFolderId}
+                      onConvertFolder={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch(reportError)}
+                      onNewFolderNameChange={setNewFolderName}
+                      onCreateFolder={() => {
+                        const parent = folders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? folders.find((folder) => folder.kind === "category" && !folder.parent_id);
+                        void createContentFolder({ scope: "paper", name: newFolderName.trim(), kind: recipientScope === "student" ? "paper" : "category", parent_id: recipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => {
+                          setFolders((current) => [...current, folder]);
+                          setPublishFolderId(folder.id);
+                          setNewFolderName("");
+                        }).catch(reportError);
+                      }}
+                      onSubjectChange={setSelectedSubject}
+                      onToggleClass={toggleClass}
+                      onStudentSearchChange={setStudentSearch}
+                      onToggleStudent={(studentId) => setSelectedStudentIds((ids) => ids.includes(studentId) ? ids.filter((id) => id !== studentId) : [...ids, studentId])}
+                      onSubmissionModeChange={setSubmissionMode}
+                      onMaxScreenSwitchesChange={setMaxScreenSwitches}
+                      onPublishStartAtChange={setPublishStartAt}
+                      onPublishEndAtChange={setPublishEndAt}
+                      onTimeLimitMinutesChange={setTimeLimitMinutes}
+                      onPublish={() => void publishSelectedPaper()}
+                    />
+                  }
+                  publications={publications}
+                  clock={clock}
+                  busy={busy}
+                  onTogglePause={togglePublicationPause}
+                  onRevoke={revokePublication}
+                />
                 <aside className="space-y-4">
                   <Panel title="线下成绩" icon={<Upload className="h-5 w-5 text-slate-600" />}>
                     <div className="flex flex-col gap-2">
@@ -1756,35 +1558,6 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         </div>
       ) : null}
       {folderAnalysis ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="文件夹分析"><section className="flex h-[85vh] w-[85vw] flex-col overflow-hidden rounded-xl bg-white shadow-xl"><header className="flex items-center justify-between border-b p-4"><div><h2 className="font-semibold">{folderAnalysis.folder.name} · 文件夹分析</h2><p className="text-xs text-slate-500">仅统计实际收到该练习的学生；不计入班级统考平均分。</p></div><button type="button" aria-label="关闭文件夹分析" onClick={() => setFolderAnalysis(null)}><X className="h-5 w-5" /></button></header><div className="overflow-auto p-5"><div className="mb-4 grid gap-2 text-sm sm:grid-cols-5">{[["接收人数", folderAnalysis.summary.assigned_count], ["已提交", folderAnalysis.summary.submitted_count], ["已批改", folderAnalysis.summary.graded_count], ["发布批次", folderAnalysis.summary.publication_count], ["平均得分率", folderAnalysis.summary.average_score_percent == null ? "暂无" : `${folderAnalysis.summary.average_score_percent}%`]].map(([label, value]) => <div key={label} className="rounded border bg-slate-50 p-3"><div className="text-slate-500">{label}</div><b>{value}</b></div>)}</div><div className="space-y-1 text-sm">{folderAnalysis.attempts.map((attempt, index) => <div key={index} className="flex flex-wrap justify-between gap-2 rounded border p-2"><span>{attempt.display_name} · {attempt.student_no}</span><span>{attempt.title} · {attempt.status} · {attempt.score == null ? "未发布成绩" : `${attempt.score}/${attempt.max_score ?? "—"}`}</span></div>)}</div></div></section></div> : null}
-    </div>
-  );
-}
-
-function Pager({ meta, onPage, onPageSize }: { meta: PageMeta; onPage: (page: number) => void; onPageSize: (pageSize: number) => void }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-sm text-slate-600">
-      <span>
-        第 {meta.page} / {meta.totalPages} 页，共 {meta.total} 条
-      </span>
-      <div className="flex gap-2">
-        <select aria-label="每页条数" className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm" value={meta.pageSize} onChange={(event) => onPageSize(Number(event.target.value))}><option value={10}>10 条</option><option value={20}>20 条</option><option value={50}>50 条</option></select>
-        <button
-          type="button"
-          disabled={meta.page <= 1}
-          onClick={() => onPage(meta.page - 1)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium disabled:opacity-50"
-        >
-          上一页
-        </button>
-        <button
-          type="button"
-          disabled={meta.page >= meta.totalPages}
-          onClick={() => onPage(meta.page + 1)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium disabled:opacity-50"
-        >
-          下一页
-        </button>
-      </div>
     </div>
   );
 }
