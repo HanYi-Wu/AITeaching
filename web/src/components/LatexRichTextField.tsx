@@ -9,10 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  createMathLiveBridge,
-  type MathLiveBridgeInstance,
-} from "./latexField/mathLiveBridge";
+import { MathSymbolsDropdown } from "./latexField/MathSymbolsPanel";
+import { MathEditPopup } from "./latexField/MathEditPopup";
 import { Shapes, Table2 } from "lucide-react";
 
 import { resourceApiUrl } from "../api/client";
@@ -393,51 +391,6 @@ function getSerializedCaretOffset(root: HTMLElement, range: Range): number {
   return total;
 }
 
-/* ═══════════════════ Toolbar data ═══════════════════ */
-
-const SYMBOL_GROUPS: { label: string; symbols: { label: string; latex: string }[] }[] = [
-  {
-    label: "希腊字母",
-    symbols: [
-      { label: "α", latex: "\\alpha" },
-      { label: "β", latex: "\\beta" },
-      { label: "γ", latex: "\\gamma" },
-      { label: "δ", latex: "\\delta" },
-      { label: "θ", latex: "\\theta" },
-      { label: "λ", latex: "\\lambda" },
-      { label: "μ", latex: "\\mu" },
-      { label: "π", latex: "\\pi" },
-      { label: "σ", latex: "\\sigma" },
-      { label: "ω", latex: "\\omega" },
-    ],
-  },
-  {
-    label: "运算符",
-    symbols: [
-      { label: "±", latex: "\\pm" },
-      { label: "×", latex: "\\times" },
-      { label: "÷", latex: "\\div" },
-      { label: "≤", latex: "\\leq" },
-      { label: "≥", latex: "\\geq" },
-      { label: "≠", latex: "\\neq" },
-      { label: "≈", latex: "\\approx" },
-      { label: "∞", latex: "\\infty" },
-    ],
-  },
-  {
-    label: "常用",
-    symbols: [
-      { label: "∑", latex: "\\sum" },
-      { label: "∏", latex: "\\prod" },
-      { label: "∫", latex: "\\int" },
-      { label: "∂", latex: "\\partial" },
-      { label: "→", latex: "\\rightarrow" },
-      { label: "⇒", latex: "\\Rightarrow" },
-      { label: "∈", latex: "\\in" },
-      { label: "∀", latex: "\\forall" },
-    ],
-  },
-];
 
 /* ═══════════════════ Component ═══════════════════ */
 
@@ -502,14 +455,10 @@ export function LatexRichTextField({
   onChangeRef.current = onChange;
 
   const [mode, setMode] = useState<"visual" | "source">("visual");
-  const [symbolsOpen, setSymbolsOpen] = useState(false);
-  const symbolsBtnRef = useRef<HTMLButtonElement>(null);
 
   /* popup state */
   const [mathPopup, setMathPopup] = useState<MathPopupState>(null);
   const [mathPopupPos, setMathPopupPos] = useState({ top: 0, left: 0 });
-  const mathPopupHostRef = useRef<HTMLDivElement>(null);
-  const mathBridgeRef = useRef<MathLiveBridgeInstance | null>(null);
   const mathPopupStateRef = useRef<MathPopupState>(null);
   mathPopupStateRef.current = mathPopup;
 
@@ -635,11 +584,11 @@ export function LatexRichTextField({
     setMathPopup({ widget, latex, isNew });
   }, []);
 
-  const closeMathPopup = useCallback((confirm: boolean) => {
+  const closeMathPopup = useCallback((confirm: boolean, latexOverride?: string) => {
     const popup = mathPopupStateRef.current;
     if (!popup) return;
-    if (confirm && mathBridgeRef.current) {
-      const latex = mathBridgeRef.current.getCanonicalLatex();
+    if (confirm) {
+      const latex = (latexOverride ?? popup.latex).trim();
       const isDisplay = popup.widget.classList.contains(DISPLAY_MATH_WIDGET_CLASS);
       if (latex) {
         popup.widget.dataset.latex = latex;
@@ -651,8 +600,6 @@ export function LatexRichTextField({
       popup.widget.remove();
     }
     setMathPopup(null);
-    mathBridgeRef.current?.destroy();
-    mathBridgeRef.current = null;
     const root = editorRef.current;
     if (root) {
       const next = serializeEditor(root);
@@ -661,22 +608,6 @@ export function LatexRichTextField({
       root.focus();
     }
   }, []);
-
-  useEffect(() => {
-    if (!mathPopup || !mathPopupHostRef.current) return;
-    const host = mathPopupHostRef.current;
-    const bridge = createMathLiveBridge({
-      host,
-      initialLatex: mathPopup.latex,
-      onConfirm: () => closeMathPopup(true),
-      onCancel: () => closeMathPopup(false),
-    });
-    mathBridgeRef.current = bridge;
-    return () => {
-      bridge.destroy();
-      mathBridgeRef.current = null;
-    };
-  }, [mathPopup, closeMathPopup]);
 
   /* ═══════════════════ MERMAID POPUP ═══════════════════ */
 
@@ -1019,19 +950,7 @@ export function LatexRichTextField({
   }, []);
   const switchToSource = useCallback(() => setMode("source"), []);
 
-  /* ─── Close symbols dropdown on outside click ─── */
-
-  useEffect(() => {
-    if (!symbolsOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (symbolsBtnRef.current && !symbolsBtnRef.current.contains(e.target as Node)) {
-        const dropdown = document.getElementById("lrt-symbols-dropdown");
-        if (dropdown && !dropdown.contains(e.target as Node)) setSymbolsOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [symbolsOpen]);
+  
 
   /* ═══════════════════ Render ═══════════════════ */
 
@@ -1122,48 +1041,10 @@ export function LatexRichTextField({
         </button>
 
         {/* symbols dropdown */}
-        <div className="relative">
-          <button
-            ref={symbolsBtnRef}
-            type="button"
-            className="rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-white hover:shadow-sm disabled:opacity-40"
-            disabled={mode !== "visual"}
-            onClick={() => setSymbolsOpen((o) => !o)}
-            title="常用符号"
-          >
-            α β π ▾
-          </button>
-          {symbolsOpen && (
-            <div
-              id="lrt-symbols-dropdown"
-              className="absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-2 shadow-xl"
-            >
-              {SYMBOL_GROUPS.map((group) => (
-                <div key={group.label} className="mb-1.5 last:mb-0">
-                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                    {group.label}
-                  </p>
-                  <div className="flex flex-wrap gap-0.5">
-                    {group.symbols.map((sym) => (
-                      <button
-                        key={sym.latex}
-                        type="button"
-                        className="rounded px-1.5 py-0.5 text-sm hover:bg-blue-50 hover:text-blue-700"
-                        title={sym.latex}
-                        onClick={() => {
-                          insertMathTemplate(sym.latex);
-                          setSymbolsOpen(false);
-                        }}
-                      >
-                        {sym.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <MathSymbolsDropdown
+          disabled={mode !== "visual"}
+          onSelectSymbol={insertMathTemplate}
+        />
 
         <div className="mx-1 h-4 w-px bg-slate-300" />
 
@@ -1300,35 +1181,14 @@ export function LatexRichTextField({
       )}
 
       {/* ═══ Math editing popup ═══ */}
-      {mathPopup && (
-        <div id="lrt-math-popup" className="fixed z-50" style={{ top: mathPopupPos.top, left: mathPopupPos.left }}>
-          <div className="w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-2xl ring-1 ring-black/5">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-700">
-                {mathPopup.isNew ? "插入公式" : "编辑公式"}
-              </span>
-              <span className="text-[10px] text-slate-400">Enter 确认 · Esc 取消</span>
-            </div>
-            <div ref={mathPopupHostRef} className="min-h-[40px]" />
-            <div className="mt-2.5 flex justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-md px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
-                onClick={() => closeMathPopup(false)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
-                onClick={() => closeMathPopup(true)}
-              >
-                确认
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <MathEditPopup
+        open={!!mathPopup}
+        isNew={mathPopup?.isNew ?? false}
+        position={mathPopupPos}
+        initialLatex={mathPopup?.latex ?? ""}
+        onConfirm={(latex) => closeMathPopup(true, latex)}
+        onCancel={() => closeMathPopup(false)}
+      />
 
       {/* ═══ Mermaid editing popup ═══ */}
       {mermaidPopup && (
