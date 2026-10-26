@@ -99,3 +99,20 @@ export function pruneStaleSelection(
   }
   return { valid, stale };
 }
+
+export type BankOperationTargetSnapshot = {
+  target: string;
+  qualified_ids: string[];
+};
+
+/** 捕获操作目标快照，防止等待确认或网络延迟期间被篡改 */
+export function snapshotOperationTarget(
+  target: string,
+  qualified_ids: readonly string[],
+): BankOperationTargetSnapshot {
+  return {
+    target,
+    qualified_ids: [...qualified_ids],
+  };
+}
+

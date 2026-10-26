@@ -74,3 +74,33 @@ test('prevents moving folder into itself or its descendant on drop', () => {
   expect(apiPost).not.toHaveBeenCalled();
 });
 
+test('retains clipboard and selection when move action fails', async () => {
+  const onError = vi.fn();
+  vi.mocked(apiPost).mockRejectedValueOnce(new Error('后端网络错误'));
+  render(
+    <BankFolderExplorer
+      data={{ folders: ['folder'], assignments: {} }}
+      items={[{ qualified_id: 'q1' }]}
+      selectedIds={['q1']}
+      onChange={vi.fn()}
+      onError={onError}
+      onSelectIds={vi.fn()}
+      renderItem={(item) => <div>{item.qualified_id}</div>}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: '文件管理器' }));
+  const dialog = screen.getByRole('dialog');
+  fireEvent.contextMenu(within(dialog).getByRole('checkbox'), { clientX: 100, clientY: 100 });
+  fireEvent.click(screen.getByRole('menuitem', { name: '剪切' }));
+
+  const pasteBtn = within(dialog).getByRole('button', { name: '粘贴到当前目录' });
+  expect(pasteBtn).not.toBeDisabled();
+  fireEvent.click(pasteBtn);
+
+  // Wait for failure
+  await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('后端网络错误'));
+  // Clipboard should NOT be lost on failure
+  expect(pasteBtn).not.toBeDisabled();
+});
+
+

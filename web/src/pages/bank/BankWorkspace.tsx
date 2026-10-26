@@ -921,7 +921,9 @@ export function BankWorkspace({
   }
 
   async function doExportSelection() {
-    if (selectedExportIds.length === 0) {
+    if (busy) return;
+    const targetIds = [...selectedExportIds];
+    if (targetIds.length === 0) {
       onError("请在左侧勾选需要导出的题目");
       return;
     }
@@ -929,7 +931,7 @@ export function BankWorkspace({
     onError(null);
     try {
       const result = await apiPost<{ download_url: string; filename: string; question_count: number }>("/api/bank/export-selection", {
-        qualified_ids: selectedExportIds,
+        qualified_ids: targetIds,
         title: "我的题目导出",
       });
       const blob = await downloadPlatformBlob(result.download_url);

@@ -89,6 +89,46 @@ describe("bank toolbar uses the current selection and edits", () => {
     expect(screen.getByRole("button", { name: "导出已选（0）" })).toBeDisabled();
   });
 
+  it("captures export target snapshot and ignores duplicate clicks during in-flight export", async () => {
+    let resolvePost: (value: { download_url: string; filename: string; question_count: number }) => void;
+    mocks.post.mockImplementationOnce(() => new Promise((resolve) => { resolvePost = resolve; }));
+    mountWorkspace();
+
+    const first = await screen.findByRole("checkbox", { name: `选择导出 ${qid}` });
+    await userEvent.click(first);
+
+    const exportBtn = screen.getByRole("button", { name: "导出已选（1）" });
+    await userEvent.click(exportBtn);
+
+    // Duplicate click while busy
+    await userEvent.click(exportBtn);
+
+    // Selection changes while export request is in flight
+    const second = screen.getByRole("checkbox", { name: "选择导出 数学/default/q2" });
+    await userEvent.click(second);
+
+    // Resolve network request
+    resolvePost!({ download_url: "/api/bank/exports/selection.zip", filename: "selection.zip", question_count: 1 });
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+    expect(mocks.post).toHaveBeenCalledWith("/api/bank/export-selection", { qualified_ids: ["数学/default/q1"], title: "我的题目导出" });
+  });
+
+  it("retains selection when export fails", async () => {
+    mocks.post.mockRejectedValueOnce(new Error("网络异常"));
+    mountWorkspace();
+
+    const first = await screen.findByRole("checkbox", { name: `选择导出 ${qid}` });
+    await userEvent.click(first);
+
+    const exportBtn = screen.getByRole("button", { name: "导出已选（1）" });
+    await userEvent.click(exportBtn);
+
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith("网络异常"));
+    // Selection should remain intact
+    expect(first).toBeChecked();
+    expect(screen.getByRole("button", { name: "导出已选（1）" })).toBeEnabled();
+  });
+
   it("saves the final YAML after successive edits while the document stays dirty", async () => {
     await openFirstQuestion();
     await userEvent.click(screen.getByRole("tab", { name: "源文件" }));
