@@ -84,3 +84,19 @@ def _clean_status(status: str) -> str:
     if clean not in VALID_ACCOUNT_STATUSES:
         raise ValueError("status must be active or disabled")
     return clean
+
+
+def _student_with_account(con: Any, student_id: str) -> dict[str, Any]:
+    row = con.execute(
+        """
+        SELECT s.*, u.username AS account_username
+        FROM students s
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE s.id = ?
+        """,
+        (student_id,),
+    ).fetchone()
+    data = row_to_dict(row)
+    if data is None:
+        raise RuntimeError("failed to load student")
+    return data
