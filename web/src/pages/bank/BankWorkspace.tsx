@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -14,7 +13,6 @@ import yaml from "js-yaml";
 import {
   apiDelete,
   apiGet,
-  apiGraphQuestionBindingsIndex,
   apiPost,
   apiPostFormData,
   apiPut,
@@ -44,19 +42,14 @@ import i18n from "../../i18n/i18n";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { localeCompareStrings } from "../../lib/locale";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
-import { notifyContentLibraryChanged, useContentLibraryChanged } from "../../lib/contentEvents";
+import { notifyContentLibraryChanged } from "../../lib/contentEvents";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../../lib/ime";
 import { cn } from "../../lib/utils";
 import { downloadPlatformBlob, listTaggedItems, type ContentTag } from "../../platform/auth";
 import { QUESTION_TYPE_OPTIONS, isChoiceQuestionType } from "../../lib/questionTypes";
-import {
-  buildMetadataFilterDefinitions,
-  hasActiveMetadataFilters,
-  matchesMetadataFilters,
-  type MetadataFilters,
-} from "../../lib/metadataFilters";
-import { defaultItemsForNewGroup, type BankListItem, type BankCollectionRow } from "./bankModel";
+import { defaultItemsForNewGroup, type BankListItem } from "./bankModel";
 import { pruneStaleSelection, toggleSingleSelection } from "./bankOperationModel";
+import { useBankList } from "./useBankList";
 
 export function BankWorkspace({
   onError,
@@ -66,17 +59,34 @@ export function BankWorkspace({
   onOpenGraphNode?: (nodeId: string) => void;
 }) {
   const { t } = useTranslation(["bank", "lib", "common"]);
-  const [items, setItems] = useState<BankListItem[]>([]);
-  const [folders, setFolders] = useState<BankFolders>({ folders: [], assignments: {} });
-  const [collections, setCollections] = useState<BankCollectionRow[]>([]);
-  const [subjects, setSubjects] = useState<string[]>([]);
-  const [filterSubject, setFilterSubject] = useState<string>("__all__");
-  const [filterCollection, setFilterCollection] = useState<string>("__all__");
-  const [filterType, setFilterType] = useState<string>("__all__");
-  const [filterCategory, setFilterCategory] = useState("__all__");
-  const [metadataFilters, setMetadataFilters] = useState<MetadataFilters>({});
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+  const {
+    items,
+    folders,
+    setFolders,
+    collections,
+    subjects,
+    filterSubject,
+    setFilterSubject,
+    filterCollection,
+    setFilterCollection,
+    filterType,
+    setFilterType,
+    filterCategory,
+    setFilterCategory,
+    metadataFilters,
+    setMetadataFilters,
+    searchInput,
+    setSearchInput,
+    search,
+    commitSearch,
+    graphLinkIndex,
+    loadList,
+    collectionOptions,
+    metadataFilterDefinitions,
+    filtered,
+    bankFilterSummary,
+  } = useBankList({ onError });
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
   const refreshTags = useCallback(() => { void listTaggedItems("bank").then(({ items }) => setTaggedItems(items)).catch(() => undefined); }, []);
@@ -118,10 +128,6 @@ export function BankWorkspace({
   const [mathOpen, setMathOpen] = useState(false);
   const [mermaidOpen, setMermaidOpen] = useState(false);
   const [primeBrushOpen, setPrimeBrushOpen] = useState(false);
-  /** 题目全限定 id → 已关联知识点（用于列表与编辑区标签） */
-  const [graphLinkIndex, setGraphLinkIndex] = useState<
-    Record<string, { id: string; canonical_name: string; node_kind: string }[]>
-  >({});
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const analysisRef = useRef<HTMLTextAreaElement>(null);
@@ -346,41 +352,6 @@ export function BankWorkspace({
     [detail, insertSnippet, onError],
   );
 
-  const loadList = useCallback(async () => {
-    onError(null);
-    const [c, it, sub, folderData] = await Promise.all([
-      apiGet<{
-        collections: { id: string; label: string; subject?: string; collection?: string }[];
-      }>("/api/bank/collections"),
-      apiGet<{ items: BankListItem[] }>("/api/bank/items"),
-      apiGet<{ subjects: string[] }>("/api/bank/subjects"),
-      apiGet<BankFolders>("/api/bank/folders"),
-    ]);
-    setCollections(
-      c.collections.map((x) => {
-        const parts = x.id.split("/");
-        const subj = x.subject ?? parts[0] ?? "";
-        const coll =
-          x.collection ?? (parts.length > 1 ? parts.slice(1).join("/") : parts[0] ?? "");
-        return { id: x.id, label: x.label, subject: subj, collection: coll };
-      }),
-    );
-    setItems(it.items);
-    setFolders(folderData);
-    setSubjects(sub.subjects);
-    try {
-      const idx = await apiGraphQuestionBindingsIndex();
-      setGraphLinkIndex(idx.index ?? {});
-    } catch {
-      setGraphLinkIndex({});
-    }
-  }, [onError]);
-
-  useEffect(() => {
-    void loadList().catch((e: Error) => onError(e.message));
-  }, [loadList, onError]);
-  useContentLibraryChanged(kind => { if (kind === 'question') void loadList().catch((e: Error) => onError(e.message)); });
-
   useEffect(() => {
     if (!bankManageOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -392,93 +363,6 @@ export function BankWorkspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [bankManageOpen]);
-
-  const collectionOptions = useMemo(() => {
-    if (filterSubject === "__all__") {
-      return collections;
-    }
-    return collections.filter((c) => {
-      if (c.id === "main") {
-        return filterSubject === "main";
-      }
-      return c.id.startsWith(`${filterSubject}/`);
-    });
-  }, [collections, filterSubject]);
-
-  // Legacy grouped files are exposed as ordinary questions in the unified bank.
-  const collapsedBankItems = items;
-
-  const metadataScopeItems = useMemo(() => {
-    return collapsedBankItems.filter((it) => {
-      if (filterSubject !== "__all__" && (it.subject ?? "") !== filterSubject) {
-        return false;
-      }
-      if (filterCollection !== "__all__" && it.collection !== filterCollection) {
-        return false;
-      }
-      if (filterType !== "__all__" && it.type !== filterType) {
-        return false;
-      }
-      return true;
-    });
-  }, [collapsedBankItems, filterSubject, filterCollection, filterType]);
-
-  const metadataFilterDefinitions = useMemo(
-    () => buildMetadataFilterDefinitions(metadataScopeItems),
-    [metadataScopeItems],
-  );
-  const deferredSearch = useDeferredValue(search);
-  const deferredMetadataFilters = useDeferredValue(metadataFilters);
-  const activeMetadataFilters = useMemo(
-    () => (hasActiveMetadataFilters(deferredMetadataFilters) ? deferredMetadataFilters : null),
-    [deferredMetadataFilters],
-  );
-  const metadataScopeSearchItems = useMemo(
-    () =>
-      metadataScopeItems.map((it) => ({
-        item: it,
-        searchText: [
-          it.qualified_id,
-          it.content_preview,
-          it.group_id ?? "",
-          it.group_material ?? "",
-          JSON.stringify(it.metadata ?? {}),
-        ]
-          .join("\n")
-          .toLowerCase(),
-      })),
-    [metadataScopeItems],
-  );
-
-  const filtered = useMemo(() => {
-    const q = deferredSearch.trim().toLowerCase();
-    return metadataScopeSearchItems
-      .filter(({ item, searchText }) => {
-        if (filterCategory !== "__all__" && String(item.metadata?.category || "未分类") !== filterCategory) return false;
-        if (activeMetadataFilters && !matchesMetadataFilters(item.metadata, activeMetadataFilters)) {
-          return false;
-        }
-        return !q || searchText.includes(q);
-      })
-      .map(({ item }) => item);
-  }, [activeMetadataFilters, metadataScopeSearchItems, deferredSearch, filterCategory]);
-  const bankFilterSummary = useMemo(() => {
-    const all = t("bank:filterAllLabel");
-    const sub = filterSubject === "__all__" ? all : filterSubject;
-    const collLabel =
-      filterCollection === "__all__"
-        ? all
-        : collections.find((c) => c.id === filterCollection)?.label ?? filterCollection;
-    const typLabel =
-      filterType === "__all__"
-        ? all
-        : filterType === "group"
-          ? t("bank:typeGroup")
-          : t(`lib:questionTypes.${filterType}`);
-    const searchSuffix = search.trim() ? t("bank:filterSearchActive") : "";
-    const tagSuffix = hasActiveMetadataFilters(metadataFilters) ? " · metadata" : "";
-    return `${sub} · ${collLabel} · ${typLabel}${searchSuffix}${tagSuffix}`;
-  }, [filterSubject, filterCollection, filterType, search, metadataFilters, collections, t]);
 
   useEffect(() => {
     if (!bankFilterMenuOpen) return;
@@ -1134,10 +1018,6 @@ export function BankWorkspace({
     },
     [trySelectId],
   );
-
-  const commitSearch = useCallback((value: string) => {
-    setSearch(value);
-  }, []);
 
   const closeTab = useCallback(
     (qid: string) => {
