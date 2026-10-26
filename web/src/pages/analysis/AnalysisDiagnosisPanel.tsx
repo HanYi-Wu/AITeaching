@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { FileSpreadsheet, RefreshCw, Sparkles } from "lucide-react";
 import { SvgBarChart } from "./SvgBarChart";
+import { AnalysisComparisonCard } from "./AnalysisComparisonCard";
 import {
   type AnalysisRemediationDraftPreviewResponse,
   type AnalysisRemediationDraftResponse,
@@ -264,6 +265,9 @@ export function AnalysisDiagnosisPanel({
               ) : null}
             </div>
           ) : null}
+
+          {/* Comparison card (C18) */}
+          <AnalysisComparisonCard className="mt-4" />
         </>
       )}
     </div>
