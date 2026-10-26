@@ -414,8 +414,6 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
       const result = await submitStudentAttempt(attempt.id, { time_spent_seconds: elapsedSeconds(), answers: payload });
       while (pendingImageWorkRef.current.length) await Promise.all([...pendingImageWorkRef.current]);
       const accepted = result.attempt.submitted_answers_accepted === true;
-      const latestText = textScopeRef.current && submittedScope && studentDraftKey(textScopeRef.current) === studentDraftKey(submittedScope)
-        ? answersRef.current : submittedText;
       const latestImages = activeAttemptRef.current?.id === attempt.id ? cloneImages(imageAnswersRef.current) : submittedImages;
       const latestImagesWithConflicts = { ...latestImages, ...submittedImageConflicts };
       const imageSnapshot: ImageSubmissionSnapshot = {
@@ -424,6 +422,20 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
       };
       imageSubmissionRef.current = imageSnapshot;
       let retained = false;
+      let imageIssue: ImageDraftIssue = "unavailable";
+      if (localImageSave.scope) {
+        imageIssue = accepted
+          ? await confirmImageSave(localImageSave)
+          : await retainUnconfirmedStudentImageDraft(localImageSave.scope, submittedImages, latestImagesWithConflicts);
+      }
+      imageSnapshot.issue = imageIssue;
+      if (activeAttemptRef.current?.id === attempt.id) {
+        imageSnapshot.latest = { ...cloneImages(imageAnswersRef.current), ...submittedImageConflicts };
+      }
+      if (Object.keys(unconfirmedImageValues(imageSnapshot)).length) retained = true;
+      updateUnconfirmedImages(imageSnapshot);
+      const latestText = textScopeRef.current && submittedScope && studentDraftKey(textScopeRef.current) === studentDraftKey(submittedScope)
+        ? { ...answersRef.current } : submittedText;
       if (submittedScope) {
         const issue = accepted
           ? acknowledgeStudentTextDraft(submittedScope, Object.fromEntries(Object.entries(submittedText).filter(([id]) => !Object.prototype.hasOwnProperty.call(submittedConflicts, id))))
@@ -433,10 +445,10 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
           : latestText;
         const pending = { ...pendingStudentTextDraft(submittedScope), ...unsent, ...submittedConflicts };
         const key = studentDraftKey(submittedScope)!;
-        retained = Object.keys(pending).length > 0;
+        retained = retained || Object.keys(pending).length > 0;
         setUnconfirmedTexts((current) => {
           const next = { ...current };
-          if (retained) next[key] = { title: attempt.title, answers: pending, issue };
+          if (Object.keys(pending).length) next[key] = { title: attempt.title, answers: pending, issue };
           else delete next[key];
           return next;
         });
@@ -445,18 +457,9 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
         const unsent = accepted
           ? Object.fromEntries(Object.entries(latest).filter(([id, value]) => value !== submittedText[id]))
           : latest;
-        retained = Object.keys(unsent).length > 0;
-        if (retained) setUnconfirmedTexts((current) => ({ ...current, [`unscoped:${user.id}:${attempt.id}`]: { title: attempt.title, answers: unsent, issue: "unavailable" } }));
+        retained = retained || Object.keys(unsent).length > 0;
+        if (Object.keys(unsent).length) setUnconfirmedTexts((current) => ({ ...current, [`unscoped:${user.id}:${attempt.id}`]: { title: attempt.title, answers: unsent, issue: "unavailable" } }));
       }
-      let imageIssue: ImageDraftIssue = "unavailable";
-      if (localImageSave.scope) {
-        imageIssue = accepted
-          ? await confirmImageSave(localImageSave)
-          : await retainUnconfirmedStudentImageDraft(localImageSave.scope, submittedImages, latestImagesWithConflicts);
-      }
-      imageSnapshot.issue = imageIssue;
-      if (Object.keys(unconfirmedImageValues(imageSnapshot)).length) retained = true;
-      updateUnconfirmedImages(imageSnapshot);
       textScopeRef.current = null;
       imageScopeRef.current = null;
       textConflictsRef.current = {};
