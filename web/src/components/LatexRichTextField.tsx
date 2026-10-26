@@ -11,10 +11,7 @@ import {
 } from "react";
 import { MathSymbolsDropdown } from "./latexField/MathSymbolsPanel";
 import { MathEditPopup } from "./latexField/MathEditPopup";
-import {
-  getFieldSelection,
-  shouldIgnoreLateValueUpdate,
-} from "./latexField/asyncCallbackBridge";
+import { getFieldSelection } from "./latexField/asyncCallbackBridge";
 import { Shapes, Table2 } from "lucide-react";
 
 import { resourceApiUrl } from "../api/client";
@@ -198,10 +195,8 @@ export function LatexRichTextField({
     if (mode !== "visual") return;
     const root = editorRef.current;
     if (!root) return;
+    if (composingRef.current) return;
     const isFocused = document.activeElement === root;
-    if (shouldIgnoreLateValueUpdate(value, lastEmittedRef.current, isFocused, composingRef.current)) {
-      return;
-    }
     if (isFocused && value === lastEmittedRef.current) return;
     buildEditorDom(root, value);
     lastEmittedRef.current = value;
@@ -298,6 +293,7 @@ export function LatexRichTextField({
     el.textContent = "渲染中…";
     el.classList.remove("text-amber-600");
     const seq = ++mermaidRenderSeqRef.current;
+    el.dataset.renderSeq = String(seq);
     const timer = setTimeout(() => void renderMermaidToElement(mermaidDraft, el, seq), 400);
     return () => clearTimeout(timer);
   }, [mermaidDraft, mermaidPopup]);

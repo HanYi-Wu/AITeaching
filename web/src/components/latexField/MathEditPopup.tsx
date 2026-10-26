@@ -20,14 +20,18 @@ export function MathEditPopup({
 }: MathEditPopupProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const bridgeRef = useRef<MathLiveBridgeInstance | null>(null);
+  const onConfirmRef = useRef(onConfirm);
+  onConfirmRef.current = onConfirm;
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
 
   useEffect(() => {
     if (!open || !hostRef.current) return;
     const bridge = createMathLiveBridge({
       host: hostRef.current,
       initialLatex,
-      onConfirm: (latex) => onConfirm(latex),
-      onCancel,
+      onConfirm: (latex) => onConfirmRef.current(latex),
+      onCancel: () => onCancelRef.current(),
     });
     bridgeRef.current = bridge;
 
@@ -35,7 +39,7 @@ export function MathEditPopup({
       bridge.destroy();
       bridgeRef.current = null;
     };
-  }, [open, initialLatex, onConfirm, onCancel]);
+  }, [open, initialLatex]);
 
   if (!open) return null;
 

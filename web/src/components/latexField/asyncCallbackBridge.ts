@@ -64,28 +64,3 @@ export function getFieldSelection(
 
   return { start: 0, end: 0 };
 }
-
-/**
- * 迟到写入防护：
- * 当用户正在当前字段活跃输入（包括中文 IME 组合输入中）时，
- * 若外部迟到回调带来与本地输入不一致的旧快照，拦截该次更新，
- * 避免后来输入被迟到回调覆盖。
- */
-export function shouldIgnoreLateValueUpdate(
-  incomingValue: string,
-  lastEmittedValue: string | null,
-  isFocused: boolean,
-  isComposing: boolean,
-): boolean {
-  if (isComposing) {
-    return true;
-  }
-  if (!isFocused || lastEmittedValue === null) {
-    return false;
-  }
-  // 用户正处于聚焦输入中，且收到的外部值不等于最新已发射的值
-  if (incomingValue !== lastEmittedValue) {
-    return true;
-  }
-  return false;
-}

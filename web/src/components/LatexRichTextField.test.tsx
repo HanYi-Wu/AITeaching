@@ -115,27 +115,31 @@ describe("LatexRichTextField widget deletion", () => {
     expect(execCommand).toHaveBeenCalledWith("delete");
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith("before  after"));
   });
-  it("does not overwrite active user input when a stale late-arriving value update is received while focused", () => {
+  it("applies a new question value while the visual editor remains focused", () => {
     const onChange = vi.fn();
     const textAreaRef = createRef<HTMLTextAreaElement>();
-    const { container, rerender } = render(
-      <LatexRichTextField value="initial" onChange={onChange} textAreaRef={textAreaRef} />
+    const { container, rerender, getByText } = render(
+      <LatexRichTextField value="question one" onChange={onChange} textAreaRef={textAreaRef} />
     );
     const editor = container.querySelector("[contenteditable='true']") as HTMLDivElement;
     editor.focus();
 
-    // User types additional text
-    editor.textContent = "initial edited text";
-    fireEvent.input(editor);
-    expect(onChange).toHaveBeenCalledWith("initial edited text");
-
-    // Stale prop from a delayed callback arrives while editor remains focused
+    // The parent selects another question without blurring this field.
     rerender(
-      <LatexRichTextField value="initial" onChange={onChange} textAreaRef={textAreaRef} />
+      <LatexRichTextField value="question two" onChange={onChange} textAreaRef={textAreaRef} />
     );
 
-    // Editor should not be overwritten back to stale "initial"
-    expect(editor.textContent).toBe("initial edited text");
+    expect(editor.textContent).toBe("question two");
+
+    fireEvent.click(getByText("源码"));
+    rerender(
+      <LatexRichTextField value="question three" onChange={onChange} textAreaRef={textAreaRef} />
+    );
+    const source = container.querySelector("textarea:not(.sr-only)") as HTMLTextAreaElement;
+    expect(source.value).toBe("question three");
+
+    fireEvent.click(getByText("可视化"));
+    expect(container.querySelector("[contenteditable='true']")?.textContent).toBe("question three");
   });
 
   it("passes unified selection to embed requests in visual mode", () => {

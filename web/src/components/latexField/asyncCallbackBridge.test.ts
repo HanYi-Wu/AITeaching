@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  getFieldSelection,
-  shouldIgnoreLateValueUpdate,
-} from "./asyncCallbackBridge";
+import { getFieldSelection } from "./asyncCallbackBridge";
 import { renderMermaidToElement } from "./contentPreview";
 
 vi.mock("../../lib/mermaidInit", () => {
@@ -48,31 +45,6 @@ describe("asyncCallbackBridge", () => {
 
       const sel = getFieldSelection(null, hiddenTa, null, "visual", vi.fn());
       expect(sel).toEqual({ start: 2, end: 4 });
-    });
-  });
-
-  describe("shouldIgnoreLateValueUpdate", () => {
-    it("always ignores updates during IME composition", () => {
-      expect(shouldIgnoreLateValueUpdate("hello", "hello world", true, true)).toBe(true);
-      expect(shouldIgnoreLateValueUpdate("hello", "hello", false, true)).toBe(true);
-    });
-
-    it("allows updates when not focused (e.g. modal confirm, question switch)", () => {
-      expect(shouldIgnoreLateValueUpdate("question 2", "question 1", false, false)).toBe(false);
-      expect(shouldIgnoreLateValueUpdate("inserted $x$", "original", false, false)).toBe(false);
-    });
-
-    it("blocks stale updates when editor is actively focused and user has typed newer content", () => {
-      // User typed "world" -> lastEmittedValue is "hello world". Stale incoming callback is "hello"
-      expect(shouldIgnoreLateValueUpdate("hello", "hello world", true, false)).toBe(true);
-    });
-
-    it("allows updates when incoming value matches the currently emitted value", () => {
-      expect(shouldIgnoreLateValueUpdate("hello world", "hello world", true, false)).toBe(false);
-    });
-
-    it("allows initial value on mount when lastEmittedValue is null", () => {
-      expect(shouldIgnoreLateValueUpdate("initial", null, true, false)).toBe(false);
     });
   });
 

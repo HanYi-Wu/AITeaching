@@ -26,6 +26,7 @@ vi.mock("mathlive", () => ({
 
 import { MathSymbolsDropdown, SYMBOL_GROUPS } from "./MathSymbolsPanel";
 import { MathEditPopup } from "./MathEditPopup";
+import { MathInsertOverlay } from "../MathInsertOverlay";
 
 describe("MathSymbolsPanel and MathEditPopup", () => {
   it("renders MathSymbolsDropdown and selects symbols", () => {
@@ -94,5 +95,71 @@ describe("MathSymbolsPanel and MathEditPopup", () => {
       />
     );
     expect(getByText("编辑公式")).toBeInTheDocument();
+  });
+
+  it("preserves MathEditPopup input when parent callbacks change", () => {
+    const initialConfirm = vi.fn();
+    const initialCancel = vi.fn();
+    const { container, rerender } = render(
+      <MathEditPopup
+        open={true}
+        isNew={true}
+        position={{ top: 100, left: 200 }}
+        initialLatex="x^2"
+        onConfirm={initialConfirm}
+        onCancel={initialCancel}
+      />
+    );
+
+    const popup = container.querySelector("#lrt-math-popup")!;
+    const host = popup.firstElementChild!.children[1] as HTMLDivElement;
+    const field = host.firstElementChild as MockMathfieldElement;
+    field.latexValue = "typed formula";
+
+    const nextConfirm = vi.fn();
+    const nextCancel = vi.fn();
+    rerender(
+      <MathEditPopup
+        open={true}
+        isNew={true}
+        position={{ top: 120, left: 220 }}
+        initialLatex="x^2"
+        onConfirm={nextConfirm}
+        onCancel={nextCancel}
+      />
+    );
+
+    expect(host.firstElementChild).toBe(field);
+    expect(field.latexValue).toBe("typed formula");
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(nextConfirm).toHaveBeenCalledWith("typed formula");
+  });
+
+  it("preserves MathInsertOverlay input when parent callbacks change", () => {
+    const initialConfirm = vi.fn();
+    const initialClose = vi.fn();
+    const { getByRole, rerender } = render(
+      <MathInsertOverlay open onConfirm={initialConfirm} onClose={initialClose} />
+    );
+
+    const dialog = getByRole("dialog");
+    const host = dialog.firstElementChild!.children[2] as HTMLDivElement;
+    const field = host.firstElementChild as MockMathfieldElement;
+    field.latexValue = "typed formula";
+
+    const nextConfirm = vi.fn();
+    const nextClose = vi.fn();
+    rerender(<MathInsertOverlay open onConfirm={nextConfirm} onClose={nextClose} />);
+
+    expect(host.firstElementChild).toBe(field);
+    expect(field.latexValue).toBe("typed formula");
+    fireEvent.keyDown(field, { key: "Escape", isComposing: true });
+    expect(nextClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(nextClose).toHaveBeenCalledOnce();
+    nextClose.mockClear();
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(nextConfirm).toHaveBeenCalledWith("$typed formula$");
+    expect(nextClose).toHaveBeenCalledOnce();
   });
 });
