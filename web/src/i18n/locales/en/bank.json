@@ -92,5 +92,9 @@
   "workViewPreview": "Preview",
   "workViewSource": "Source",
   "closeTabConfirm": "This tab has unsaved changes. Close anyway?",
-  "switchTabDiscard": "You have unsaved changes. Switch anyway and discard them?"
+  "switchTabDiscard": "You have unsaved changes. Switch anyway and discard them?",
+  "saveConflict": "This question was updated elsewhere. Your edits are preserved. Review the latest content before saving again.",
+  "viewLatest": "View latest content",
+  "loadLatest": "Load latest version",
+  "loadLatestConfirm": "Loading the latest version will discard your local edits. Continue?"
 }

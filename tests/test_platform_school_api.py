@@ -577,8 +577,29 @@ def test_school_management_paginates_bulk_updates_resets_and_removes_assignments
         headers=school_headers,
     )
     assert disabled_teacher.status_code == 200
-    assert disabled_teacher.json()["updated"] == 1
+    assert disabled_teacher.json() == {
+        "updated": 1,
+        "changed": 1,
+        "unchanged": 0,
+        "not_found": 0,
+        "changed_ids": [second_teacher["id"]],
+        "status": "disabled",
+    }
     assert web_client.post("/api/auth/login", json={"username": "teacher_page_b", "password": "teacher123"}).status_code == 401
+    repeated_teacher = web_client.post(
+        "/api/school/teachers/bulk-status",
+        json={"ids": [second_teacher["id"], second_teacher["id"]], "status": "disabled"},
+        headers=school_headers,
+    )
+    assert repeated_teacher.status_code == 200
+    assert repeated_teacher.json() == {
+        "updated": 1,
+        "changed": 0,
+        "unchanged": 1,
+        "not_found": 0,
+        "changed_ids": [],
+        "status": "disabled",
+    }
 
     teacher_reset = web_client.post(
         f"/api/school/teachers/{second_teacher['id']}/reset-password",
@@ -598,7 +619,14 @@ def test_school_management_paginates_bulk_updates_resets_and_removes_assignments
         headers=school_headers,
     )
     assert disabled_student.status_code == 200
-    assert disabled_student.json()["updated"] == 1
+    assert disabled_student.json() == {
+        "updated": 1,
+        "changed": 1,
+        "unchanged": 0,
+        "not_found": 0,
+        "changed_ids": [student["id"]],
+        "status": "disabled",
+    }
     assert web_client.post(
         "/api/auth/login",
         json={"username": student["account_username"], "password": student["initial_password"]},

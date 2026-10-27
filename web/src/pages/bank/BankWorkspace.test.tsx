@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import yaml from "js-yaml";
+import { ApiError } from "../../api/errors";
 import { notifyContentLibraryChanged } from "../../lib/contentEvents";
 import { ToolBarProvider, useToolBar } from "../../contexts/ToolBarContext";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
@@ -305,6 +306,64 @@ describe("bank toolbar uses the current selection and edits", () => {
 
     await waitFor(() => expect((screen.getByRole("textbox", { name: "附加信息内容" }) as HTMLInputElement).value).toBe("newer unsaved edit"));
     expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+  });
+
+  it("sends the loaded version and preserves edits while viewing a conflict", async () => {
+    const baseGet = mocks.get.getMockImplementation()!;
+    let version = "v1";
+    mocks.get.mockImplementation(async (path: string) => ({ ...await baseGet(path), version }));
+    mocks.put.mockRejectedValueOnce(new ApiError("updated elsewhere", 409));
+    await openFirstQuestion();
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息名称" }), { target: { value: "topic" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "local edit" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(expect.any(String), expect.any(Object), { "If-Match": "v1" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前编辑已保留");
+    version = "v2";
+    savedQuestion = { ...savedQuestion, metadata: { topic: "remote edit" } };
+    await userEvent.click(screen.getByRole("button", { name: "查看最新内容" }));
+    expect(await screen.findByText(/topic: remote edit/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "附加信息内容" })).toHaveValue("local edit");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await userEvent.click(screen.getByRole("button", { name: "载入最新版本" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "附加信息内容" })).toHaveValue("remote edit"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("uses only the selected record as editable YAML for a legacy multi-record file", async () => {
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      const data = await baseGet(path);
+      if (path === `/api/bank/items/${encodeURIComponent(qid)}`) {
+        return { ...data, file_yaml: yaml.dump([savedQuestion, { ...savedQuestion, id: "q2" }]), record_yaml: yaml.dump(savedQuestion) };
+      }
+      return data;
+    });
+    await openFirstQuestion();
+    await userEvent.click(screen.getByRole("tab", { name: "源文件" }));
+    const source = screen.getByRole("textbox", { name: "题目 YAML" }) as HTMLTextAreaElement;
+    expect(yaml.load(source.value)).toMatchObject({ id: "q1" });
+    expect(source.value).not.toContain("id: q2");
+  });
+
+  it("keeps the saved version for newer edits when another window writes before refresh", async () => {
+    const baseGet = mocks.get.getMockImplementation()!;
+    let version = "v1";
+    mocks.get.mockImplementation(async (path: string) => ({ ...await baseGet(path), version }));
+    let finishSave: ((value: { version: string }) => void) | undefined;
+    mocks.put.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    await openFirstQuestion();
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息名称" }), { target: { value: "topic" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "submitted" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(finishSave).toBeTypeOf("function"));
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "new local edit" } });
+    version = "remote-v3";
+    await act(async () => { finishSave!({ version: "saved-v2" }); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存" })).toBeEnabled());
+    expect(screen.getByRole("textbox", { name: "附加信息内容" })).toHaveValue("new local edit");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mocks.put).toHaveBeenLastCalledWith(expect.any(String), expect.any(Object), { "If-Match": "saved-v2" }));
   });
 
   it("keeps newer YAML text when the submitted version finishes saving", async () => {

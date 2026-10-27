@@ -31,6 +31,11 @@ def test_saved_answers_resume_and_confirmed_grades_keep_attempt_identity(web_cli
                               json={"class_ids": [class_id]})
     assert publication.status_code == 200
     publication_id = publication.json()["publication"]["id"]
+    frozen_question_path = tmp_path / "resource" / "math" / "q1.yaml"
+    frozen_question_path.write_text(
+        frozen_question_path.read_text(encoding="utf-8").replace("1+1=?", "source changed after publication"),
+        encoding="utf-8",
+    )
     assert client.post(f"/api/papers/{paper_id}/publish", headers=teacher,
                        json={"class_ids": [class_id]}).status_code == 400
     token = client.post("/api/auth/login", json=account).json()["token"]
@@ -38,6 +43,7 @@ def test_saved_answers_resume_and_confirmed_grades_keep_attempt_identity(web_cli
     start_url = f"/api/student/publications/{publication_id}/start"
     started = client.post(start_url, headers=student)
     assert started.status_code == 200
+    assert started.json()["questions"][0]["content"] == "1+1=?"
     attempt_id = started.json()["attempt"]["id"]
     original_snapshot = started.json()["attempt"]["snapshot_version"]
     payload = {"answers": [
@@ -64,6 +70,7 @@ def test_saved_answers_resume_and_confirmed_grades_keep_attempt_identity(web_cli
     submissions = client.get(f"/api/papers/{paper_id}/submissions", headers=teacher).json()["submissions"]
     submission = next(row for row in submissions if row["attempt_id"] == attempt_id)
     assert submission["answers"][0]["answer"] == "student working"
+    assert submission["answers"][0]["content"] == "1+1=?"
     for answer, score in zip(submission["answers"], (3, 4), strict=True):
         grade_url = f"/api/papers/{paper_id}/attempts/{attempt_id}/answers/{answer['question_id']}/grade"
         version = answer["grading_version"]
@@ -78,3 +85,18 @@ def test_saved_answers_resume_and_confirmed_grades_keep_attempt_identity(web_cli
     result = client.get("/api/student/results", headers=student).json()["results"][0]
     assert (result["attempt_id"], result["score"], result["max_score"]) == (attempt_id, 7, 10)
     assert [answer["feedback"] for answer in result["answers"]] == ["confirmed", "confirmed"]
+    assert result["answers"][0]["content"] == "1+1=?"
+
+    refreshed_submission = next(
+        row
+        for row in client.get(f"/api/papers/{paper_id}/submissions", headers=teacher).json()["submissions"]
+        if row["attempt_id"] == attempt_id
+    )
+    analysis = client.get(
+        f"/api/papers/{paper_id}/analysis?publication_id={publication_id}",
+        headers=teacher,
+    ).json()["analysis"]
+    analysis_student = analysis["students"][0]
+    assert (refreshed_submission["score"], refreshed_submission["max_score"]) == (result["score"], result["max_score"])
+    assert analysis_student["score_percent"] == result["score_percent"] == 70
+    assert analysis["summary"]["average_score"] == 70

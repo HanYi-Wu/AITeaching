@@ -28,6 +28,7 @@ from solaire.web.papers.student_sessions import (
     _ensure_assigned_attempt, _attempt_for_student, _attempt_for_student_in_connection,
     _attempt_payload, list_student_papers, start_student_publication,
 )
+from solaire.web.papers.frozen_question_reads import FrozenQuestionReadContext
 from solaire.web.papers.snapshots import (
     _normalize_exam_question_refs, _load_exam_question_payloads,
     _is_placeholder_question, _load_attempt_question_payloads, public_snapshot_identity,
@@ -284,6 +285,7 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
         ).fetchall()
 
     results: list[dict[str, Any]] = []
+    read_context = FrozenQuestionReadContext()
     for row in rows:
         attempt = row_to_dict(row) or {}
         payload = _attempt_payload(attempt)
@@ -291,9 +293,17 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
         question_order: list[str] = []
         question_by_id: dict[str, dict[str, Any]] = {}
         try:
-            questions, answer_keys = _load_attempt_question_payloads(project_root, attempt, root=root)
+            questions, answer_keys = _load_attempt_question_payloads(
+                project_root,
+                attempt,
+                root=root,
+                read_context=read_context,
+            )
             question_order = [str(q["question_id"]) for q in questions]
-            question_by_id = {str(q["question_id"]): q for q in questions}
+            _questions, question_by_id, _order_index = read_context.indexed_questions(
+                attempt.get("question_payload_json"),
+                questions,
+            )
         except Exception:
             pass
         with connect(root) as con:

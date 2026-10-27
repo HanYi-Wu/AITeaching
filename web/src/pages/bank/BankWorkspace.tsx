@@ -8,6 +8,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import yaml from "js-yaml";
+import { ApiError } from "../../api/errors";
+import { loadSessionToken } from "../../platform/session";
 import {
   apiDelete,
   apiGet,
@@ -90,6 +92,7 @@ export function BankWorkspace({
   /** 中间工作区：字段编辑 / 浏览 / 源文件 */
   const [workView, setWorkView] = useState<"fields" | "preview" | "source">("fields");
   const [detail, setDetail] = useState<BankDetailState | null>(null);
+  const [saveConflict, setSaveConflict] = useState<{ qid: string; latest: BankDetailState | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [importYaml, setImportYaml] = useState("");
   const [importSubject, setImportSubject] = useState(() => i18n.t("bank:defaultSubject"));
@@ -114,6 +117,7 @@ export function BankWorkspace({
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   const detailRequestSeqRef = useRef(0);
+  useEffect(() => () => { detailRequestSeqRef.current++; }, []);
   const draftRef = useRef({ selectedId, detail, rawYaml, metaRows });
   draftRef.current = { selectedId, detail, rawYaml, metaRows };
   const saveInProgressRef = useRef(false);
@@ -233,11 +237,14 @@ export function BankWorkspace({
       question: QuestionJson | null;
       question_display?: QuestionJson | null;
       file_yaml: string;
+      record_yaml?: string;
+      version?: string;
       storage_path: string;
       storage_kind: string;
       question_group?: QuestionGroupJson | null;
       question_group_preview?: { material: string; items: GroupMemberJson[] } | null;
     }>(`/api/bank/items/${enc}`);
+    d.file_yaml = d.record_yaml ?? d.file_yaml;
     let detailState: BankDetailState;
     if (!d.question && d.question_group) {
       const ug = d.question_group.unified;
@@ -283,13 +290,15 @@ export function BankWorkspace({
   const loadDetail = useCallback(
     async (qid: string) => {
       const requestSeq = ++detailRequestSeqRef.current;
+      const session = loadSessionToken();
       onError(null);
       const detailState = await fetchDetail(qid);
-      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid) {
+      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid || session !== loadSessionToken()) {
         return;
       }
       const nextMetaRows = detailMetaRows(detailState);
       setDetail(detailState);
+      setSaveConflict(null);
       setRawYaml(detailState.file_yaml);
       setMetaRows(nextMetaRows);
       setEditorTab("form");
@@ -304,10 +313,12 @@ export function BankWorkspace({
       submittedDetailJson: string,
       submittedMetaRowsJson: string,
       submittedYaml: string,
+      savedVersion?: string,
     ) => {
-      const requestSeq = ++detailRequestSeqRef.current;
+      const requestSeq = detailRequestSeqRef.current;
+      const session = loadSessionToken();
       const detailState = await fetchDetail(qid);
-      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid) {
+      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid || session !== loadSessionToken()) {
         return;
       }
 
@@ -326,6 +337,8 @@ export function BankWorkspace({
       if (formUnchanged) {
         setDetail(detailState);
         setMetaRows(nextMetaRows);
+      } else if (savedVersion) {
+        setDetail((previous) => previous?.qualified_id === qid ? { ...previous, version: savedVersion } : previous);
       }
       if (yamlUnchanged) {
         setRawYaml(detailState.file_yaml);
@@ -431,6 +444,9 @@ export function BankWorkspace({
     }
     if (saveInProgressRef.current) return;
     const qid = detail.qualified_id;
+    const scope = detailRequestSeqRef.current;
+    const session = loadSessionToken();
+    const isCurrent = () => selectedIdRef.current === qid && scope === detailRequestSeqRef.current && session === loadSessionToken();
     const submittedDetailJson = JSON.stringify(detail);
     const submittedMetaRowsJson = JSON.stringify(metaRows);
     const submittedYaml = rawYaml;
@@ -439,20 +455,20 @@ export function BankWorkspace({
     onError(null);
     try {
       const enc = encodeURIComponent(qid);
-      if (detail.question_group) {
-        const body = buildQuestionGroupFromForm();
-        await apiPut(`/api/bank/items/${enc}`, body);
-      } else {
-        const q = buildQuestionFromForm();
-        await apiPut(`/api/bank/items/${enc}`, q);
-      }
+      const body = detail.question_group ? buildQuestionGroupFromForm() : buildQuestionFromForm();
+      const result = detail.version
+        ? await apiPut<{ version?: string }>(`/api/bank/items/${enc}`, body, { "If-Match": detail.version })
+        : await apiPut<{ version?: string }>(`/api/bank/items/${enc}`, body);
+      if (!isCurrent()) return;
       await loadList();
-      if (selectedIdRef.current === qid) {
-        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml);
+      if (isCurrent()) {
+        setSaveConflict(null);
+        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml, result?.version);
       }
       notifyContentLibraryChanged("question");
     } catch (e) {
-      if (selectedIdRef.current === qid) {
+      if (isCurrent()) {
+        if (e instanceof ApiError && e.status === 409) setSaveConflict({ qid, latest: null });
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
@@ -468,6 +484,9 @@ export function BankWorkspace({
     }
     if (saveInProgressRef.current) return;
     const qid = detail.qualified_id;
+    const scope = detailRequestSeqRef.current;
+    const session = loadSessionToken();
+    const isCurrent = () => selectedIdRef.current === qid && scope === detailRequestSeqRef.current && session === loadSessionToken();
     const submittedDetailJson = JSON.stringify(detail);
     const submittedMetaRowsJson = JSON.stringify(metaRows);
     const submittedYaml = rawYaml;
@@ -475,6 +494,7 @@ export function BankWorkspace({
     setBusy(true);
     onError(null);
     try {
+      let savedVersion: string | undefined;
       {
         const parsed = yaml.load(rawYaml) as unknown;
         if (!parsed || typeof parsed !== "object") {
@@ -485,20 +505,21 @@ export function BankWorkspace({
           throw new Error("题目 ID 不可在 YAML 中修改；如需更名，请新建题目后迁移内容。");
         }
         const enc = encodeURIComponent(qid);
-        if (obj.type === "group") {
-          await apiPut(`/api/bank/items/${enc}`, obj as unknown as QuestionGroupJson);
-        } else {
-          const q = { ...obj } as unknown as QuestionJson;
-          await apiPut(`/api/bank/items/${enc}`, q);
-        }
+        const result = detail.version
+          ? await apiPut<{ version?: string }>(`/api/bank/items/${enc}`, obj, { "If-Match": detail.version })
+          : await apiPut<{ version?: string }>(`/api/bank/items/${enc}`, obj);
+        savedVersion = result?.version;
       }
+      if (!isCurrent()) return;
       await loadList();
-      if (selectedIdRef.current === qid) {
-        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml);
+      if (isCurrent()) {
+        setSaveConflict(null);
+        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml, savedVersion);
       }
       notifyContentLibraryChanged("question");
     } catch (e) {
-      if (selectedIdRef.current === qid) {
+      if (isCurrent()) {
+        if (e instanceof ApiError && e.status === 409) setSaveConflict({ qid, latest: null });
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
@@ -1142,6 +1163,34 @@ export function BankWorkspace({
           }}
         />
         <div className="min-h-0 flex-1 overflow-auto p-4">
+          {saveConflict?.qid === selectedId && detail ? (
+            <div role="alert" className="mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
+              <p>{t("saveConflict")}</p>
+              <button type="button" className="mt-2 underline" onClick={async () => {
+                const qid = detail.qualified_id;
+                const sequence = ++detailRequestSeqRef.current;
+                const session = loadSessionToken();
+                try {
+                  const latest = await fetchDetail(qid);
+                  if (sequence === detailRequestSeqRef.current && selectedIdRef.current === qid && session === loadSessionToken()) {
+                    setSaveConflict({ qid, latest });
+                  }
+                } catch (error) {
+                  if (sequence === detailRequestSeqRef.current && session === loadSessionToken()) onError(error instanceof Error ? error.message : String(error));
+                }
+              }}>{t("viewLatest")}</button>
+              {saveConflict.latest ? (
+                <div>
+                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-white p-2">{saveConflict.latest.file_yaml}</pre>
+                  <button type="button" className="mt-2 underline" onClick={() => {
+                    if (window.confirm(t("loadLatestConfirm"))) {
+                      void loadDetail(detail.qualified_id).catch((error) => onError(error instanceof Error ? error.message : String(error)));
+                    }
+                  }}>{t("loadLatest")}</button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {selectedId ? <div className="mb-2 rounded border bg-white p-2 text-xs"><ContentTags scope="bank" itemId={selectedId} onError={onError} onChange={refreshTags} /></div> : null}
           {!detail ? (
             <p className="text-sm text-slate-500">{t("selectLeft")}</p>

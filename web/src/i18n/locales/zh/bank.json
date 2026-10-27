@@ -92,5 +92,9 @@
   "workViewPreview": "浏览",
   "workViewSource": "源文件",
   "closeTabConfirm": "此标签有未保存的修改，确定关闭？",
-  "switchTabDiscard": "当前题目有未保存的修改，切换将放弃修改，是否继续？"
+  "switchTabDiscard": "当前题目有未保存的修改，切换将放弃修改，是否继续？",
+  "saveConflict": "题目已在其他位置更新。当前编辑已保留，请查看最新内容后重新核对。",
+  "viewLatest": "查看最新内容",
+  "loadLatest": "载入最新版本",
+  "loadLatestConfirm": "载入最新版本将放弃当前本地编辑，是否继续？"
 }

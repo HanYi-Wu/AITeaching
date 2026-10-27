@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useRef,
   type ChangeEvent,
   type Dispatch,
@@ -9,6 +10,7 @@ import {
 import { apiPostFormData } from "../../api/client";
 import type { EmbedKind } from "../../lib/bankEditorEmbedKinds";
 import type { BankDetailState } from "../../components/BankQuestionEditorPanel";
+import { loadSessionToken } from "../../platform/session";
 // Import imageCompression primitives for adapter capability
 import {
   compressImageFileToDataUrl,
@@ -287,6 +289,16 @@ export function useBankImageUpload({
   const embedSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const targetQidRef = useRef<string | null>(null);
   const snapshotTextRef = useRef<string>("");
+  const scopeRef = useRef(0);
+  const currentQidRef = useRef(detail?.qualified_id);
+  const imageScopeRef = useRef(0);
+  const sessionRef = useRef<string | null>(null);
+  const targetVersionRef = useRef<string | undefined>(undefined);
+  if (currentQidRef.current !== detail?.qualified_id) {
+    currentQidRef.current = detail?.qualified_id;
+    scopeRef.current++;
+  }
+  useEffect(() => () => { scopeRef.current++; }, []);
 
   const beginImageEmbed = useCallback(
     (kind: EmbedKind, sel: { start: number; end: number } | null) => {
@@ -294,6 +306,9 @@ export function useBankImageUpload({
       embedSelectionRef.current = sel;
       targetQidRef.current = detail?.qualified_id ?? null;
       snapshotTextRef.current = detail ? getEmbedKindText(detail, kind) : "";
+      imageScopeRef.current = scopeRef.current;
+      sessionRef.current = loadSessionToken();
+      targetVersionRef.current = detail?.version;
       imageInputRef.current?.click();
     },
     [detail],
@@ -321,6 +336,10 @@ export function useBankImageUpload({
       const targetQid = targetQidRef.current;
       const snapshotText = snapshotTextRef.current;
       const saved = embedSelectionRef.current;
+      const scope = imageScopeRef.current;
+      const session = sessionRef.current;
+      const version = targetVersionRef.current;
+      const isCurrent = () => scope === scopeRef.current && session === loadSessionToken();
 
       imageEmbedKindRef.current = null;
       embedSelectionRef.current = null;
@@ -328,7 +347,7 @@ export function useBankImageUpload({
       snapshotTextRef.current = "";
       e.target.value = "";
 
-      if (!file || !targetQid || !kind) {
+      if (!file || !targetQid || !kind || !isCurrent()) {
         return;
       }
 
@@ -338,14 +357,17 @@ export function useBankImageUpload({
         const fd = new FormData();
         fd.append("file", file);
         const enc = encodeURIComponent(targetQid);
-        const r = await apiPostFormData<{ marker: string }>(`/api/bank/items/${enc}/image`, fd);
+        const r = version
+          ? await apiPostFormData<{ marker: string }>(`/api/bank/items/${enc}/image`, fd, { "If-Match": version })
+          : await apiPostFormData<{ marker: string }>(`/api/bank/items/${enc}/image`, fd);
+        if (!isCurrent()) return;
 
         if (!r || typeof r.marker !== "string") {
           throw new Error("上传图片返回无效引用");
         }
 
         setDetail((d) => {
-          if (!d) return null;
+          if (!d || !isCurrent()) return d;
           // Guard: 切题后迟到上传不写入新题
           if (d.qualified_id !== targetQid) {
             return d;
@@ -363,7 +385,7 @@ export function useBankImageUpload({
         });
       } catch (err) {
         // Guard: 上传失败不插入坏引用
-        onError(err instanceof Error ? err.message : String(err));
+        if (isCurrent()) onError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }

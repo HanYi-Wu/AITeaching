@@ -206,15 +206,19 @@ describe("AnalysisWorkspace", () => {
     primeDefaultApi();
   });
 
-  function renderWs(allowHostTools = false) {
-    return render(
+  function wsTree(allowHostTools = false, ownerId = "teacher-a", projectId = "project-a") {
+    return (
       <TestI18nProvider>
         <AgentProvider>
-          <AnalysisWorkspace allowHostTools={allowHostTools} />
+          <AnalysisWorkspace allowHostTools={allowHostTools} ownerId={ownerId} projectId={projectId} />
           <PageContextProbe />
         </AgentProvider>
-      </TestI18nProvider>,
+      </TestI18nProvider>
     );
+  }
+
+  function renderWs(allowHostTools = false, ownerId = "teacher-a", projectId = "project-a") {
+    return render(wsTree(allowHostTools, ownerId, projectId));
   }
 
   it("shows empty state before exam is selected", async () => {
@@ -233,6 +237,46 @@ describe("AnalysisWorkspace", () => {
     renderWs(true);
     await waitFor(() => expect(mocks.apiAnalysisListFolderScripts).toHaveBeenCalledTimes(1));
     expect(mocks.apiAnalysisListTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores metadata responses from the previous account and project", async () => {
+    let resolveOldJobs!: (value: { jobs: Array<{ job_id: string; kind: string; status: string }> }) => void;
+    let resolveCurrentJobs!: (value: { jobs: Array<{ job_id: string; kind: string; status: string }> }) => void;
+    let resolveOldScripts!: (value: { scripts: Array<{ path: string; name: string; updated_at: number }> }) => void;
+    let resolveOldTools!: (value: { tools: Array<{ name: string }> }) => void;
+    let resolveCurrentScripts!: (value: { scripts: Array<{ path: string; name: string; updated_at: number }> }) => void;
+    mocks.apiAnalysisListJobs
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOldJobs = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveCurrentJobs = resolve; }));
+    mocks.apiAnalysisListFolderScripts
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOldScripts = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveCurrentScripts = resolve; }));
+    mocks.apiAnalysisListTools.mockImplementationOnce(() => new Promise((resolve) => { resolveOldTools = resolve; }));
+
+    const view = renderWs(true, "admin-a", "project-a");
+    await waitFor(() => expect(resolveOldJobs).toBeDefined());
+    view.rerender(wsTree(false, "teacher-b", "project-b"));
+    await waitFor(() => expect(resolveCurrentJobs).toBeDefined());
+    fireEvent.click(await screen.findByRole("button", { name: /期末考试/ }));
+
+    await act(async () => resolveCurrentJobs({ jobs: [{ job_id: "current1-job", kind: "builtin", status: "succeeded" }] }));
+    expect(await screen.findByText(/current1/)).toBeInTheDocument();
+    await act(async () => {
+      resolveOldJobs({ jobs: [{ job_id: "oldmeta1-job", kind: "script", status: "succeeded" }] });
+      resolveOldScripts({ scripts: [{ path: "old-project.py", name: "old-project.py", updated_at: 1 }] });
+      resolveOldTools({ tools: [{ name: "old-project.tool" }] });
+    });
+    expect(screen.getByText(/current1/)).toBeInTheDocument();
+    expect(screen.queryByText(/oldmeta1/)).not.toBeInTheDocument();
+    expect(mocks.apiAnalysisListFolderScripts).toHaveBeenCalledTimes(1);
+    expect(mocks.apiAnalysisListTools).toHaveBeenCalledTimes(1);
+
+    view.rerender(wsTree(true, "teacher-b", "project-b"));
+    await waitFor(() => expect(mocks.apiAnalysisListFolderScripts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.apiAnalysisListTools).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("option", { name: "old-project.py" })).not.toBeInTheDocument();
+    await act(async () => resolveCurrentScripts({ scripts: [{ path: "current-project.py", name: "current-project.py", updated_at: 2 }] }));
+    expect(await screen.findByRole("option", { name: "current-project.py" })).toBeInTheDocument();
   });
 
   it("shows online and offline papers in one history list and exposes the selected paper to AI", async () => {
@@ -345,9 +389,35 @@ describe("AnalysisWorkspace", () => {
     const examButton = await screen.findByRole("button", { name: /期末考试/ });
     fireEvent.click(examButton);
     const runBtn = await screen.findByRole("button", { name: "运行选中脚本" });
+    await waitFor(() => expect(runBtn).toBeEnabled());
     fireEvent.click(runBtn);
 
     expect(await screen.findByText("运行失败")).toBeInTheDocument();
+  });
+
+  it("does not apply a folder-script result after host-tool permission is revoked", async () => {
+    let resolveRun!: (value: { job_id: string; status: string; output: { summary: { title: string; status: string } } }) => void;
+    mocks.apiAnalysisRunFolderScript.mockImplementationOnce(() => new Promise((resolve) => { resolveRun = resolve; }));
+    const view = renderWs(true);
+
+    fireEvent.click(await screen.findByRole("button", { name: /期末考试/ }));
+    const runButton = await screen.findByRole("button", { name: "运行选中脚本" });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    expect(screen.getByDisplayValue("demo.py")).toBeInTheDocument();
+    fireEvent.click(runButton);
+    expect(mocks.apiAnalysisRunFolderScript).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(resolveRun).toBeDefined());
+
+    view.rerender(wsTree(false, "teacher-a", "project-a"));
+    expect(screen.queryByRole("button", { name: "运行选中脚本" })).not.toBeInTheDocument();
+    await act(async () => resolveRun({
+      job_id: "late-job",
+      status: "succeeded",
+      output: { summary: { title: "STALE HOST OUTPUT", status: "succeeded" } },
+    }));
+
+    expect(screen.queryByText(/STALE HOST OUTPUT/)).not.toBeInTheDocument();
+    expect(mocks.apiAnalysisRunFolderScript).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the latest batch analysis when switching batches out of order", async () => {
@@ -475,5 +545,35 @@ describe("AnalysisWorkspace", () => {
     });
 
     expect(screen.getByText("2")).toBeInTheDocument();
+  });
+
+  it("drops a legacy exam detail response when the owner and project change", async () => {
+    let resolveSummary!: (value: Record<string, unknown>) => void;
+    const defaultApiGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string) => path === "/api/exams/e1/summary"
+      ? new Promise((resolve) => { resolveSummary = resolve; })
+      : defaultApiGet(path));
+    const view = renderWs(false, "teacher-a", "project-a");
+
+    fireEvent.click(await screen.findByRole("button", { name: /期末考试/ }));
+    await waitFor(() => expect(resolveSummary).toBeDefined());
+    view.rerender(wsTree(false, "teacher-b", "project-b"));
+    await act(async () => resolveSummary({
+      exam_id: "e1",
+      exam_title: "旧项目迟到考试",
+      subject: "数学",
+      question_count: 3,
+      section_count: 1,
+      score_batch_count: 1,
+      has_score: true,
+      latest_batch_id: "b1",
+      exam_dir: "e1",
+      mtime: new Date().toISOString(),
+      questions: [],
+      score_batches: [],
+    }));
+
+    expect(screen.queryByRole("heading", { name: "旧项目迟到考试" })).not.toBeInTheDocument();
+    expect(await screen.findByText("从左侧选择一个历史考试")).toBeInTheDocument();
   });
 });

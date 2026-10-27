@@ -245,16 +245,54 @@ def reset_teacher_password(
     return {"teacher": teacher, "password": new_password}
 
 
+def _clean_status_ids(ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(item.strip() for item in ids if item.strip()))
+
+
+def _bulk_status_result(
+    *,
+    requested_ids: list[str],
+    matched_ids: list[str],
+    changed_ids: list[str],
+    status: str,
+) -> dict[str, Any]:
+    """Keep legacy matched-row count and expose status transitions separately."""
+    return {
+        "updated": len(matched_ids),
+        "changed": len(changed_ids),
+        "unchanged": len(matched_ids) - len(changed_ids),
+        "not_found": len(requested_ids) - len(matched_ids),
+        "changed_ids": changed_ids,
+        "status": status,
+    }
+
+
 def bulk_update_teachers(root: Path, *, school_id: str, teacher_ids: list[str], status: str) -> dict[str, Any]:
     init_platform_db(root)
-    clean_ids = [item.strip() for item in teacher_ids if item.strip()]
+    clean_ids = _clean_status_ids(teacher_ids)
     clean_status = _clean_status(status)
     if not clean_ids:
-        return {"updated": 0}
+        return _bulk_status_result(
+            requested_ids=clean_ids, matched_ids=[], changed_ids=[], status=clean_status
+        )
     placeholders = ",".join("?" for _ in clean_ids)
     now = utc_now()
     with connect(root) as con:
-        cur = con.execute(
+        con.execute("BEGIN IMMEDIATE")
+        rows = con.execute(
+            f"""
+            SELECT id, status
+            FROM users
+            WHERE school_id = ? AND role = 'teacher' AND id IN ({placeholders})
+            """,
+            (school_id, *clean_ids),
+        ).fetchall()
+        matched_ids = [str(row["id"]) for row in rows]
+        status_by_id = {str(row["id"]): str(row["status"]) for row in rows}
+        changed_ids = [
+            item for item in clean_ids if item in status_by_id and status_by_id[item] != clean_status
+        ]
+        con.execute(
             f"""
             UPDATE users
             SET status = ?, updated_at = ?
@@ -262,7 +300,12 @@ def bulk_update_teachers(root: Path, *, school_id: str, teacher_ids: list[str], 
             """,
             (clean_status, now, school_id, *clean_ids),
         )
-    return {"updated": int(cur.rowcount if cur.rowcount is not None else 0)}
+    return _bulk_status_result(
+        requested_ids=clean_ids,
+        matched_ids=matched_ids,
+        changed_ids=changed_ids,
+        status=clean_status,
+    )
 
 
 def reset_student_password(
@@ -340,30 +383,48 @@ def reset_student_password(
 
 def bulk_update_students(root: Path, *, school_id: str, student_ids: list[str], status: str) -> dict[str, Any]:
     init_platform_db(root)
-    clean_ids = [item.strip() for item in student_ids if item.strip()]
+    clean_ids = _clean_status_ids(student_ids)
     clean_status = _clean_status(status)
     if not clean_ids:
-        return {"updated": 0}
+        return _bulk_status_result(
+            requested_ids=clean_ids, matched_ids=[], changed_ids=[], status=clean_status
+        )
     placeholders = ",".join("?" for _ in clean_ids)
     now = utc_now()
     with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
         rows = con.execute(
-            f"SELECT id, user_id FROM students WHERE school_id = ? AND id IN ({placeholders})",
+            f"""
+            SELECT s.id, s.user_id, s.status, u.id AS account_id, u.status AS account_status
+            FROM students s
+            LEFT JOIN users u
+              ON u.id = s.user_id AND u.school_id = s.school_id AND u.role = 'student'
+            WHERE s.school_id = ? AND s.id IN ({placeholders})
+            """,
             (school_id, *clean_ids),
         ).fetchall()
-        student_ids_existing = [str(row["id"]) for row in rows]
-        user_ids = [str(row["user_id"]) for row in rows if row["user_id"]]
-        if not student_ids_existing:
-            return {"updated": 0}
-        student_placeholders = ",".join("?" for _ in student_ids_existing)
-        cur = con.execute(
-            f"""
-            UPDATE students
-            SET status = ?, updated_at = ?
-            WHERE school_id = ? AND id IN ({student_placeholders})
-            """,
-            (clean_status, now, school_id, *student_ids_existing),
-        )
+        row_by_id = {str(row["id"]): row for row in rows}
+        matched_ids = [item for item in clean_ids if item in row_by_id]
+        changed_ids = [
+            item
+            for item in matched_ids
+            if str(row_by_id[item]["status"]) != clean_status
+            or (
+                row_by_id[item]["account_id"]
+                and str(row_by_id[item]["account_status"]) != clean_status
+            )
+        ]
+        user_ids = list(dict.fromkeys(str(row["account_id"]) for row in rows if row["account_id"]))
+        if matched_ids:
+            student_placeholders = ",".join("?" for _ in matched_ids)
+            con.execute(
+                f"""
+                UPDATE students
+                SET status = ?, updated_at = ?
+                WHERE school_id = ? AND id IN ({student_placeholders})
+                """,
+                (clean_status, now, school_id, *matched_ids),
+            )
         if user_ids:
             user_placeholders = ",".join("?" for _ in user_ids)
             con.execute(
@@ -374,4 +435,9 @@ def bulk_update_students(root: Path, *, school_id: str, student_ids: list[str], 
                 """,
                 (clean_status, now, school_id, *user_ids),
             )
-    return {"updated": int(cur.rowcount if cur.rowcount is not None else 0)}
+    return _bulk_status_result(
+        requested_ids=clean_ids,
+        matched_ids=matched_ids,
+        changed_ids=changed_ids,
+        status=clean_status,
+    )

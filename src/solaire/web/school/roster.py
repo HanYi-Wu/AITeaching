@@ -8,6 +8,7 @@ from typing import Any
 from solaire.web.auth_service import utc_now
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.school.common import (
+    _clean_status,
     _contains_query,
     _new_id,
     _page,
@@ -176,7 +177,7 @@ def update_student(
         params.append(email.strip() or None)
     if status is not None:
         updates.append("status = ?")
-        params.append(status.strip() or "active")
+        params.append(_clean_status(status))
     params.extend([student_id, school_id])
     with connect(root) as con:
         existing = con.execute(

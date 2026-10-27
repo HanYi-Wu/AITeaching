@@ -9,6 +9,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { apiGet, apiGraphQuestionBindingsIndex } from "../../api/client";
 import { useContentLibraryChanged } from "../../lib/contentEvents";
+import { loadSessionToken } from "../../platform/session";
 import {
   buildMetadataFilterDefinitions,
   hasActiveMetadataFilters,
@@ -44,6 +45,8 @@ export function useBankList({ onError }: UseBankListOptions) {
 
   const loadList = useCallback(async () => {
     const currentSeq = ++reqSeqRef.current;
+    const session = loadSessionToken();
+    const isCurrent = () => currentSeq === reqSeqRef.current && session === loadSessionToken();
     onError(null);
     setLoading(true);
     try {
@@ -56,7 +59,7 @@ export function useBankList({ onError }: UseBankListOptions) {
         apiGet<BankFolders>("/api/bank/folders"),
       ]);
 
-      if (currentSeq !== reqSeqRef.current) {
+      if (!isCurrent()) {
         return;
       }
 
@@ -75,20 +78,20 @@ export function useBankList({ onError }: UseBankListOptions) {
 
       try {
         const idx = await apiGraphQuestionBindingsIndex();
-        if (currentSeq === reqSeqRef.current) {
+        if (isCurrent()) {
           setGraphLinkIndex(idx.index ?? {});
         }
       } catch {
-        if (currentSeq === reqSeqRef.current) {
+        if (isCurrent()) {
           setGraphLinkIndex({});
         }
       }
     } catch (e) {
-      if (currentSeq === reqSeqRef.current) {
+      if (isCurrent()) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (currentSeq === reqSeqRef.current) {
+      if (isCurrent()) {
         setLoading(false);
       }
     }

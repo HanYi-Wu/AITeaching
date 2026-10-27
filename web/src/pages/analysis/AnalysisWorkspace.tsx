@@ -58,12 +58,21 @@ import { AnalysisResultView } from "./AnalysisResultView";
 // Main component
 // ---------------------------------------------------------------------------
 
+function normalizeAnalysisProjectId(projectId: string | null | undefined): string | null {
+  const normalized = projectId?.trim().replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
+  return normalized || null;
+}
+
 export function AnalysisWorkspace({
   onOpenExamInCompose,
   allowHostTools = false,
+  ownerId = null,
+  projectId = null,
 }: {
   onOpenExamInCompose?: (examId: string) => void;
   allowHostTools?: boolean;
+  ownerId?: string | null;
+  projectId?: string | null;
 } = {}) {
   const { t } = useTranslation("analysis");
   const [exams, setExams] = useState<ExamResult[]>([]);
@@ -99,19 +108,55 @@ export function AnalysisWorkspace({
   const onlineAnalysisRequestIdRef = useRef(0);
   const legacyDetailRequestIdRef = useRef(0);
   const legacyAnalysisRequestIdRef = useRef(0);
+  const examListRequestIdRef = useRef(0);
+  const onlinePapersRequestIdRef = useRef(0);
+  const eduAnalysisMetaRequestIdRef = useRef(0);
+  const studioRunRequestIdRef = useRef(0);
+  const ownerProjectScopeKey = JSON.stringify([
+    ownerId?.trim() || null,
+    normalizeAnalysisProjectId(projectId),
+  ]);
+  const metadataScopeKey = JSON.stringify([ownerProjectScopeKey, allowHostTools]);
+  const importRequestIdRef = useRef(0);
+  const ownerProjectScopeKeyRef = useRef(ownerProjectScopeKey);
+  ownerProjectScopeKeyRef.current = ownerProjectScopeKey;
+  const metadataScopeKeyRef = useRef(metadataScopeKey);
+  metadataScopeKeyRef.current = metadataScopeKey;
+  const selectedExamIdRef = useRef(selectedExamId);
+  selectedExamIdRef.current = selectedExamId;
+  const selectedBatchIdRef = useRef(selectedBatchId);
+  selectedBatchIdRef.current = selectedBatchId;
+  const selectedOnlinePaperIdRef = useRef(selectedOnlinePaperId);
+  selectedOnlinePaperIdRef.current = selectedOnlinePaperId;
+  const allowHostToolsRef = useRef(allowHostTools);
+  allowHostToolsRef.current = allowHostTools;
   const { setPageContext } = useAgentContext();
 
   const loadExams = useCallback(async () => {
+    const requestId = ++examListRequestIdRef.current;
+    const scopeKey = ownerProjectScopeKey;
     setLoadingExams(true);
     try {
       const data = await apiGet<{ exams: ExamResult[] }>("/api/exams/analysis-list");
-      setExams(data.exams ?? []);
+      if (examListRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+        setExams(data.exams ?? []);
+      }
     } catch (e) {
-      console.error("loadExams failed", e);
+      if (examListRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+        console.error("loadExams failed", e);
+      }
     } finally {
-      setLoadingExams(false);
+      if (examListRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+        setLoadingExams(false);
+      }
     }
-  }, []);
+  }, [ownerProjectScopeKey]);
+
+  const previousOwnerProjectScopeKeyRef = useRef(ownerProjectScopeKey);
+  const ownerProjectScopeReady = previousOwnerProjectScopeKeyRef.current === ownerProjectScopeKey;
+  const previousMetadataScopeKeyRef = useRef(metadataScopeKey);
+  const metadataScopeReady = previousMetadataScopeKeyRef.current === metadataScopeKey;
+  const hostToolsAvailable = allowHostTools && metadataScopeReady;
 
   const {
     diagLoading,
@@ -131,6 +176,8 @@ export function AnalysisWorkspace({
   } = useAnalysisDiagnosis({
     selectedExamId,
     selectedBatchId,
+    scopeKey: ownerProjectScopeKey,
+    scopeReady: ownerProjectScopeReady,
     tab,
     loadExams,
     onOpenExamInCompose,
@@ -138,8 +185,57 @@ export function AnalysisWorkspace({
   });
 
   useEffect(() => {
+    if (previousOwnerProjectScopeKeyRef.current === ownerProjectScopeKey) return;
+    previousOwnerProjectScopeKeyRef.current = ownerProjectScopeKey;
+    examListRequestIdRef.current += 1;
+    onlinePapersRequestIdRef.current += 1;
+    eduAnalysisMetaRequestIdRef.current += 1;
+    importRequestIdRef.current += 1;
+    studioRunRequestIdRef.current += 1;
+    onlineAnalysisRequestIdRef.current += 1;
+    legacyDetailRequestIdRef.current += 1;
+    legacyAnalysisRequestIdRef.current += 1;
+    invalidateDiagnosis();
+    setExams([]);
+    setOnlinePapers([]);
+    setSelectedExamId(null);
+    setExamSummary(null);
+    setSelectedBatchId(null);
+    setAnalysis(null);
+    setSelectedOnlinePaperId(null);
+    selectedOnlinePaperIdRef.current = null;
+    setOnlineAnalysis(null);
+    setFolderScripts([]);
+    setJobs([]);
+    setTools([]);
+    setSelectedFolderScriptPath("");
+    setJobOutput(null);
+    setJobError(null);
+    setImportError(null);
+    setImportWarnings([]);
+    setImporting(false);
+    setLoadingExams(false);
+    setLoadingOnlinePapers(false);
+    setLoadingOnlineAnalysis(false);
+    setLoadingDetail(false);
+  }, [ownerProjectScopeKey, invalidateDiagnosis]);
+
+  useEffect(() => {
+    if (previousMetadataScopeKeyRef.current === metadataScopeKey) return;
+    previousMetadataScopeKeyRef.current = metadataScopeKey;
+    eduAnalysisMetaRequestIdRef.current += 1;
+    studioRunRequestIdRef.current += 1;
+    setFolderScripts([]);
+    setJobs([]);
+    setTools([]);
+    setSelectedFolderScriptPath("");
+    setJobOutput(null);
+    setJobError(null);
+  }, [metadataScopeKey, allowHostTools]);
+
+  useEffect(() => {
     const onlinePaper = onlinePapers.find((paper) => paper.paper_id === selectedOnlinePaperId);
-    if (selectedOnlinePaperId && onlinePaper) {
+    if (ownerProjectScopeReady && selectedOnlinePaperId && onlinePaper) {
       const submitted = onlinePaper.submitted_student_count ?? onlineAnalysis?.summary.completed_students ?? 0;
       const inProgress = onlinePaper.in_progress_student_count ?? onlineAnalysis?.summary.in_progress_students ?? 0;
       setPageContext({
@@ -148,7 +244,7 @@ export function AnalysisWorkspace({
         selected_resource_id: selectedOnlinePaperId,
         summary: `试卷分析：${onlinePaper.title}（${submitted} 份已提交，${inProgress} 份答题中）`,
       });
-    } else if (selectedExamId && examSummary) {
+    } else if (ownerProjectScopeReady && selectedExamId && examSummary) {
       setPageContext({
         current_page: "analysis",
         selected_resource_type: "exam",
@@ -162,32 +258,38 @@ export function AnalysisWorkspace({
       });
     }
     return () => setPageContext(null);
-  }, [selectedExamId, examSummary, selectedOnlinePaperId, onlinePapers, onlineAnalysis, setPageContext, t]);
-
-  useEffect(() => {
-    void loadExams();
-  }, [loadExams]);
+  }, [ownerProjectScopeReady, selectedExamId, examSummary, selectedOnlinePaperId, onlinePapers, onlineAnalysis, setPageContext, t]);
 
   const loadOnlinePapers = useCallback(async () => {
+    const requestId = ++onlinePapersRequestIdRef.current;
+    const scopeKey = ownerProjectScopeKey;
     setLoadingOnlinePapers(true);
     try {
       const first = await listPlatformPapers({ deliveryMode: "all", status: "all", page: 1, pageSize: 100 });
       const papers = [...(first.papers ?? [])];
       for (let page = 2; page <= (first.total_pages ?? 1); page += 1) {
+        if (onlinePapersRequestIdRef.current !== requestId || ownerProjectScopeKeyRef.current !== scopeKey) return;
         const next = await listPlatformPapers({ deliveryMode: "all", status: "all", page, pageSize: 100 });
         papers.push(...(next.papers ?? []));
       }
-      setOnlinePapers(papers);
+      if (onlinePapersRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+        setOnlinePapers(papers);
+      }
     } catch {
-      setOnlinePapers([]);
+      if (onlinePapersRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+        setOnlinePapers([]);
+      }
     } finally {
-      setLoadingOnlinePapers(false);
+      if (onlinePapersRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+        setLoadingOnlinePapers(false);
+      }
     }
-  }, []);
+  }, [ownerProjectScopeKey]);
 
   useEffect(() => {
+    void loadExams();
     void loadOnlinePapers();
-  }, [loadOnlinePapers]);
+  }, [loadExams, loadOnlinePapers]);
 
   const selectedOnlinePaper = useMemo(
     () => onlinePapers.find((paper) => paper.paper_id === selectedOnlinePaperId) ?? null,
@@ -219,78 +321,115 @@ export function AnalysisWorkspace({
   }, [historyMode, historyQuery, historySubject, legacyExams]);
 
   const handleOnlinePaperSelect = useCallback(async (paper: PlatformPaperRecord, publicationId?: string, classId?: string) => {
+    if (ownerProjectScopeKeyRef.current !== ownerProjectScopeKey) return;
     const requestId = ++onlineAnalysisRequestIdRef.current;
+    const scopeKey = ownerProjectScopeKey;
+    studioRunRequestIdRef.current += 1;
     legacyDetailRequestIdRef.current += 1;
     legacyAnalysisRequestIdRef.current += 1;
     invalidateDiagnosis();
     setSelectedOnlinePaperId(paper.paper_id);
+    selectedOnlinePaperIdRef.current = paper.paper_id;
     setSelectedExamId(null);
+    selectedExamIdRef.current = null;
     setExamSummary(null);
     setSelectedBatchId(null);
+    selectedBatchIdRef.current = null;
     setAnalysis(null);
+    setOnlineAnalysis(null);
+    setJobOutput(null);
+    setJobError(null);
     setLoadingOnlineAnalysis(true);
     try {
       const data = await analyzePlatformPaper(paper.paper_id, publicationId, classId);
-      if (onlineAnalysisRequestIdRef.current === requestId) {
+      if (onlineAnalysisRequestIdRef.current === requestId &&
+          ownerProjectScopeKeyRef.current === scopeKey &&
+          selectedOnlinePaperIdRef.current === paper.paper_id) {
         setOnlineAnalysis(data.analysis);
       }
     } catch (e) {
       console.error("loadOnlinePaperAnalysis failed", e);
-      if (onlineAnalysisRequestIdRef.current === requestId) {
+      if (onlineAnalysisRequestIdRef.current === requestId &&
+          ownerProjectScopeKeyRef.current === scopeKey &&
+          selectedOnlinePaperIdRef.current === paper.paper_id) {
         setOnlineAnalysis(null);
       }
     } finally {
-      if (onlineAnalysisRequestIdRef.current === requestId) {
+      if (onlineAnalysisRequestIdRef.current === requestId &&
+          ownerProjectScopeKeyRef.current === scopeKey &&
+          selectedOnlinePaperIdRef.current === paper.paper_id) {
         setLoadingOnlineAnalysis(false);
       }
     }
-  }, [invalidateDiagnosis]);
+  }, [invalidateDiagnosis, ownerProjectScopeKey]);
 
   const loadExamDetail = useCallback(async (examId: string) => {
+    if (ownerProjectScopeKeyRef.current !== ownerProjectScopeKey) return;
     const requestId = ++legacyDetailRequestIdRef.current;
+    const scopeKey = ownerProjectScopeKey;
+    studioRunRequestIdRef.current += 1;
     legacyAnalysisRequestIdRef.current += 1;
     onlineAnalysisRequestIdRef.current += 1;
     invalidateDiagnosis();
     setLoadingDetail(true);
     setAnalysis(null);
     setSelectedOnlinePaperId(null);
+    selectedOnlinePaperIdRef.current = null;
     setOnlineAnalysis(null);
     setSelectedBatchId(null);
+    selectedBatchIdRef.current = null;
+    setJobOutput(null);
+    setJobError(null);
+    setLoadingOnlineAnalysis(false);
     try {
       const data = await apiGet<ExamSummary>(`/api/exams/${encodeURIComponent(examId)}/summary`);
-      if (legacyDetailRequestIdRef.current === requestId) {
+      if (legacyDetailRequestIdRef.current === requestId &&
+          ownerProjectScopeKeyRef.current === scopeKey &&
+          selectedExamIdRef.current === examId) {
         setExamSummary(data);
         if (data.latest_batch_id) {
+          selectedBatchIdRef.current = data.latest_batch_id;
           setSelectedBatchId(data.latest_batch_id);
         }
       }
     } catch (e) {
-      console.error("loadExamDetail failed", e);
+      if (legacyDetailRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+        console.error("loadExamDetail failed", e);
+      }
     } finally {
-      if (legacyDetailRequestIdRef.current === requestId) setLoadingDetail(false);
+      if (legacyDetailRequestIdRef.current === requestId &&
+          ownerProjectScopeKeyRef.current === scopeKey &&
+          selectedExamIdRef.current === examId) setLoadingDetail(false);
     }
-  }, [invalidateDiagnosis]);
+  }, [invalidateDiagnosis, ownerProjectScopeKey]);
 
   const loadAnalysis = useCallback(
     async (examId: string, batchId: string) => {
       const requestId = ++legacyAnalysisRequestIdRef.current;
+      const scopeKey = ownerProjectScopeKey;
       try {
         const data = await apiGet<ScoreAnalysis>(
           `/api/exams/${encodeURIComponent(examId)}/scores/${encodeURIComponent(batchId)}`,
         );
-        if (legacyAnalysisRequestIdRef.current === requestId) {
+        if (legacyAnalysisRequestIdRef.current === requestId &&
+            ownerProjectScopeKeyRef.current === scopeKey &&
+            selectedExamIdRef.current === examId &&
+            selectedBatchIdRef.current === batchId) {
           setAnalysis(data);
           setImportWarnings([]);
         }
       } catch (e) {
-        console.error("loadAnalysis failed", e);
+        if (legacyAnalysisRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+          console.error("loadAnalysis failed", e);
+        }
       }
     },
-    [],
+    [ownerProjectScopeKey],
   );
 
   const handleExamSelect = useCallback(
     async (examId: string) => {
+      selectedExamIdRef.current = examId;
       setSelectedExamId(examId);
       await loadExamDetail(examId);
     },
@@ -312,26 +451,31 @@ export function AnalysisWorkspace({
   }, []);
 
   useEffect(() => {
-    if (selectedExamId && selectedBatchId) {
+    if (ownerProjectScopeReady && selectedExamId && selectedBatchId) {
       void loadAnalysis(selectedExamId, selectedBatchId);
     }
-  }, [selectedExamId, selectedBatchId, loadAnalysis]);
+  }, [ownerProjectScopeReady, selectedExamId, selectedBatchId, loadAnalysis]);
 
   const loadEduAnalysisMeta = useCallback(async () => {
+    const requestId = ++eduAnalysisMetaRequestIdRef.current;
+    const scopeKey = metadataScopeKey;
     try {
       const [s, j, t] = await Promise.all([
         allowHostTools ? apiAnalysisListFolderScripts() : Promise.resolve({ scripts: [] }),
         apiAnalysisListJobs(),
         allowHostTools ? apiAnalysisListTools() : Promise.resolve({ tools: [] }),
       ]);
+      if (eduAnalysisMetaRequestIdRef.current !== requestId || metadataScopeKeyRef.current !== scopeKey) return;
       setFolderScripts(s.scripts ?? []);
       setJobs(j.jobs ?? []);
       setTools((t.tools as ToolSpec[]) ?? []);
       setSelectedFolderScriptPath((previous) => s.scripts.some((script) => script.path === previous) ? previous : s.scripts[0]?.path ?? "");
     } catch (e) {
-      console.error("loadEduAnalysisMeta failed", e);
+      if (eduAnalysisMetaRequestIdRef.current === requestId && metadataScopeKeyRef.current === scopeKey) {
+        console.error("loadEduAnalysisMeta failed", e);
+      }
     }
-  }, [allowHostTools]);
+  }, [allowHostTools, metadataScopeKey]);
 
   useEffect(() => {
     void loadEduAnalysisMeta();
@@ -362,6 +506,12 @@ export function AnalysisWorkspace({
 
   const handleImport = useCallback(
     async (examId: string, file: File) => {
+      const requestId = ++importRequestIdRef.current;
+      const scopeKey = ownerProjectScopeKey;
+      const isCurrent = () => importRequestIdRef.current === requestId &&
+        ownerProjectScopeKeyRef.current === scopeKey &&
+        selectedExamIdRef.current === examId;
+      if (!isCurrent()) return;
       setImporting(true);
       setImportError(null);
       setImportWarnings([]);
@@ -372,100 +522,150 @@ export function AnalysisWorkspace({
           `/api/exams/${encodeURIComponent(examId)}/scores`,
           fd,
         );
+        if (!isCurrent()) return;
         if (result.warnings?.length) {
           setImportWarnings(result.warnings);
         }
         await loadExamDetail(examId);
-        setSelectedBatchId(result.batch_id);
+        if (isCurrent()) {
+          selectedBatchIdRef.current = result.batch_id;
+          setSelectedBatchId(result.batch_id);
+        }
       } catch (e) {
-        setImportError(e instanceof Error ? e.message : String(e));
+        if (isCurrent()) setImportError(e instanceof Error ? e.message : String(e));
       } finally {
-        setImporting(false);
+        if (isCurrent()) setImporting(false);
       }
     },
-    [loadExamDetail],
+    [loadExamDetail, ownerProjectScopeKey],
   );
 
   const handleRecompute = useCallback(async () => {
     if (!selectedExamId || !selectedBatchId) return;
+    const requestId = ++legacyAnalysisRequestIdRef.current;
+    const scopeKey = ownerProjectScopeKey;
+    const examId = selectedExamId;
+    const batchId = selectedBatchId;
     try {
       const data = await apiPost<ScoreAnalysis>(
-        `/api/exams/${encodeURIComponent(selectedExamId)}/scores/${encodeURIComponent(selectedBatchId)}/recompute`,
+        `/api/exams/${encodeURIComponent(examId)}/scores/${encodeURIComponent(batchId)}/recompute`,
         {},
       );
-      setAnalysis(data);
+      if (legacyAnalysisRequestIdRef.current === requestId &&
+          ownerProjectScopeKeyRef.current === scopeKey &&
+          selectedExamIdRef.current === examId &&
+          selectedBatchIdRef.current === batchId) setAnalysis(data);
     } catch (e) {
-      console.error("recompute failed", e);
+      if (legacyAnalysisRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
+        console.error("recompute failed", e);
+      }
     }
-  }, [selectedExamId, selectedBatchId]);
+  }, [selectedExamId, selectedBatchId, ownerProjectScopeKey]);
 
   const handleDeleteBatch = useCallback(async () => {
     if (!selectedExamId || !selectedBatchId) return;
+    const scopeKey = ownerProjectScopeKey;
+    const examId = selectedExamId;
+    const batchId = selectedBatchId;
+    const isCurrent = () => ownerProjectScopeKeyRef.current === scopeKey &&
+      selectedExamIdRef.current === examId &&
+      selectedBatchIdRef.current === batchId;
     const ok = await confirmDialog(t("confirmDeleteBatch"));
-    if (!ok) return;
+    if (!ok || !isCurrent()) return;
     try {
       await apiDelete<{ ok: boolean }>(
-        `/api/exams/${encodeURIComponent(selectedExamId)}/scores/${encodeURIComponent(selectedBatchId)}`,
+        `/api/exams/${encodeURIComponent(examId)}/scores/${encodeURIComponent(batchId)}`,
       );
-      await loadExamDetail(selectedExamId);
+      if (isCurrent()) await loadExamDetail(examId);
     } catch (e) {
-      setImportError(e instanceof Error ? e.message : String(e));
+      if (isCurrent()) setImportError(e instanceof Error ? e.message : String(e));
     }
-  }, [selectedExamId, selectedBatchId, loadExamDetail, t]);
+  }, [selectedExamId, selectedBatchId, ownerProjectScopeKey, loadExamDetail, t]);
 
   const handleDeleteExam = useCallback(async () => {
     if (!selectedExamId) return;
-    const ok = await confirmDialog(t("confirmDeleteExam"));
-    if (!ok) return;
+    const scopeKey = ownerProjectScopeKey;
     const deletedId = selectedExamId;
+    const isCurrent = () => ownerProjectScopeKeyRef.current === scopeKey && selectedExamIdRef.current === deletedId;
+    const ok = await confirmDialog(t("confirmDeleteExam"));
+    if (!ok || !isCurrent()) return;
     try {
       await apiDelete<{ ok: boolean }>(`/api/exams/${encodeURIComponent(deletedId)}`);
+      if (!isCurrent()) return;
       setSelectedExamId(null);
+      selectedExamIdRef.current = null;
       setExamSummary(null);
       setSelectedBatchId(null);
+      selectedBatchIdRef.current = null;
+      setSelectedOnlinePaperId(null);
+      selectedOnlinePaperIdRef.current = null;
       setAnalysis(null);
       invalidateDiagnosis();
       await loadExams();
       dispatchExamsChanged({ examId: deletedId });
     } catch (e) {
-      setImportError(e instanceof Error ? e.message : String(e));
+      if (isCurrent()) setImportError(e instanceof Error ? e.message : String(e));
     }
-  }, [selectedExamId, loadExams, invalidateDiagnosis, t]);
+  }, [selectedExamId, ownerProjectScopeKey, loadExams, invalidateDiagnosis, t]);
 
   const handleRunBuiltinStudio = useCallback(async () => {
-    if (!selectedExamId || !selectedBatchId) return;
+    if (!ownerProjectScopeReady || !selectedExamId || !selectedBatchId) return;
+    const runId = ++studioRunRequestIdRef.current;
+    const scopeKey = ownerProjectScopeKey;
+    const examId = selectedExamId;
+    const batchId = selectedBatchId;
+    const isCurrent = () => studioRunRequestIdRef.current === runId &&
+      ownerProjectScopeKeyRef.current === scopeKey &&
+      selectedExamIdRef.current === examId &&
+      selectedBatchIdRef.current === batchId;
     try {
       setJobError(null);
+      setJobOutput(null);
       const res = await apiAnalysisRunBuiltin({
         builtin_id: "builtin:exam_stats_v1",
-        exam_id: selectedExamId,
-        batch_id: selectedBatchId,
+        exam_id: examId,
+        batch_id: batchId,
         recompute: true,
       });
+      if (!isCurrent()) return;
       if (res.output) setJobOutput(res.output);
       if ((res as { error?: string }).error) setJobError(String((res as { error?: string }).error));
       await loadEduAnalysisMeta();
     } catch (e) {
-      setImportError(e instanceof Error ? e.message : String(e));
+      if (isCurrent()) setImportError(e instanceof Error ? e.message : String(e));
     }
-  }, [selectedExamId, selectedBatchId, loadEduAnalysisMeta]);
+  }, [ownerProjectScopeReady, selectedExamId, selectedBatchId, ownerProjectScopeKey, loadEduAnalysisMeta]);
 
   const handleRunFolderScriptStudio = useCallback(async () => {
-    if (!selectedExamId || !selectedBatchId || !selectedFolderScriptPath) return;
+    if (!ownerProjectScopeReady || !hostToolsAvailable || !allowHostToolsRef.current || !selectedExamId || !selectedBatchId || !selectedFolderScriptPath) return;
+    const runId = ++studioRunRequestIdRef.current;
+    const scopeKey = ownerProjectScopeKey;
+    const metadataKey = metadataScopeKey;
+    const examId = selectedExamId;
+    const batchId = selectedBatchId;
+    const scriptPath = selectedFolderScriptPath;
+    const isCurrent = () => studioRunRequestIdRef.current === runId &&
+      allowHostToolsRef.current &&
+      metadataScopeKeyRef.current === metadataKey &&
+      ownerProjectScopeKeyRef.current === scopeKey &&
+      selectedExamIdRef.current === examId &&
+      selectedBatchIdRef.current === batchId;
     try {
       setJobError(null);
+      setJobOutput(null);
       const res = await apiAnalysisRunFolderScript({
-        script_path: selectedFolderScriptPath,
-        exam_id: selectedExamId,
-        batch_id: selectedBatchId,
+        script_path: scriptPath,
+        exam_id: examId,
+        batch_id: batchId,
       });
+      if (!isCurrent()) return;
       if (res.output) setJobOutput(res.output);
       if (res.error) setJobError(String(res.error));
       await loadEduAnalysisMeta();
     } catch (e) {
-      setImportError(e instanceof Error ? e.message : String(e));
+      if (isCurrent()) setImportError(e instanceof Error ? e.message : String(e));
     }
-  }, [selectedExamId, selectedBatchId, selectedFolderScriptPath, loadEduAnalysisMeta]);
+  }, [ownerProjectScopeReady, hostToolsAvailable, allowHostToolsRef, selectedExamId, selectedBatchId, selectedFolderScriptPath, ownerProjectScopeKey, metadataScopeKey, loadEduAnalysisMeta]);
 
   // SVG chart helpers
   const errorColorFn = (v: number, _warn?: boolean) => {
@@ -475,7 +675,10 @@ export function AnalysisWorkspace({
   };
 
   const formatPct = (v: number) => `${(v * 100).toFixed(0)}%`;
-  const normalizedOutput = jobOutput && typeof jobOutput === "object" ? (jobOutput as Record<string, unknown>) : null;
+  const visibleJobOutput = metadataScopeReady ? jobOutput : null;
+  const visibleJobError = metadataScopeReady ? jobError : null;
+  const visibleJobs = metadataScopeReady ? jobs : [];
+  const normalizedOutput = visibleJobOutput && typeof visibleJobOutput === "object" ? (visibleJobOutput as Record<string, unknown>) : null;
   const outputSummary =
     normalizedOutput && typeof normalizedOutput.summary === "object"
       ? (normalizedOutput.summary as Record<string, unknown>)
@@ -487,7 +690,7 @@ export function AnalysisWorkspace({
   const firstBarPoints = firstBarSeries?.points ?? [];
 
   const handleDownloadMetadata = useCallback(async () => {
-    if (!jobOutput) return;
+    if (!metadataScopeReady || !jobOutput) return;
     const blob = new Blob([JSON.stringify(jobOutput, null, 2)], { type: "application/json;charset=utf-8" });
     try {
       await saveBlobToDisk(blob, {
@@ -498,7 +701,7 @@ export function AnalysisWorkspace({
     } catch (e) {
       setImportError(e instanceof Error ? e.message : String(e));
     }
-  }, [jobOutput, t]);
+  }, [jobOutput, metadataScopeReady, t]);
 
   const handleDownloadChartImage = useCallback(async () => {
     const svg = rightChartRef.current?.querySelector("svg");
@@ -516,7 +719,7 @@ export function AnalysisWorkspace({
     }
   }, []);
 
-  return (
+  return ownerProjectScopeReady ? (
     <div className="flex h-full overflow-hidden">
       {/* Left sidebar: exam history */}
       <div className={cn("flex shrink-0 flex-col border-r border-slate-200 bg-slate-50", leftWidth === 56 ? "w-56" : leftWidth === 64 ? "w-64" : "w-72")}>
@@ -735,7 +938,7 @@ export function AnalysisWorkspace({
                   </span>
                 )}
               </div>
-              {jobOutput && (
+              {visibleJobOutput && (
                 <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
                   {t("lastOutput", {
                     title: String(outputSummary?.title ?? t("defaultOutputTitle")),
@@ -743,8 +946,8 @@ export function AnalysisWorkspace({
                   })}
                 </div>
               )}
-              {jobError && (
-                <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{jobError}</div>
+              {visibleJobError && (
+                <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{visibleJobError}</div>
               )}
 
               {/* Import error */}
@@ -780,7 +983,13 @@ export function AnalysisWorkspace({
               batches={examSummary.score_batches}
               selectedBatchId={selectedBatchId}
               onSelectBatch={(batchId) => {
+                legacyAnalysisRequestIdRef.current += 1;
+                studioRunRequestIdRef.current += 1;
+                selectedBatchIdRef.current = batchId;
                 setSelectedBatchId(batchId);
+                setAnalysis(null);
+                setJobOutput(null);
+                setJobError(null);
                 invalidateDiagnosis();
               }}
               onDeleteBatch={() => void handleDeleteBatch()}
@@ -879,7 +1088,7 @@ export function AnalysisWorkspace({
             </div>
 
             <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-              {allowHostTools && <>
+              {hostToolsAvailable && <>
               <div className="text-xs font-semibold text-slate-600">{t("scriptPickTitle")}</div>
               <select
                 value={selectedFolderScriptPath}
@@ -908,7 +1117,7 @@ export function AnalysisWorkspace({
               >
                 {t("runBuiltin")}
               </button>
-              {allowHostTools && <div className="text-[11px] text-slate-500">
+              {hostToolsAvailable && <div className="text-[11px] text-slate-500">
                 {t("toolScriptCount", { tools: tools.length, scripts: folderScripts.length })}
               </div>}
             </div>
@@ -929,7 +1138,7 @@ export function AnalysisWorkspace({
                 )}
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => void handleDownloadMetadata()} disabled={!jobOutput} className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                <button onClick={() => void handleDownloadMetadata()} disabled={!metadataScopeReady || !jobOutput} className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">
                   {t("downloadMeta")}
                 </button>
                 <button onClick={() => void handleDownloadChartImage()} disabled={!firstBarSpec || firstBarPoints.length === 0} className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">
@@ -941,18 +1150,23 @@ export function AnalysisWorkspace({
             <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
               <div className="mb-1 font-semibold text-slate-700">{t("recentJobs")}</div>
               <div className="max-h-28 overflow-y-auto space-y-1">
-                {jobs.slice(0, 5).map((j) => (
+                {visibleJobs.slice(0, 5).map((j) => (
                   <div key={j.job_id} className="rounded bg-slate-50 px-2 py-1">
                     <span className="font-mono">{j.job_id.slice(0, 8)}</span> · {j.kind} · {j.status}
                   </div>
                 ))}
-                {jobs.length === 0 && <div className="text-slate-400">{t("noJobs")}</div>}
+                {visibleJobs.length === 0 && <div className="text-slate-400">{t("noJobs")}</div>}
               </div>
             </div>
           </div>
           </div>
         </div>
       )}
+    </div>
+  ) : (
+    <div className="flex h-full items-center justify-center text-slate-400" role="status">
+      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+      {t("loading")}
     </div>
   );
 }

@@ -80,15 +80,15 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 }
 
 /** multipart/form-data POST — do not set Content-Type (browser sets boundary). */
-export async function apiPostFormData<T>(path: string, formData: FormData): Promise<T> {
-  const r = await fetchWithLog(path, { method: "POST", body: formData });
+export async function apiPostFormData<T>(path: string, formData: FormData, headers?: Record<string, string>): Promise<T> {
+  const r = await fetchWithLog(path, { method: "POST", body: formData, ...(headers ? { headers } : {}) });
   return r.json() as Promise<T>;
 }
 
-export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+export async function apiPut<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
   const r = await fetchWithLog(path, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
   return r.json() as Promise<T>;

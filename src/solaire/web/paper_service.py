@@ -50,6 +50,8 @@ from solaire.web.papers import publication_service
 from solaire.web.papers import ai_grading
 from solaire.web.papers import teacher_queries
 from solaire.web.papers import analysis as paper_analysis
+from solaire.web.papers.frozen_question_reads import FrozenQuestionReadContext
+from solaire.web.papers.snapshots import _is_placeholder_question
 from solaire.web.papers.grading import (
     completed_attempt_scores_in_connection,
     paper_attempt_row_in_connection,
@@ -438,6 +440,7 @@ def _analysis_question_maps(
     user: dict[str, Any],
     publication_id: str | None,
     class_id: str | None = None,
+    read_context: FrozenQuestionReadContext | None = None,
 ):
     return paper_analysis.analysis_question_maps(
         root,
@@ -448,6 +451,7 @@ def _analysis_question_maps(
         class_id,
         attempt_clause_fn=_analysis_attempt_clause,
         question_maps_fn=_question_maps,
+        read_context=read_context,
     )
 
 
@@ -462,6 +466,7 @@ def _build_module_report(
     user: dict[str, Any],
     publication_id: str | None = None,
     class_id: str | None = None,
+    read_context: FrozenQuestionReadContext | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_module_report(
         root,
@@ -477,6 +482,7 @@ def _build_module_report(
         attempt_clause_fn=_analysis_attempt_clause,
         json_payload_fn=_json_payload,
         risk_level_fn=_risk_level,
+        read_context=read_context,
     )
 
 
@@ -489,6 +495,7 @@ def _build_question_report(
     user: dict[str, Any],
     publication_id: str | None = None,
     class_id: str | None = None,
+    read_context: FrozenQuestionReadContext | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_question_report(
         root,
@@ -502,6 +509,7 @@ def _build_question_report(
         attempt_clause_fn=_analysis_attempt_clause,
         json_payload_fn=_json_payload,
         risk_level_fn=_risk_level,
+        read_context=read_context,
     )
 
 
@@ -670,10 +678,17 @@ def analyze_paper(
     in_progress = 0
     not_started = 0
     flagged_student_ids: set[str] = set()
+    question_read_context = FrozenQuestionReadContext()
     for row in attempt_rows:
         attempt = row_to_dict(row) or {}
         if project_root is not None:
-            _questions, _by_id, score_by_id = _question_maps_for_attempt(root, project_root, paper, attempt)
+            _questions, _by_id, score_by_id = _question_maps_for_attempt(
+                root,
+                project_root,
+                paper,
+                attempt,
+                read_context=question_read_context,
+            )
             canonical_max = round(sum(score_by_id.values()), 2)
             if canonical_max > 0:
                 attempt["max_score"] = canonical_max
@@ -771,8 +786,18 @@ def analyze_paper(
         user=user,
         publication_id=publication_id,
         class_id=class_id,
+        read_context=question_read_context,
     )
-    questions = _build_question_report(root, paper_id=paper_id, project_root=project_root, paper=paper, user=user, publication_id=publication_id, class_id=class_id)
+    questions = _build_question_report(
+        root,
+        paper_id=paper_id,
+        project_root=project_root,
+        paper=paper,
+        user=user,
+        publication_id=publication_id,
+        class_id=class_id,
+        read_context=question_read_context,
+    )
     classes = _build_class_report(root, paper_id=paper_id, user=user, publication_id=publication_id, class_id=class_id)
     radar = _build_radar(
         completion_rate=completion_rate,
@@ -947,6 +972,7 @@ def _question_maps_for_attempt(
     attempt: dict[str, Any],
     *,
     connection: sqlite3.Connection | None = None,
+    read_context: FrozenQuestionReadContext | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
     attempt_payload = attempt if attempt.get("exam_id") else {**attempt, "exam_id": paper.get("exam_id")}
     questions, _answer_keys = _load_attempt_question_payloads(
@@ -954,7 +980,21 @@ def _question_maps_for_attempt(
         attempt_payload,
         root=root,
         connection=connection,
+        read_context=read_context,
     )
+    if (
+        read_context is not None
+        and str(attempt.get("question_payload_json") or "")
+        and int(attempt.get("question_payload_version") or 1) >= 3
+        and all(not _is_placeholder_question(item) for item in questions)
+    ):
+        return read_context.question_maps(
+            attempt.get("question_payload_json"),
+            attempt.get("answer_key_json"),
+            questions,
+            _answer_keys,
+            include_correct_answer=True,
+        )
     by_id = {str(item.get("question_id")): {**item, 'correct_answer': _answer_keys.get(str(item.get('question_id')))} for item in questions}
     score_by_id = question_score_map(questions)
     return questions, by_id, score_by_id

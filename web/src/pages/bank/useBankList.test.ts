@@ -49,6 +49,7 @@ describe("useBankList hook", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.removeItem("solaire.platform.session");
     vi.mocked(apiGet).mockImplementation(async (path: string) => {
       if (path === "/api/bank/collections") {
         return {
@@ -76,6 +77,7 @@ describe("useBankList hook", () => {
   });
 
   afterEach(() => {
+    localStorage.removeItem("solaire.platform.session");
     vi.restoreAllMocks();
   });
 
@@ -159,5 +161,35 @@ describe("useBankList hook", () => {
 
     // Stale response must not overwrite
     expect(result.current.items).toEqual([sampleItems[0]]);
+  });
+
+  it("does not apply a slow list response after the account session changes", async () => {
+    localStorage.setItem("solaire.platform.session", "account-a");
+    let resolveOldItems: (value: unknown) => void;
+    const oldItemsPromise = new Promise((resolve) => {
+      resolveOldItems = resolve;
+    });
+    vi.mocked(apiGet).mockImplementation((path: string) => {
+      if (path === "/api/bank/items") return oldItemsPromise;
+      if (path === "/api/bank/collections") return Promise.resolve({ collections: [] });
+      if (path === "/api/bank/subjects") return Promise.resolve({ subjects: [] });
+      if (path === "/api/bank/folders") return Promise.resolve({ folders: [], assignments: {} });
+      throw new Error(`Unexpected GET ${path}`);
+    });
+
+    const { result } = renderHook(() => useBankList({ onError: mockOnError }));
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith("/api/bank/items"));
+
+    localStorage.setItem("solaire.platform.session", "account-b");
+    await act(async () => {
+      resolveOldItems!({ items: [sampleItems[1]] });
+      await oldItemsPromise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.items).toEqual([]);
+    expect(result.current.collections).toEqual([]);
+    expect(apiGraphQuestionBindingsIndex).not.toHaveBeenCalled();
   });
 });

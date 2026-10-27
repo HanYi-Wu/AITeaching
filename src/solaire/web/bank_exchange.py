@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -17,9 +18,17 @@ import yaml
 
 from solaire.exam_compiler.facade import (
     iter_question_files,
-    parse_bank_root,
     question_group_to_author_dict,
     question_item_to_author_dict,
+)
+
+from solaire.web.bank_storage import (
+    BankDocument,
+    apply_bank_import,
+    bank_write_lock,
+    parse_bank_document,
+    replace_record_data,
+    validate_bank_import,
 )
 
 from solaire.web.bank_service import (
@@ -39,27 +48,21 @@ _EMBED_IMG_RE = re.compile(r":::EMBED_IMG:([^:]+):::")
 
 
 def _normalize_bank_yaml_text(text: str) -> str:
-    raw = yaml.safe_load(text)
-    if raw is None:
+    document = parse_bank_document(Path("bank-exchange.yaml"), text)
+    if not document.records:
         return ""
-    if isinstance(raw, list):
-        out = []
-        for item in raw:
-            if not isinstance(item, dict):
-                raise ValueError("Invalid YAML root in bank exchange item")
-            rec = parse_bank_root(item)
-            out.append(_record_to_author_dict(rec))
-        return yaml.safe_dump(out, allow_unicode=True, sort_keys=False)
-    if isinstance(raw, dict):
-        rec = parse_bank_root(raw)
-        return yaml.safe_dump(_record_to_author_dict(rec), allow_unicode=True, sort_keys=False)
-    raise ValueError("Invalid YAML root in bank exchange file")
+    raw = document.raw
+    for index, record in enumerate(document.records):
+        author_data = _record_to_author_dict(record)
+        current = BankDocument(document.path, document.text, raw, document.records)
+        raw = replace_record_data(current, index, author_data)
+    return yaml.safe_dump(raw, allow_unicode=True, sort_keys=False)
 
 
-def _record_to_author_dict(rec: Any) -> dict[str, Any]:
-    if getattr(rec, "type", None) == "group":
-        return question_group_to_author_dict(rec)
-    return question_item_to_author_dict(rec)
+def _record_to_author_dict(record: Any) -> dict[str, Any]:
+    if getattr(record, "type", None) == "group":
+        return question_group_to_author_dict(record)
+    return question_item_to_author_dict(record)
 
 
 def _utc_now_iso() -> str:
@@ -73,18 +76,27 @@ def _collect_embed_rels_from_text(text: str) -> list[str]:
 
 
 def _collect_embed_rels_from_yaml_text(text: str) -> list[str]:
-    return _collect_embed_rels_from_text(text)
+    return _collect_embed_rels_from_value(yaml.safe_load(text))
 
 
-def _rewrite_embeds_exact(text: str, mapping: dict[str, str]) -> str:
-    def repl(m: re.Match[str]) -> str:
-        rel = m.group(1).strip()
-        new_rel = mapping.get(rel)
-        if new_rel is None:
-            return m.group(0)
-        return f":::EMBED_IMG:{new_rel}:::"
+def _collect_embed_rels_from_value(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return _collect_embed_rels_from_text(value)
+    if isinstance(value, dict):
+        return [rel for child in value.values() for rel in _collect_embed_rels_from_value(child)]
+    if isinstance(value, list):
+        return [rel for child in value for rel in _collect_embed_rels_from_value(child)]
+    return []
 
-    return _EMBED_IMG_RE.sub(repl, text)
+
+def _rewrite_embeds_in_value(value: Any, mapping: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return _rewrite_embeds_when_mapped(value, mapping)
+    if isinstance(value, dict):
+        return {key: _rewrite_embeds_in_value(child, mapping) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_rewrite_embeds_in_value(child, mapping) for child in value]
+    return value
 
 
 def _rewrite_embeds_when_mapped(text: str, mapping: dict[str, str]) -> str:
@@ -98,11 +110,8 @@ def _rewrite_embeds_when_mapped(text: str, mapping: dict[str, str]) -> str:
 
 
 def _rewrite_yaml_text_for_export(text: str, mapping: dict[str, str]) -> str:
-    return _rewrite_embeds_exact(text, mapping)
-
-
-def _rewrite_yaml_text_for_import(text: str, mapping: dict[str, str]) -> str:
-    return _rewrite_embeds_when_mapped(text, mapping)
+    raw = yaml.safe_load(text)
+    return yaml.safe_dump(_rewrite_embeds_in_value(raw, mapping), allow_unicode=True, sort_keys=False)
 
 
 def export_bank_exchange_zip(project_root: Path, namespace: str) -> tuple[bytes, str]:
@@ -174,6 +183,7 @@ def export_bank_exchange_zip(project_root: Path, namespace: str) -> tuple[bytes,
 
 def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
     dest = dest.resolve()
+    seen_targets: set[str] = set()
     for info in zf.infolist():
         if info.is_dir():
             continue
@@ -185,6 +195,10 @@ def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
             target.relative_to(dest)
         except ValueError as e:
             raise ValueError(f"zip 路径越界: {name}") from e
+        target_key = os.path.normcase(str(target))
+        if target_key in seen_targets:
+            raise ValueError(f"ZIP 内存在重复目标路径: {name}")
+        seen_targets.add(target_key)
         target.parent.mkdir(parents=True, exist_ok=True)
         with zf.open(info) as src, target.open("wb") as out:
             shutil.copyfileobj(src, out)
@@ -255,9 +269,7 @@ def import_bank_exchange_zip(
     ns = f"{ts}/{tc}"
     target_lib = library_root_for_namespace(project_root, ns)
     assert_within_project(project_root, target_lib)
-    target_lib.mkdir(parents=True, exist_ok=True)
     image_dir = target_lib / "image"
-    image_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -266,13 +278,16 @@ def import_bank_exchange_zip(
 
         yaml_pack = tmp_path / "yaml"
         if yaml_pack.is_dir():
-            written = 0
+            imported_yaml: list[tuple[Path, Any]] = []
             all_rels: list[str] = []
             for p in sorted(yaml_pack.rglob("*.yaml")):
                 text = p.read_text(encoding="utf-8")
-                all_rels.extend(_collect_embed_rels_from_yaml_text(text))
+                document = parse_bank_document(p, text)
+                all_rels.extend(_collect_embed_rels_from_value(document.raw))
+                imported_yaml.append((p.relative_to(yaml_pack), document.raw))
             unique_rels = list(dict.fromkeys(all_rels))
             pkg_to_resource: dict[str, str] = {}
+            image_files: dict[Path, bytes] = {}
             for rel in unique_rels:
                 src = _resolve_embed_file_in_extract(tmp_path, rel)
                 if src is None:
@@ -289,19 +304,31 @@ def import_bank_exchange_zip(
                 digest = hashlib.sha256(data).hexdigest()[:16]
                 dest = image_dir / f"{digest}{ext}"
                 assert_within_project(project_root, dest)
-                dest.write_bytes(data)
+                image_files[dest.resolve()] = data
                 resource_rel = _rel_to_resource(project_root, dest)
                 pkg_to_resource[rel] = resource_rel
 
-            for p in sorted(yaml_pack.rglob("*.yaml")):
-                rel = p.relative_to(yaml_pack)
-                dest = target_lib / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                text = _rewrite_yaml_text_for_import(p.read_text(encoding="utf-8"), pkg_to_resource)
-                dest.write_text(_normalize_bank_yaml_text(text), encoding="utf-8")
-                written += 1
+            yaml_files: dict[Path, str] = {}
+            for rel, raw in imported_yaml:
+                dest = (target_lib / rel).resolve()
+                assert_within_project(project_root, dest)
+                if dest in yaml_files:
+                    raise ValueError(f"ZIP 内存在重复题目目标路径: {rel.as_posix()}")
+                rewritten = _rewrite_embeds_in_value(raw, pkg_to_resource)
+                text = "" if rewritten is None else yaml.safe_dump(rewritten, allow_unicode=True, sort_keys=False)
+                yaml_files[dest] = _normalize_bank_yaml_text(text) if text else ""
+
+            with bank_write_lock(target_lib):
+                validate_bank_import(project_root, target_lib, yaml_files)
+                files_to_apply: dict[Path, str | bytes] = dict(yaml_files)
+                for path, data in image_files.items():
+                    if path in files_to_apply:
+                        raise ValueError(f"导入资源路径冲突: {path.name}")
+                    files_to_apply[path] = data
+                apply_bank_import(project_root, files_to_apply)
+
             return {
-                "written": written,
+                "written": len(yaml_files),
                 "namespace": ns,
                 "subject": ts,
                 "collection": tc,
@@ -315,24 +342,10 @@ def import_bank_exchange_zip(
         if raw is None:
             raise ValueError("questions.yaml 为空")
 
-        all_rels: list[str] = []
-        if isinstance(raw, dict):
-            for q in raw.get("questions") or []:
-                if isinstance(q, dict):
-                    for k in ("content", "answer", "analysis", "group_material"):
-                        if q.get(k):
-                            all_rels.extend(_collect_embed_rels_from_text(str(q[k])))
-            for g in raw.get("groups") or []:
-                if isinstance(g, dict) and g.get("material"):
-                    all_rels.extend(_collect_embed_rels_from_text(str(g["material"])))
-                for it in g.get("items") or []:
-                    if isinstance(it, dict):
-                        for k in ("content", "answer", "analysis"):
-                            if it.get(k):
-                                all_rels.extend(_collect_embed_rels_from_text(str(it[k])))
-        unique_rels = list(dict.fromkeys(all_rels))
+        unique_rels = list(dict.fromkeys(_collect_embed_rels_from_value(raw)))
 
         pkg_to_resource: dict[str, str] = {}
+        image_files: dict[Path, bytes] = {}
         for rel in unique_rels:
             src = _resolve_embed_file_in_extract(tmp_path, rel)
             if src is None:
@@ -349,37 +362,11 @@ def import_bank_exchange_zip(
             digest = hashlib.sha256(data).hexdigest()[:16]
             dest = image_dir / f"{digest}{ext}"
             assert_within_project(project_root, dest)
-            dest.write_bytes(data)
-            resource_rel = _rel_to_resource(project_root, dest)
-            pkg_to_resource[rel] = resource_rel
+            image_files[dest.resolve()] = data
+            pkg_to_resource[rel] = _rel_to_resource(project_root, dest)
 
-        def _rew_obj(o: dict[str, Any]) -> dict[str, Any]:
-            out = dict(o)
-            for k in ("content", "answer", "analysis", "group_material"):
-                if k in out and isinstance(out[k], str):
-                    out[k] = _rewrite_embeds_when_mapped(out[k], pkg_to_resource)
-            if "options" in out and isinstance(out["options"], dict):
-                out["options"] = {kk: _rewrite_embeds_when_mapped(vv, pkg_to_resource) for kk, vv in out["options"].items()}
-            return out
+        rewritten_raw = _rewrite_embeds_in_value(raw, pkg_to_resource)
+        merged_yaml = yaml.safe_dump(rewritten_raw, allow_unicode=True, sort_keys=False)
 
-        if isinstance(raw, dict):
-            nq = [_rew_obj(dict(x)) for x in (raw.get("questions") or []) if isinstance(x, dict)]
-            ng = []
-            for g in raw.get("groups") or []:
-                if not isinstance(g, dict):
-                    continue
-                gg = dict(g)
-                if isinstance(gg.get("material"), str):
-                    gg["material"] = _rewrite_embeds_when_mapped(gg["material"], pkg_to_resource)
-                items = []
-                for it in gg.get("items") or []:
-                    if isinstance(it, dict):
-                        items.append(_rew_obj(dict(it)))
-                gg["items"] = items
-                ng.append(gg)
-            raw = {"questions": nq, "groups": ng}
-
-        merged_yaml = yaml.safe_dump(raw, allow_unicode=True, sort_keys=False)
-
-    r = import_merged_yaml(project_root, merged_yaml, ts, tc)
+    r = import_merged_yaml(project_root, merged_yaml, ts, tc, extra_files=image_files)
     return {**r, "warnings": warnings}
