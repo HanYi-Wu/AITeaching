@@ -227,6 +227,9 @@ def test_real_conda_pack_preserves_relative_source_redirect_after_unpack(
     prefix_control = runtime / "share" / "prefix-control.txt"
     prefix_control.parent.mkdir(parents=True)
     prefix_control.write_text(f"prefix={PREFIX_PLACEHOLDER}\n", encoding="utf-8")
+    history_file = runtime / "conda-meta" / "history"
+    history_file.parent.mkdir(parents=True)
+    history_file.write_text("# minimal real conda history\n", encoding="utf-8")
 
     runtime_env = conda_pack.CondaEnv(
         str(runtime),
@@ -241,6 +244,7 @@ def test_real_conda_pack_preserves_relative_source_redirect_after_unpack(
                 file_mode="text",
                 prefix_placeholder=PREFIX_PLACEHOLDER,
             ),
+            conda_pack.File(str(history_file), "conda-meta/history"),
         ],
     )
     monkeypatch.setattr(
