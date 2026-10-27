@@ -9,6 +9,7 @@ import base64
 import re
 import sqlite3
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -1304,18 +1305,31 @@ def _contains_grading_prompt_injection(value: str) -> bool:
 
 
 def _attempt_scan_payloads(root: Path, attempt_id: str, *, include_content: bool = True) -> list[dict[str, Any]]:
+    return _attempt_scan_payloads_for_attempts(root, [attempt_id], include_content=include_content)[attempt_id]
+
+
+def _attempt_scan_payloads_for_attempts(
+    root: Path,
+    attempt_ids: Sequence[str],
+    *,
+    include_content: bool = False,
+    chunk_size: int = 500,
+) -> dict[str, list[dict[str, Any]]]:
+    ids = list(dict.fromkeys(attempt_ids))
+    grouped: dict[str, list[dict[str, Any]]] = {attempt_id: [] for attempt_id in ids}
+    if not ids:
+        return grouped
     content_column = ", content" if include_content else ""
     with connect(root) as con:
-        rows = con.execute(
-            f"""
-            SELECT page_index, file_name, mime_type, file_size{content_column}
-            FROM attempt_scan_images
-            WHERE attempt_id = ?
-            ORDER BY page_index
-            """,
-            (attempt_id,),
-        ).fetchall()
-    payloads: list[dict[str, Any]] = []
+        rows = []
+        for start in range(0, len(ids), chunk_size):
+            chunk = ids[start : start + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(con.execute(
+                f"SELECT attempt_id, page_index, file_name, mime_type, file_size{content_column} "
+                f"FROM attempt_scan_images WHERE attempt_id IN ({placeholders}) ORDER BY attempt_id, page_index",
+                chunk,
+            ).fetchall())
     for row in rows:
         payload = {
             "page_index": int(row["page_index"]),
@@ -1327,8 +1341,8 @@ def _attempt_scan_payloads(root: Path, attempt_id: str, *, include_content: bool
             payload["data_url"] = (
                 f"data:{row['mime_type']};base64,{base64.b64encode(bytes(row['content'])).decode('ascii')}"
             )
-        payloads.append(payload)
-    return payloads
+        grouped[str(row["attempt_id"])].append(payload)
+    return grouped
 
 
 def get_attempt_scan_image(
@@ -1380,6 +1394,7 @@ def list_paper_submissions(
         question_maps_for_attempt=_question_maps_for_attempt,
         answer_public_payload=_answer_public_payload,
         attempt_scan_payloads=_attempt_scan_payloads,
+        attempt_scan_payloads_for_attempts=_attempt_scan_payloads_for_attempts,
         attempt_status_group=_attempt_status_group,
     )
 

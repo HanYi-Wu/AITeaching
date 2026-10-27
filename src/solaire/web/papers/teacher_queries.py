@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +58,7 @@ def list_paper_submissions_query(
     answer_public_payload: Callable[..., dict[str, Any]],
     attempt_scan_payloads: Callable[..., list[dict[str, Any]]],
     attempt_status_group: Callable[[dict[str, Any]], str],
+    attempt_scan_payloads_for_attempts: Callable[..., Mapping[str, list[dict[str, Any]]]] | None = None,
 ) -> list[dict[str, Any]]:
     access_clause, access_params = attempt_access_clause(user)
     with connect(root) as con:
@@ -130,11 +131,19 @@ def list_paper_submissions_query(
         )
         answers_by_attempt.setdefault(attempt_id, []).append(public_answer)
 
+    scans_by_attempt: Mapping[str, list[dict[str, Any]]] | None = None
+    if attempt_scan_payloads_for_attempts is not None and attempts:
+        attempt_ids = [str(attempt["id"]) for attempt in attempts if attempt.get("id") is not None]
+        scans_by_attempt = attempt_scan_payloads_for_attempts(root, attempt_ids, include_content=False)
+
     submissions: list[dict[str, Any]] = []
     for attempt in attempts:
         attempt_id = str(attempt.get("id"))
         attempt_answers = answers_by_attempt.get(attempt_id, [])
-        scan_images = attempt_scan_payloads(root, attempt_id, include_content=False)
+        if scans_by_attempt is not None:
+            scan_images = list(scans_by_attempt.get(attempt_id) or [])
+        else:
+            scan_images = attempt_scan_payloads(root, attempt_id, include_content=False)
         by_id, order_index = maps_by_attempt.get(attempt_id, ({}, {}))
         if attempt_status_group(attempt) == "completed":
             answered_ids = {str(item.get("question_id") or "") for item in attempt_answers}
@@ -340,7 +349,7 @@ def teacher_student_profile_query(
                    (SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id) AS integrity_event_count,
                    (SELECT COUNT(*) FROM student_answers aa WHERE aa.attempt_id = sa.id) AS answer_count,
                    (SELECT COUNT(*) FROM student_answers aa WHERE aa.attempt_id = sa.id AND aa.score IS NULL) AS unscored_answer_count,
-                   sa.question_payload_json, sa.grading_completed_at
+                   sa.question_payload_json, sa.answer_key_json, sa.grading_completed_at
             FROM student_attempts sa
             JOIN exam_publications ep ON ep.id = sa.publication_id
             JOIN paper_records pr ON pr.id = ep.paper_id
@@ -356,8 +365,8 @@ def teacher_student_profile_query(
         ).fetchall()
         weak_rows = con.execute(
             f"""
-            SELECT pr.id AS paper_id, pr.title AS paper_title, ans.question_id,
-                   ans.is_correct, ans.score, sa.question_payload_json, sa.answer_key_json,
+            SELECT sa.id AS attempt_id, pr.id AS paper_id, pr.title AS paper_title, ans.question_id,
+                   ans.is_correct, ans.score,
                    COALESCE(sa.submitted_at, sa.started_at, ep.created_at) AS snapshot_seen_at
             FROM student_answers ans
             JOIN student_attempts sa ON sa.id = ans.attempt_id
@@ -374,21 +383,28 @@ def teacher_student_profile_query(
             (sid, class_id, *date_params),
         ).fetchall()
     recent = [row_to_dict(row) or {} for row in attempt_rows]
+    snapshot_by_attempt: dict[str, tuple[Any, Any]] = {
+        str(item["attempt_id"]): (item.get("question_payload_json"), item.get("answer_key_json"))
+        for item in recent
+        if item.get("attempt_id") is not None
+    }
     read_context = FrozenQuestionReadContext()
     weak_groups: dict[tuple[str, str, str | None], dict[str, Any]] = {}
     versions_by_question: dict[tuple[str, str], dict[str, int]] = {}
     for row in weak_rows:
         paper_key = str(row["paper_id"])
         question_key = str(row["question_id"])
+        attempt_id = str(row["attempt_id"])
+        question_payload_json, answer_key_json = snapshot_by_attempt.get(attempt_id, (None, None))
         try:
-            frozen = read_context.first_question(row["question_payload_json"], question_key)
+            frozen = read_context.first_question(question_payload_json, question_key)
         except (TypeError, ValueError):
             frozen = None
         answer_key_known = False
         answer_key = None
         try:
             answer_key_known, answer_key = read_context.first_answer_key(
-                row["answer_key_json"],
+                answer_key_json,
                 question_key,
             )
         except (TypeError, ValueError):
@@ -508,7 +524,7 @@ def teacher_student_profile_query(
         },
         "recent_exams": [
             {
-                **item,
+                **{k: v for k, v in item.items() if k != "answer_key_json"},
                 "score_percent": (
                     score_percent(item.get("score"), item.get("max_score"))
                     if item.get("grading_completed_at")

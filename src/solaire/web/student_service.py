@@ -6,6 +6,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
 from solaire.web.auth_service import utc_now
@@ -265,6 +266,29 @@ def submit_student_attempt(
     return {**_attempt_payload(_attempt_for_student(root, attempt_id, str(student["id"]))), "submitted_answers_accepted": True}
 
 
+def _load_student_answers_for_attempts(
+    con: Any,
+    attempt_ids: Sequence[str],
+    *,
+    chunk_size: int = 500,
+) -> dict[str, list[dict[str, Any]]]:
+    answers_by_attempt: dict[str, list[dict[str, Any]]] = {str(aid): [] for aid in attempt_ids}
+    if not attempt_ids:
+        return answers_by_attempt
+    for i in range(0, len(attempt_ids), chunk_size):
+        chunk = list(attempt_ids[i : i + chunk_size])
+        placeholders = ",".join("?" for _ in chunk)
+        rows = con.execute(
+            f"SELECT * FROM student_answers WHERE attempt_id IN ({placeholders}) ORDER BY rowid",
+            chunk,
+        ).fetchall()
+        for row in rows:
+            record = row_to_dict(row) or {}
+            attempt_id = str(record.get("attempt_id"))
+            answers_by_attempt.setdefault(attempt_id, []).append(record)
+    return answers_by_attempt
+
+
 def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     student = _student_for_user(root, user)
     with connect(root) as con:
@@ -283,6 +307,8 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
             """,
             (str(student["id"]),),
         ).fetchall()
+        attempt_ids = [str(row["id"]) for row in rows if row["id"] is not None]
+        answers_by_attempt = _load_student_answers_for_attempts(con, attempt_ids)
 
     results: list[dict[str, Any]] = []
     read_context = FrozenQuestionReadContext()
@@ -306,16 +332,12 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
             )
         except Exception:
             pass
-        with connect(root) as con:
-            answer_rows = con.execute(
-                "SELECT * FROM student_answers WHERE attempt_id = ?",
-                (attempt["id"],),
-            ).fetchall()
+        answer_rows = answers_by_attempt.get(str(attempt["id"]), [])
         answers: list[dict[str, Any]] = []
         correct_count = 0
         wrong_count = 0
         for answer_row in answer_rows:
-            answer = row_to_dict(answer_row) or {}
+            answer = answer_row if isinstance(answer_row, dict) else (row_to_dict(answer_row) or {})
             try:
                 answer_payload = json.loads(str(answer.get("answer_payload") or "{}"))
             except json.JSONDecodeError:

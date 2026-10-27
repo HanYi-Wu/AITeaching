@@ -123,7 +123,8 @@ def test_teacher_submission_list_reuses_only_request_scoped_frozen_reads(
     assert baseline.status_code == 200, baseline.text
     assert counts == {"questions": 4, "answers": 4, "maps": 4}
     baseline_select_count = sum(statement.lstrip().upper().startswith("SELECT") for statement in traced_sql)
-    assert baseline_select_count == 7
+    assert baseline_select_count == 4
+    assert sum("FROM attempt_scan_images" in statement for statement in traced_sql) == 1
 
     monkeypatch.setattr(teacher_queries, "FrozenQuestionReadContext", original_context_type)
     for name in counts:

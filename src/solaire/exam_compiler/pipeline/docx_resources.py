@@ -6,7 +6,6 @@ import hashlib
 import re
 import shutil
 from pathlib import Path
-from typing import Any
 
 from solaire.exam_compiler.loaders.questions import LoadedQuestions
 from solaire.exam_compiler.pipeline.diagram_expand import (
@@ -23,13 +22,105 @@ _EMBED_RE = re.compile(r":::EMBED_IMG:([^:]+):::")
 _COMMON_MATH_MACROS_RE = re.compile(r"\\(arccot|dlim|dint|e|i)(?![A-Za-z])")
 
 
+class DocxResourceContext:
+    """Export-scoped local context for reusing visual resources and media copies."""
+
+    def __init__(self) -> None:
+        self._diagram_cache: dict[tuple[str, str, int, str], tuple[str, Path]] = {}
+        self._media_cache: dict[tuple[str, str, str], tuple[str, Path]] = {}
+        self._svg_cache: dict[tuple[str, str, str], tuple[str, Path]] = {}
+
+    def get_diagram(
+        self,
+        kind: str,
+        image_dir: Path,
+        block_index: int,
+        body: str,
+    ) -> str | None:
+        key = (kind, str(image_dir.resolve()), block_index, body)
+        entry = self._diagram_cache.get(key)
+        if entry is not None:
+            rel, target = entry
+            if target.is_file():
+                return rel
+        return None
+
+    def put_diagram(
+        self,
+        kind: str,
+        image_dir: Path,
+        block_index: int,
+        body: str,
+        rel: str,
+        target: Path,
+    ) -> None:
+        key = (kind, str(image_dir.resolve()), block_index, body)
+        self._diagram_cache[key] = (rel, target)
+
+    def get_copied_media(
+        self,
+        src: Path,
+        media_dir: Path,
+        prefix: str,
+    ) -> str | None:
+        key = (str(src.resolve()), str(media_dir.resolve()), prefix)
+        entry = self._media_cache.get(key)
+        if entry is not None:
+            rel, target = entry
+            if target.is_file():
+                return rel
+        return None
+
+    def put_copied_media(
+        self,
+        src: Path,
+        media_dir: Path,
+        prefix: str,
+        rel: str,
+        target: Path,
+    ) -> None:
+        key = (str(src.resolve()), str(media_dir.resolve()), prefix)
+        self._media_cache[key] = (rel, target)
+
+    def get_copied_svg(
+        self,
+        src: Path,
+        media_dir: Path,
+        prefix: str,
+    ) -> str | None:
+        key = (str(src.resolve()), str(media_dir.resolve()), prefix)
+        entry = self._svg_cache.get(key)
+        if entry is not None:
+            rel, target = entry
+            if target.is_file():
+                return rel
+        return None
+
+    def put_copied_svg(
+        self,
+        src: Path,
+        media_dir: Path,
+        prefix: str,
+        rel: str,
+        target: Path,
+    ) -> None:
+        key = (str(src.resolve()), str(media_dir.resolve()), prefix)
+        self._svg_cache[key] = (rel, target)
+
+
 def _sanitize_name_part(s: str, default: str) -> str:
     clean = re.sub(r"[^A-Za-z0-9_.-]+", "_", s.strip())
     clean = clean.strip("._")
     return clean or default
 
 
-def _copy_media(src: Path, media_dir: Path, *, prefix: str) -> str | None:
+def _copy_media(
+    src: Path,
+    media_dir: Path,
+    *,
+    prefix: str,
+    context: DocxResourceContext | None = None,
+) -> str | None:
     src = src.resolve()
     if not src.is_file():
         return None
@@ -38,12 +129,25 @@ def _copy_media(src: Path, media_dir: Path, *, prefix: str) -> str | None:
     suffix = src.suffix.lower() or ".png"
     stem = _sanitize_name_part(prefix or src.stem, "image")
     target = media_dir / f"{stem}_{digest}{suffix}"
+    if context is not None:
+        cached = context.get_copied_media(src, media_dir, stem)
+        if cached is not None:
+            return cached
     if target.resolve() != src:
         shutil.copy2(src, target)
-    return f"media/{target.name}"
+    rel = f"media/{target.name}"
+    if context is not None:
+        context.put_copied_media(src, media_dir, stem, rel, target)
+    return rel
 
 
-def _copy_svg_as_png(src: Path, media_dir: Path, *, prefix: str) -> str | None:
+def _copy_svg_as_png(
+    src: Path,
+    media_dir: Path,
+    *,
+    prefix: str,
+    context: DocxResourceContext | None = None,
+) -> str | None:
     src = src.resolve()
     if not src.is_file():
         return None
@@ -51,9 +155,16 @@ def _copy_svg_as_png(src: Path, media_dir: Path, *, prefix: str) -> str | None:
     digest = hashlib.sha256(str(src).encode("utf-8")).hexdigest()[:10]
     stem = _sanitize_name_part(prefix or src.stem, "image")
     target = media_dir / f"{stem}_{digest}.png"
+    if context is not None:
+        cached = context.get_copied_svg(src, media_dir, stem)
+        if cached is not None:
+            return cached
     svg = src.read_text(encoding="utf-8")
     _svg_to_png(svg, target)
-    return f"media/{target.name}"
+    rel = f"media/{target.name}"
+    if context is not None:
+        context.put_copied_svg(src, media_dir, stem, rel, target)
+    return rel
 
 
 def _markdown_image(rel_path: str | None) -> str:
@@ -82,6 +193,8 @@ def _materialize_visuals(
     hq: HydratedQuestion,
     loaded: LoadedQuestions,
     media_dir: Path,
+    *,
+    context: DocxResourceContext | None = None,
 ) -> str:
     if not text:
         return ""
@@ -98,24 +211,52 @@ def _materialize_visuals(
         kind = m.group(1)
         body = m.group(2)
         if kind == "primebrush":
+            b_idx = primebrush_idx
+            primebrush_idx += 1
+            if context is not None:
+                cached = context.get_diagram("primebrush", image_dir, b_idx, body)
+                if cached is not None:
+                    return _markdown_image(cached)
             stem, png_name = ensure_primebrush_block_files(
                 body,
                 image_dir=image_dir,
-                block_index=primebrush_idx,
+                block_index=b_idx,
                 write_png=True,
             )
-            primebrush_idx += 1
-            rel = _copy_media(image_dir / png_name, media_dir, prefix=stem)
+            rel = _copy_media(image_dir / png_name, media_dir, prefix=stem, context=context)
+            if context is not None and rel is not None:
+                context.put_diagram(
+                    "primebrush",
+                    image_dir,
+                    b_idx,
+                    body,
+                    rel,
+                    media_dir / Path(rel).name,
+                )
             return _markdown_image(rel)
 
+        b_idx = mermaid_idx
+        mermaid_idx += 1
+        if context is not None:
+            cached = context.get_diagram("mermaid", image_dir, b_idx, body)
+            if cached is not None:
+                return _markdown_image(cached)
         stem, png_name = ensure_mermaid_block_files(
             body,
             image_dir=image_dir,
-            block_index=mermaid_idx,
+            block_index=b_idx,
             write_png=True,
         )
-        mermaid_idx += 1
-        rel = _copy_media(image_dir / png_name, media_dir, prefix=stem)
+        rel = _copy_media(image_dir / png_name, media_dir, prefix=stem, context=context)
+        if context is not None and rel is not None:
+            context.put_diagram(
+                "mermaid",
+                image_dir,
+                b_idx,
+                body,
+                rel,
+                media_dir / Path(rel).name,
+            )
         return _markdown_image(rel)
 
     out = _FENCE_RE.sub(repl_fence, text)
@@ -133,9 +274,9 @@ def _materialize_visuals(
         if not src.is_file():
             return m.group(0)
         if src.suffix.lower() == ".svg":
-            copied = _copy_svg_as_png(src, media_dir, prefix=src.stem)
+            copied = _copy_svg_as_png(src, media_dir, prefix=src.stem, context=context)
         else:
-            copied = _copy_media(src, media_dir, prefix=src.stem)
+            copied = _copy_media(src, media_dir, prefix=src.stem, context=context)
         return _markdown_image(copied)
 
     return _EMBED_RE.sub(repl_embed, out)
@@ -204,9 +345,13 @@ def _render_text(
     hq: HydratedQuestion,
     loaded: LoadedQuestions,
     media_dir: Path,
+    *,
+    context: DocxResourceContext | None = None,
 ) -> str:
     return _normalize_docx_math_macros(
         _clean_latex_for_markdown(
-            expand_tables_for_docx_markdown(_materialize_visuals(text, hq, loaded, media_dir))
+            expand_tables_for_docx_markdown(
+                _materialize_visuals(text, hq, loaded, media_dir, context=context)
+            )
         )
     )

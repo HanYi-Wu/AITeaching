@@ -26,6 +26,7 @@ _COMMON_MATH_MACROS_RE = _docx_resources._COMMON_MATH_MACROS_RE
 _W_NS = _docx_process._W_NS
 _XML_NAMESPACES = _docx_process._XML_NAMESPACES
 PandocError = _docx_process.PandocError
+DocxResourceContext = _docx_resources.DocxResourceContext
 
 
 def _parse_exam(exam_yaml: Path) -> ExamConfig:
@@ -154,13 +155,22 @@ def _render_docx_markdown(
     media_dir: Path,
     *,
     show_answers: bool,
+    context: _docx_resources.DocxResourceContext | None = None,
 ) -> str:
+    def bound_render_text(
+        text: str,
+        hq: HydratedQuestion,
+        loaded_qs: LoadedQuestions,
+        md_dir: Path,
+    ) -> str:
+        return _render_text(text, hq, loaded_qs, md_dir, context=context)
+
     return _docx_markdown.render_docx_markdown(
         hydrated,
         loaded,
         media_dir,
         show_answers=show_answers,
-        render_text=_render_text,
+        render_text=bound_render_text,
         clean_text=_clean_latex_for_markdown,
     )
 
@@ -255,14 +265,28 @@ def build_exam_docx(
     media_dir = docx_work / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
 
+    resource_context = _docx_resources.DocxResourceContext()
+
     student_md = docx_work / "student_paper.md"
     teacher_md = docx_work / "teacher_paper.md"
     student_md.write_text(
-        _render_docx_markdown(hydrated, loaded, media_dir, show_answers=False),
+        _render_docx_markdown(
+            hydrated,
+            loaded,
+            media_dir,
+            show_answers=False,
+            context=resource_context,
+        ),
         encoding="utf-8",
     )
     teacher_md.write_text(
-        _render_docx_markdown(hydrated, loaded, media_dir, show_answers=True),
+        _render_docx_markdown(
+            hydrated,
+            loaded,
+            media_dir,
+            show_answers=True,
+            context=resource_context,
+        ),
         encoding="utf-8",
     )
 
@@ -271,6 +295,13 @@ def build_exam_docx(
 
     dest = out_dir if out_dir is not None else exam_parent_dir(exam_yaml)
     dest = dest.resolve()
+    student_docx = docx_work / "student_paper.docx"
+    teacher_docx = docx_work / "teacher_paper.docx"
+    if not student_docx.is_file():
+        raise PandocError(f"Pandoc output missing: {student_docx.name}")
+    if not teacher_docx.is_file():
+        raise PandocError(f"Pandoc output missing: {teacher_docx.name}")
+
     student_out = _copy_docx_if_exists(docx_work, "student_paper", dest)
     teacher_out = _copy_docx_if_exists(docx_work, "teacher_paper", dest)
     return student_out, teacher_out
