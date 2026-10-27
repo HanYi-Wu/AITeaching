@@ -106,7 +106,8 @@ def pack_runtime(runtime, output, staging_dir, conda_pack, console_scripts=()):
             source=str(pth_source),
             target=pth_target,
             is_conda=False,
-            file_mode='text',
+            # The relative path contains no installation prefix to relocate.
+            file_mode=None,
         )
     )
     filtered.files.sort(key=lambda entry: entry.target)

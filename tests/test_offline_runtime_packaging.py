@@ -210,6 +210,101 @@ def test_relative_pth_imports_from_release_src(tmp_path: Path):
     assert str(source_package) in result.stdout
 
 
+def test_real_conda_pack_preserves_relative_source_redirect_after_unpack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    conda_pack = pytest.importorskip("conda_pack")
+    from conda_pack.core import BIN_DIR, PREFIX_PLACEHOLDER
+
+    runtime = tmp_path / "build-runtime"
+    site_target = Path(
+        f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
+    )
+    installed_package = runtime / site_target / "solaire" / "__init__.py"
+    installed_package.parent.mkdir(parents=True)
+    installed_package.write_text("INSTALLED_COPY = True\n", encoding="utf-8")
+    prefix_control = runtime / "share" / "prefix-control.txt"
+    prefix_control.parent.mkdir(parents=True)
+    prefix_control.write_text(f"prefix={PREFIX_PLACEHOLDER}\n", encoding="utf-8")
+
+    runtime_env = conda_pack.CondaEnv(
+        str(runtime),
+        [
+            conda_pack.File(
+                str(installed_package),
+                (site_target / "solaire" / "__init__.py").as_posix(),
+            ),
+            conda_pack.File(
+                str(prefix_control),
+                "share/prefix-control.txt",
+                file_mode="text",
+                prefix_placeholder=PREFIX_PLACEHOLDER,
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        conda_pack.CondaEnv,
+        "from_prefix",
+        classmethod(lambda cls, _prefix: runtime_env),
+    )
+
+    output = tmp_path / "runtime.tar.gz"
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    pack_runtime(runtime, output, staging, conda_pack)
+
+    release = tmp_path / "release"
+    runtime_install = release / "runtime"
+    runtime_install.mkdir(parents=True)
+    source_package = release / "src" / "solaire"
+    source_package.mkdir(parents=True)
+    (source_package / "__init__.py").write_text(
+        "from .marker import SOURCE_MARKER\n", encoding="utf-8"
+    )
+    (source_package / "marker.py").write_text(
+        "SOURCE_MARKER = 'release-source'\n", encoding="utf-8"
+    )
+    with tarfile.open(output, "r:gz") as archive:
+        archive.extractall(runtime_install, filter="data")
+
+    unpack_script = runtime_install / BIN_DIR / (
+        "conda-unpack-script.py" if sys.platform == "win32" else "conda-unpack"
+    )
+    unpack = subprocess.run(
+        [sys.executable, str(unpack_script)],
+        cwd=runtime_install,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert unpack.returncode == 0, unpack.stdout + unpack.stderr
+
+    pth_path = runtime_install / site_target / "solaire-source.pth"
+    assert pth_path.read_bytes() == b"../../../../src\n"
+    expected_prefix = runtime_install.resolve().as_posix()
+    assert (runtime_install / "share" / "prefix-control.txt").read_text(
+        encoding="utf-8"
+    ) == f"prefix={expected_prefix}\n"
+
+    imported = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import site,sys; site.addsitedir(sys.argv[1]); "
+            "import solaire; print(solaire.SOURCE_MARKER, solaire.__file__)",
+            str(runtime_install / site_target),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "release-source" in imported.stdout
+    assert str(source_package) in imported.stdout
+
+
 def test_unpacked_size_uses_only_regular_files_in_the_actual_archive(tmp_path: Path):
     archive_path = tmp_path / "runtime.tar.gz"
     with tarfile.open(archive_path, "w:gz") as archive:
