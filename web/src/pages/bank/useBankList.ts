@@ -17,7 +17,7 @@ import {
   type MetadataFilters,
 } from "../../lib/metadataFilters";
 import type { BankFolders } from "../../components/BankFolderExplorer";
-import type { BankCollectionRow, BankListItem } from "./bankModel";
+import type { BankCollectionRow, BankListItem, BankReadDiagnostic } from "./bankModel";
 
 export interface UseBankListOptions {
   onError: (msg: string | null) => void;
@@ -26,6 +26,7 @@ export interface UseBankListOptions {
 export function useBankList({ onError }: UseBankListOptions) {
   const { t } = useTranslation(["bank", "lib", "common"]);
   const [items, setItems] = useState<BankListItem[]>([]);
+  const [diagnostics, setDiagnostics] = useState<BankReadDiagnostic[]>([]);
   const [folders, setFolders] = useState<BankFolders>({ folders: [], assignments: {} });
   const [collections, setCollections] = useState<BankCollectionRow[]>([]);
   const [subjects, setSubjects] = useState<string[]>([]);
@@ -54,7 +55,7 @@ export function useBankList({ onError }: UseBankListOptions) {
         apiGet<{
           collections: { id: string; label: string; subject?: string; collection?: string }[];
         }>("/api/bank/collections"),
-        apiGet<{ items: BankListItem[] }>("/api/bank/items"),
+        apiGet<{ items: BankListItem[]; diagnostics?: BankReadDiagnostic[] }>("/api/bank/items"),
         apiGet<{ subjects: string[] }>("/api/bank/subjects"),
         apiGet<BankFolders>("/api/bank/folders"),
       ]);
@@ -73,6 +74,7 @@ export function useBankList({ onError }: UseBankListOptions) {
 
       setCollections(parsedCollections);
       setItems(it.items);
+      setDiagnostics(it.diagnostics ?? []);
       setFolders(folderData);
       setSubjects(sub.subjects);
 
@@ -210,6 +212,7 @@ export function useBankList({ onError }: UseBankListOptions) {
 
   return {
     items,
+    diagnostics,
     setItems,
     folders,
     setFolders,

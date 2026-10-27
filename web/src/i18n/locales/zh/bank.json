@@ -1,4 +1,6 @@
 {
+  "fileIssues": "有 {{count}} 个题目文件需要处理",
+  "fileIssuesHelp": "健康题目仍可读取和编辑。请按文件路径修复以下问题后刷新。",
   "placeholderSubItem": "（小题 1）",
   "pageContextWithId": "题库：{{id}}{{suffix}}",
   "pageContextBrowse": "浏览与编辑题库",
