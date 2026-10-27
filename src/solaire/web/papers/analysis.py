@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
+from contextlib import ExitStack, closing
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -65,7 +65,7 @@ def analysis_question_maps(
     # Published snapshots, not the editable source, define historical exam content.
     clause, params = attempt_clause_fn(user, publication_id, class_id=class_id)
     if snapshot_rows is None:
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             snapshot_rows = con.execute(
                 f"SELECT sa.question_payload_json FROM student_attempts sa "
                 f"JOIN exam_publications ep ON ep.id=sa.publication_id WHERE ep.paper_id=? AND {clause} ORDER BY sa.rowid",
@@ -162,7 +162,7 @@ def build_module_report(
 
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
     if answer_rows is None:
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             answer_rows = con.execute(
                 f"""
                 SELECT ans.question_id, ans.score, ans.is_correct, ans.answer_payload,
@@ -267,7 +267,7 @@ def build_question_report(
 
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
     if answer_rows is None:
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             answer_rows = con.execute(
                 f"""
                 SELECT ans.question_id, ans.answer_payload, ans.is_correct, ans.score,
@@ -335,7 +335,11 @@ def build_class_report(
     connection: Any = None,
 ) -> list[dict[str, Any]]:
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with (nullcontext(connection) if connection is not None else connect(root)) as con:
+    with ExitStack() as stack:
+        con = connection
+        if con is None:
+            con = stack.enter_context(closing(connect(root)))
+            stack.enter_context(con)
         rows = con.execute(
             f"""
             SELECT

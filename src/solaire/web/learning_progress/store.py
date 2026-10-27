@@ -5,6 +5,7 @@ All mutation operations accept an existing transaction connection and do not com
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import sqlite3
 import uuid
@@ -74,7 +75,7 @@ def get_practice_sources(
     if isinstance(root_or_con, sqlite3.Connection):
         rows = root_or_con.execute(query, (practice_publication_id,)).fetchall()
     else:
-        with connect(root_or_con) as con:
+        with closing(connect(root_or_con)) as con, con:
             rows = con.execute(query, (practice_publication_id,)).fetchall()
 
     results: list[PracticeSourceLink] = []
@@ -166,7 +167,7 @@ def get_frozen_baselines(
     if isinstance(root_or_con, sqlite3.Connection):
         rows = root_or_con.execute(query, tuple(params)).fetchall()
     else:
-        with connect(root_or_con) as con:
+        with closing(connect(root_or_con)) as con, con:
             rows = con.execute(query, tuple(params)).fetchall()
 
     results: list[FrozenBaselineItem] = []

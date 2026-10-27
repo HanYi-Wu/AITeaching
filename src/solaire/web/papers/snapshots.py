@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import hashlib
 import json
 import os
@@ -209,7 +211,7 @@ def _load_attempt_question_payloads(
                 if connection is not None:
                     connection.execute(update_sql, update_params)
                 elif root is not None:
-                    with connect(root) as con:
+                    with closing(connect(root)) as con, con:
                         con.execute(update_sql, update_params)
             return repaired_questions, repaired_answers
         return questions, normalized_answers

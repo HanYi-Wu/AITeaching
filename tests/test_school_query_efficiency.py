@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import closing, contextmanager
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -43,6 +43,16 @@ class CountedConnection:
     def __init__(self, connection, counts: QueryCounts) -> None:
         self.connection = connection
         self.counts = counts
+
+    def __enter__(self):
+        self.connection.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return self.connection.__exit__(exc_type, exc, traceback)
+
+    def close(self) -> None:
+        self.connection.close()
 
     def execute(self, sql: str, params=()):
         if sql.lstrip().upper().startswith(("SELECT", "WITH")):
@@ -118,10 +128,8 @@ def seed_school_data(root: Path, count: int = 25) -> str:
 def counted_call(module, root: Path, function, *args, **kwargs):
     counts = QueryCounts()
 
-    @contextmanager
     def counted_connect(db_root: Path):
-        with closing(platform_db.connect(db_root)) as connection, connection:
-            yield CountedConnection(connection, counts)
+        return CountedConnection(platform_db.connect(db_root), counts)
 
     with patch.object(module, "connect", counted_connect), patch.object(module, "init_platform_db", lambda _root: None):
         result = function(root, *args, **kwargs)

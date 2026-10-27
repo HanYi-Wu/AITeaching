@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from solaire.web.platform_db import connect
 
 def _class_student_ids(root: Path, class_id: str) -> set[str]:
     """Return all active student IDs belonging to the given class."""
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             """
             SELECT cs.student_id FROM class_students cs

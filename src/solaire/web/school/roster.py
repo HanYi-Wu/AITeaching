@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ from solaire.web.school.common import (
 def set_teacher_subjects(root: Path, *, teacher_id: str, school_id: str, subjects: list[str]) -> list[str]:
     init_platform_db(root)
     clean_subjects = sorted({subject.strip() for subject in subjects if subject.strip()})
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         teacher = con.execute(
             "SELECT 1 FROM users WHERE id = ? AND school_id = ? AND role = 'teacher' AND status = 'active'",
             (teacher_id, school_id),
@@ -40,7 +41,7 @@ def set_teacher_subjects(root: Path, *, teacher_id: str, school_id: str, subject
 
 def list_teachers(root: Path, *, school_id: str) -> list[dict[str, Any]]:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             """
             SELECT id, school_id, role, username, display_name, email, status, created_at, updated_at
@@ -101,7 +102,7 @@ def list_students(root: Path, *, school_id: str, class_id: str | None = None) ->
         class_join = "JOIN class_students cs_filter ON cs_filter.student_id = s.id"
         class_where = "AND cs_filter.class_id = ?"
         params.append(class_id)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             f"""
             SELECT
@@ -165,7 +166,7 @@ def query_students(
         )
     """
     query_params = (*params, *filter_params)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         _register_school_query_functions(con)
         students, total, clean_page, clean_page_size, total_pages = _fetch_sql_page(
             con,
@@ -219,7 +220,7 @@ def update_student(
         updates.append("status = ?")
         params.append(_clean_status(status))
     params.extend([student_id, school_id])
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute(
             "SELECT user_id FROM students WHERE id = ? AND school_id = ?",
             (student_id, school_id),
@@ -253,7 +254,7 @@ def assign_teacher_class(
 ) -> dict[str, Any]:
     init_platform_db(root)
     clean_subject = subject.strip() if subject else ""
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         teacher = con.execute(
             "SELECT 1 FROM users WHERE id = ? AND school_id = ? AND role = 'teacher' AND status = 'active'",
             (teacher_id, school_id),
@@ -306,7 +307,7 @@ def list_teacher_class_assignments(
         )
     """
     params = (school_id, school_id, *search_params)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         _register_school_query_functions(con)
         assignments, total, clean_page, clean_page_size, total_pages = _fetch_sql_page(
             con,
@@ -337,7 +338,7 @@ def remove_teacher_class_assignment(
 ) -> dict[str, Any]:
     init_platform_db(root)
     clean_subject = subject.strip() if subject else ""
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         teacher = con.execute(
             "SELECT 1 FROM users WHERE id = ? AND school_id = ? AND role = 'teacher'",
             (teacher_id, school_id),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ def _wrong_questions_for_student(
 ) -> list[dict[str, Any]]:
     wrong: list[dict[str, Any]] = []
     if read_context is None:
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             read_context = load_online_source_read_context(
                 con,
                 source_publication_ids=source_publication_ids,
@@ -65,7 +66,7 @@ def _source_questions_for_student(
     sources: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     if read_context is None:
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             read_context = load_online_source_read_context(
                 con,
                 source_publication_ids=source_publication_ids,

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,7 +39,7 @@ def repair(project_root: Path, platform_root: Path, *, apply: bool = False) -> d
             while backup.exists():
                 backup = backup_dir / f"platform-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{suffix}.db"
                 suffix += 1
-            with sqlite3.connect(backup) as target:
+            with closing(sqlite3.connect(backup)) as target, target:
                 con.backup(target)
             report["backup"] = str(backup)
             init_platform_db(platform_root)

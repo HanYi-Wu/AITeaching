@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import json
 import uuid
 from pathlib import Path
@@ -24,7 +26,7 @@ def _student_for_user(root: Path, user: dict[str, Any]) -> dict[str, Any]:
     if user.get("role") != "student":
         raise PermissionError("Student role required")
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute(
             """
             SELECT s.*, u.username AS account_username
@@ -43,7 +45,7 @@ def _score_percent(score: object, max_score: object) -> float | None:
     return score_percent(score, max_score, legacy_zero_max=True)
 
 def _saved_answer_payloads(root: Path, attempt_id: str) -> list[dict[str, Any]]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             "SELECT question_id, answer_payload FROM student_answers WHERE attempt_id = ? ORDER BY responded_at, question_id",
             (attempt_id,),
@@ -65,7 +67,7 @@ def _saved_answer_payloads(root: Path, attempt_id: str) -> list[dict[str, Any]]:
     return saved
 
 def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -> dict[str, Any]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         publication = con.execute(
             """
             SELECT ep.*, pr.exam_id, pr.title AS paper_title, COALESCE(ep.subject, pr.subject) AS subject, pr.id AS paper_id
@@ -121,7 +123,7 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
     return attempt
 
 def _attempt_for_student(root: Path, attempt_id: str, student_id: str) -> dict[str, Any]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         attempt = _attempt_for_student_in_connection(con, attempt_id, student_id)
     return attempt
 
@@ -187,7 +189,7 @@ def _attempt_payload(row: dict[str, Any]) -> dict[str, Any]:
 def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     student = _student_for_user(root, user)
     student_id = str(student["id"])
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         pub_rows = con.execute(
             """
             SELECT DISTINCT ep.id
@@ -247,7 +249,7 @@ def start_student_publication(
             _ensure_attempt_can_collect(attempt)
     now = utc_now()
     if str(attempt.get("status")) == "not_started":
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             con.execute(
                 "UPDATE student_attempts SET status = 'in_progress', started_at = ? WHERE id = ?",
                 (now, attempt["id"]),

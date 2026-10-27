@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -61,7 +63,7 @@ def list_paper_submissions_query(
     attempt_scan_payloads_for_attempts: Callable[..., Mapping[str, list[dict[str, Any]]]] | None = None,
 ) -> list[dict[str, Any]]:
     access_clause, access_params = attempt_access_clause(user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN")
         attempt_rows = con.execute(
             f"""
@@ -214,7 +216,7 @@ def find_paper_submissions_query(
         )
         params.append(clean_grading)
     params.append(clean_limit)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             f"""
             SELECT
@@ -250,7 +252,7 @@ def find_paper_submissions_query(
 
 
 def list_teacher_class_students_query(root: Path, *, class_id: str) -> list[dict[str, Any]]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             """
             SELECT s.id, s.student_no, s.display_name, s.email, s.status,
@@ -339,7 +341,7 @@ def teacher_student_profile_query(
     if user.get("role") == "teacher":
         date_clause += " AND ep.teacher_id = ?"
         date_params += (str(user["id"]),)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         attempt_rows = con.execute(
             f"""
             SELECT sa.id AS attempt_id, sa.status, sa.score, sa.max_score, sa.started_at,

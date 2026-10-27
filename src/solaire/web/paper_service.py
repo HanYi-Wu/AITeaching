@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import uuid
 import json
 import asyncio
@@ -236,7 +238,7 @@ def query_papers(
     if subject and subject != "all":
         papers = [paper for paper in papers if str(paper.get("subject") or "") == subject]
     if folder_id:
-        with connect(platform_root) as con:
+        with closing(connect(platform_root)) as con, con:
             folder_rows = con.execute(
                 "WITH RECURSIVE subtree(id) AS (SELECT id FROM content_folders WHERE id=? UNION ALL SELECT child.id FROM content_folders child JOIN subtree parent ON child.parent_id=parent.id) SELECT id FROM subtree",
                 (folder_id,),
@@ -267,7 +269,7 @@ def update_paper_delivery_mode(root: Path, paper_id: str, delivery_mode: str, us
         raise PermissionError("Only teachers and admins can update paper delivery mode")
     clean_mode = normalize_delivery_mode(delivery_mode)
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
         if existing is None:
             raise ValueError("paper not found")
@@ -288,7 +290,7 @@ def list_paper_publications(root: Path, *, paper_id: str, user: dict[str, Any]) 
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
     access_clause, access_params = _publication_access_clause(user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             f"""
             SELECT
@@ -377,7 +379,7 @@ def update_paper_publication(
         updates.append("status = ?")
         params.append(clean_status)
     params.extend([publication_id, paper_id])
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         publication = con.execute(
             "SELECT teacher_id, start_at, end_at, folder_id, status FROM exam_publications WHERE id = ? AND paper_id = ?",
             (publication_id, paper_id),
@@ -407,7 +409,7 @@ def revoke_paper_publication(root: Path, *, paper_id: str, publication_id: str, 
         user=user,
         status="revoked",
     )
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         active = con.execute(
             "SELECT 1 FROM exam_publications WHERE paper_id = ? AND status <> 'revoked' LIMIT 1",
             (paper_id,),
@@ -602,7 +604,7 @@ def analyze_paper(
         raise PermissionError("Only admin, school, and teacher users can analyze papers")
 
     publication_access, publication_params = _publication_access_clause(user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN")
         publication_rows = con.execute(
             f"SELECT * FROM exam_publications ep WHERE paper_id = ? AND {publication_access} ORDER BY created_at DESC, ep.rowid DESC",
@@ -882,7 +884,7 @@ def analyze_paper(
 def list_teacher_classes(root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     init_platform_db(root)
     role = user.get("role")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if role == "teacher":
             rows = con.execute(
                 """
@@ -981,7 +983,7 @@ def _paper_attempt_row(
     attempt_id: str,
     user: dict[str, Any],
 ) -> dict[str, Any]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         return paper_attempt_row_in_connection(
             con,
             paper_id=paper_id,
@@ -1170,7 +1172,7 @@ def ingest_offline_submission(
     if not questions:
         raise ValueError("试卷没有可批改题目，请先完成组卷")
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         publication = con.execute(
             """
             SELECT ep.id, ep.submission_mode
@@ -1325,7 +1327,7 @@ def _attempt_scan_payloads_for_attempts(
     if not ids:
         return grouped
     content_column = ", content" if include_content else ""
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = []
         for start in range(0, len(ids), chunk_size):
             chunk = ids[start : start + chunk_size]
@@ -1361,7 +1363,7 @@ def get_attempt_scan_image(
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
     _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id, user=user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute(
             """
             SELECT file_name, mime_type, file_size, content
@@ -1549,7 +1551,7 @@ def suggest_ai_grades_for_pending_attempts(
         if attempted_question_count >= question_budget:
             break
         attempt_id = str(attempt["attempt_id"])
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             rows = con.execute(
                 "SELECT question_id FROM student_answers WHERE attempt_id = ? AND COALESCE(grading_status, 'pending') = 'pending'",
                 (attempt_id,),
@@ -1626,7 +1628,7 @@ def grade_paper_answer(
     now = utc_now()
     answer_id = _new_id()
     answer: dict[str, Any] | None = None
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         paper_row = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
         paper = row_to_dict(paper_row)
@@ -1729,7 +1731,7 @@ def complete_paper_attempt_grading(
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("只有教师或管理员可以完成并发布批改结果")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         paper_row = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
         paper = row_to_dict(paper_row)
@@ -1808,7 +1810,7 @@ def suggest_ai_grades_for_attempt(
     if len(selected) > 50:
         raise ValueError("单次 AI 预批改最多处理 50 道题，请分批操作")
 
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if _verify_context:
             _verify_context(con)
         initial_revisions = load_answer_revisions(con, [attempt_id])
@@ -1836,7 +1838,7 @@ def suggest_ai_grades_for_attempt(
     generated: list[dict[str, Any]] = []
     for qid in selected:
         if _verify_context:
-            with connect(root) as con:
+            with closing(connect(root)) as con, con:
                 _verify_context(con)
         answer = by_question.get(qid)
         if answer is None:
@@ -1861,7 +1863,7 @@ def suggest_ai_grades_for_attempt(
             ai_error = "未配置 AI 模型"
         else:
             if _verify_context:
-                with connect(root) as con:
+                with closing(connect(root)) as con, con:
                     _verify_context(con)
             try:
                 suggestion = _run_async_blocking(
@@ -1908,7 +1910,7 @@ def suggest_ai_grades_for_attempt(
         )
 
     suggestions: list[dict[str, Any]] = []
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         if _verify_context:
             _verify_context(con)

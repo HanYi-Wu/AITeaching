@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,7 @@ def create_user(
     clean_email = email.strip() if email and email.strip() else None
     now = utc_now()
     user_id = _new_id()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if school_id is not None:
             school = con.execute("SELECT 1 FROM schools WHERE id = ? AND status = 'active'", (school_id,)).fetchone()
             if school is None:
@@ -97,7 +98,7 @@ def create_teacher(
     clean_subjects = sorted({subject.strip() for subject in subjects if subject.strip()})
     now = utc_now()
     user_id = _new_id()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         school = con.execute("SELECT 1 FROM schools WHERE id = ? AND status = 'active'", (school_id,)).fetchone()
         if school is None:
             raise ValueError("school not found")
@@ -160,7 +161,7 @@ def update_teacher(
         updates.append("status = ?")
         params.append(clean_status)
     params.extend([teacher_id, school_id])
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute(
             "SELECT 1 FROM users WHERE id = ? AND school_id = ? AND role = 'teacher'",
             (teacher_id, school_id),
@@ -214,7 +215,7 @@ def reset_teacher_password(
     init_platform_db(root)
     new_password = (password or _new_student_password()).strip()
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute(
             "SELECT 1 FROM users WHERE id = ? AND school_id = ? AND role = 'teacher'",
             (teacher_id, school_id),
@@ -280,7 +281,7 @@ def bulk_update_teachers(root: Path, *, school_id: str, teacher_ids: list[str], 
         )
     placeholders = ",".join("?" for _ in clean_ids)
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         rows = con.execute(
             f"""
@@ -321,7 +322,7 @@ def reset_student_password(
     init_platform_db(root)
     new_password = (password or _new_student_password()).strip()
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute(
             """
             SELECT id, user_id, student_no, display_name, email
@@ -394,7 +395,7 @@ def bulk_update_students(root: Path, *, school_id: str, student_ids: list[str], 
         )
     placeholders = ",".join("?" for _ in clean_ids)
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         rows = con.execute(
             f"""

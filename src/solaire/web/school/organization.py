@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ def create_school(root: Path, *, name: str) -> dict[str, Any]:
         raise ValueError("school name is required")
     now = utc_now()
     school_id = _new_id()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute(
             """
             INSERT INTO schools (id, name, status, ai_enabled, created_at, updated_at)
@@ -42,7 +43,7 @@ def create_school(root: Path, *, name: str) -> dict[str, Any]:
 
 def list_schools(root: Path) -> list[dict[str, Any]]:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             """
             SELECT s.*,
@@ -94,7 +95,7 @@ def create_class(
         raise ValueError("class name is required")
     now = utc_now()
     class_id = _new_id()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         school = con.execute("SELECT 1 FROM schools WHERE id = ? AND status = 'active'", (school_id,)).fetchone()
         if school is None:
             raise ValueError("school not found")
@@ -122,7 +123,7 @@ def create_class(
 
 def list_classes(root: Path, *, school_id: str) -> list[dict[str, Any]]:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute("SELECT * FROM classes WHERE school_id = ? ORDER BY created_at DESC", (school_id,)).fetchall()
     return [row_to_dict(row) or {} for row in rows]
 
@@ -161,7 +162,7 @@ def query_classes(
         )
     """
     params = (school_id, school_id, *filter_params)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         _register_school_query_functions(con)
         classes, total, clean_page, clean_page_size, total_pages = _fetch_sql_page(
             con,
@@ -204,7 +205,7 @@ def update_class(
         updates.append("grade = ?")
         params.append(grade.strip() or None)
     params.extend([class_id, school_id])
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute(
             "SELECT 1 FROM classes WHERE id = ? AND school_id = ?",
             (class_id, school_id),
@@ -224,7 +225,7 @@ def update_class(
 
 def delete_class(root: Path, *, school_id: str, class_id: str) -> dict[str, Any]:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute(
             "SELECT 1 FROM classes WHERE id = ? AND school_id = ?",
             (class_id, school_id),

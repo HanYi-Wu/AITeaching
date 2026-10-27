@@ -1,4 +1,5 @@
 """Private banks. Unattributed legacy copies are quarantined, never assigned to everyone."""
+from contextlib import closing
 import json
 from pathlib import Path
 import shutil
@@ -63,7 +64,7 @@ def bank_resource_root(project_root: Path) -> Path:
         migration = project_root / '.solaire' / 'bank-migration.json'
         snapshot = project_root / '.solaire' / 'legacy_bank_snapshot'
         if not migration.is_file():
-            with connect(platform) as con:
+            with closing(connect(platform)) as con, con:
                 ids = [str(row['id']) for row in con.execute("SELECT id FROM users WHERE role='teacher'")]
             snapshot.mkdir(parents=True, exist_ok=True)
             if resource.is_dir():

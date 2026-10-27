@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import secrets
 import uuid
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +84,7 @@ def _cell_text(value: object) -> str:
 
 
 def _fetch_required(root: Path, sql: str, params: tuple[object, ...], message: str) -> dict[str, Any]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute(sql, params).fetchone()
     data = row_to_dict(row)
     if data is None:

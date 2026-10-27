@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 from pathlib import Path
 from typing import Any
@@ -53,7 +54,7 @@ def get_authoritative_source_status(
     online_refs = {(source.source_type, str(source.source_batch_id or source.source_publication_id or ""))
                    for source in sources if source.source_type != "diagnostic_batch"}
     pairs = [(ref, sid) for kind, ref, sid in expected if (kind, ref) in online_refs]
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN")
         online_hashes = compute_online_source_snapshot_hashes(con, pairs)
         publication_statuses = {}
@@ -102,7 +103,7 @@ def get_authoritative_target_evidence(
     if student_id is not None:
         student_clause = " AND sa.student_id = ?"
         params.append(student_id)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         attempts = con.execute(
             f"SELECT sa.* FROM student_attempts sa WHERE sa.publication_id = ? {student_clause}", tuple(params),
         ).fetchall()

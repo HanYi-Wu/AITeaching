@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import sys
 from pathlib import Path
@@ -63,7 +64,7 @@ def _publish_personalized(
     now = utc_now()
     paper_id = _new_id()
     publication_id = _new_id()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute(
             """
             INSERT INTO paper_records
@@ -182,7 +183,7 @@ def publish_wrong_question_practice(
     if len(sources) != 1:
         raise ValueError("Select one historical publication")
     students = _class_students(root, class_id)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         read_context = load_online_source_read_context(
             con,
             source_publication_ids=[clean_source_id],
@@ -246,7 +247,7 @@ async def publish_reinforcement_practice(
     provider: str | None = None
     model: str | None = None
     students = _class_students(root, class_id)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         read_context = load_online_source_read_context(
             con,
             source_publication_ids=clean_ids,

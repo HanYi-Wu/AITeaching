@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import json
 from pathlib import Path
 from typing import Any
@@ -69,7 +71,7 @@ def publication_access_clause(user: dict[str, Any], *, publication_alias: str = 
 
 def publication_stats(root: Path, paper_id: str, user: dict[str, Any]) -> dict[str, int]:
     access_clause, access_params = publication_access_clause(user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute(
             f"""
             SELECT
@@ -104,7 +106,7 @@ def publication_stats(root: Path, paper_id: str, user: dict[str, Any]) -> dict[s
 
 def adaptive_paper_summary(root: Path, paper_id: str, user: dict[str, Any]) -> tuple[int, bool]:
     access_clause, access_params = attempt_access_clause(user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             f"""
             SELECT sa.question_payload_json, sa.score

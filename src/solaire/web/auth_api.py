@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -97,7 +98,7 @@ def teacher_guide_progress(body: TeacherGuideBody, user: Annotated[dict[str, Any
     if user.get('must_change_password'):
         raise HTTPException(status_code=400, detail='请先修改初始密码')
     root = require_platform_root()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute('BEGIN IMMEDIATE')
         row = con.execute('SELECT teacher_guide_step FROM users WHERE id=?', (user['id'],)).fetchone()
         current = int(row['teacher_guide_step'])

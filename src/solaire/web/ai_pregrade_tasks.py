@@ -1,6 +1,7 @@
 """Bounded optional background adapter for the existing pregrading service."""
 from __future__ import annotations
 
+from contextlib import closing
 import logging
 import sqlite3
 import uuid
@@ -88,7 +89,7 @@ class AiPregradeTaskService:
         if not user or not user.get("id"):
             raise HTTPException(status_code=401, detail="未认证的用户")
         user_id = str(user["id"])
-        with connect(self.root) as con:
+        with closing(connect(self.root)) as con, con:
             fresh_user, _ = verify_security_context(con, self.root, paper_id=paper_id, user_id=user_id)
         if attempt_id:
             _paper_attempt_row(self.root, paper_id=paper_id, attempt_id=attempt_id, user=fresh_user)
@@ -115,7 +116,7 @@ class AiPregradeTaskService:
         record = get_task_projection(self.project_root, task_id, normalize_owner(user))
         if record is None or record.task_type != "ai_pregrade" or (paper_id and record.source_id != paper_id):
             raise HTTPException(status_code=404, detail="AI预批改任务不存在")
-        with connect(self.root) as con:
+        with closing(connect(self.root)) as con, con:
             verify_security_context(con, self.root, paper_id=record.source_id, user_id=str(user["id"]), require_ai=False)
         return reconcile_task(self.project_root, record, user).model_dump()
 
@@ -132,7 +133,7 @@ class AiPregradeTaskService:
 
         try:
             update("running", "核对权限与答卷")
-            with connect(self.root) as con:
+            with closing(connect(self.root)) as con, con:
                 user, _ = verify(con)
             if attempt_id:
                 attempts = [{"attempt_id": attempt_id}]
@@ -148,7 +149,7 @@ class AiPregradeTaskService:
                 if budget <= 0:
                     break
                 aid = str(item["attempt_id"])
-                with connect(self.root) as con:
+                with closing(connect(self.root)) as con, con:
                     user, _ = verify(con)
                     ids = [str(r[0]) for r in con.execute(
                         "SELECT question_id FROM student_answers WHERE attempt_id=? AND COALESCE(grading_status,'pending')='pending' ORDER BY question_id LIMIT ?",

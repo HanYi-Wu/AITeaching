@@ -1,5 +1,6 @@
 """Shared destination and ownership policy for UI and AI exports."""
 
+from contextlib import closing
 from pathlib import Path
 
 import yaml
@@ -45,7 +46,7 @@ def assert_destination_owner(
         exam_id = dest_dir.resolve().relative_to((root / "exams").resolve()).as_posix()
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="导出目录必须位于试卷目录下") from exc
-    with connect(default_platform_root()) as con:
+    with closing(connect(default_platform_root())) as con, con:
         row = con.execute(
             "SELECT id, owner_teacher_id FROM paper_records WHERE exam_id=? COLLATE NOCASE", (exam_id,)
         ).fetchone()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -29,7 +29,7 @@ def _import_connection(root: Path, connection: sqlite3.Connection | None) -> Ite
     if connection is not None:
         yield connection
     else:
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             yield con
 
 

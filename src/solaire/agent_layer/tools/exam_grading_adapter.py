@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from typing import Any
 
 from solaire.agent_layer.models import InvocationContext, ToolResult
@@ -38,7 +39,7 @@ def tool_ai_grade_submission(ctx: InvocationContext, args: dict[str, Any]) -> To
             require_submitted=True,
         )
         if question_ids is None:
-            with connect(default_platform_root()) as con:
+            with closing(connect(default_platform_root())) as con, con:
                 rows = con.execute(
                     """
                     SELECT question_id

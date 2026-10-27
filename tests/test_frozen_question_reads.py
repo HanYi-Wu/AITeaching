@@ -489,21 +489,10 @@ def test_submission_reads_fill_missing_questions_without_publishing_student_resu
     assert analysis["summary"]["average_score"] is None
 
 
-def test_analysis_reports_preserve_six_argument_question_map_callbacks(tmp_path: Path, monkeypatch) -> None:
-    class EmptyConnection:
-        def __enter__(self):
-            return self
+def test_analysis_reports_preserve_six_argument_question_map_callbacks(tmp_path: Path) -> None:
+    from solaire.web.platform_db import init_platform_db
 
-        def __exit__(self, *_args):
-            return False
-
-        def execute(self, *_args):
-            return self
-
-        def fetchall(self):
-            return []
-
-    monkeypatch.setattr(paper_analysis, "connect", lambda _root: EmptyConnection())
+    init_platform_db(tmp_path)
     question = {"question_id": "q1", "header": "1", "section_id": "Choice", "score_per_item": 1}
     callback_args: list[tuple[object, ...]] = []
 

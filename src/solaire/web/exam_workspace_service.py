@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -100,7 +101,7 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
     hidden = set()
     platform = default_platform_root()
     if user and user.get("role") == "teacher" and platform_db_path(platform).is_file():
-        with connect(platform) as con:
+        with closing(connect(platform)) as con, con:
             hidden = {
                 str(row["exam_id"]).casefold()
                 for row in con.execute(

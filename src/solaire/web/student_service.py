@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import re
 from datetime import UTC, datetime
@@ -56,7 +57,7 @@ MAX_PROCTOR_EVENTS_PER_MINUTE = 120
 def ensure_student_resource_access(root: Path, project_root: Path, user: dict[str, Any], target: Path) -> None:
     """Only images in this student's opened papers or released analysis are readable."""
     student = _student_for_user(root, user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             "SELECT sa.*, pr.exam_id FROM student_attempts sa "
             "JOIN exam_publications ep ON ep.id = sa.publication_id "
@@ -106,7 +107,7 @@ def record_student_proctor_event(
     payload_json = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True)
     if len(payload_json.encode("utf-8")) > 4096:
         raise ValueError("Proctor event payload is too large")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         current = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
         if str(current.get("status")) != "in_progress":
@@ -193,7 +194,7 @@ def submit_student_attempt(
 
     now = utc_now()
     submitted_rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers or [], now)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
         if str(attempt.get("status")) == "submitted":
@@ -291,7 +292,7 @@ def _load_student_answers_for_attempts(
 
 def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     student = _student_for_user(root, user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,

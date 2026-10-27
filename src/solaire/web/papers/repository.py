@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -42,7 +44,7 @@ def get_or_create_exam_paper(
     owner_teacher_id = str(exam.get("owner_teacher_id") or "").strip() or None
     school_id = str(user.get("school_id")) if user.get("school_id") else None
 
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if not owner_teacher_id and user_role == "teacher" and claim:
             owner_teacher_id = str(user.get("id"))
         elif not owner_teacher_id:
@@ -119,13 +121,13 @@ def get_or_create_exam_paper(
 
 def get_paper_record(root: Path, paper_id: str) -> dict[str, Any] | None:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
     return row_to_dict(row)
 
 
 def list_adaptive_paper_records(root: Path) -> list[dict[str, Any]]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             "SELECT * FROM paper_records WHERE exam_id LIKE 'adaptive/%' ORDER BY updated_at DESC"
         ).fetchall()

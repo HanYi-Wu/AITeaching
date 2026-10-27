@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import csv
 import hashlib
 import io
@@ -53,7 +54,7 @@ def compute_online_source_snapshot_hash(
     if isinstance(con_or_root, sqlite3.Connection):
         rows = con_or_root.execute(query, tuple(params)).fetchall()
     else:
-        with connect(con_or_root) as con:
+        with closing(connect(con_or_root)) as con, con:
             rows = con.execute(query, tuple(params)).fetchall()
 
     return _online_source_snapshot_hash_from_rows(rows)

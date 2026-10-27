@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 from pathlib import Path
 from typing import Annotated, Any
@@ -66,7 +67,7 @@ def _display_names(root: Path, publication_id: str, student_ids: set[str]) -> di
     if not student_ids:
         return {"student_names": {}, "knowledge_names": {}}
     placeholders = ",".join("?" for _ in student_ids)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         students = con.execute(f"SELECT id, display_name FROM students WHERE id IN ({placeholders})", tuple(student_ids)).fetchall()
         attempts = con.execute(f"SELECT question_payload_json FROM student_attempts WHERE publication_id = ? AND student_id IN ({placeholders})", (publication_id, *student_ids)).fetchall()
     names = {str(row["id"]): str(row["display_name"]) for row in students}
@@ -106,7 +107,7 @@ def teacher_practice_publications(
             SELECT 1 FROM publication_classes pc JOIN teacher_class_assignments tca ON tca.class_id = pc.class_id
             WHERE pc.publication_id = ep.id AND tca.teacher_id = ?))"""
         params.extend([user["id"], user["id"]])
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             f"""SELECT DISTINCT ep.id, ep.title, ep.created_at FROM exam_publications ep
                 JOIN practice_sources ps ON ps.practice_publication_id = ep.id
@@ -125,7 +126,7 @@ def teacher_learning_progress_comparison(
 ) -> dict[str, Any]:
     root = require_platform_root()
     project_root = _content_root()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         allowed_ids = _teacher_scope(con, practice_publication_id, user, class_id)
     if student_id and student_id not in allowed_ids:
         raise HTTPException(status_code=403, detail="Student is outside the authorized publication recipients")
@@ -151,7 +152,7 @@ def student_learning_progress_comparison(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if student_id and student_id != actual_id:
         raise HTTPException(status_code=403, detail="Students can only read their own progress comparison")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         assigned = con.execute(
             """SELECT 1 FROM student_attempts sa JOIN exam_publications ep ON ep.id = sa.publication_id
                WHERE sa.publication_id = ? AND sa.student_id = ? AND ep.status != 'revoked'""", (practice_publication_id, actual_id),

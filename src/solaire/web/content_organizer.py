@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import uuid
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ def list_folders(root: Path, user: dict[str, Any], scope: str) -> list[dict[str,
     if scope not in SCOPES:
         raise ValueError("不支持的文件夹类型")
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             "SELECT * FROM content_folders WHERE owner_teacher_id=? AND scope=? ORDER BY name, id",
             (owner, scope),
@@ -57,7 +58,7 @@ def create_folder(root: Path, user: dict[str, Any], *, scope: str, name: str,
     init_platform_db(root)
     now = utc_now()
     folder_id = uuid.uuid4().hex
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         if parent_id and _folder(con, parent_id, owner, scope)["kind"] != "category":
             raise ValueError("试卷文件夹下不能建立子文件夹")
@@ -79,7 +80,7 @@ def update_folder(root: Path, user: dict[str, Any], folder_id: str, *,
                   move: bool = False, kind: str | None = None) -> dict[str, Any]:
     owner = _owner(user)
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         current = _folder(con, folder_id, owner, "paper") if kind == "paper" else None
         if current is None:
@@ -138,7 +139,7 @@ def delete_folder(root: Path, user: dict[str, Any], folder_id: str) -> dict[str,
     """Remove organization only; never remove source files, papers or attempts."""
     owner = _owner(user)
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         row = con.execute(
             "SELECT * FROM content_folders WHERE id=? AND owner_teacher_id=?", (folder_id, owner)
@@ -179,7 +180,7 @@ def delete_folder(root: Path, user: dict[str, Any], folder_id: str) -> dict[str,
 def assign_paper_folder(root: Path, user: dict[str, Any], paper_id: str, folder_id: str) -> None:
     owner = _owner(user)
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         _folder(con, folder_id, owner, "paper")
         paper = con.execute("SELECT owner_teacher_id FROM paper_records WHERE id=?", (paper_id,)).fetchone()
         if paper is None or paper["owner_teacher_id"] != owner:
@@ -195,7 +196,7 @@ def list_folder_items(root: Path, user: dict[str, Any], scope: str) -> dict[str,
     if scope not in {"template", "compose"}:
         raise ValueError("不支持的内容类型")
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute("SELECT item_id, folder_id FROM content_folder_items WHERE owner_teacher_id=? AND scope=?", (owner, scope)).fetchall()
     return {str(row["item_id"]): str(row["folder_id"]) for row in rows}
 
@@ -205,7 +206,7 @@ def assign_folder_item(root: Path, user: dict[str, Any], *, scope: str, item_id:
     if scope not in {"template", "compose"} or not item_id.strip():
         raise ValueError("内容标识无效")
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if folder_id:
             _folder(con, folder_id, owner, scope)
             con.execute(
@@ -220,7 +221,7 @@ def assign_folder_item(root: Path, user: dict[str, Any], *, scope: str, item_id:
 def list_tags(root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     owner = _owner(user)
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute("SELECT * FROM content_tags WHERE owner_teacher_id=? ORDER BY name", (owner,)).fetchall()
     return [row_to_dict(row) or {} for row in rows]
 
@@ -232,7 +233,7 @@ def save_tag(root: Path, user: dict[str, Any], *, name: str, color: str, tag_id:
         raise ValueError("标签名称最多 5 字，颜色需从预设色中选择")
     init_platform_db(root)
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if tag_id:
             row = con.execute("SELECT 1 FROM content_tags WHERE id=? AND owner_teacher_id=?", (tag_id, owner)).fetchone()
             if not row:
@@ -251,7 +252,7 @@ def set_item_tags(root: Path, user: dict[str, Any], *, scope: str, item_id: str,
         raise ValueError("标签目标无效或标签过多")
     init_platform_db(root)
     unique_ids = list(dict.fromkeys(tag_ids))
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if scope == "paper":
             paper = con.execute("SELECT owner_teacher_id FROM paper_records WHERE id=?", (item_id,)).fetchone()
             if not paper or paper["owner_teacher_id"] != owner:
@@ -274,7 +275,7 @@ def item_tags(root: Path, user: dict[str, Any], scope: str, item_id: str) -> lis
     if scope not in TAG_SCOPES:
         raise ValueError("不支持的内容类型")
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             "SELECT t.* FROM content_tags t JOIN content_tag_links l ON l.tag_id=t.id WHERE t.owner_teacher_id=? AND l.scope=? AND l.item_id=? ORDER BY t.name",
             (owner, scope, item_id),
@@ -287,7 +288,7 @@ def all_item_tags(root: Path, user: dict[str, Any], scope: str) -> dict[str, lis
     if scope not in TAG_SCOPES:
         raise ValueError("不支持的内容类型")
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             "SELECT l.item_id, t.id, t.name, t.color FROM content_tag_links l JOIN content_tags t ON t.id=l.tag_id WHERE t.owner_teacher_id=? AND l.scope=? ORDER BY t.name",
             (owner, scope),
@@ -302,7 +303,7 @@ def analyze_paper_folder(root: Path, user: dict[str, Any], folder_id: str) -> di
     """Analyze actual recipients only; never count unassigned classmates as zero."""
     owner = _owner(user)
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         folder = _folder(con, folder_id, owner, "paper")
         rows = con.execute(
             """WITH RECURSIVE subtree(id) AS (

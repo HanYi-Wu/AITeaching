@@ -296,6 +296,9 @@ def test_completion_rechecks_paper_access_after_waiting_for_writer_lock(
                 begin_requested.set()
             return self.raw_connection.execute(sql, parameters)
 
+        def close(self):
+            self.raw_connection.close()
+
     monkeypatch.setattr(paper_service, "init_platform_db", lambda _root: None)
     monkeypatch.setattr(
         paper_service,
