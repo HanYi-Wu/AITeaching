@@ -11,6 +11,7 @@ from typing import Any
 
 from solaire.exam_compiler.loaders.questions import load_all_questions
 from solaire.exam_compiler.models import QuestionGroupRecord, QuestionItem
+from solaire.web.papers.frozen_question_reads import FrozenQuestionReadContext
 from solaire.web.exam_service import _load_exam_config
 from solaire.web.exam_workspace_service import workspace_dir
 from solaire.web.library_discovery import discover_question_library_refs
@@ -121,13 +122,17 @@ def _load_attempt_question_payloads(
     *,
     root: Path | None = None,
     connection: sqlite3.Connection | None = None,
+    read_context: FrozenQuestionReadContext | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     raw_questions = attempt.get("question_payload_json")
     raw_answers = attempt.get("answer_key_json")
     if raw_questions:
         try:
-            questions = json.loads(str(raw_questions))
-            answer_keys = json.loads(str(raw_answers or "{}"))
+            if read_context is None:
+                questions = json.loads(str(raw_questions))
+                answer_keys = json.loads(str(raw_answers or "{}"))
+            else:
+                questions, answer_keys = read_context.load_payload(raw_questions, raw_answers)
         except json.JSONDecodeError as exc:
             raise ValueError("Personalized question payload is invalid") from exc
         if not isinstance(questions, list) or not all(isinstance(item, dict) for item in questions):

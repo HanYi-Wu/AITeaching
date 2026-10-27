@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from solaire.web.papers.visibility import attempt_access_clause
+from solaire.web.papers.frozen_question_reads import FrozenQuestionReadContext
 from solaire.web.platform_db import connect, row_to_dict
 
 
@@ -57,6 +58,7 @@ def analysis_question_maps(
     *,
     attempt_clause_fn: Callable[..., tuple[str, list[str]]],
     question_maps_fn: Callable[[Path, dict[str, Any]], tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]],
+    read_context: FrozenQuestionReadContext | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
     # Published snapshots, not the editable source, define historical exam content.
     clause, params = attempt_clause_fn(user, publication_id, class_id=class_id)
@@ -68,6 +70,16 @@ def analysis_question_maps(
         ).fetchall()
     by_id: dict[str, dict[str, Any]] = {}
     for row in rows:
+        if read_context is not None:
+            try:
+                _questions, snapshot_by_id, _scores = read_context.first_questions(
+                    row["question_payload_json"]
+                )
+            except (TypeError, json.JSONDecodeError):
+                continue
+            for question_id, question in snapshot_by_id.items():
+                by_id.setdefault(question_id, question)
+            continue
         try:
             payload = json.loads(row["question_payload_json"] or "[]")
         except (TypeError, json.JSONDecodeError):
@@ -99,13 +111,16 @@ def build_module_report(
     attempt_clause_fn: Callable[..., tuple[str, list[str]]],
     json_payload_fn: Callable[[object], dict[str, Any]],
     risk_level_fn: Callable[[float | None], str],
+    read_context: FrozenQuestionReadContext | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
-        questions, _by_id, score_by_id = question_maps_fn(
-            root, project_root, paper, user, publication_id, class_id,
-        )
+        question_map_args = (root, project_root, paper, user, publication_id, class_id)
+        if read_context is None:
+            questions, _by_id, score_by_id = question_maps_fn(*question_map_args)
+        else:
+            questions, _by_id, score_by_id = question_maps_fn(*question_map_args, read_context)
     except (FileNotFoundError, ValueError):
         return []
     modules: dict[str, dict[str, Any]] = {}
@@ -203,13 +218,16 @@ def build_question_report(
     attempt_clause_fn: Callable[..., tuple[str, list[str]]],
     json_payload_fn: Callable[[object], dict[str, Any]],
     risk_level_fn: Callable[[float | None], str],
+    read_context: FrozenQuestionReadContext | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
-        questions, _by_id, score_by_id = question_maps_fn(
-            root, project_root, paper, user, publication_id, class_id,
-        )
+        question_map_args = (root, project_root, paper, user, publication_id, class_id)
+        if read_context is None:
+            questions, _by_id, score_by_id = question_maps_fn(*question_map_args)
+        else:
+            questions, _by_id, score_by_id = question_maps_fn(*question_map_args, read_context)
     except (FileNotFoundError, ValueError):
         return []
     reports: dict[str, dict[str, Any]] = {}

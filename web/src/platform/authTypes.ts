@@ -302,6 +302,9 @@ export type TeacherStudentProfile = {
     content?: string | null;
     section_id?: string | null;
     tags?: string[];
+    question_version?: number | null;
+    question_version_count?: number | null;
+    question_version_label?: string | null;
   }>;
   radar?: Array<{ id: string; label: string; value: number }>;
   date_range?: { from?: string | null; to?: string | null };

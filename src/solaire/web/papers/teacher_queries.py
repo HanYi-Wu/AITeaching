@@ -7,9 +7,44 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from solaire.web.papers.frozen_question_reads import FrozenQuestionReadContext
 from solaire.web.papers.grading_versions import answer_grading_version, load_answer_revisions
 from solaire.web.papers.visibility import attempt_access_clause
 from solaire.web.platform_db import connect, row_to_dict
+
+
+def _weak_question_definition_key(
+    question: dict[str, Any] | None,
+    *,
+    answer_key_known: bool,
+    answer_key: Any,
+) -> str | None:
+    if question is None:
+        return None
+    question_id = str(question.get("question_id") or "").strip()
+    content = str(question.get("content") or "").strip()
+    question_type = str(question.get("type") or "").strip()
+    if not content or content == question_id or question_type in {"", "unknown"}:
+        return None
+    try:
+        definition = {
+            "content": question.get("content"),
+            "group_material": question.get("group_material", question.get("material")),
+            "type": question.get("type"),
+            "options": question.get("options"),
+            "score_per_item": float(question.get("score_per_item") or 0.0),
+            "answer_key_known": answer_key_known,
+            "answer_key": str(answer_key) if answer_key_known else None,
+        }
+        return json.dumps(
+            definition,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def list_paper_submissions_query(
@@ -65,10 +100,17 @@ def list_paper_submissions_query(
         revisions = load_answer_revisions(con, [str(row["id"]) for row in attempt_rows])
 
     attempts = [row_to_dict(row) or {} for row in attempt_rows]
+    read_context = FrozenQuestionReadContext()
     maps_by_attempt: dict[str, tuple[dict[str, dict[str, Any]], dict[str, int]]] = {}
     max_score_by_attempt: dict[str, float] = {}
     for attempt in attempts:
-        questions, by_id, score_by_id = question_maps_for_attempt(root, project_root, paper, attempt)
+        questions, by_id, score_by_id = question_maps_for_attempt(
+            root,
+            project_root,
+            paper,
+            attempt,
+            read_context=read_context,
+        )
         attempt_id = str(attempt.get("id"))
         maps_by_attempt[attempt_id] = (
             by_id,
@@ -315,7 +357,8 @@ def teacher_student_profile_query(
         weak_rows = con.execute(
             f"""
             SELECT pr.id AS paper_id, pr.title AS paper_title, ans.question_id,
-                   ans.is_correct, ans.score, sa.question_payload_json
+                   ans.is_correct, ans.score, sa.question_payload_json, sa.answer_key_json,
+                   COALESCE(sa.submitted_at, sa.started_at, ep.created_at) AS snapshot_seen_at
             FROM student_answers ans
             JOIN student_attempts sa ON sa.id = ans.attempt_id
             JOIN exam_publications ep ON ep.id = sa.publication_id
@@ -326,16 +369,43 @@ def teacher_student_profile_query(
                 WHERE pc.publication_id = ep.id AND pc.class_id = ?
               )
               {date_clause}
-            ORDER BY pr.title, ans.question_id, sa.id
+            ORDER BY pr.title, ans.question_id, snapshot_seen_at, sa.id
             """,
             (sid, class_id, *date_params),
         ).fetchall()
     recent = [row_to_dict(row) or {} for row in attempt_rows]
-    weak_groups: dict[tuple[str, str], dict[str, Any]] = {}
+    read_context = FrozenQuestionReadContext()
+    weak_groups: dict[tuple[str, str, str | None], dict[str, Any]] = {}
+    versions_by_question: dict[tuple[str, str], dict[str, int]] = {}
     for row in weak_rows:
         paper_key = str(row["paper_id"])
         question_key = str(row["question_id"])
-        key = (paper_key, question_key)
+        try:
+            frozen = read_context.first_question(row["question_payload_json"], question_key)
+        except (TypeError, ValueError):
+            frozen = None
+        answer_key_known = False
+        answer_key = None
+        try:
+            answer_key_known, answer_key = read_context.first_answer_key(
+                row["answer_key_json"],
+                question_key,
+            )
+        except (TypeError, ValueError):
+            pass
+        definition_key = _weak_question_definition_key(
+            frozen,
+            answer_key_known=answer_key_known,
+            answer_key=answer_key,
+        )
+        question_group_key = (paper_key, question_key)
+        question_versions = versions_by_question.setdefault(question_group_key, {})
+        question_version = None
+        if definition_key is not None:
+            if definition_key not in question_versions:
+                question_versions[definition_key] = len(question_versions) + 1
+            question_version = question_versions[definition_key]
+        key = (paper_key, question_key, definition_key)
         group = weak_groups.setdefault(
             key,
             {
@@ -349,37 +419,38 @@ def teacher_student_profile_query(
                 "content": None,
                 "section_id": None,
                 "tags": [],
+                "_definition_key": definition_key,
+                "_question_version": question_version,
             },
         )
         group["attempt_count"] += 1
         if row["is_correct"] == 0:
             group["wrong_count"] += 1
-        question_score = 0.0
-        try:
-            frozen_questions = json.loads(str(row["question_payload_json"] or "[]"))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            frozen_questions = []
-        if isinstance(frozen_questions, list):
-            frozen = next(
-                (
-                    item
-                    for item in frozen_questions
-                    if isinstance(item, dict) and str(item.get("question_id") or "") == question_key
-                ),
-                None,
-            )
-            if frozen is not None:
-                question_score = float(frozen.get("score_per_item") or 0.0)
-                group["header"] = frozen.get("header")
-                group["content"] = frozen.get("content")
-                group["section_id"] = frozen.get("section_id")
-                group["tags"] = frozen.get("tags") or []
+        question_score = float(frozen.get("score_per_item") or 0.0) if frozen is not None else 0.0
+        if frozen is not None:
+            group["header"] = frozen.get("header")
+            group["content"] = frozen.get("content")
+            group["section_id"] = frozen.get("section_id")
+            group["tags"] = list(frozen.get("tags") or [])
         if row["score"] is not None and question_score > 0:
             group["score_percentages"].append(float(row["score"]) / question_score * 100)
     weak_questions = []
     for group in weak_groups.values():
         if int(group["wrong_count"]) <= 0:
             continue
+        version_key = (str(group["paper_id"]), str(group["question_id"]))
+        version_count = len(versions_by_question.get(version_key, {}))
+        definition_key = group.pop("_definition_key")
+        question_version = group.pop("_question_version")
+        group["question_version"] = question_version
+        if definition_key is None:
+            group["question_version_count"] = None
+            group["question_version_label"] = "历史题目内容不可用"
+        else:
+            group["question_version_count"] = version_count
+            group["question_version_label"] = (
+                f"历史版本 {question_version}" if version_count > 1 else None
+            )
         percentages_for_question = group.pop("score_percentages")
         group["average_score_percent"] = (
             round(sum(percentages_for_question) / len(percentages_for_question), 2)
@@ -401,10 +472,11 @@ def teacher_student_profile_query(
     question_counts: dict[str, int] = {}
     for item in recent:
         try:
-            frozen = json.loads(str(item.get("question_payload_json") or "[]"))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            frozen = []
-        question_counts[str(item.get("attempt_id"))] = len(frozen) if isinstance(frozen, list) else 0
+            question_counts[str(item.get("attempt_id"))] = read_context.question_count(
+                item.get("question_payload_json")
+            )
+        except (TypeError, ValueError):
+            question_counts[str(item.get("attempt_id"))] = 0
     per_question_times = [
         float(item["time_spent_seconds"]) / question_counts[str(item.get("attempt_id"))]
         for item in submitted
