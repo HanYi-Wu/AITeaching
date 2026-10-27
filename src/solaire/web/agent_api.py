@@ -30,7 +30,7 @@ from solaire.agent_layer.session import create_session, delete_session, list_ses
 from solaire.knowledge_forge import list_graphs
 from solaire.web import state
 from solaire.web.actor_scope import teacher_graph_root
-from solaire.web.result_service import list_exam_results
+from solaire.web.exam_service import _iter_exam_workspace_dirs
 from solaire.web.public_access import _authenticated_user, public_mode_enabled
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -54,8 +54,8 @@ def _require_root() -> Path:
 
 def _project_ctx(root: Path, platform_user: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
-        exams = list_exam_results(root)
-        exam_summary = f"{len(exams)} 场考试记录" if exams else "暂无考试结果"
+        exam_count = sum(1 for _ in _iter_exam_workspace_dirs(root))
+        exam_summary = f"{exam_count} 场考试记录" if exam_count else "暂无考试结果"
     except Exception:
         exam_summary = "考试列表暂不可用"
     template_count = 0
