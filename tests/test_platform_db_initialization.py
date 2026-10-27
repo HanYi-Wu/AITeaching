@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 import sqlite3
+import os
 import subprocess
 import sys
 
@@ -62,8 +63,12 @@ def test_upgrade_is_atomic_and_can_retry_after_a_migration_failure(tmp_path, mon
 
 def test_concurrent_processes_open_one_complete_database(tmp_path):
     code = "from pathlib import Path; from solaire.web.platform_db import init_platform_db; import sys; init_platform_db(Path(sys.argv[1]))"
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(filter(None, (
+        str(Path(__file__).resolve().parents[1] / "src"), environment.get("PYTHONPATH"),
+    )))
     def initialize(_):
-        return subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, timeout=30)
+        return subprocess.run([sys.executable, "-c", code, str(tmp_path)], env=environment, capture_output=True, text=True, timeout=30)
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(initialize, range(4)))
     assert all(result.returncode == 0 for result in results), [result.stderr for result in results]
