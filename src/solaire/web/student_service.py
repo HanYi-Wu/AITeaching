@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
 from solaire.web.auth_service import utc_now
@@ -55,14 +57,13 @@ MAX_PROCTOR_EVENTS_PER_MINUTE = 120
 def ensure_student_resource_access(root: Path, project_root: Path, user: dict[str, Any], target: Path) -> None:
     """Only images in this student's opened papers or released analysis are readable."""
     student = _student_for_user(root, user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             "SELECT sa.*, pr.exam_id FROM student_attempts sa "
             "JOIN exam_publications ep ON ep.id = sa.publication_id "
             "JOIN paper_records pr ON pr.id = ep.paper_id "
             "WHERE sa.student_id = ? AND sa.status <> 'not_started' "
-            "AND EXISTS (SELECT 1 FROM publication_classes pc JOIN class_students cs ON cs.class_id = pc.class_id "
-            "WHERE pc.publication_id = ep.id AND cs.student_id = sa.student_id)", (student['id'],),
+            "AND ep.status IN ('published', 'paused', 'closed')", (student['id'],),
         ).fetchall()
     for row in rows:
         attempt = dict(row)
@@ -105,7 +106,7 @@ def record_student_proctor_event(
     payload_json = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True)
     if len(payload_json.encode("utf-8")) > 4096:
         raise ValueError("Proctor event payload is too large")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         current = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
         if str(current.get("status")) != "in_progress":
@@ -192,7 +193,7 @@ def submit_student_attempt(
 
     now = utc_now()
     submitted_rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers or [], now)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
         if str(attempt.get("status")) == "submitted":
@@ -265,9 +266,32 @@ def submit_student_attempt(
     return {**_attempt_payload(_attempt_for_student(root, attempt_id, str(student["id"]))), "submitted_answers_accepted": True}
 
 
+def _load_student_answers_for_attempts(
+    con: Any,
+    attempt_ids: Sequence[str],
+    *,
+    chunk_size: int = 500,
+) -> dict[str, list[dict[str, Any]]]:
+    answers_by_attempt: dict[str, list[dict[str, Any]]] = {str(aid): [] for aid in attempt_ids}
+    if not attempt_ids:
+        return answers_by_attempt
+    for i in range(0, len(attempt_ids), chunk_size):
+        chunk = list(attempt_ids[i : i + chunk_size])
+        placeholders = ",".join("?" for _ in chunk)
+        rows = con.execute(
+            f"SELECT * FROM student_answers WHERE attempt_id IN ({placeholders}) ORDER BY rowid",
+            chunk,
+        ).fetchall()
+        for row in rows:
+            record = row_to_dict(row) or {}
+            attempt_id = str(record.get("attempt_id"))
+            answers_by_attempt.setdefault(attempt_id, []).append(record)
+    return answers_by_attempt
+
+
 def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     student = _student_for_user(root, user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
@@ -283,6 +307,8 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
             """,
             (str(student["id"]),),
         ).fetchall()
+        attempt_ids = [str(row["id"]) for row in rows if row["id"] is not None]
+        answers_by_attempt = _load_student_answers_for_attempts(con, attempt_ids)
 
     results: list[dict[str, Any]] = []
     read_context = FrozenQuestionReadContext()
@@ -306,16 +332,12 @@ def list_student_results(root: Path, project_root: Path, user: dict[str, Any]) -
             )
         except Exception:
             pass
-        with connect(root) as con:
-            answer_rows = con.execute(
-                "SELECT * FROM student_answers WHERE attempt_id = ?",
-                (attempt["id"],),
-            ).fetchall()
+        answer_rows = answers_by_attempt.get(str(attempt["id"]), [])
         answers: list[dict[str, Any]] = []
         correct_count = 0
         wrong_count = 0
         for answer_row in answer_rows:
-            answer = row_to_dict(answer_row) or {}
+            answer = answer_row if isinstance(answer_row, dict) else (row_to_dict(answer_row) or {})
             try:
                 answer_payload = json.loads(str(answer.get("answer_payload") or "{}"))
             except json.JSONDecodeError:

@@ -5,13 +5,11 @@ from __future__ import annotations
 from typing import Any
 from fastapi import File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
-from solaire.exam_compiler.facade import QuestionGroupRecord, QuestionItem, load_all_questions, strip_hydrate_fields
 from solaire.web.auth_api import extract_session_token, require_platform_root
 from solaire.web.auth_service import get_session_user
 from solaire.web.bank_exchange import export_bank_exchange_zip, import_bank_exchange_zip
 from solaire.web.bank_storage import BankVersionConflict
-from solaire.web.bank_service import collections_list, create_question_selection_export, delete_question, delete_question_collection, expand_question_for_web, get_question_detail, import_merged_yaml, list_bank_entries, list_subjects, question_exists, question_selection_export_path, rename_question_collection, save_bank_record, upload_bank_image
-from solaire.web.library_discovery import discover_question_library_refs
+from solaire.web.bank_service import bank_catalog, collections_list, create_question_selection_export, delete_question, delete_question_collection, get_question_detail, import_merged_yaml, list_question_rows_for_web, list_subjects, question_exists, question_selection_export_path, rename_question_collection, save_bank_record, upload_bank_image
 from solaire.web.exam_service import ensure_probe_list_yaml
 from solaire.web.security import assert_within_project, content_disposition_attachment, safe_filename_component
 from fastapi import APIRouter
@@ -54,31 +52,12 @@ def serve_resource_file(rel_path: str, request: Request) -> FileResponse:
     return FileResponse(target, media_type=mt, headers=headers)
 
 
-def _subject_collection_from_qualified_id(qid: str) -> tuple[str, str, str]:
-    """Returns (subject, collection_name, full_namespace)."""
-    parts = qid.split("/")
-    if len(parts) >= 3:
-        return parts[0], parts[1], "/".join(parts[:-1])
-    if len(parts) == 2 and parts[0] == "main":
-        return "main", "main", "main"
-    if len(parts) == 2:
-        return parts[0], "", parts[0]
-    return (parts[0] if parts else "", "", parts[0] if parts else "")
-
-
 @router.get("/api/questions")
 def list_questions() -> dict[str, Any]:
     root = _require_root()
-    probe = ensure_probe_list_yaml(root)
-    refs = discover_question_library_refs(root)
-    libs = [(r["namespace"], r["path"]) for r in refs]
+    ensure_probe_list_yaml(root)
     try:
-        loaded = load_all_questions(probe, libs)
-    except FileNotFoundError as e:
-        raise HTTPException(
-            status_code=400,
-            detail="题库路径不完整或已被移动，请检查项目下的题库目录后重试。",
-        ) from e
+        items, diagnostics = list_question_rows_for_web(root)
     except OSError as e:
         raise HTTPException(
             status_code=400,
@@ -86,63 +65,10 @@ def list_questions() -> dict[str, Any]:
         ) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    items: list[dict[str, Any]] = []
-    for qid, rec in sorted(loaded.by_qualified.items()):
-        subj, coll_name, ns = _subject_collection_from_qualified_id(qid)
-        if isinstance(rec, QuestionItem):
-            q = strip_hydrate_fields(rec)
-            try:
-                q_disp = expand_question_for_web(root, ns, q)
-            except Exception:
-                # 插图展开失败（如 PrimeBrush 渲染异常）不应拖垮整表；列表页回退为未展开题干。
-                q_disp = q
-            content = q_disp.content or ""
-            preview = content if len(content) <= 240 else content[:237] + "..."
-            items.append(
-                {
-                    "id": q.id,
-                    "qualified_id": qid,
-                    "namespace": ns,
-                    "collection": ns,
-                    "subject": subj,
-                    "collection_name": coll_name,
-                    "type": q.type,
-                    "content": content,
-                    "content_preview": preview,
-                    "answer": q_disp.answer,
-                    "analysis": q_disp.analysis,
-                    "metadata": dict(q.metadata) if q.metadata else {},
-                    "group_id": None,
-                    "group_member_qualified_ids": [],
-                    "group_material": None,
-                }
-            )
-        else:
-            assert isinstance(rec, QuestionGroupRecord)
-            content = rec.material or ""
-            preview = content if len(content) <= 240 else content[:237] + "..."
-            u = rec.unified
-            display_type = u if isinstance(u, str) else "group"
-            items.append(
-                {
-                    "id": rec.id,
-                    "qualified_id": qid,
-                    "namespace": ns,
-                    "collection": ns,
-                    "subject": subj,
-                    "collection_name": coll_name,
-                    "type": display_type,
-                    "content": content,
-                    "content_preview": preview,
-                    "answer": "",
-                    "analysis": "",
-                    "metadata": {},
-                    "group_id": rec.id,
-                    "group_member_qualified_ids": [],
-                    "group_material": rec.material,
-                }
-            )
-    return {"questions": items}
+    result = {"questions": items}
+    if diagnostics:
+        result["diagnostics"] = diagnostics
+    return result
 
 
 @router.get("/api/bank/subjects")
@@ -191,7 +117,8 @@ def bank_collection_delete(body: BankCollectionDeleteBody) -> dict[str, Any]:
 def bank_items() -> dict[str, Any]:
     root = _require_root()
     ensure_probe_list_yaml(root)
-    return {"items": list_bank_entries(root)}
+    items, diagnostics = bank_catalog(root)
+    return {"items": items, "diagnostics": diagnostics}
 
 
 def _bank_folder_owner(request: Request) -> str:

@@ -2,6 +2,7 @@ import { Download, RefreshCw } from "lucide-react";
 import {
   exportStudentAccounts,
   type PlatformUser,
+  type StudentClassTransferResult,
 } from "../../../platform/auth";
 import { PlatformShell } from "../PlatformShell";
 import { Metric } from "./SchoolControls";
@@ -25,6 +26,15 @@ type Props = {
 
 export function SchoolWorkspace({ user, onLogout, onError }: Props) {
   const data = useSchoolWorkspaceData(user, onError);
+  const studentTransferScopeKey = JSON.stringify([
+    user.id,
+    user.school_id ?? "",
+    data.studentClassFilter,
+    data.studentQuery.q,
+    data.studentQuery.status,
+    data.studentQuery.page,
+    data.studentQuery.pageSize,
+  ]);
 
   const pages: Array<{ id: SchoolPage; label: string; description: string }> = [
     { id: "overview", label: "总览", description: "学校数据概览" },
@@ -127,7 +137,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               teacherDrafts={data.teacherDrafts}
               setTeacherDrafts={data.setTeacherDrafts}
               busy={data.busy}
-              run={data.run}
+              run={(action) => data.run(action, ["teachers"])}
               setNotice={data.setNotice}
             />
           ) : null}
@@ -141,7 +151,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               classDrafts={data.classDrafts}
               setClassDrafts={data.setClassDrafts}
               busy={data.busy}
-              run={data.run}
+              run={(action) => data.run(action, ["classes"])}
             />
           ) : null}
 
@@ -160,8 +170,23 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               studentClassFilter={data.studentClassFilter}
               setStudentClassFilter={data.setStudentClassFilter}
               busy={data.busy}
-              run={data.run}
+              run={(action) => data.run(action, ["students"])}
               setNotice={data.setNotice}
+              canTransfer={user.role === "school"}
+              transferScopeKey={studentTransferScopeKey}
+              onTransferred={async (result: StudentClassTransferResult, isCurrent: () => boolean) => {
+                try {
+                  const refreshed = await data.refreshTargets(["students", "classes"]);
+                  if (!isCurrent()) return;
+                  data.setNotice(refreshed
+                    ? `学生转班完成，保留 ${result.retained_attempt_count} 份考试记录。`
+                    : "转班已完成，但学生或班级列表刷新失败，请点击“刷新”重新加载。",
+                  );
+                } catch {
+                  if (!isCurrent()) return;
+                  data.setNotice("转班已完成，但学生或班级列表刷新失败，请点击“刷新”重新加载。");
+                }
+              }}
             />
           ) : null}
 
@@ -172,7 +197,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               assignmentQuery={data.assignmentQuery}
               setAssignmentQuery={data.setAssignmentQuery}
               busy={data.busy}
-              run={data.run}
+              run={(action) => data.run(action, ["assignments"])}
             />
           ) : null}
 

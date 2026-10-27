@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import json
 from pathlib import Path
 from typing import Any
@@ -36,7 +38,7 @@ def save_student_answers(
     _validate_answer_batch(answers, {str(item.get("question_id")) for item in questions})
     now = utc_now()
     rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers, now)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
         if str(attempt.get("status")) == "submitted":

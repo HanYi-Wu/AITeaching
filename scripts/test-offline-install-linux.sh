@@ -15,6 +15,12 @@ cleanup() {
 }
 trap cleanup EXIT
 sudo bash "$package/install.sh" "${options[@]}"
+runtime="$base/current/runtime"
+for command in solaire-exam solaire-web solaire-desktop primebrush; do
+  [[ -x "$runtime/bin/$command" ]] || { echo "Missing runtime console script: $command" >&2; exit 1; }
+done
+sudo -u educationhelper env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$runtime/bin/python" -c \
+  'from importlib.metadata import distribution; names = {"solaire-exam", "solaire-web", "solaire-desktop", "primebrush"}; entries = {item.name: item for item in distribution("solaire-education").entry_points if item.group == "console_scripts"}; missing = names - entries.keys(); assert not missing, f"Missing console scripts: {sorted(missing)}"; [entries[name].load() for name in sorted(names)]; print("Runtime CLI imports: OK")'
 curl -fsS --noproxy '*' -o /dev/null -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"offline-test123","display_name":"Offline CI"}' \
   http://127.0.0.1:15173/api/auth/bootstrap-admin

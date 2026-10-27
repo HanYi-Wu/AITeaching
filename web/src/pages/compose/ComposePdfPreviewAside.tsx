@@ -1,5 +1,9 @@
+import { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
-import { PdfPreview } from "../../components/PdfPreview";
+
+const LazyPdfPreview = lazy(() =>
+  import("../../components/PdfPreview").then(({ PdfPreview }) => ({ default: PdfPreview })),
+);
 
 export type ComposePdfPreviewAsideProps = {
   busy: boolean;
@@ -89,7 +93,9 @@ export function ComposePdfPreviewAside({
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {composeRightPdfPath ? (
-          <PdfPreview apiPath={composeRightPdfPath} className="min-h-[min(70vh,560px)]" />
+          <Suspense fallback={<p className="text-xs text-slate-500" role="status">正在加载 PDF 预览…</p>}>
+            <LazyPdfPreview apiPath={composeRightPdfPath} className="min-h-[min(70vh,560px)]" />
+          </Suspense>
         ) : (
           <p className="text-xs text-slate-500">{t("compose:previewPdfEmptyHint")}</p>
         )}

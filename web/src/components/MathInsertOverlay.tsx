@@ -1,10 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import {
-  createMathLiveBridge,
-  DEFAULT_MATH_MODAL_CLASS,
-  type MathLiveBridgeInstance,
-} from "./latexField/mathLiveBridge";
+import type { MathLiveBridgeInstance } from "./latexField/mathLiveBridge";
 import { isImeComposingKeyboardEvent } from "../lib/ime";
 
 type MathInsertOverlayProps = {
@@ -20,6 +16,8 @@ type MathInsertOverlayProps = {
 export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverlayProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const bridgeRef = useRef<MathLiveBridgeInstance | null>(null);
+  const [bridgeVersion, setBridgeVersion] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const onConfirmRef = useRef(onConfirm);
@@ -31,27 +29,37 @@ export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverla
       bridgeRef.current = null;
       return;
     }
-    const host = hostRef.current;
-    if (!host) {
-      return;
-    }
-    const bridge = createMathLiveBridge({
-      host,
-      className: DEFAULT_MATH_MODAL_CLASS,
-      onConfirm: (latex) => {
-        if (!latex) return;
-        onConfirmRef.current(`$${latex}$`);
-        onCloseRef.current();
-      },
-      onCancel: () => onCloseRef.current(),
-    });
-    bridgeRef.current = bridge;
+    let cancelled = false;
+    setLoadFailed(false);
+    void import("./latexField/mathLiveBridge")
+      .then(({ createMathLiveBridge, DEFAULT_MATH_MODAL_CLASS }) => {
+        const host = hostRef.current;
+        if (cancelled || !host) return;
+        const bridge = createMathLiveBridge({
+          host,
+          className: DEFAULT_MATH_MODAL_CLASS,
+          onConfirm: (latex) => {
+            if (!latex) return;
+            onConfirmRef.current(`$${latex}$`);
+            onCloseRef.current();
+          },
+          onCancel: () => onCloseRef.current(),
+        });
+        bridgeRef.current = bridge;
+        setBridgeVersion((version) => version + 1);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true);
+      });
 
     return () => {
-      bridge.destroy();
+      cancelled = true;
+      bridgeRef.current?.destroy();
       bridgeRef.current = null;
     };
   }, [open]);
+
+  const bridgeReady = bridgeVersion > 0 && bridgeRef.current !== null;
 
   if (!open) {
     return null;
@@ -59,15 +67,15 @@ export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverla
 
   function tryConfirm() {
     const bridge = bridgeRef.current;
-    if (!bridge) {
+    if (!bridgeReady || !bridge) {
       return;
     }
     const latex = bridge.getCanonicalLatex();
     if (!latex) {
       return;
     }
-    onConfirm(`$${latex}$`);
-    onClose();
+    onConfirmRef.current(`$${latex}$`);
+    onCloseRef.current();
   }
 
   return (
@@ -96,6 +104,11 @@ export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverla
           在下方编辑，确认后将作为行内公式（$...$）插入到光标处。
         </p>
         <div ref={hostRef} className="mt-3 min-h-[52px]" />
+        {!bridgeReady ? (
+          <p className="mt-1 text-[11px] text-slate-500" role={loadFailed ? "alert" : "status"}>
+            {loadFailed ? "公式编辑器加载失败，请关闭后重试。" : "正在加载公式编辑器…"}
+          </p>
+        ) : null}
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
@@ -107,6 +120,7 @@ export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverla
           <button
             type="button"
             className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-40"
+            disabled={!bridgeReady}
             onClick={tryConfirm}
           >
             插入

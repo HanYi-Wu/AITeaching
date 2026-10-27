@@ -16,13 +16,6 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from solaire.agent_layer.guardrails import (
-    SAFETY_MODE_CHOICES,
-    list_safety_modes_public,
-    load_safety_mode,
-    save_safety_mode,
-    save_user_safety_mode,
-)
 from solaire.agent_layer.llm.llm_overrides import load_overrides_raw, mask_api_key, save_overrides_raw
 from solaire.agent_layer.llm.user_llm_overrides import load_user_overrides_raw, save_user_overrides_raw
 from solaire.agent_layer.llm.providers import VALID_PROVIDERS, list_provider_options_for_api
@@ -31,18 +24,23 @@ from solaire.agent_layer.llm.errors import llm_error_message as _llm_connection_
 from solaire.agent_layer.memory import list_topic_filenames, read_index, read_topic, write_index, write_topic
 from solaire.agent_layer.cancel_signal import clear_cancel, request_cancel
 from solaire.agent_layer.stream_dispatcher import format_sse_event
-from solaire.agent_layer.orchestrator import iter_agent_turn_sse
 from solaire.agent_layer.skills import list_skills_public
-from solaire.agent_layer.context_meter import context_meter_for_session
 from solaire.agent_layer.attachments import SUPPORTED_UPLOAD_SUFFIXES, capability_for_filename
 from solaire.agent_layer.session import create_session, delete_session, list_sessions, load_session
 from solaire.knowledge_forge import list_graphs
 from solaire.web import state
 from solaire.web.actor_scope import teacher_graph_root
-from solaire.web.result_service import list_exam_results
+from solaire.web.exam_service import _iter_exam_workspace_dirs
 from solaire.web.public_access import _authenticated_user, public_mode_enabled
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+
+def iter_agent_turn_sse(*args: Any, **kwargs: Any):
+    """Lazy orchestration entry point kept patchable for tests and integrations."""
+    from solaire.agent_layer.orchestrator import iter_agent_turn_sse as run_turn
+
+    return run_turn(*args, **kwargs)
 
 
 def _require_root() -> Path:
@@ -56,8 +54,8 @@ def _require_root() -> Path:
 
 def _project_ctx(root: Path, platform_user: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
-        exams = list_exam_results(root)
-        exam_summary = f"{len(exams)} 场考试记录" if exams else "暂无考试结果"
+        exam_count = sum(1 for _ in _iter_exam_workspace_dirs(root))
+        exam_summary = f"{exam_count} 场考试记录" if exam_count else "暂无考试结果"
     except Exception:
         exam_summary = "考试列表暂不可用"
     template_count = 0
@@ -161,6 +159,8 @@ class SafetyModePutBody(BaseModel):
 
 @router.get("/config")
 def agent_config() -> dict[str, Any]:
+    from solaire.agent_layer.guardrails import load_safety_mode
+
     root = state.get_root()
     s = load_llm_settings(root)
     return {
@@ -291,6 +291,12 @@ async def agent_llm_settings_test() -> dict[str, Any]:
 
 @router.get("/safety-mode")
 def agent_safety_mode_get() -> dict[str, Any]:
+    from solaire.agent_layer.guardrails import (
+        SAFETY_MODE_CHOICES,
+        list_safety_modes_public,
+        load_safety_mode,
+    )
+
     root = state.get_root()
     return {
         "persist_available": True,
@@ -302,6 +308,12 @@ def agent_safety_mode_get() -> dict[str, Any]:
 
 @router.put("/safety-mode")
 def agent_safety_mode_put(body: SafetyModePutBody) -> dict[str, Any]:
+    from solaire.agent_layer.guardrails import (
+        SAFETY_MODE_CHOICES,
+        save_safety_mode,
+        save_user_safety_mode,
+    )
+
     root = state.get_root()
     mode = str(body.mode).strip().lower()
     if mode not in SAFETY_MODE_CHOICES:
@@ -342,6 +354,8 @@ def agent_session_get(session_id: str, request: Request) -> dict[str, Any]:
 @router.get("/sessions/{session_id}/context-meter")
 def agent_session_context_meter(session_id: str, request: Request) -> dict[str, Any]:
     """按当前会话与内容上下文估算上下文用量（与 SSE `context_metrics` 同源逻辑）。"""
+    from solaire.agent_layer.context_meter import context_meter_for_session
+
     root = _require_root()
     s = _owned_session(root, session_id, request)
     return context_meter_for_session(root, s, project_ctx=_project_ctx(root, _request_actor(request)))

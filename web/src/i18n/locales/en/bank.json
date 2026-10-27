@@ -1,4 +1,6 @@
 {
+  "fileIssues": "Question files needing attention: {{count}}",
+  "fileIssuesHelp": "Healthy questions remain available. Fix the listed file issues and refresh.",
   "placeholderSubItem": "(Sub-item 1)",
   "pageContextWithId": "Bank: {{id}}{{suffix}}",
   "pageContextBrowse": "Browse and edit the question bank",

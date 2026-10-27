@@ -58,6 +58,7 @@ export function BankWorkspace({
   const { t } = useTranslation(["bank", "lib", "common"]);
   const {
     items,
+    diagnostics,
     folders,
     setFolders,
     collections,
@@ -1146,6 +1147,19 @@ export function BankWorkspace({
 
       {/* 中：多标签 + 字段 / 浏览 / 源文件 */}
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden border-slate-200 bg-slate-50 lg:border-r">
+        {diagnostics.length > 0 && (
+          <details className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+            <summary className="cursor-pointer font-medium">{t("fileIssues", { count: diagnostics.length })}</summary>
+            <p className="mt-2 text-xs">{t("fileIssuesHelp")}</p>
+            <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-xs">
+              {diagnostics.map((diagnostic, index) => (
+                <li key={`${diagnostic.storage_path}:${diagnostic.code}:${index}`} className="break-words">
+                  <span className="font-medium">{diagnostic.storage_path}</span>：{diagnostic.message}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         <TabPanel
           tabs={tabItems}
           activeId={selectedId}

@@ -7,9 +7,6 @@ from pathlib import Path
 
 import yaml
 
-from solaire.exam_compiler.loaders.questions import load_all_questions
-from solaire.exam_compiler.loaders.template_loader import load_template, resolve_template_yaml_path
-from solaire.exam_compiler.models import ExamConfig
 from solaire.exam_compiler.paths import exam_parent_dir, work_dir_for_exam
 from solaire.exam_compiler.pipeline.compile_tex import (
     LatexmkError,
@@ -19,13 +16,7 @@ from solaire.exam_compiler.pipeline.compile_tex import (
 )
 from solaire.exam_compiler.pipeline.hydrate import hydrate
 from solaire.exam_compiler.pipeline.render import write_student_teacher_tex
-from solaire.exam_compiler.pipeline.validate import normalize_exam_for_preview, validate_exam, validate_exam_preview
-
-
-def _parse_exam(exam_yaml: Path) -> ExamConfig:
-    with exam_yaml.open(encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    return ExamConfig.model_validate(raw)
+from solaire.exam_compiler.pipeline.prepare import PreparedExam, prepare_exam
 
 
 def _compile_exam_tex_to_pdfs(
@@ -33,29 +24,23 @@ def _compile_exam_tex_to_pdfs(
     *,
     clean_workdir: bool = False,
     preview_relaxed: bool = False,
+    prepared: PreparedExam | None = None,
 ) -> tuple[Path, Path, Path, list[str]]:
     """Returns (work_dir, student_pdf, teacher_pdf, preview_warnings). preview_warnings only when preview_relaxed."""
     exam_yaml = exam_yaml.resolve()
     if not exam_yaml.is_file():
         raise FileNotFoundError(exam_yaml)
 
-    exam = _parse_exam(exam_yaml)
+    prepared = prepared or prepare_exam(exam_yaml, preview_relaxed=preview_relaxed)
+    prepared.check_source(exam_yaml, preview_relaxed=preview_relaxed)
+    exam, loaded, template = prepared.exam, prepared.loaded, prepared.template
     if not exam.question_libraries:
         raise ValueError("exam.yaml must include non-empty question_libraries")
-
-    libs = [(lib.namespace, lib.path) for lib in exam.question_libraries]
-    loaded = load_all_questions(exam_yaml, libs)
-
-    tmpl_path = resolve_template_yaml_path(exam_yaml, exam)
-    template = load_template(tmpl_path)
-    preview_warnings: list[str] = []
+    tmpl_path = prepared.template_path
+    preview_warnings = list(prepared.preview_warnings)
     if preview_relaxed:
-        exam, preview_warnings = normalize_exam_for_preview(exam, template)
-        validate_exam_preview(exam, template, loaded)
         with exam_yaml.open("w", encoding="utf-8") as f:
             yaml.safe_dump(exam.model_dump(mode="json"), f, allow_unicode=True, sort_keys=False)
-    else:
-        validate_exam(exam, template, loaded)
 
     hydrated = hydrate(exam, template, loaded)
     work_dir = work_dir_for_exam(exam_yaml)
@@ -80,9 +65,9 @@ def _compile_exam_tex_to_pdfs(
     return work_dir, student_pdf, teacher_pdf, preview_warnings
 
 
-def precheck_exam_latex_build(exam_yaml: Path, *, clean_workdir: bool = False) -> None:
+def precheck_exam_latex_build(exam_yaml: Path, *, clean_workdir: bool = False, prepared: PreparedExam | None = None) -> None:
     """Run hydrate → write TeX → latexmk for student+teacher; raises LatexmkError on failure."""
-    _compile_exam_tex_to_pdfs(exam_yaml, clean_workdir=clean_workdir, preview_relaxed=False)
+    _compile_exam_tex_to_pdfs(exam_yaml, clean_workdir=clean_workdir, preview_relaxed=False, prepared=prepared)
 
 
 def build_exam_pdfs(
@@ -91,6 +76,7 @@ def build_exam_pdfs(
     *,
     clean_workdir: bool = False,
     preview_relaxed: bool = False,
+    prepared: PreparedExam | None = None,
 ) -> tuple[Path, Path, list[str]]:
     """
     Build student and teacher PDFs.
@@ -99,7 +85,7 @@ def build_exam_pdfs(
     and preview warning lines (empty unless preview_relaxed).
     """
     work_dir, student_pdf, teacher_pdf, preview_warnings = _compile_exam_tex_to_pdfs(
-        exam_yaml, clean_workdir=clean_workdir, preview_relaxed=preview_relaxed
+        exam_yaml, clean_workdir=clean_workdir, preview_relaxed=preview_relaxed, prepared=prepared
     )
     dest = out_dir if out_dir is not None else exam_parent_dir(exam_yaml)
     dest = dest.resolve()

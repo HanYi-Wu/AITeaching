@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import csv
 import hashlib
 import io
 import json
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -52,9 +54,14 @@ def compute_online_source_snapshot_hash(
     if isinstance(con_or_root, sqlite3.Connection):
         rows = con_or_root.execute(query, tuple(params)).fetchall()
     else:
-        with connect(con_or_root) as con:
+        with closing(connect(con_or_root)) as con, con:
             rows = con.execute(query, tuple(params)).fetchall()
 
+    return _online_source_snapshot_hash_from_rows(rows)
+
+
+def _online_source_snapshot_hash_from_rows(rows: Any) -> str:
+    """Hash the exact ordered answer projection used by the online source contract."""
     payload = [
         {
             "attempt_id": str(r["attempt_id"]),
@@ -67,6 +74,51 @@ def compute_online_source_snapshot_hash(
     ]
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "online-v1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def compute_online_source_snapshot_hashes(
+    con: sqlite3.Connection, source_student_pairs: list[tuple[str, str]],
+) -> dict[tuple[str, str], str]:
+    """Read score hashes for the exact source/student pairs in a comparison."""
+    pairs = list(dict.fromkeys(source_student_pairs))
+    grouped: dict[tuple[str, str], list[Any]] = {pair: [] for pair in pairs}
+    for start in range(0, len(pairs), 400):
+        chunk = pairs[start : start + 400]
+        placeholders = ",".join("(?,?)" for _ in chunk)
+        rows = con.execute(
+            f"""
+            SELECT sa.publication_id, sa.id AS attempt_id, sa.student_id,
+                   ans.question_id, ans.score, ans.is_correct
+            FROM student_attempts sa JOIN student_answers ans ON ans.attempt_id = sa.id
+            WHERE sa.status = 'submitted' AND (sa.publication_id, sa.student_id) IN ({placeholders})
+            ORDER BY sa.student_id ASC, ans.question_id ASC
+            """,
+            [value for pair in chunk for value in pair],
+        ).fetchall()
+        for row in rows:
+            grouped[(str(row["publication_id"]), str(row["student_id"]))].append(row)
+    return {pair: _online_source_snapshot_hash_from_rows(rows) for pair, rows in grouped.items()}
+
+
+@dataclass(frozen=True, slots=True)
+class GraphQuestionBindingSnapshot:
+    graph_root: Path
+    node_ids_by_question: dict[str, list[str]]
+    names_by_node_id: dict[str, str]
+
+
+def load_graph_question_binding_snapshot(project_root: Path) -> GraphQuestionBindingSnapshot:
+    """Load actor-scoped question bindings and node names once for one publication."""
+    graph_root = _evidence_graph_root(project_root).resolve()
+    state = load_graph(graph_root)
+    mapping: dict[str, list[str]] = {}
+    for binding in state.bindings:
+        qid = binding.question_qualified_id
+        nid = binding.node_id
+        if nid not in mapping.setdefault(qid, []):
+            mapping[qid].append(nid)
+    names = {node.id: node.canonical_name for node in state.nodes}
+    return GraphQuestionBindingSnapshot(graph_root, mapping, names)
 
 
 def get_graph_question_node_bindings(project_root: Path) -> dict[str, list[str]]:
@@ -94,12 +146,21 @@ def question_node_ids(question: dict[str, Any], bindings: dict[str, list[str]]) 
     return list(dict.fromkeys(bindings.get(str(question.get("question_id")), [])))
 
 
-def freeze_question_bindings(project_root: Path | None, questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    bindings = get_graph_question_node_bindings(project_root) if project_root else {}
-    names = {}
+def freeze_question_bindings(
+    project_root: Path | None,
+    questions: list[dict[str, Any]],
+    *,
+    graph_snapshot: GraphQuestionBindingSnapshot | None = None,
+) -> list[dict[str, Any]]:
     if project_root:
-        graph = load_graph(_evidence_graph_root(project_root))
-        names = {node.id: node.canonical_name for node in graph.nodes}
+        graph_root = _evidence_graph_root(project_root).resolve()
+        if graph_snapshot is None or graph_snapshot.graph_root != graph_root:
+            graph_snapshot = load_graph_question_binding_snapshot(project_root)
+        bindings = graph_snapshot.node_ids_by_question
+        names = graph_snapshot.names_by_node_id
+    else:
+        bindings = {}
+        names = {}
     frozen = []
     for question in questions:
         node_ids = question_node_ids(question, bindings)

@@ -48,22 +48,36 @@ ensure_graph_layout.__wrapped__ = _ensure_graph_dir_only  # type: ignore[attr-de
 
 
 def _migrate_legacy_graph_state(state: GraphState) -> bool:
-    """将旧版 uses_skill 关系迁移为 related。"""
+    """将旧版 uses_skill 关系迁移为 related，并对完全一致的关系幂等收敛。"""
     changed = False
     new_rels: list[NodeRelation] = []
+    seen: dict[str, list[NodeRelation]] = {}
     for r in state.relations:
+        current_r = r
         if r.relation_type == "uses_skill":
-            new_rels.append(
-                NodeRelation(
-                    id=r.id,
-                    from_node_id=r.from_node_id,
-                    to_node_id=r.to_node_id,
-                    relation_type="related",
-                )
+            current_r = NodeRelation(
+                id=r.id,
+                from_node_id=r.from_node_id,
+                to_node_id=r.to_node_id,
+                relation_type="related",
             )
             changed = True
+
+        existing_relations = seen.get(current_r.id)
+        if existing_relations:
+            if any(
+                existing.from_node_id == current_r.from_node_id
+                and existing.to_node_id == current_r.to_node_id
+                and existing.relation_type == current_r.relation_type
+                for existing in existing_relations
+            ):
+                changed = True
+                continue
+            existing_relations.append(current_r)
+            new_rels.append(current_r)
         else:
-            new_rels.append(r)
+            seen[current_r.id] = [current_r]
+            new_rels.append(current_r)
     state.relations = new_rels
     return changed
 

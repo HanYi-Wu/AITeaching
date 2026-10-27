@@ -13,6 +13,8 @@ import type {
   SchoolImportKind,
   SchoolRecord,
   StudentRecord,
+  StudentClassTransferPreview,
+  StudentClassTransferResult,
   TeacherClassAssignmentRecord,
   TeacherRecord,
 } from "./authTypes";
@@ -241,6 +243,20 @@ export function updateStudent(
 ): Promise<{ student: StudentRecord }> {
   return platformRequest(`/api/school/students/${encodeURIComponent(studentId)}`, {
     method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getStudentClassTransfer(studentId: string): Promise<StudentClassTransferPreview> {
+  return platformRequest(`/api/school/students/${encodeURIComponent(studentId)}/class-transfer`);
+}
+
+export function transferStudentClass(
+  studentId: string,
+  payload: { target_class_id: string; expected_class_ids: string[] },
+): Promise<StudentClassTransferResult> {
+  return platformRequest(`/api/school/students/${encodeURIComponent(studentId)}/class-transfer`, {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }

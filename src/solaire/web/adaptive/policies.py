@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import uuid
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,7 @@ def _ensure_teacher(user: dict[str, Any]) -> None:
 
 def _ensure_class_access(root: Path, user: dict[str, Any], class_id: str) -> dict[str, Any]:
     _ensure_teacher(user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if user.get("role") == "teacher":
             row = con.execute(
                 """
@@ -51,7 +52,7 @@ def list_practice_history(root: Path, *, class_id: str, user: dict[str, Any]) ->
     if user.get("role") == "teacher":
         teacher_clause = "AND ep.teacher_id = ?"
         params.append(str(user["id"]))
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             f"""
             SELECT ep.id, ep.paper_id, ep.title, ep.created_at, ep.status, ep.practice_kind,
@@ -103,7 +104,7 @@ def _validate_sources(
 
 
 def _class_students(root: Path, class_id: str) -> list[dict[str, Any]]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             """
             SELECT s.* FROM students s

@@ -7,14 +7,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from solaire.exam_compiler.loaders.questions import LoadedQuestions, load_all_questions
-from solaire.exam_compiler.loaders.template_loader import load_template, resolve_template_yaml_path
-from solaire.exam_compiler.models import ExamConfig
+from solaire.exam_compiler.loaders.questions import LoadedQuestions
 from solaire.exam_compiler.paths import exam_parent_dir, work_dir_for_exam
 from solaire.exam_compiler.pipeline.hydrate import HydratedExam, HydratedQuestion, hydrate
-from solaire.exam_compiler.pipeline.validate import validate_exam
+from solaire.exam_compiler.pipeline.prepare import PreparedExam, prepare_exam
 from solaire.web.extension_registry import resolve_exe
 from . import docx_markdown as _docx_markdown
 from . import docx_resources as _docx_resources
@@ -26,12 +22,7 @@ _COMMON_MATH_MACROS_RE = _docx_resources._COMMON_MATH_MACROS_RE
 _W_NS = _docx_process._W_NS
 _XML_NAMESPACES = _docx_process._XML_NAMESPACES
 PandocError = _docx_process.PandocError
-
-
-def _parse_exam(exam_yaml: Path) -> ExamConfig:
-    with exam_yaml.open(encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    return ExamConfig.model_validate(raw)
+DocxResourceContext = _docx_resources.DocxResourceContext
 
 
 _tail = _docx_process._tail
@@ -154,13 +145,22 @@ def _render_docx_markdown(
     media_dir: Path,
     *,
     show_answers: bool,
+    context: _docx_resources.DocxResourceContext | None = None,
 ) -> str:
+    def bound_render_text(
+        text: str,
+        hq: HydratedQuestion,
+        loaded_qs: LoadedQuestions,
+        md_dir: Path,
+    ) -> str:
+        return _render_text(text, hq, loaded_qs, md_dir, context=context)
+
     return _docx_markdown.render_docx_markdown(
         hydrated,
         loaded,
         media_dir,
         show_answers=show_answers,
-        render_text=_render_text,
+        render_text=bound_render_text,
         clean_text=_clean_latex_for_markdown,
     )
 
@@ -226,21 +226,18 @@ def build_exam_docx(
     out_dir: Path | None,
     *,
     clean_workdir: bool = False,
+    prepared: PreparedExam | None = None,
 ) -> tuple[Path, Path]:
     """Build student and teacher DOCX files with Pandoc."""
     exam_yaml = exam_yaml.resolve()
     if not exam_yaml.is_file():
         raise FileNotFoundError(exam_yaml)
 
-    exam = _parse_exam(exam_yaml)
+    prepared = prepared or prepare_exam(exam_yaml)
+    prepared.check_source(exam_yaml)
+    exam, loaded, template = prepared.exam, prepared.loaded, prepared.template
     if not exam.question_libraries:
         raise ValueError("exam.yaml must include non-empty question_libraries")
-
-    libs = [(lib.namespace, lib.path) for lib in exam.question_libraries]
-    loaded = load_all_questions(exam_yaml, libs)
-    tmpl_path = resolve_template_yaml_path(exam_yaml, exam)
-    template = load_template(tmpl_path)
-    validate_exam(exam, template, loaded)
 
     hydrated = hydrate(exam, template, loaded)
     work_dir = work_dir_for_exam(exam_yaml)
@@ -255,14 +252,28 @@ def build_exam_docx(
     media_dir = docx_work / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
 
+    resource_context = _docx_resources.DocxResourceContext()
+
     student_md = docx_work / "student_paper.md"
     teacher_md = docx_work / "teacher_paper.md"
     student_md.write_text(
-        _render_docx_markdown(hydrated, loaded, media_dir, show_answers=False),
+        _render_docx_markdown(
+            hydrated,
+            loaded,
+            media_dir,
+            show_answers=False,
+            context=resource_context,
+        ),
         encoding="utf-8",
     )
     teacher_md.write_text(
-        _render_docx_markdown(hydrated, loaded, media_dir, show_answers=True),
+        _render_docx_markdown(
+            hydrated,
+            loaded,
+            media_dir,
+            show_answers=True,
+            context=resource_context,
+        ),
         encoding="utf-8",
     )
 
@@ -271,6 +282,13 @@ def build_exam_docx(
 
     dest = out_dir if out_dir is not None else exam_parent_dir(exam_yaml)
     dest = dest.resolve()
+    student_docx = docx_work / "student_paper.docx"
+    teacher_docx = docx_work / "teacher_paper.docx"
+    if not student_docx.is_file():
+        raise PandocError(f"Pandoc output missing: {student_docx.name}")
+    if not teacher_docx.is_file():
+        raise PandocError(f"Pandoc output missing: {teacher_docx.name}")
+
     student_out = _copy_docx_if_exists(docx_work, "student_paper", dest)
     teacher_out = _copy_docx_if_exists(docx_work, "teacher_paper", dest)
     return student_out, teacher_out

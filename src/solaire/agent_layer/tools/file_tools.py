@@ -11,6 +11,7 @@ from typing import Any
 from solaire.agent_layer.attachments import TEXT_SUFFIXES, extract_attachment
 from solaire.agent_layer.models import InvocationContext, ToolResult
 from solaire.agent_layer.plan_document import normalize_rel_path, validate_plan_markdown_body
+from solaire.agent_layer.tools._streaming_reader import read_file_window
 from solaire.common.security import assert_within_project
 
 # 计划模式：仅允许落盘到该目录（与 Cursor 类 harness 一致）
@@ -90,18 +91,20 @@ def tool_file_read(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult:
             }
         )
     try:
-        text = p.read_text(encoding="utf-8", errors="replace")
+        offset = int(args.get("offset") or 0)
+    except (ValueError, TypeError):
+        return ToolResult(status="failed", error_message="offset 参数必须为整数")
+    raw_limit = args.get("limit")
+    limit = None
+    if raw_limit is not None:
+        try:
+            limit = int(raw_limit)
+        except (ValueError, TypeError):
+            return ToolResult(status="failed", error_message="limit 参数必须为整数")
+    try:
+        total, content = read_file_window(p, offset=offset, limit=limit)
     except Exception as e:
         return ToolResult(status="failed", error_message=f"读取失败: {e}")
-    offset = int(args.get("offset") or 0)
-    limit = args.get("limit")
-    lines = text.splitlines(keepends=True)
-    total = len(lines)
-    if offset > 0:
-        lines = lines[offset:]
-    if limit is not None:
-        lines = lines[: int(limit)]
-    content = "".join(lines)
     return ToolResult(data={"path": rel, "total_lines": total, "content": content})
 
 

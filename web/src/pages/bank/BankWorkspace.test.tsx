@@ -80,6 +80,25 @@ describe("bank toolbar uses the current selection and edits", () => {
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+  it("shows file diagnostics while healthy questions remain editable and clears repaired issues", async () => {
+    const original = mocks.get.getMockImplementation()!;
+    let damaged = true;
+    mocks.get.mockImplementation(async (path: string) => {
+      const response = await original(path);
+      return path === "/api/bank/items" && damaged ? {
+        ...response, diagnostics: [{ storage_path: "resource/数学/default/broken.yaml", code: "invalid_yaml", message: "题目文件无法解析" }],
+      } : response;
+    });
+    mountWorkspace();
+    await userEvent.click(await screen.findByText("有 1 个题目文件需要处理"));
+    expect(screen.getByText("resource/数学/default/broken.yaml")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q1/ }));
+    await screen.findByRole("textbox", { name: "附加信息名称" });
+    damaged = false;
+    act(() => notifyContentLibraryChanged("question"));
+    await waitFor(() => expect(screen.queryByText("有 1 个题目文件需要处理")).not.toBeInTheDocument());
+  });
+
   it("updates the export count on every selection change and exports exactly the current IDs", async () => {
     mountWorkspace();
     const first = await screen.findByRole("checkbox", { name: `选择导出 ${qid}` });

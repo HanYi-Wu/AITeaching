@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from solaire.web.papers.class_snapshots import freeze_attempt_class_memberships
+
+from contextlib import closing
 import json
 import sys
 from pathlib import Path
@@ -24,6 +27,7 @@ from solaire.web.adaptive.selection import (
     _wrong_questions_for_student,
 )
 from solaire.web.auth_service import utc_now
+from solaire.web.learning_progress.source_reads import load_online_source_read_context
 from solaire.web.platform_db import connect
 
 
@@ -62,7 +66,7 @@ def _publish_personalized(
     now = utc_now()
     paper_id = _new_id()
     publication_id = _new_id()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute(
             """
             INSERT INTO paper_records
@@ -97,10 +101,22 @@ def _publish_personalized(
             ),
         )
         con.execute("INSERT INTO publication_classes (publication_id, class_id) VALUES (?, ?)", (publication_id, class_id))
-        from solaire.web.learning_progress.sources import freeze_question_bindings
+        from solaire.web.learning_progress.sources import (
+            freeze_question_bindings,
+            load_graph_question_binding_snapshot,
+        )
 
+        graph_snapshot = load_graph_question_binding_snapshot(project_root) if project_root else None
+
+        attempt_ids: list[str] = []
         for assignment in assignments:
-            questions = freeze_question_bindings(project_root, assignment["questions"])
+            questions = freeze_question_bindings(
+                project_root,
+                assignment["questions"],
+                graph_snapshot=graph_snapshot,
+            )
+            attempt_id = _new_id()
+            attempt_ids.append(attempt_id)
             con.execute(
                 """
                 INSERT INTO student_attempts
@@ -109,7 +125,7 @@ def _publish_personalized(
                 VALUES (?, ?, ?, 'not_started', ?, ?, ?, 3)
                 """,
                 (
-                    _new_id(),
+                    attempt_id,
                     publication_id,
                     assignment["student_id"],
                     json.dumps(questions, ensure_ascii=False),
@@ -124,6 +140,7 @@ def _publish_personalized(
                     ),
                 ),
             )
+        freeze_attempt_class_memberships(con, attempt_ids, captured_at=now)
         from solaire.web.learning_progress.baselines import freeze_personalized_baseline
 
         freeze_personalized_baseline(
@@ -134,6 +151,7 @@ def _publish_personalized(
             source_publication_ids=source_publication_ids,
             assignments=assignments,
             captured_at=now,
+            graph_snapshot=graph_snapshot,
         )
     publication = {
         "id": publication_id,
@@ -171,6 +189,12 @@ def publish_wrong_question_practice(
     if len(sources) != 1:
         raise ValueError("Select one historical publication")
     students = _class_students(root, class_id)
+    with closing(connect(root)) as con, con:
+        read_context = load_online_source_read_context(
+            con,
+            source_publication_ids=[clean_source_id],
+            student_ids=[str(student["id"]) for student in students],
+        )
     assignments: list[dict[str, Any]] = []
     for student in students:
         wrong = _wrong_questions_for_student(
@@ -178,6 +202,7 @@ def publish_wrong_question_practice(
             project_root,
             student_id=str(student["id"]),
             source_publication_ids=[clean_source_id],
+            read_context=read_context,
         )
         if not wrong:
             continue
@@ -189,6 +214,7 @@ def publish_wrong_question_practice(
             keys[qid] = str(item["answer"])
             questions.append({key: value for key, value in item.items() if key not in {"answer", "source_publication_id"}})
         assignments.append({"student_id": student["id"], "questions": questions, "answer_keys": keys})
+    del read_context
     result = _publish_personalized(
         root,
         class_id=class_id,
@@ -227,6 +253,12 @@ async def publish_reinforcement_practice(
     provider: str | None = None
     model: str | None = None
     students = _class_students(root, class_id)
+    with closing(connect(root)) as con, con:
+        read_context = load_online_source_read_context(
+            con,
+            source_publication_ids=clean_ids,
+            student_ids=[str(student["id"]) for student in students],
+        )
     generator_fn = _resolve_generate_reinforcement_questions()
     for student in students:
         wrong = _wrong_questions_for_student(
@@ -234,6 +266,7 @@ async def publish_reinforcement_practice(
             project_root,
             student_id=str(student["id"]),
             source_publication_ids=clean_ids,
+            read_context=read_context,
         )
         if not wrong:
             wrong = _source_questions_for_student(
@@ -241,6 +274,7 @@ async def publish_reinforcement_practice(
                 project_root,
                 student_id=str(student["id"]),
                 source_publication_ids=clean_ids,
+                read_context=read_context,
             )
         if not wrong:
             continue
@@ -260,6 +294,7 @@ async def publish_reinforcement_practice(
         total_tokens += int(usage.get("total_tokens") or 0)
         provider = str(generated.get("provider") or provider or "") or None
         model = str(generated.get("model") or model or "") or None
+    del read_context
     result = _publish_personalized(
         root,
         class_id=class_id,

@@ -6,6 +6,17 @@ import yaml
 from fastapi.testclient import TestClient
 
 
+def test_conflicting_relation_delete_returns_a_validation_error(web_client, monkeypatch):
+    from solaire.web.routers import graph
+    headers = _teacher_headers(web_client)
+    def conflicting(*args, **kwargs):
+        raise ValueError("同一关系编号存在冲突，请指定图谱")
+    monkeypatch.setattr(graph, "delete_node_relation", conflicting)
+    response = web_client.delete("/api/graph/relations/conflicting", headers=headers)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "同一关系编号存在冲突，请指定图谱"
+
+
 def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 

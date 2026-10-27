@@ -19,7 +19,6 @@ from solaire.exam_compiler.facade import (
     QuestionItem,
     expand_diagram_fences_in_text,
     iter_question_files,
-    load_questions_from_yaml_file,
     parse_bank_root,
     question_group_to_author_dict,
     question_item_to_author_dict,
@@ -38,6 +37,7 @@ from solaire.web.bank_storage import (
     bank_record_version,
     bank_write_lock,
     find_bank_record,
+    read_bank_library,
     read_bank_document,
     replace_record_data,
     validate_bank_import,
@@ -64,22 +64,22 @@ def _subject_collection_from_namespace(ns: str) -> tuple[str, str]:
     return (parts[0], "")
 
 
-def list_bank_entries(project_root: Path) -> list[dict[str, Any]]:
+def bank_catalog(project_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Return readable entries and per-file diagnostics from one scan per library."""
     out: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, str]] = []
     for ref in discover_question_library_refs(project_root):
         ns = ref["namespace"]
         subj, coll = _subject_collection_from_namespace(ns)
         lib = library_root_for_namespace(project_root, ns)
         if not lib.is_dir():
             continue
-        for ypath in iter_question_files(lib):
-            assert_within_project(project_root, ypath)
-            try:
-                records = load_questions_from_yaml_file(ypath, ns)
-            except Exception:
-                continue
+        index = read_bank_library(project_root, lib)
+        diagnostics.extend(index.diagnostics)
+        for document in index.documents:
+            ypath = document.path
             rel = _rel_to_resource(project_root, ypath)
-            for rec in records:
+            for rec in document.records:
                 answer_relation_needs_review = False
                 if isinstance(rec, QuestionItem):
                     q = strip_hydrate_fields(rec)
@@ -113,7 +113,79 @@ def list_bank_entries(project_root: Path) -> list[dict[str, Any]]:
                     }
                 )
     out.sort(key=lambda x: x["qualified_id"])
-    return out
+    diagnostics.sort(key=lambda item: (item["storage_path"], item["code"]))
+    return out, diagnostics
+
+
+def list_bank_entries(project_root: Path) -> list[dict[str, Any]]:
+    return bank_catalog(project_root)[0]
+
+
+def list_question_rows_for_web(project_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Build the compose picker from one request-local scan per library."""
+    items: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, str]] = []
+    for ref in discover_question_library_refs(project_root):
+        namespace = ref["namespace"]
+        library = library_root_for_namespace(project_root, namespace)
+        if not library.is_dir():
+            continue
+        index = read_bank_library(project_root, library)
+        diagnostics.extend(index.diagnostics)
+        index.require_unique_ids()
+        subj, coll_name = _subject_collection_from_namespace(namespace)
+        for document in index.documents:
+            for record in document.records:
+                qualified_id = f"{namespace}/{record.id}"
+                if isinstance(record, QuestionItem):
+                    question = strip_hydrate_fields(record)
+                    try:
+                        displayed = expand_question_for_web(project_root, namespace, question)
+                    except Exception:
+                        displayed = question
+                    content = displayed.content or ""
+                    preview = content if len(content) <= 240 else content[:237] + "..."
+                    items.append({
+                        "id": question.id,
+                        "qualified_id": qualified_id,
+                        "namespace": namespace,
+                        "collection": namespace,
+                        "subject": subj,
+                        "collection_name": coll_name,
+                        "type": question.type,
+                        "content": content,
+                        "content_preview": preview,
+                        "answer": displayed.answer,
+                        "analysis": displayed.analysis,
+                        "metadata": dict(question.metadata) if question.metadata else {},
+                        "group_id": None,
+                        "group_member_qualified_ids": [],
+                        "group_material": None,
+                    })
+                else:
+                    content = record.material or ""
+                    preview = content if len(content) <= 240 else content[:237] + "..."
+                    display_type = record.unified if isinstance(record.unified, str) else "group"
+                    items.append({
+                        "id": record.id,
+                        "qualified_id": qualified_id,
+                        "namespace": namespace,
+                        "collection": namespace,
+                        "subject": subj,
+                        "collection_name": coll_name,
+                        "type": display_type,
+                        "content": content,
+                        "content_preview": preview,
+                        "answer": "",
+                        "analysis": "",
+                        "metadata": {},
+                        "group_id": record.id,
+                        "group_member_qualified_ids": [],
+                        "group_material": record.material,
+                    })
+    items.sort(key=lambda item: item["qualified_id"])
+    diagnostics.sort(key=lambda item: (item["storage_path"], item["code"]))
+    return items, diagnostics
 
 
 def create_question_selection_export(
@@ -129,11 +201,26 @@ def create_question_selection_export(
     if len(clean_ids) > 300:
         raise ValueError("单次最多导出 300 道题目")
     questions: list[dict[str, Any]] = []
+    indexes = {}
     for qualified_id in clean_ids:
-        detail = get_question_detail(project_root, qualified_id)
-        record = detail.get("question") or detail.get("question_group")
-        if not isinstance(record, dict):
-            continue
+        namespace, qid = split_qualified_id(qualified_id)
+        index = indexes.get(namespace)
+        if index is None:
+            library = library_root_for_namespace(project_root, namespace)
+            if not library.is_dir():
+                raise FileNotFoundError(f"Library not found: {namespace}")
+            index = read_bank_library(project_root, library)
+            indexes[namespace] = index
+        found = index.find(qid)
+        if found is None:
+            index.require_identity_complete(qid)
+            raise FileNotFoundError(f"Question not found: {qualified_id}")
+        document, record_index = found
+        parsed = document.records[record_index]
+        if isinstance(parsed, QuestionItem):
+            record = strip_hydrate_fields(parsed).model_dump(mode="json")
+        else:
+            record = parsed.model_dump(mode="json")
         questions.append({"qualified_id": qualified_id, **record})
     if not questions:
         raise ValueError("所选题目无法导出")
@@ -241,8 +328,10 @@ def get_question_detail(project_root: Path, qualified_id: str) -> dict[str, Any]
     lib = library_root_for_namespace(project_root, ns)
     if not lib.is_dir():
         raise FileNotFoundError(f"Library not found: {ns}")
-    found = find_bank_record(project_root, lib, qid)
+    library_index = read_bank_library(project_root, lib)
+    found = library_index.find(qid)
     if found is None:
+        library_index.require_identity_complete(qid)
         raise FileNotFoundError(f"Question not found: {qualified_id}")
     document, index = found
     rec = document.records[index]
@@ -321,11 +410,15 @@ def expand_question_for_web(project_root: Path, namespace: str, q: QuestionItem)
 
 
 def question_exists(project_root: Path, qualified_id: str) -> bool:
-    try:
-        get_question_detail(project_root, qualified_id)
-        return True
-    except FileNotFoundError:
+    namespace, qid = split_qualified_id(qualified_id)
+    library = library_root_for_namespace(project_root, namespace)
+    if not library.is_dir():
         return False
+    try:
+        return read_bank_library(project_root, library).find(qid) is not None
+    except ValueError:
+        # A known duplicate must be treated as occupied so create requests cannot overwrite it.
+        return True
 
 
 _ALLOWED_BANK_IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
@@ -393,7 +486,8 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *,
         raise ValueError("题目编号与保存路径不一致；请刷新题目后重试，不能直接修改已有题目的编号")
     lib = library_root_for_namespace(project_root, ns)
     with bank_write_lock(lib):
-        found = find_bank_record(project_root, lib, qid)
+        library_index = read_bank_library(project_root, lib)
+        found = library_index.find(qid)
         if expected_version is not None:
             current = bank_record_version(project_root, *found) if found is not None else None
             if expected_version.strip().strip('"') != current:
@@ -409,6 +503,7 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *,
             path = lib / f"{_safe_filename_id(qid)}.yaml"
             if path.exists():
                 raise FileExistsError(str(path))
+            library_index.require_identity_complete(qid)
         text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
         write_text_atomic(path, text)
         saved_index = index if found is not None else 0
@@ -535,13 +630,12 @@ def import_merged_yaml(
 
     written = 0
     with bank_write_lock(target):
-        existing_documents: dict[Path, BankDocument] = {}
+        library_index = read_bank_library(project_root, target)
+        existing_documents = {document.path.resolve(): document for document in library_index.documents}
         existing_ids: dict[str, tuple[Path, int]] = {}
-        for path in iter_question_files(target):
-            assert_within_project(project_root, path)
-            document = read_bank_document(path)
+        for document in library_index.documents:
+            path = document.path
             resolved_path = document.path.resolve()
-            existing_documents[resolved_path] = document
             for index, existing_record in enumerate(document.records):
                 if existing_record.id in existing_ids:
                     other_path, _ = existing_ids[existing_record.id]
@@ -572,6 +666,9 @@ def import_merged_yaml(
 
             path = (target / f"{_safe_filename_id(qid)}.yaml").resolve()
             assert_within_project(project_root, path)
+            if path.exists():
+                raise ValueError(f"导入题目目标文件已存在，不能覆盖未匹配的稳定题号: {path.name}")
+            library_index.require_identity_complete(qid)
             prior_claim = path_claims.get(path)
             if prior_claim is not None and prior_claim != qid:
                 raise ValueError(f"导入题目文件名冲突: {prior_claim} 与 {qid}")

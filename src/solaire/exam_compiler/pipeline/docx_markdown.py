@@ -34,9 +34,10 @@ def _append_options(
         return
     options = dict(sorted(q.options.items()))
     pairs = [(k, render_text(v, hq, loaded, media_dir)) for k, v in choice_option_pairs(options)]
-    if any(chr(96) * 3 + "{=openxml}" in v for _k, v in pairs):
+    if any(chr(96) * 3 + "{=openxml}" in v or "\n\n" in v for _k, v in pairs):
         for k, v in pairs:
             lines.append(f"**{k}.**")
+            lines.append("")
             if v:
                 lines.append(v)
             lines.append("")

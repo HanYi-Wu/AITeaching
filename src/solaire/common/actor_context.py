@@ -1,4 +1,5 @@
 """Request/task-local identity for filesystem access; never a process-global user."""
+from contextlib import closing
 from contextvars import ContextVar
 import hashlib
 import yaml
@@ -27,7 +28,7 @@ def assert_private_bank_path(project_root, path):
         if platform_db_path(platform).is_file():
             actual = path.resolve().relative_to(project_root.resolve()).parts
             exam_id = '/'.join(actual[1:3])
-            with connect(platform) as con:
+            with closing(connect(platform)) as con, con:
                 owners = {
                     str(row[0]) for row in con.execute(
                         'SELECT owner_teacher_id FROM paper_records WHERE exam_id = ? COLLATE NOCASE',

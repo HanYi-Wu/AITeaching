@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -10,8 +11,11 @@ from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.school.common import (
     _contains_query,
     _fetch_required,
+    _fetch_sql_page,
     _new_id,
     _page,
+    _register_school_query_functions,
+    _sql_search_clause,
 )
 
 
@@ -22,7 +26,7 @@ def create_school(root: Path, *, name: str) -> dict[str, Any]:
         raise ValueError("school name is required")
     now = utc_now()
     school_id = _new_id()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute(
             """
             INSERT INTO schools (id, name, status, ai_enabled, created_at, updated_at)
@@ -39,7 +43,7 @@ def create_school(root: Path, *, name: str) -> dict[str, Any]:
 
 def list_schools(root: Path) -> list[dict[str, Any]]:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             """
             SELECT s.*,
@@ -91,7 +95,7 @@ def create_class(
         raise ValueError("class name is required")
     now = utc_now()
     class_id = _new_id()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         school = con.execute("SELECT 1 FROM schools WHERE id = ? AND status = 'active'", (school_id,)).fetchone()
         if school is None:
             raise ValueError("school not found")
@@ -119,7 +123,7 @@ def create_class(
 
 def list_classes(root: Path, *, school_id: str) -> list[dict[str, Any]]:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute("SELECT * FROM classes WHERE school_id = ? ORDER BY created_at DESC", (school_id,)).fetchall()
     return [row_to_dict(row) or {} for row in rows]
 
@@ -132,39 +136,51 @@ def query_classes(
     page: int = 1,
     page_size: int = 10,
 ) -> dict[str, Any]:
-    classes = list_classes(root, school_id=school_id)
-    if classes:
-        ids = [str(klass["id"]) for klass in classes]
-        placeholders = ",".join("?" for _ in ids)
-        with connect(root) as con:
-            student_rows = con.execute(
-                f"""
-                SELECT class_id, COUNT(*) AS n
-                FROM class_students
-                WHERE class_id IN ({placeholders})
-                GROUP BY class_id
-                """,
-                tuple(ids),
-            ).fetchall()
-            teacher_rows = con.execute(
-                f"""
-                SELECT class_id, COUNT(DISTINCT teacher_id) AS n
-                FROM teacher_class_assignments
-                WHERE class_id IN ({placeholders})
-                GROUP BY class_id
-                """,
-                tuple(ids),
-            ).fetchall()
-        students_by_class = {str(row["class_id"]): int(row["n"]) for row in student_rows}
-        teachers_by_class = {str(row["class_id"]): int(row["n"]) for row in teacher_rows}
-        for klass in classes:
-            class_id = str(klass["id"])
-            klass["student_count"] = students_by_class.get(class_id, 0)
-            klass["teacher_count"] = teachers_by_class.get(class_id, 0)
-    if q:
-        classes = [klass for klass in classes if _contains_query(klass, q, ["name", "grade", "student_count", "teacher_count"])]
-    result = _page(classes, page=page, page_size=page_size)
-    return {"classes": result.pop("items"), **result}
+    init_platform_db(root)
+    filters, filter_params = _sql_search_clause(q, "name, grade, student_count, teacher_count")
+    class_ctes = """
+        scoped_classes AS (
+            SELECT id FROM classes WHERE school_id = ?
+        ), student_counts AS (
+            SELECT cs.class_id, COUNT(*) AS student_count
+            FROM class_students cs
+            JOIN scoped_classes scoped ON scoped.id = cs.class_id
+            GROUP BY cs.class_id
+        ), teacher_counts AS (
+            SELECT tca.class_id, COUNT(DISTINCT tca.teacher_id) AS teacher_count
+            FROM teacher_class_assignments tca
+            JOIN scoped_classes scoped ON scoped.id = tca.class_id
+            GROUP BY tca.class_id
+        ), class_rows AS (
+            SELECT c.*,
+                   COALESCE(sc.student_count, 0) AS student_count,
+                   COALESCE(tc.teacher_count, 0) AS teacher_count
+            FROM classes c
+            LEFT JOIN student_counts sc ON sc.class_id = c.id
+            LEFT JOIN teacher_counts tc ON tc.class_id = c.id
+            WHERE c.school_id = ?
+        )
+    """
+    params = (school_id, school_id, *filter_params)
+    with closing(connect(root)) as con, con:
+        _register_school_query_functions(con)
+        classes, total, clean_page, clean_page_size, total_pages = _fetch_sql_page(
+            con,
+            ctes=class_ctes,
+            rows_sql=f"SELECT * FROM class_rows WHERE 1 = 1{filters}",
+            params=params,
+            order_by="created_at DESC",
+            identity_column="id",
+            page=page,
+            page_size=page_size,
+        )
+    return {
+        "classes": classes,
+        "total": total,
+        "page": clean_page,
+        "page_size": clean_page_size,
+        "total_pages": total_pages,
+    }
 
 
 def update_class(
@@ -189,7 +205,7 @@ def update_class(
         updates.append("grade = ?")
         params.append(grade.strip() or None)
     params.extend([class_id, school_id])
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute(
             "SELECT 1 FROM classes WHERE id = ? AND school_id = ?",
             (class_id, school_id),
@@ -209,7 +225,7 @@ def update_class(
 
 def delete_class(root: Path, *, school_id: str, class_id: str) -> dict[str, Any]:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute(
             "SELECT 1 FROM classes WHERE id = ? AND school_id = ?",
             (class_id, school_id),

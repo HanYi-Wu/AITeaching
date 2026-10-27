@@ -50,12 +50,15 @@ def test_doc_ocr_image_boundary_and_real_fixtures(tmp_path: Path) -> None:
     img.save(img_path)
 
     # 1. Real image call
-    res = tool_doc_ocr_image(ctx, {"path": "resource/test_ocr_input.png", "lang": "chi_sim+eng"})
-    # Either tesseract is installed and succeeds, or actionable not-installed error is returned
+    res = tool_doc_ocr_image(ctx, {"path": "resource/test_ocr_input.png", "lang": "eng"})
+    # A blank image yields a no-text result; an unavailable engine yields install guidance.
     assert res.status in ("succeeded", "failed")
     if res.status == "failed":
-        assert res.error_code in ("ocr_not_installed", "ocr_failed")
-        assert "tesseract" in res.error_message.lower() or "ocr" in res.error_message.lower()
+        if res.error_code == "ocr_not_installed":
+            assert "tesseract" in res.error_message.lower() or "ocr" in res.error_message.lower()
+        else:
+            assert res.error_code == "ocr_failed"
+            assert "未识别到文字" in res.error_message
     else:
         assert "content" in res.data
         assert res.data["source"] == "resource/test_ocr_input.png"

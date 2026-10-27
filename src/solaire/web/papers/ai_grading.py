@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import asyncio
 import base64
 import binascii
@@ -88,7 +90,7 @@ def ocr_attempt_scan_images(
     total_bytes = 0
     max_pages = 10
     max_bytes = 50 * 1024 * 1024
-    with limit, connect(root) as con:
+    with limit, closing(connect(root)) as con, con:
         cursor = con.execute(
             """
             SELECT file_size, content

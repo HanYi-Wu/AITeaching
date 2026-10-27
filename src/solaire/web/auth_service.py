@@ -7,6 +7,7 @@ import hmac
 import json
 import secrets
 import uuid
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -72,7 +73,7 @@ def _public_user(row: dict[str, object]) -> dict[str, object]:
 
 def get_user_profile(root: Path, user_id: str) -> dict[str, object]:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         subjects = [str(item["subject"]) for item in con.execute(
             "SELECT subject FROM teacher_subjects WHERE teacher_id = ? ORDER BY subject",
@@ -103,7 +104,7 @@ def update_user_profile(
         "font_scale": max(0.85, min(1.2, float(preferences.get("font_scale") or 1))),
     }
     user_id = str(user.get("id") or "")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute(
             "UPDATE users SET avatar_data_url = ?, preferences_json = ?, updated_at = ? WHERE id = ?",
             (clean_avatar, json.dumps(clean_preferences, ensure_ascii=False), utc_now(), user_id),
@@ -129,7 +130,7 @@ def _validate_username(username: str) -> str:
 
 def has_admin(root: Path) -> bool:
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone()
     return row is not None
 
@@ -140,7 +141,7 @@ def bootstrap_admin(root: Path, *, username: str, password: str, display_name: s
     user_id = uuid.uuid4().hex
     clean_username = _validate_username(username)
     clean_display_name = display_name.strip() or clean_username
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone()
         if existing is not None:
             raise ValueError("admin already exists")
@@ -163,7 +164,7 @@ def bootstrap_admin(root: Path, *, username: str, password: str, display_name: s
 def authenticate_user(root: Path, username: str, password: str) -> dict[str, object] | None:
     init_platform_db(root)
     clean_username = username.strip()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute("SELECT * FROM users WHERE username = ?", (clean_username,)).fetchone()
         if row is None:
             matches = con.execute(
@@ -194,7 +195,7 @@ def update_user_credentials(
     wants_password = bool(new_password)
     if wants_username and wants_password:
         raise ValueError("change username or password, not both")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute("SELECT * FROM users WHERE id = ? AND status = 'active'", (user_id,)).fetchone()
         user = row_to_dict(row)
         if user is None:
@@ -239,7 +240,7 @@ def create_session(root: Path, user_id: str) -> str:
     token = secrets.token_urlsafe(32)
     now_dt = datetime.now(UTC)
     expires = now_dt + timedelta(days=SESSION_DAYS)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         exists = con.execute("SELECT 1 FROM users WHERE id = ? AND status = 'active'", (user_id,)).fetchone()
         if exists is None:
             raise ValueError("active user not found")
@@ -258,7 +259,7 @@ def get_session_user(root: Path, token: str | None) -> dict[str, object] | None:
         return None
     init_platform_db(root)
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute(
             """
             SELECT users.*
@@ -281,7 +282,7 @@ def revoke_session(root: Path, token: str | None) -> None:
     if not token:
         return
     init_platform_db(root)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute(
             "UPDATE platform_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
             (utc_now(), _hash_token(token)),

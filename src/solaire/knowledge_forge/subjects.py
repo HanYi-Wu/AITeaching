@@ -19,6 +19,8 @@ from solaire.common.security import assert_within_project
 from solaire.knowledge_forge.migration import ensure_graph_layout
 from solaire.knowledge_forge.concurrency import graph_lock
 from solaire.knowledge_forge.concurrency import graph_mutation
+from solaire.knowledge_forge.cache import _invalidate_graph_cache
+from solaire.common.atomic_files import write_bytes_atomic
 import uuid
 
 
@@ -75,18 +77,38 @@ def create_graph(project_root: Path, display_name: str, slug: str | None = None)
 
 @graph_mutation
 def delete_graph(project_root: Path, slug: str) -> None:
-    """删除科目图谱及其数据文件。"""
+    """删除科目图谱及其数据文件。
+
+    若 metadata 保存失败，使用原子写恢复原图状态并保证文件内容 hash 一致；
+    若恢复也失败，异常必须指出受影响路径。
+    """
     ensure_graph_layout(project_root)
     with graph_lock(project_root, slug):
         sp = _subject_state_path(project_root, slug)
         assert_within_project(project_root, sp)
+        meta = _load_meta(project_root)
+        meta.subjects = [sm for sm in meta.subjects if sm.slug != slug]
+
+        original_bytes: bytes | None = None
+        if sp.is_file():
+            original_bytes = sp.read_bytes()
+
         if sp.is_file():
             sp.unlink()
         _state_cache.pop((_graph_root_key(project_root), slug), None)
 
-        meta = _load_meta(project_root)
-        meta.subjects = [sm for sm in meta.subjects if sm.slug != slug]
-        _save_meta(project_root, meta)
+        try:
+            _save_meta(project_root, meta)
+        except OSError as exc:
+            if original_bytes is not None:
+                try:
+                    write_bytes_atomic(sp, original_bytes)
+                except Exception as restore_exc:
+                    raise OSError(
+                        f"Failed to restore graph file at {sp} during rollback of delete_graph: {restore_exc}"
+                    ) from exc
+            _invalidate_graph_cache(project_root)
+            raise
 
 
 @graph_mutation

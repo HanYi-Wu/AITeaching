@@ -46,10 +46,10 @@ def _list_score_batches(result_dir: Path) -> list[dict[str, Any]]:
             try:
                 with scores_csv.open(encoding="utf-8") as f:
                     reader = csv.reader(f)
-                    rows = list(reader)
-                    student_count = max(0, len(rows) - 1)  # subtract header
-                    if rows:
-                        question_count = max(0, len(rows[0]) - 2)
+                    header = next(reader, None)
+                    student_count = sum(1 for _ in reader)
+                    if header is not None:
+                        question_count = max(0, len(header) - 2)
             except Exception:
                 pass
         batches.append({

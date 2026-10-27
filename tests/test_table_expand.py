@@ -5,6 +5,7 @@ from solaire.exam_compiler.pipeline.table_expand import (
     expand_tables_for_latex,
     table_to_latex,
     table_to_openxml,
+    separate_markdown_tables,
 )
 
 
@@ -19,6 +20,14 @@ rows:
   - - text: $x$
     - text: 说明
 """
+
+
+def test_word_pipe_tables_keep_a_block_boundary_after_prose_and_question_labels():
+    table = "| A | B |\n|---|:---:|\n| 1 | 2 |"
+    assert separate_markdown_tables("Question\n" + table) == "Question\n\n" + table
+    assert separate_markdown_tables(table) == "\n\n" + table
+    example = "```markdown\n" + table + "\n```"
+    assert separate_markdown_tables(example) == example
 
 
 EMPTY_TABLE = """version: 1

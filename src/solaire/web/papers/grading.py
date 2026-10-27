@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -115,7 +117,7 @@ def recompute_attempt_score(
     attempt_id: str,
     score_by_id: dict[str, float],
 ) -> dict[str, Any]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         return recompute_attempt_score_in_connection(
             con,

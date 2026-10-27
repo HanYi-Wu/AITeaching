@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from solaire.agent_layer import registry as tool_registry
 from solaire.agent_layer.llm.adapter import LLMAdapter
 from solaire.agent_layer.models import GuardrailDecision, InvocationContext, SessionState, ToolRisk
 from solaire.agent_layer.user_agent_paths import user_agent_state_dir
@@ -39,6 +38,12 @@ SAFETY_MODE_LABELS: dict[str, str] = {
     SAFETY_MODE_VIVACE: "Vivace Mode",
     SAFETY_MODE_PRESTISSIMO: "Prestissimo Mode",
 }
+
+
+def _tool_registry() -> Any:
+    from solaire.agent_layer import registry
+
+    return registry
 
 def _safety_mode_path(project_root: Path) -> Path:
     p = (project_root / ".solaire" / "agent" / _SAFETY_MODE_FILE).resolve()
@@ -119,7 +124,7 @@ def list_safety_modes_public() -> list[dict[str, str]]:
 
 
 def policy_for(tool_name: str) -> ToolPolicy:
-    rt = tool_registry.get_registered_tool(tool_name)
+    rt = _tool_registry().get_registered_tool(tool_name)
     if rt is None:
         return ToolPolicy(ToolRisk.READ)
     return ToolPolicy(risk=rt.risk, requires_confirmation_override=rt.requires_confirmation_override)
@@ -127,7 +132,7 @@ def policy_for(tool_name: str) -> ToolPolicy:
 
 def vivace_needs_fast_model_review(tool_name: str) -> bool:
     """Whether Vivace mode runs the extra fast-model safety pass for this tool (see tool_executor)."""
-    rt = tool_registry.get_registered_tool(tool_name)
+    rt = _tool_registry().get_registered_tool(tool_name)
     return bool(rt and rt.vivace_fast_review)
 
 
@@ -192,7 +197,7 @@ def check_tool_call(
             return GuardrailDecision.AUTO_APPROVE
         if pol.risk == ToolRisk.DESTRUCTIVE:
             return GuardrailDecision.NEEDS_CONFIRMATION
-        rt = tool_registry.get_registered_tool(tool_name)
+        rt = _tool_registry().get_registered_tool(tool_name)
         allegro_add = bool(rt and rt.allegro_auto_add)
         return GuardrailDecision.AUTO_APPROVE if allegro_add else GuardrailDecision.NEEDS_CONFIRMATION
     if mode == SAFETY_MODE_VIVACE:
@@ -228,7 +233,7 @@ def human_confirmation_message(tool_name: str, args: dict) -> str:
         questions = args.get('questions') or []
         ids = '、'.join(str(q.get('question_id', '')) for q in questions[:12] if isinstance(q, dict))
         return f'确认一次创建这批 {len(questions)} 道题目？题号：{ids}。成功项保留，失败项会单独列出，不覆盖已有题目。'
-    rt = tool_registry.get_registered_tool(tool_name)
+    rt = _tool_registry().get_registered_tool(tool_name)
     label = (rt.action_label if rt and rt.action_label else None) or "一项可能影响数据的操作"
     return f"助手请求执行：{label}。请确认是否继续。"
 

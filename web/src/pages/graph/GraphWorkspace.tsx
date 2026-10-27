@@ -144,26 +144,56 @@ export function GraphWorkspace({
     }
   }, [setGraphs, onError]);
 
-  // Load graph data for active slug
+  const isMountedRef = useRef(true);
+  const loadSeqRef = useRef(0);
+  const activeSlugRef = useRef(activeSlug);
+  activeSlugRef.current = activeSlug;
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      loadSeqRef.current += 1;
+    };
+  }, []);
+
+  // Load graph data for active slug with generation/identity isolation
   const loadGraphData = useCallback(async (slug: string | null) => {
-    if (!slug) { setGraphNodes([]); setRelations([]); return; }
+    if (slug !== activeSlugRef.current) return;
+    const currentSeq = ++loadSeqRef.current;
+    if (!slug) {
+      if (isMountedRef.current && currentSeq === loadSeqRef.current) {
+        setGraphNodes([]);
+        setRelations([]);
+        setBusy(false);
+      }
+      return;
+    }
     onError(null);
+    setBusy(true);
     try {
-      setBusy(true);
       const [n, r, tx] = await Promise.all([
         apiGraphListNodes(undefined, slug),
         apiGraphListRelations(slug),
         apiGraphGetTaxonomy(),
       ]);
+      if (!isMountedRef.current || currentSeq !== loadSeqRef.current || activeSlugRef.current !== slug) {
+        return;
+      }
       setGraphNodes(n.nodes);
       setKindCounts(n.kind_counts ?? {});
       setRelations(r.relations);
       setSubjects(tx.subjects?.length ? tx.subjects : [i18n.t("defaultSubject", { ns: "graph" })]);
       setLevels(tx.levels?.length ? tx.levels : [i18n.t("defaultLevel1", { ns: "graph" }), i18n.t("defaultLevel2", { ns: "graph" })]);
     } catch (e) {
+      if (!isMountedRef.current || currentSeq !== loadSeqRef.current || activeSlugRef.current !== slug) {
+        return;
+      }
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isMountedRef.current && currentSeq === loadSeqRef.current && activeSlugRef.current === slug) {
+        setBusy(false);
+      }
     }
   }, [onError, setBusy, setGraphNodes, setKindCounts, setRelations, setSubjects, setLevels]);
 

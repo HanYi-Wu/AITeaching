@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from solaire.web.papers.class_snapshots import freeze_attempt_class_memberships
+
+from contextlib import closing
+
 import json
 import sqlite3
 import uuid
@@ -60,7 +64,7 @@ def _validate_publish_classes_with_connection(
 
 
 def validate_publish_classes(root: Path, user: dict[str, Any], class_ids: list[str]) -> list[str]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         return _validate_publish_classes_with_connection(con, user, class_ids)
 
 
@@ -122,7 +126,7 @@ def _ensure_class_not_already_published_with_connection(
 
 
 def ensure_class_not_already_published(root: Path, *, paper_id: str, class_ids: list[str]) -> None:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         _ensure_class_not_already_published_with_connection(
             con,
             paper_id=paper_id,
@@ -192,7 +196,7 @@ def _map_publication_trigger_error(
     error: sqlite3.IntegrityError,
 ) -> None:
     if str(error) == "paper already published to class":
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             _ensure_class_not_already_published_with_connection(
                 con,
                 paper_id=paper_id,
@@ -200,7 +204,7 @@ def _map_publication_trigger_error(
             )
         raise ValueError("paper already published to class") from error
     if str(error) == "student already assigned in paper folder":
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             conflicts = _student_folder_conflicts(
                 con,
                 folder_id=str(folder_id or ""),
@@ -253,7 +257,7 @@ def publish_online_paper(
     clean_max_screen_switches = max(0, int(max_screen_switches or 0))
     clean_time_limit_minutes = normalize_time_limit(time_limit_minutes, empty_as_zero=True)
     clean_subject_value = str(subject or "").strip()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         clean_subject_value = _validate_publish_subject_with_connection(
             con,
             user=user,
@@ -270,7 +274,7 @@ def publish_online_paper(
     frozen_answer_keys: dict[str, str] = {}
     student_ids_to_assign: list[str] = []
     try:
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             # Lock before authoritative rechecks so concurrent publishers serialize
             # their duplicate check and every write in the same transaction.
             con.execute("BEGIN IMMEDIATE")
@@ -383,23 +387,22 @@ def publish_online_paper(
                 "INSERT INTO publication_classes (publication_id, class_id) VALUES (?, ?)",
                 [(publication_id, class_id) for class_id in selected_class_ids],
             )
+            attempt_records = [
+                (
+                    (id_factory or _new_id)(), publication_id, str(row["student_id"]),
+                    frozen_questions_json, frozen_answer_keys_json,
+                )
+                for row in rows
+            ]
             con.executemany(
                 """
                 INSERT OR IGNORE INTO student_attempts
                   (id, publication_id, student_id, status, question_payload_json, answer_key_json, question_payload_version)
                 VALUES (?, ?, ?, 'not_started', ?, ?, 3)
                 """,
-                [
-                    (
-                        (id_factory or _new_id)(),
-                        publication_id,
-                        str(row["student_id"]),
-                        frozen_questions_json,
-                        frozen_answer_keys_json,
-                    )
-                    for row in rows
-                ],
+                attempt_records,
             )
+            freeze_attempt_class_memberships(con, [record[0] for record in attempt_records], captured_at=now)
             effective_src_exam = source_exam_id
             effective_src_batch = source_batch_id
             if (not effective_src_exam or not effective_src_batch) and project_root is not None:

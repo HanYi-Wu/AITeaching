@@ -217,7 +217,10 @@ def graph_relations_delete(
     graph: str | None = Query(None),
 ) -> dict[str, Any]:
     root = _require_root()
-    delete_node_relation(root, relation_id, graph=graph)
+    try:
+        delete_node_relation(root, relation_id, graph=graph)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 

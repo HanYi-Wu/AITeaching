@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from solaire.web.export_workflow import _draft_to_sections, export_exam
 
 import json
@@ -250,7 +251,7 @@ def exams_analysis_list() -> dict[str, Any]:
     user = actor.get()
     if user and user.get("role") == "teacher":
         teacher_id = str(user.get("id") or "")
-        with connect(default_platform_root()) as con:
+        with closing(connect(default_platform_root())) as con, con:
             owners = {
                 str(row["exam_id"]): str(row["owner_teacher_id"] or "")
                 for row in con.execute("SELECT exam_id, owner_teacher_id FROM paper_records").fetchall()
@@ -293,7 +294,7 @@ def exams_download_bundle(
     if format not in {"pdf", "docx"}:
         raise HTTPException(status_code=400, detail="format 须为 pdf 或 docx")
     if user.get("role") == "teacher":
-        with connect(default_platform_root()) as con:
+        with closing(connect(default_platform_root())) as con, con:
             row = con.execute("SELECT owner_teacher_id FROM paper_records WHERE exam_id=?", (exam_path,)).fetchone()
         if row is None or str(row["owner_teacher_id"] or "") != str(user.get("id")):
             raise HTTPException(status_code=403, detail="无权下载此试卷")

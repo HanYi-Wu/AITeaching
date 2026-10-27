@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import uuid
 from pathlib import Path
 from typing import Any
@@ -149,7 +150,7 @@ def tool_exam_workspace_delete(ctx: InvocationContext, args: dict[str, Any]) -> 
             from solaire.agent_layer.tools import teacher_tools
             root = getattr(teacher_tools, "default_platform_root", default_platform_root)()
             init_platform_db(root)
-            with connect(root) as con:
+            with closing(connect(root)) as con, con:
                 paper = con.execute('SELECT * FROM paper_records WHERE exam_id = ?', (exam_id,)).fetchone()
                 if actor.get('role') != 'admin' and (not paper or paper['owner_teacher_id'] != actor['id']):
                     raise PermissionError('无法确认该草稿归属于当前教师；请由管理员核实归属，不能越权删除。')

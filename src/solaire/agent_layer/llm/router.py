@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from solaire.agent_layer.llm.llm_overrides import load_overrides_raw
-from solaire.agent_layer.llm.openai_compat import OpenAICompatAdapter
 from solaire.agent_layer.llm.providers import (
     LlmProvider,
     ReasoningEffort,
@@ -171,13 +170,16 @@ def _build_adapter(
     provider: LlmProvider,
     reasoning_effort: ReasoningEffort,
 ) -> Any:
-    from solaire.agent_layer.llm.anthropic_messages import AnthropicMessagesAdapter
-    from solaire.agent_layer.llm.openai_responses import OpenAIResponsesAdapter
-
     if provider == "openai":
+        from solaire.agent_layer.llm.openai_responses import OpenAIResponsesAdapter
+
         return OpenAIResponsesAdapter(api_key=api_key, base_url=base_url, model=model)
     if provider == "anthropic":
+        from solaire.agent_layer.llm.anthropic_messages import AnthropicMessagesAdapter
+
         return AnthropicMessagesAdapter(api_key=api_key, base_url=base_url, model=model)
+    from solaire.agent_layer.llm.openai_compat import OpenAICompatAdapter
+
     return OpenAICompatAdapter(
         api_key=api_key,
         base_url=base_url,

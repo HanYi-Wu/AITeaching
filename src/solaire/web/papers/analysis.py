@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack, closing
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -36,13 +37,11 @@ def analysis_attempt_clause(
         params = [*params, publication_id]
     if class_id:
         clause = (
-            f"({clause}) AND EXISTS (SELECT 1 FROM publication_classes filter_pc "
-            f"JOIN class_students filter_cs ON filter_cs.class_id = filter_pc.class_id "
-            f"JOIN exam_publications filter_ep ON filter_ep.id = filter_pc.publication_id "
-            f"WHERE filter_pc.publication_id = {attempt_alias}.publication_id "
+            f"({clause}) AND EXISTS (SELECT 1 FROM attempt_class_memberships filter_acm "
+            f"JOIN exam_publications filter_ep ON filter_ep.id = {attempt_alias}.publication_id "
+            f"WHERE filter_acm.attempt_id = {attempt_alias}.id "
             f"AND filter_ep.recipient_scope = 'class' "
-            f"AND filter_pc.class_id = ? AND filter_cs.student_id = "
-            f"{attempt_alias}.student_id)"
+            f"AND filter_acm.class_id = ?)"
         )
         params = [*params, class_id]
     return clause, params
@@ -59,17 +58,19 @@ def analysis_question_maps(
     attempt_clause_fn: Callable[..., tuple[str, list[str]]],
     question_maps_fn: Callable[[Path, dict[str, Any]], tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]],
     read_context: FrozenQuestionReadContext | None = None,
+    snapshot_rows: list[Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
     # Published snapshots, not the editable source, define historical exam content.
     clause, params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with connect(root) as con:
-        rows = con.execute(
-            f"SELECT sa.question_payload_json FROM student_attempts sa "
-            f"JOIN exam_publications ep ON ep.id=sa.publication_id WHERE ep.paper_id=? AND {clause} ORDER BY sa.rowid",
-            (paper["id"], *params),
-        ).fetchall()
+    if snapshot_rows is None:
+        with closing(connect(root)) as con, con:
+            snapshot_rows = con.execute(
+                f"SELECT sa.question_payload_json FROM student_attempts sa "
+                f"JOIN exam_publications ep ON ep.id=sa.publication_id WHERE ep.paper_id=? AND {clause} ORDER BY sa.rowid",
+                (paper["id"], *params),
+            ).fetchall()
     by_id: dict[str, dict[str, Any]] = {}
-    for row in rows:
+    for row in snapshot_rows:
         if read_context is not None:
             try:
                 _questions, snapshot_by_id, _scores = read_context.first_questions(
@@ -112,12 +113,16 @@ def build_module_report(
     json_payload_fn: Callable[[object], dict[str, Any]],
     risk_level_fn: Callable[[float | None], str],
     read_context: FrozenQuestionReadContext | None = None,
+    question_data: tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]] | None = None,
+    answer_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
         question_map_args = (root, project_root, paper, user, publication_id, class_id)
-        if read_context is None:
+        if question_data is not None:
+            questions, _by_id, score_by_id = question_data
+        elif read_context is None:
             questions, _by_id, score_by_id = question_maps_fn(*question_map_args)
         else:
             questions, _by_id, score_by_id = question_maps_fn(*question_map_args, read_context)
@@ -154,20 +159,21 @@ def build_module_report(
         return []
 
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with connect(root) as con:
-        rows = con.execute(
-            f"""
-            SELECT ans.question_id, ans.score, ans.is_correct, ans.answer_payload,
-                   sa.score AS attempt_score
-            FROM student_answers ans
-            JOIN student_attempts sa ON sa.id = ans.attempt_id
-            JOIN exam_publications ep ON ep.id = sa.publication_id
-            WHERE ep.paper_id = ? AND {access_clause}
-            """,
-            (paper_id, *access_params),
-        ).fetchall()
+    if answer_rows is None:
+        with closing(connect(root)) as con, con:
+            answer_rows = con.execute(
+                f"""
+                SELECT ans.question_id, ans.score, ans.is_correct, ans.answer_payload,
+                       sa.score AS attempt_score
+                FROM student_answers ans
+                JOIN student_attempts sa ON sa.id = ans.attempt_id
+                JOIN exam_publications ep ON ep.id = sa.publication_id
+                WHERE ep.paper_id = ? AND {access_clause}
+                """,
+                (paper_id, *access_params),
+            ).fetchall()
 
-    for row in rows:
+    for row in answer_rows:
         question_id = str(row["question_id"] or "")
         module_id = question_module.get(question_id)
         if not module_id:
@@ -219,12 +225,16 @@ def build_question_report(
     json_payload_fn: Callable[[object], dict[str, Any]],
     risk_level_fn: Callable[[float | None], str],
     read_context: FrozenQuestionReadContext | None = None,
+    question_data: tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]] | None = None,
+    answer_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
         question_map_args = (root, project_root, paper, user, publication_id, class_id)
-        if read_context is None:
+        if question_data is not None:
+            questions, _by_id, score_by_id = question_data
+        elif read_context is None:
             questions, _by_id, score_by_id = question_maps_fn(*question_map_args)
         else:
             questions, _by_id, score_by_id = question_maps_fn(*question_map_args, read_context)
@@ -254,20 +264,21 @@ def build_question_report(
         return []
 
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with connect(root) as con:
-        rows = con.execute(
-            f"""
-            SELECT ans.question_id, ans.answer_payload, ans.is_correct, ans.score,
-                   sa.score AS attempt_score
-            FROM student_answers ans
-            JOIN student_attempts sa ON sa.id = ans.attempt_id
-            JOIN exam_publications ep ON ep.id = sa.publication_id
-            WHERE ep.paper_id = ? AND {access_clause}
-            """,
-            (paper_id, *access_params),
-        ).fetchall()
+    if answer_rows is None:
+        with closing(connect(root)) as con, con:
+            answer_rows = con.execute(
+                f"""
+                SELECT ans.question_id, ans.answer_payload, ans.is_correct, ans.score,
+                       sa.score AS attempt_score
+                FROM student_answers ans
+                JOIN student_attempts sa ON sa.id = ans.attempt_id
+                JOIN exam_publications ep ON ep.id = sa.publication_id
+                WHERE ep.paper_id = ? AND {access_clause}
+                """,
+                (paper_id, *access_params),
+            ).fetchall()
 
-    for row in rows:
+    for row in answer_rows:
         question_id = str(row["question_id"] or "")
         item = reports.get(question_id)
         if item is None:
@@ -319,15 +330,20 @@ def build_class_report(
     attempt_clause_fn: Callable[..., tuple[str, list[str]]],
     attempt_status_group_fn: Callable[[dict[str, Any]], str],
     score_percent_fn: Callable[[object, object], float | None],
+    connection: Any = None,
 ) -> list[dict[str, Any]]:
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with connect(root) as con:
+    with ExitStack() as stack:
+        con = connection
+        if con is None:
+            con = stack.enter_context(closing(connect(root)))
+            stack.enter_context(con)
         rows = con.execute(
             f"""
             SELECT
-              c.id AS class_id,
-              c.name AS class_name,
-              c.grade AS class_grade,
+              acm.class_id AS class_id,
+              acm.class_name AS class_name,
+              acm.class_grade AS class_grade,
               sa.id AS attempt_id,
               sa.status,
               sa.started_at,
@@ -339,14 +355,12 @@ def build_class_report(
               (SELECT COUNT(*) FROM student_answers aa WHERE aa.attempt_id = sa.id AND aa.score IS NULL) AS unscored_answer_count,
               COUNT(pe.id) AS screen_switch_count
             FROM exam_publications ep
-            JOIN publication_classes pc ON pc.publication_id = ep.id
-            JOIN classes c ON c.id = pc.class_id
             JOIN student_attempts sa ON sa.publication_id = ep.id
-            JOIN class_students cs ON cs.class_id = c.id AND cs.student_id = sa.student_id
+            JOIN attempt_class_memberships acm ON acm.attempt_id = sa.id
             LEFT JOIN proctor_events pe ON pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'
             WHERE ep.paper_id = ? AND {access_clause}
-            GROUP BY c.id, sa.id
-            ORDER BY c.name
+            GROUP BY acm.class_id, sa.id
+            ORDER BY acm.class_name
             """,
             (paper_id, *access_params),
         ).fetchall()

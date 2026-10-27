@@ -49,6 +49,75 @@ class BankDocument:
         return self.raw[index] if isinstance(self.raw, list) else self.raw
 
 
+@dataclass
+class BankLibraryIndex:
+    """One request's parsed view of a library; never retained across requests."""
+
+    library: Path
+    documents: list[BankDocument]
+    by_id: dict[str, tuple[BankDocument, int]]
+    duplicates: dict[str, list[tuple[BankDocument, int]]]
+    diagnostics: list[dict[str, str]]
+
+    def find(self, qid: str) -> tuple[BankDocument, int] | None:
+        matches = self.duplicates.get(qid)
+        if matches:
+            paths = ", ".join(dict.fromkeys(document.path.name for document, _ in matches))
+            raise ValueError(f"题集中存在重复题目编号，请先修正 YAML: {qid} ({paths})")
+        return self.by_id.get(qid)
+
+    def require_unique_ids(self) -> None:
+        if self.duplicates:
+            qid = sorted(self.duplicates)[0]
+            self.find(qid)
+
+    def require_identity_complete(self, qid: str) -> None:
+        if self.diagnostics:
+            paths = ", ".join(item["storage_path"] for item in self.diagnostics)
+            raise ValueError(f"存在无法读取的题目文件，无法确认新题号 {qid} 是否已存在: {paths}")
+
+
+def _diagnostic_path(project_root: Path, path: Path) -> str:
+    resource = (project_root / "resource").resolve()
+    try:
+        return path.resolve().relative_to(resource).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _diagnostic_message(path: Path, error: Exception) -> str:
+    message = str(error).replace(str(path), path.name).replace(str(path.resolve()), path.name)
+    first_line = next((line.strip() for line in message.splitlines() if line.strip()), type(error).__name__)
+    return f"{type(error).__name__}: {first_line}"[:300]
+
+
+def read_bank_library(project_root: Path, library: Path) -> BankLibraryIndex:
+    """Read each YAML file once, keeping healthy records usable beside damaged files."""
+    documents: list[BankDocument] = []
+    by_id: dict[str, tuple[BankDocument, int]] = {}
+    duplicates: dict[str, list[tuple[BankDocument, int]]] = {}
+    diagnostics: list[dict[str, str]] = []
+    for path in iter_question_files(library):
+        assert_within_project(project_root, path)
+        try:
+            document = read_bank_document(path)
+        except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
+            diagnostics.append({
+                "storage_path": _diagnostic_path(project_root, path),
+                "code": "invalid_question_file",
+                "message": _diagnostic_message(path, error),
+            })
+            continue
+        documents.append(document)
+        for index, record in enumerate(document.records):
+            location = (document, index)
+            if record.id in by_id:
+                duplicates.setdefault(record.id, [by_id[record.id]]).append(location)
+            else:
+                by_id[record.id] = location
+    return BankLibraryIndex(library, documents, by_id, duplicates, diagnostics)
+
+
 def read_bank_document(path: Path) -> BankDocument:
     text = path.read_text(encoding="utf-8")
     return parse_bank_document(path, text)
@@ -78,16 +147,7 @@ def bank_record_version(project_root: Path, document: BankDocument, index: int) 
 
 
 def find_bank_record(project_root: Path, library: Path, qid: str) -> tuple[BankDocument, int] | None:
-    found = None
-    for path in iter_question_files(library):
-        assert_within_project(project_root, path)
-        document = read_bank_document(path)
-        for index, record in enumerate(document.records):
-            if record.id == qid:
-                if found is not None:
-                    raise ValueError(f"题集中存在重复题目编号，请先修正 YAML: {qid}")
-                found = (document, index)
-    return found
+    return read_bank_library(project_root, library).find(qid)
 
 
 def replace_record_data(document: BankDocument, index: int, replacement: dict[str, Any]) -> Any:
@@ -116,13 +176,29 @@ def validate_bank_import(project_root: Path, library: Path, files: dict[Path, st
     """Check the resulting library before replacing any of its documents."""
     planned = {path.resolve(): text for path, text in files.items()}
     seen: dict[str, Path] = {}
+    existing_index = read_bank_library(project_root, library)
     paths = {path.resolve() for path in iter_question_files(library)} | planned.keys()
     for path in sorted(paths):
         assert_within_project(project_root, path)
         path.relative_to(library.resolve())
         if path == (library / "questions.yaml").resolve():
             raise ValueError("题库根目录的 questions.yaml 仅用于旧版合并导入，请使用其他题目文件名")
-        document = parse_bank_document(path, planned[path]) if path in planned else read_bank_document(path)
+        if path in planned:
+            if path.is_file():
+                try:
+                    read_bank_document(path)
+                except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
+                    raise ValueError(f"拒绝覆盖损坏的题目文件: {_diagnostic_path(project_root, path)} ({type(error).__name__})") from error
+            document = parse_bank_document(path, planned[path])
+            if not path.exists():
+                for record in document.records:
+                    existing_index.require_identity_complete(record.id)
+        else:
+            try:
+                document = read_bank_document(path)
+            except (OSError, UnicodeError, yaml.YAMLError, ValueError):
+                # Unreadable files remain untouched; diagnostics are exposed by bank listing.
+                continue
         for record in document.records:
             if record.id in seen:
                 raise ValueError(f"题集中存在重复题目编号: {record.id} ({seen[record.id].name}, {path.name})")

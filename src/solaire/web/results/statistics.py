@@ -11,6 +11,12 @@ from typing import Any
 from solaire.knowledge_forge import load_graph
 from solaire.web.exam_service import _load_exam_config
 from solaire.web.exam_workspace_service import workspace_dir
+from solaire.web.results.analysis_cache import (
+    compute_source_fingerprint,
+    is_cache_valid,
+    save_analysis_cache_atomic,
+    strip_cache_metadata,
+)
 from solaire.web.results.models import (
     _flatten_questions,
     _now_utc,
@@ -23,6 +29,8 @@ def compute_statistics(
     project_root: Path,
     exam_id: str,
     batch_id: str,
+    *,
+    graph_state: Any = None,
 ) -> dict[str, Any]:
     """
     Load scores for a batch, compute per-question / per-student / per-node stats.
@@ -45,12 +53,15 @@ def compute_statistics(
     if not scores_csv.is_file():
         raise FileNotFoundError(f"Scores not found: {batch_id}")
 
-    with scores_csv.open(encoding="utf-8") as f:
-        raw_text = f.read()
+    scores_bytes = scores_csv.read_bytes()
+    try:
+        raw_text = scores_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raw_text = scores_bytes.decode("gbk", errors="replace")
 
     reader = csv.reader(io.StringIO(raw_text))
     rows = list(reader)
-    header = [h.strip() for h in rows[0]]
+    header = [h.strip().lstrip("\ufeff") for h in rows[0]]
     data_rows = rows[1:]
 
     header_lower = [h.strip().lower() for h in header]
@@ -104,10 +115,14 @@ def compute_statistics(
         else:
             avg_score = sum(answered) / len(answered)
             # Score ratio (fuzzy membership: 0=wrong, 1=full correct)
-            fuzzy_scores = [min(max(s / q.score_per_item, 0.0), 1.0) for s in answered]
-            fuzzy_score = sum(fuzzy_scores) / len(fuzzy_scores)
-            correct_count = sum(1 for s in answered if s >= q.score_per_item * 0.5)
-            err_rate = 1.0 - correct_count / len(answered)
+            if q.score_per_item and q.score_per_item > 0:
+                fuzzy_scores = [min(max(s / q.score_per_item, 0.0), 1.0) for s in answered]
+                fuzzy_score = sum(fuzzy_scores) / len(fuzzy_scores)
+                correct_count = sum(1 for s in answered if s >= q.score_per_item * 0.5)
+                err_rate = 1.0 - correct_count / len(answered)
+            else:
+                fuzzy_score = 0.0
+                err_rate = None
         question_stats.append({
             "question_id": q.question_id,
             "header": q.csv_header(),
@@ -153,17 +168,27 @@ def compute_statistics(
         st["class_rank"] = st["rank"]
         st["total_in_class"] = len(students)
 
-    # Per-knowledge-node statistics (fuzzy)
+    # Read-only graph state loaded once for both node stats and unbound warnings
+    if graph_state is None:
+        try:
+            graph_state = load_graph(project_root)
+        except Exception:
+            graph_state = None
+
+    exam_qids = {q.question_id for q in questions}
     node_question_map: dict[str, list[str]] = {}
-    try:
-        state = load_graph(project_root)
-        exam_qids = {q.question_id for q in questions}
-        for binding in state.bindings:
-            qid = binding.question_qualified_id
-            if qid in exam_qids:
-                node_question_map.setdefault(binding.node_id, []).append(qid)
-    except Exception:
-        pass
+    bound_qids_flat: set[str] = set()
+    matching_bindings: list[tuple[str, str]] = []
+    if graph_state is not None:
+        try:
+            for binding in getattr(graph_state, "bindings", []):
+                qid = binding.question_qualified_id
+                if qid in exam_qids:
+                    node_question_map.setdefault(binding.node_id, []).append(qid)
+                    bound_qids_flat.add(qid)
+                    matching_bindings.append((qid, binding.node_id))
+        except Exception:
+            pass
 
     # Compute node-level fuzzy error rate
     node_stats: list[dict[str, Any]] = []
@@ -176,9 +201,10 @@ def compute_statistics(
                 if q.question_id == qid:
                     answered = [s["scores"][qi] for s in students if s["scores"][qi] is not None]
                     if answered:
-                        fuzzy_ratios = [min(max(s / q.score_per_item, 0.0), 1.0) for s in answered]
-                        avg_fuzzy = sum(fuzzy_ratios) / len(fuzzy_ratios)
-                        min_fuzzy = min(min_fuzzy, avg_fuzzy)
+                        if q.score_per_item and q.score_per_item > 0:
+                            fuzzy_ratios = [min(max(s / q.score_per_item, 0.0), 1.0) for s in answered]
+                            avg_fuzzy = sum(fuzzy_ratios) / len(fuzzy_ratios)
+                            min_fuzzy = min(min_fuzzy, avg_fuzzy)
                     break
         mastery = min_fuzzy if min_fuzzy < 1.0 else 1.0
         error_rate = 1.0 - mastery
@@ -192,16 +218,6 @@ def compute_statistics(
 
     # Warn about unbound questions
     unbound_warnings: list[dict[str, str]] = []
-    bound_qids_flat: set[str] = set()
-    try:
-        state = load_graph(project_root)
-        exam_qids = {q.question_id for q in questions}
-        for b in state.bindings:
-            if b.question_qualified_id in exam_qids:
-                bound_qids_flat.add(b.question_qualified_id)
-    except Exception:
-        pass
-
     for q in questions:
         if q.question_id not in bound_qids_flat:
             unbound_warnings.append({
@@ -211,7 +227,7 @@ def compute_statistics(
                 "message": f"第{q.csv_header()}题（{q.question_id}）未绑定知识点节点，请在知识图谱页面绑定后再查看节点统计",
             })
 
-    # Save computed analysis
+    # Save computed analysis atomically with source fingerprint
     analysis_path = dir_path / "scores" / batch_id / "analysis.json"
     student_mastery_rows: list[dict[str, Any]] = []
     for st in students:
@@ -242,22 +258,73 @@ def compute_statistics(
         "class_avg_ratio": round(sum(s["score_ratio"] for s in student_stats) / len(student_stats), 4) if student_stats else 0,
         "class_avg_fuzzy": round(sum(s["fuzzy_score"] for s in student_stats) / len(student_stats), 4) if student_stats else 0,
     }
-    with analysis_path.open("w", encoding="utf-8") as f:
-        json.dump(analysis_data, f, ensure_ascii=False, indent=2)
+
+    fingerprint = compute_source_fingerprint(
+        exam_id=exam_id,
+        batch_id=batch_id,
+        questions=questions,
+        scores_bytes=scores_bytes,
+        bindings=matching_bindings,
+    )
+    save_analysis_cache_atomic(analysis_path, analysis_data, fingerprint)
 
     return analysis_data
 
 
 def get_score_analysis(project_root: Path, exam_id: str, batch_id: str) -> dict[str, Any]:
-    """Return cached analysis for a score batch (recompute if stale)."""
+    """Return cached analysis for a score batch (recompute if stale or inputs changed)."""
     dir_path = workspace_dir(project_root, exam_id)
     assert_within_project(project_root, dir_path)
     analysis_path = dir_path / "scores" / batch_id / "analysis.json"
     if not analysis_path.is_file():
         return compute_statistics(project_root, exam_id, batch_id)
-    with analysis_path.open(encoding="utf-8") as f:
-        data = json.load(f)
-    # If cache missing fields needed for 学情诊断视图，重算
-    if "warnings" not in data or "student_mastery_rows" not in data or "question_order" not in data:
+
+    exam_yaml = dir_path / "exam.yaml"
+    scores_csv = dir_path / "scores" / batch_id / "scores.csv"
+    if not exam_yaml.is_file() or not scores_csv.is_file():
         return compute_statistics(project_root, exam_id, batch_id)
-    return data
+
+    try:
+        with analysis_path.open(encoding="utf-8") as f:
+            cached_data = json.load(f)
+    except Exception:
+        return compute_statistics(project_root, exam_id, batch_id)
+
+    if not isinstance(cached_data, dict) or "_fingerprint" not in cached_data:
+        return compute_statistics(project_root, exam_id, batch_id)
+
+    try:
+        exam = _load_exam_config(exam_yaml)
+        questions = _flatten_questions(exam)
+        scores_bytes = scores_csv.read_bytes()
+    except Exception:
+        return compute_statistics(project_root, exam_id, batch_id)
+
+    graph_state: Any = None
+    try:
+        graph_state = load_graph(project_root)
+    except Exception:
+        graph_state = None
+
+    exam_qids = {q.question_id for q in questions}
+    matching_bindings: list[tuple[str, str]] = []
+    if graph_state is not None:
+        try:
+            for b in getattr(graph_state, "bindings", []):
+                if b.question_qualified_id in exam_qids:
+                    matching_bindings.append((b.question_qualified_id, b.node_id))
+        except Exception:
+            pass
+
+    expected_fp = compute_source_fingerprint(
+        exam_id=exam_id,
+        batch_id=batch_id,
+        questions=questions,
+        scores_bytes=scores_bytes,
+        bindings=matching_bindings,
+    )
+
+    if not is_cache_valid(cached_data, expected_fp):
+        return compute_statistics(project_root, exam_id, batch_id, graph_state=graph_state)
+
+    return strip_cache_metadata(cached_data)

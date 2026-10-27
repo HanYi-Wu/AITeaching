@@ -10,11 +10,12 @@ from typing import Any
 
 from solaire.web.learning_progress.sources import (
     compute_batch_snapshot_hash,
-    compute_online_source_snapshot_hash,
     get_graph_question_node_bindings,
+    GraphQuestionBindingSnapshot,
     question_node_ids,
     resolve_batch_student_scores,
 )
+from solaire.web.learning_progress.source_reads import load_online_source_read_context
 from solaire.web.learning_progress.store import (
     insert_frozen_baseline_items,
     record_practice_source,
@@ -130,6 +131,7 @@ def freeze_personalized_baseline(
     assignments: list[dict[str, Any]],
     captured_at: str,
     calculation_rule_version: str = DEFAULT_CALCULATION_RULE_VERSION,
+    graph_snapshot: GraphQuestionBindingSnapshot | None = None,
 ) -> int:
     """Freeze baseline for personalized adaptive practice in caller's SQL transaction."""
     for sp_id in source_publication_ids:
@@ -143,7 +145,19 @@ def freeze_personalized_baseline(
             calculation_rule_version=calculation_rule_version,
         )
 
-    node_bindings = get_graph_question_node_bindings(project_root) if project_root else {}
+    node_bindings = (
+        graph_snapshot.node_ids_by_question
+        if graph_snapshot is not None
+        else get_graph_question_node_bindings(project_root) if project_root else {}
+    )
+    source_read_context = load_online_source_read_context(
+        con,
+        source_publication_ids=source_publication_ids,
+        student_ids=[str(assignment["student_id"]) for assignment in assignments],
+        require_grading_completed=True,
+        include_scores=True,
+        include_answer_keys=False,
+    )
 
     baseline_items: list[dict[str, Any]] = []
 
@@ -151,31 +165,16 @@ def freeze_personalized_baseline(
         plat_student_id = str(assignment["student_id"])
         # For wrong_questions practice, look up source answers from source publications
         for sp_id in source_publication_ids:
-            # Check source attempt
-            attempt_row = con.execute(
-                """
-                SELECT id, question_payload_json, grading_completed_at FROM student_attempts
-                WHERE publication_id = ? AND student_id = ? AND status = 'submitted'
-                """,
-                (sp_id, plat_student_id),
-            ).fetchone()
-            if attempt_row is None or not attempt_row["grading_completed_at"]:
+            attempt = source_read_context.attempt(sp_id, plat_student_id)
+            if attempt is None or not attempt.get("grading_completed_at"):
                 continue
-            src_attempt_id = str(attempt_row["id"])
-            source_hash = compute_online_source_snapshot_hash(con, sp_id, plat_student_id)
-
-            # Query source answers
-            ans_rows = con.execute(
-                """
-                SELECT question_id, score, is_correct FROM student_answers
-                WHERE attempt_id = ?
-                """,
-                (src_attempt_id,),
-            ).fetchall()
+            src_attempt_id = str(attempt["id"])
+            source_hash = source_read_context.source_snapshot_hash(sp_id, plat_student_id)
+            ans_rows = source_read_context.answers(src_attempt_id)
 
             # Attempt question payload to know max score
             try:
-                q_payloads = json.loads(str(attempt_row["question_payload_json"] or "[]"))
+                q_payloads = json.loads(str(attempt.get("question_payload_json") or "[]"))
             except Exception:
                 q_payloads = []
             question_meta = {str(qp.get("question_id")): qp for qp in q_payloads if isinstance(qp, dict)}

@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 16
+
+CLASS_MEMBERSHIP_VIEW_SQL = """
+CREATE VIEW IF NOT EXISTS attempt_class_memberships AS
+SELECT attempt_id, class_id, class_name, class_grade FROM attempt_class_snapshots
+UNION ALL
+SELECT sa.id AS attempt_id, c.id AS class_id, c.name AS class_name, c.grade AS class_grade
+FROM student_attempts sa
+JOIN publication_classes pc ON pc.publication_id = sa.publication_id
+JOIN class_students cs ON cs.class_id = pc.class_id AND cs.student_id = sa.student_id
+JOIN classes c ON c.id = cs.class_id
+WHERE sa.class_membership_frozen = 0
+"""
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -77,6 +90,22 @@ CREATE TABLE IF NOT EXISTS class_students (
   student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   PRIMARY KEY(class_id, student_id)
 );
+CREATE INDEX IF NOT EXISTS idx_class_students_student ON class_students(student_id, class_id);
+CREATE TRIGGER IF NOT EXISTS one_current_class_per_student_insert
+BEFORE INSERT ON class_students
+WHEN EXISTS (
+  SELECT 1 FROM class_students
+  WHERE student_id = NEW.student_id AND class_id != NEW.class_id
+)
+BEGIN SELECT RAISE(ABORT, 'student already belongs to a different class'); END;
+CREATE TRIGGER IF NOT EXISTS one_current_class_per_student_update
+BEFORE UPDATE OF student_id, class_id ON class_students
+WHEN EXISTS (
+  SELECT 1 FROM class_students
+  WHERE student_id = NEW.student_id AND class_id != NEW.class_id
+    AND NOT (student_id = OLD.student_id AND class_id = OLD.class_id)
+)
+BEGIN SELECT RAISE(ABORT, 'student already belongs to a different class'); END;
 
 CREATE TABLE IF NOT EXISTS teacher_class_assignments (
   teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -180,6 +209,7 @@ CREATE TABLE IF NOT EXISTS student_attempts (
   answer_key_json TEXT,
   practice_metadata_json TEXT,
   question_payload_version INTEGER NOT NULL DEFAULT 1,
+  class_membership_frozen INTEGER NOT NULL DEFAULT 0,
   grading_completed_at TEXT,
   grading_completed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   UNIQUE(publication_id, student_id)
@@ -202,6 +232,31 @@ CREATE TABLE IF NOT EXISTS student_answers (
   responded_at TEXT NOT NULL,
   UNIQUE(attempt_id, question_id)
 );
+
+CREATE TABLE IF NOT EXISTS attempt_class_snapshots (
+  attempt_id TEXT NOT NULL REFERENCES student_attempts(id) ON DELETE CASCADE,
+  class_id TEXT NOT NULL,
+  class_name TEXT NOT NULL,
+  class_grade TEXT,
+  captured_at TEXT NOT NULL,
+  source TEXT NOT NULL,
+  PRIMARY KEY(attempt_id, class_id)
+);
+CREATE INDEX IF NOT EXISTS idx_attempt_class_snapshots_class ON attempt_class_snapshots(class_id, attempt_id);
+
+CREATE TABLE IF NOT EXISTS student_class_transfers (
+  id TEXT PRIMARY KEY,
+  school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  actor_id TEXT NOT NULL,
+  from_classes_json TEXT NOT NULL,
+  to_class_id TEXT NOT NULL,
+  to_class_name TEXT NOT NULL,
+  transferred_at TEXT NOT NULL,
+  retained_attempt_count INTEGER NOT NULL,
+  captured_legacy_attempt_count INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_student_class_transfers_student ON student_class_transfers(student_id, transferred_at);
 
 CREATE TABLE IF NOT EXISTS paper_answer_grading_versions (
   attempt_id TEXT NOT NULL REFERENCES student_attempts(id) ON DELETE CASCADE,
@@ -319,15 +374,33 @@ def connect(root: Path) -> sqlite3.Connection:
 
 
 def init_platform_db(root: Path) -> None:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         previous_version = int(con.execute("PRAGMA user_version").fetchone()[0])
+        if previous_version == SCHEMA_VERSION:
+            return
+        if previous_version > SCHEMA_VERSION:
+            raise RuntimeError(f"Platform database version {previous_version} is newer than supported version {SCHEMA_VERSION}")
+        # SQLite serializes upgrades across processes; another opener may finish while we wait.
+        con.execute("BEGIN IMMEDIATE")
+        previous_version = int(con.execute("PRAGMA user_version").fetchone()[0])
+        if previous_version == SCHEMA_VERSION:
+            return
+        if previous_version > SCHEMA_VERSION:
+            raise RuntimeError(f"Platform database version {previous_version} is newer than supported version {SCHEMA_VERSION}")
         if 0 < previous_version < SCHEMA_VERSION:
             backup_dir = platform_db_path(root).parent / "backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            with sqlite3.connect(backup_dir / f"platform-before-v{SCHEMA_VERSION}-{stamp}.db") as backup:
-                con.backup(backup)
-        con.executescript(SCHEMA_SQL)
+            with closing(sqlite3.connect(backup_dir / f"platform-before-v{SCHEMA_VERSION}-{stamp}.db")) as backup:
+                with closing(connect(root)) as source:
+                    source.backup(backup)
+        # executescript commits pending transactions, so execute each complete DDL statement here.
+        statement = ""
+        for line in SCHEMA_SQL.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                con.execute(statement)
+                statement = ""
         _ensure_column(con, "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "users", "teacher_guide_step", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "users", "avatar_data_url", "TEXT")
@@ -345,7 +418,7 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "paper_records", "folder_id", "TEXT REFERENCES content_folders(id) ON DELETE SET NULL")
         if previous_version < 12:
             con.execute("DROP TRIGGER IF EXISTS publication_classes_one_active_per_paper")
-            con.executescript("""
+            con.execute("""
             CREATE TRIGGER publication_classes_one_active_per_paper
             BEFORE INSERT ON publication_classes
             WHEN EXISTS (
@@ -359,7 +432,7 @@ def init_platform_db(root: Path) -> None:
             BEGIN SELECT RAISE(ABORT, 'paper already published to class'); END;
             """)
             con.execute("DROP TRIGGER IF EXISTS one_active_attempt_per_paper_folder")
-            con.executescript("""
+            con.execute("""
             CREATE TRIGGER one_active_attempt_per_paper_folder
             BEFORE INSERT ON student_attempts
             WHEN EXISTS (
@@ -383,8 +456,10 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "student_attempts", "answer_key_json", "TEXT")
         _ensure_column(con, "student_attempts", "practice_metadata_json", "TEXT")
         _ensure_column(con, "student_attempts", "question_payload_version", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(con, "student_attempts", "class_membership_frozen", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "student_attempts", "grading_completed_at", "TEXT")
         _ensure_column(con, "student_attempts", "grading_completed_by", "TEXT REFERENCES users(id) ON DELETE SET NULL")
+        con.execute(CLASS_MEMBERSHIP_VIEW_SQL)
         # Keep legacy records readable after the subject model became mandatory.
         con.execute("UPDATE paper_records SET subject = '通用' WHERE subject IS NULL OR TRIM(subject) = '' OR subject = '未分科'")
         con.execute("UPDATE exam_publications SET subject = (SELECT subject FROM paper_records WHERE id = exam_publications.paper_id) WHERE subject IS NULL OR TRIM(subject) = '' OR subject = '未分科'")
@@ -405,6 +480,19 @@ def init_platform_db(root: Path) -> None:
         """)
         _dedupe_active_publication_classes(con)
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def ensure_teacher_default_folder(con: sqlite3.Connection, teacher_id: str) -> None:
+    """Create a teacher's default folder in the same transaction as the account."""
+    con.execute(
+        """
+        INSERT OR IGNORE INTO content_folders
+          (id, owner_teacher_id, scope, parent_id, kind, name, created_at, updated_at)
+        SELECT 'paper-default-' || id, id, 'paper', NULL, 'category', '默认文件夹', created_at, updated_at
+        FROM users WHERE id = ? AND role = 'teacher'
+        """,
+        (teacher_id,),
+    )
 
 
 def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition: str) -> None:

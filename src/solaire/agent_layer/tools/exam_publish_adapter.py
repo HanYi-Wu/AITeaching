@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import re
 import sqlite3
 from pathlib import Path
@@ -45,7 +46,7 @@ def _paper_candidates(root: Path, actor: dict[str, Any]) -> list[dict[str, Any]]
         WHERE {' AND '.join(where)}
         ORDER BY updated_at DESC, created_at DESC
     """
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(sql, tuple(params)).fetchall()
     return [row_to_dict(row) or {} for row in rows]
 
@@ -118,7 +119,7 @@ def _class_candidates(root: Path, actor: dict[str, Any]) -> list[dict[str, Any]]
         params.append(str(actor.get("school_id")))
     else:
         sql = "SELECT id, name, grade, school_id FROM classes ORDER BY grade, name"
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(sql, tuple(params)).fetchall()
     return [row_to_dict(row) or {} for row in rows]
 
@@ -156,7 +157,7 @@ def _resolve_folder_and_students(root: Path, actor: dict[str, Any], args: dict[s
     folder_id = str(args.get("folder_id") or "").strip() or None
     folder_name = str(args.get("folder_name") or "").strip()
     if not folder_id and folder_name:
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             rows = con.execute("SELECT id, name FROM content_folders WHERE owner_teacher_id=? AND scope='paper' AND name LIKE ?",
                 (str(actor.get("id")), f"%{folder_name}%")).fetchall()
         exact = [row for row in rows if str(row["name"]) == folder_name]
@@ -169,7 +170,7 @@ def _resolve_folder_and_students(root: Path, actor: dict[str, Any], args: dict[s
     if student_names:
         if len(class_ids) != 1:
             return folder_id, [], "按学生姓名发布时须先确定一个班级"
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             rows = con.execute("SELECT s.id, s.student_no, s.display_name FROM students s JOIN class_students cs ON cs.student_id=s.id WHERE cs.class_id=?", (class_ids[0],)).fetchall()
         for term in student_names:
             exact = [row for row in rows if term in {str(row["id"]), str(row["student_no"]), str(row["display_name"])}]

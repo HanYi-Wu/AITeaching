@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ def update_school_ai_enabled(root: Path, *, school_id: str, ai_enabled: bool) ->
     """Toggle the school-level AI enablement state in authoritative DB."""
     init_platform_db(root)
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute("SELECT 1 FROM schools WHERE id = ?", (school_id,)).fetchone()
         if existing is None:
             raise ValueError("school not found")

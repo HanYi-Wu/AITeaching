@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import logging
 import sqlite3
@@ -96,7 +97,7 @@ def verify_authoritative_actor_and_policy(
 
     if connection is not None:
         return _verify_with_conn(connection)
-    with connect(project_root) as conn:
+    with closing(connect(project_root)) as conn, conn:
         return _verify_with_conn(conn)
 
 

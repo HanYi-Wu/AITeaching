@@ -216,6 +216,71 @@ describe("StudentWorkspace", () => {
     expect(screen.getByText("注意基本运算。")).toBeInTheDocument();
   });
 
+  it("updates a submitted result after the teacher publishes it while the student waits on the results page", async () => {
+    let poll: (() => void) | undefined;
+    const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation((handler, timeout) => {
+      if (timeout === 15000) poll = handler as () => void;
+      return 1;
+    });
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+    const documentHiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const pendingResult = {
+      attempt_id: "attempt-pending", publication_id: "pub-pending", exam_id: "quiz/Math", title: "待发布考试",
+      subject: "Math", status: "submitted", score: null, max_score: null, score_percent: null, time_spent_seconds: 300,
+      show_results: false, analysis: { correct_count: null, wrong_count: null, answered_count: 2 }, answers: [],
+    };
+    mocks.listStudentResults.mockResolvedValue({ results: [pendingResult] });
+    const view = render(<StudentWorkspace user={{ id: "s1", role: "student", username: "stu_abcd", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+
+    try {
+      await userEvent.click(await screen.findByTestId("student-page-results"));
+      expect((await screen.findAllByText("待发布考试")).length).toBeGreaterThan(0);
+      expect(screen.getByText("待教师批改")).toBeInTheDocument();
+
+      mocks.listStudentResults.mockResolvedValue({
+        results: [{
+          ...pendingResult, score: 8, max_score: 10, score_percent: 80, show_results: true,
+          answers: [
+            { question_id: "q1", header: "1", content: "1+1=?", answer: "A", correct_answer: "A", score: 5, score_per_item: 5, is_correct: true },
+            { question_id: "q2", header: "2", content: "2+2=?", answer: "3", correct_answer: "4", score: 0, score_per_item: 5, is_correct: false },
+          ],
+        }],
+      });
+      await act(async () => {
+        poll?.();
+        await Promise.resolve();
+      });
+
+      expect(mocks.listStudentResults).toHaveBeenCalledTimes(2);
+      expect(await screen.findByText("逐题复盘")).toBeInTheDocument();
+      expect(screen.getAllByText("80%").length).toBeGreaterThan(0);
+
+      await userEvent.click(screen.getByRole("button", { name: "只看错题" }));
+      mocks.listStudentResults.mockResolvedValue({
+        results: [{
+          ...pendingResult, score: 9, max_score: 10, score_percent: 90, show_results: true,
+          answers: [
+            { question_id: "q1", header: "1", content: "1+1=?", answer: "A", correct_answer: "A", score: 5, score_per_item: 5, is_correct: true },
+            { question_id: "q2", header: "2", content: "2+2=?", answer: "3", correct_answer: "4", score: 0, score_per_item: 5, is_correct: false },
+          ],
+        }],
+      });
+      await act(async () => {
+        poll?.();
+        await Promise.resolve();
+      });
+
+      expect(screen.getAllByText("90%").length).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: "查看全部题目" })).toBeInTheDocument();
+      expect(mocks.listStudentResults).toHaveBeenCalledTimes(3);
+    } finally {
+      view.unmount();
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+      documentHiddenSpy.mockRestore();
+    }
+  });
+
   it("forces first-login students to change password before entering papers", async () => {
     mocks.updateStudentAccount.mockResolvedValue({
       user: {

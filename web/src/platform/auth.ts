@@ -6,7 +6,7 @@
  */
 
 import { clearSessionToken, loadSessionToken } from "./session";
-import { platformRequest } from "./platformRequest";
+import { PlatformRequestError, platformRequest } from "./platformRequest";
 import type { PlatformAuthResponse, PlatformStatus, PlatformUser } from "./authTypes";
 
 export * from "./authTypes";
@@ -50,10 +50,12 @@ export async function getCurrentUser(): Promise<{ user: PlatformUser | null }> {
     }
     return data;
   } catch (e) {
-    if (loadSessionToken() === token) {
+    if (loadSessionToken() !== token) return { user: null };
+    if (e instanceof PlatformRequestError && e.status === 401) {
       clearSessionToken();
+      return { user: null };
     }
-    return { user: null };
+    throw e;
   }
 }
 
@@ -82,7 +84,11 @@ export async function logoutPlatform(): Promise<void> {
     return;
   }
   try {
-    await platformRequest<{ ok: boolean }>("/api/auth/logout", { method: "POST", body: "{}" });
+    await platformRequest<{ ok: boolean }>("/api/auth/logout", {
+      method: "POST",
+      body: "{}",
+      headers: { Authorization: `Bearer ${token}` },
+    });
   } catch {
     /* ignore network errors during logout */
   }

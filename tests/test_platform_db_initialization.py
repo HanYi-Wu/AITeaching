@@ -1,0 +1,173 @@
+"""Database opening must keep migrations out of current-version requests."""
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from pathlib import Path
+import sqlite3
+import os
+import subprocess
+import sys
+
+import pytest
+
+from solaire.web import platform_db
+from solaire.web.school.accounts import create_teacher
+from solaire.web.school.importer import import_teachers
+from solaire.web.school.organization import create_school
+
+
+def test_current_database_opening_does_not_repair_or_write(tmp_path, monkeypatch):
+    platform_db.init_platform_db(tmp_path)
+    statements = []
+    original = platform_db.connect
+
+    def traced(root):
+        con = original(root)
+        con.set_trace_callback(statements.append)
+        return con
+
+    monkeypatch.setattr(platform_db, "connect", traced)
+    for _ in range(4):
+        platform_db.init_platform_db(tmp_path)
+    assert statements == ["PRAGMA user_version"] * 4
+
+
+def test_upgrade_is_atomic_and_can_retry_after_a_migration_failure(tmp_path, monkeypatch):
+    path = platform_db.platform_db_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(path)) as con, con:
+        con.executescript(platform_db.SCHEMA_SQL)
+        con.execute("DROP TRIGGER one_current_class_per_student_insert")
+        con.execute("DROP TRIGGER one_current_class_per_student_update")
+        con.execute("ALTER TABLE users DROP COLUMN preferences_json")
+        con.execute("PRAGMA user_version = 11")
+
+    with monkeypatch.context() as patch:
+        def fail(_con):
+            raise OSError("migration interrupted")
+        patch.setattr(platform_db, "_dedupe_active_publication_classes", fail)
+        with pytest.raises(OSError, match="migration interrupted"):
+            platform_db.init_platform_db(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert "preferences_json" not in {row["name"] for row in con.execute("PRAGMA table_info(users)")}
+        assert not con.execute("SELECT 1 FROM sqlite_master WHERE type='trigger'").fetchall()
+
+    platform_db.init_platform_db(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == platform_db.SCHEMA_VERSION
+        assert "preferences_json" in {row["name"] for row in con.execute("PRAGMA table_info(users)")}
+        assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+    backups = list((path.parent / "backups").glob("*.db"))
+    assert backups
+    with closing(sqlite3.connect(backups[0])) as backup:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 11
+
+
+def test_concurrent_processes_open_one_complete_database(tmp_path):
+    code = "from pathlib import Path; from solaire.web.platform_db import init_platform_db; import sys; init_platform_db(Path(sys.argv[1]))"
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(filter(None, (
+        str(Path(__file__).resolve().parents[1] / "src"), environment.get("PYTHONPATH"),
+    )))
+    def initialize(_):
+        return subprocess.run([sys.executable, "-c", code, str(tmp_path)], env=environment, capture_output=True, text=True, timeout=30)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(initialize, range(4)))
+    assert all(result.returncode == 0 for result in results), [result.stderr for result in results]
+    with closing(platform_db.connect(tmp_path)) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == platform_db.SCHEMA_VERSION
+        assert {row["name"] for row in con.execute("SELECT name FROM sqlite_master WHERE type='trigger'")} == {
+            "publication_classes_one_active_per_paper", "one_active_attempt_per_paper_folder",
+            "one_current_class_per_student_insert", "one_current_class_per_student_update",
+        }
+
+
+def test_newer_database_is_never_downgraded(tmp_path):
+    platform_db.init_platform_db(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        con.execute(f"PRAGMA user_version = {platform_db.SCHEMA_VERSION + 1}")
+    with pytest.raises(RuntimeError, match="newer than supported"):
+        platform_db.init_platform_db(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == platform_db.SCHEMA_VERSION + 1
+
+
+def test_teacher_creation_and_import_create_default_folders_in_their_transactions(tmp_path):
+    school = create_school(tmp_path, name="School")
+    teacher = create_teacher(tmp_path, school_id=school["id"], username="teacher", password="teacher123", display_name="Teacher", subjects=["Math"])
+    imported = import_teachers(tmp_path, school_id=school["id"], teachers=[{"username": "imported", "password": "teacher123"}])
+    with closing(platform_db.connect(tmp_path)) as con:
+        folders = {row[0] for row in con.execute("SELECT id FROM content_folders")}
+    assert folders == {f"paper-default-{teacher['id']}", f"paper-default-{imported['teachers'][0]['id']}"}
+
+    with pytest.raises(ValueError, match="Row 2"):
+        import_teachers(tmp_path, school_id=school["id"], teachers=[{"username": "rolled-back"}, {"username": "x"}])
+    with closing(platform_db.connect(tmp_path)) as con:
+        assert {row[0] for row in con.execute("SELECT id FROM content_folders")} == folders
+        assert con.execute("SELECT 1 FROM users WHERE username='rolled-back'").fetchone() is None
+
+
+def test_version_thirteen_database_gains_student_class_lookup_index(tmp_path):
+    platform_db.init_platform_db(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        con.execute("DROP INDEX IF EXISTS idx_class_students_student")
+        con.execute("PRAGMA user_version = 13")
+
+    platform_db.init_platform_db(tmp_path)
+
+    with closing(platform_db.connect(tmp_path)) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == platform_db.SCHEMA_VERSION
+        assert [row["name"] for row in con.execute("PRAGMA index_info(idx_class_students_student)")] == [
+            "student_id", "class_id",
+        ]
+
+
+def _seed_current_class_memberships(root):
+    platform_db.init_platform_db(root)
+    with closing(platform_db.connect(root)) as con, con:
+        con.execute("INSERT INTO schools (id, name, created_at, updated_at) VALUES ('school', 'School', 'now', 'now')")
+        con.executemany(
+            "INSERT INTO classes (id, school_id, name, created_at, updated_at) VALUES (?, 'school', ?, 'now', 'now')",
+            [("class-a", "A"), ("class-b", "B")],
+        )
+        con.executemany(
+            "INSERT INTO students (id, school_id, student_no, display_name, created_at, updated_at) "
+            "VALUES (?, 'school', ?, ?, 'now', 'now')",
+            [("student-a", "A", "Alice"), ("student-b", "B", "Bob")],
+        )
+        con.executemany(
+            "INSERT INTO class_students (class_id, student_id) VALUES (?, ?)",
+            [("class-a", "student-a"), ("class-b", "student-b")],
+        )
+
+
+def test_database_rejects_a_second_current_class_on_insert_and_update(tmp_path):
+    _seed_current_class_memberships(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        con.execute("INSERT OR IGNORE INTO class_students VALUES ('class-a', 'student-a')")
+        with pytest.raises(sqlite3.IntegrityError, match="student already belongs"):
+            con.execute("INSERT INTO class_students VALUES ('class-b', 'student-a')")
+        with pytest.raises(sqlite3.IntegrityError, match="student already belongs"):
+            con.execute("UPDATE class_students SET student_id='student-a' WHERE student_id='student-b'")
+        assert [tuple(row) for row in con.execute("SELECT class_id, student_id FROM class_students ORDER BY student_id")] == [
+            ("class-a", "student-a"), ("class-b", "student-b"),
+        ]
+
+
+def test_upgrade_preserves_ambiguous_legacy_memberships_and_guards_new_writes(tmp_path):
+    _seed_current_class_memberships(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        con.execute("DROP TRIGGER one_current_class_per_student_insert")
+        con.execute("DROP TRIGGER one_current_class_per_student_update")
+        con.execute("INSERT INTO class_students VALUES ('class-b', 'student-a')")
+        con.execute("PRAGMA user_version = 14")
+
+    platform_db.init_platform_db(tmp_path)
+
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        assert [row[0] for row in con.execute(
+            "SELECT class_id FROM class_students WHERE student_id='student-a' ORDER BY class_id",
+        )] == ["class-a", "class-b"]
+        assert con.execute("PRAGMA user_version").fetchone()[0] == platform_db.SCHEMA_VERSION
+        with pytest.raises(sqlite3.IntegrityError, match="student already belongs"):
+            con.execute("INSERT INTO class_students VALUES ('class-a', 'student-b')")

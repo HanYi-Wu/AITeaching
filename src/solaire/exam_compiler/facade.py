@@ -46,6 +46,7 @@ from solaire.exam_compiler.loaders.template_loader import (
 # 流水线（Pipeline）
 # --------------------------------------------------------------------------
 from solaire.exam_compiler.pipeline.build import build_exam_pdfs, precheck_exam_latex_build
+from solaire.exam_compiler.pipeline.prepare import PreparedExam, prepare_exam
 from solaire.exam_compiler.pipeline.docx import (
     PandocError,
     build_exam_docx,
@@ -85,6 +86,8 @@ from solaire.exam_compiler.latex_jinja_paths import (
 from solaire.exam_compiler.latex_metadata_ui import load_latex_metadata_ui_fields
 
 __all__ = [
+    "PreparedExam",
+    "prepare_exam",
     # 领域模型
     "BankRecord",
     "ExamConfig",

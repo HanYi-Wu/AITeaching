@@ -41,6 +41,7 @@ jobs:
       - name: Prepare runtime (network allowed only on builder)
         shell: micromamba-shell {0}
         run: |
+          set -euo pipefail
           python -m pip install ".[primebrush-pdf,ocr]" pytest httpx2
           mkdir -p "$CONDA_PREFIX/share/tessdata"
           curl -fL --retry 3 https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/chi_sim.traineddata -o "$CONDA_PREFIX/share/tessdata/chi_sim.traineddata"
@@ -55,6 +56,7 @@ jobs:
       - name: Package and test real installation
         shell: micromamba-shell {0}
         run: |
+          set -euo pipefail
           python scripts/build_linux_offline.py --runtime-prefix "$CONDA_PREFIX"
           python -m tools.release_verify offline dist-offline/*.tar.gz --ref "$GITHUB_SHA"
           bash scripts/test-offline-install-linux.sh

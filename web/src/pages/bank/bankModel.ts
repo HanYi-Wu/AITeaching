@@ -1,6 +1,12 @@
 import { type QuestionGroupJson } from "../../components/bankEditorTypes";
 import { isChoiceQuestionType } from "../../lib/questionTypes";
 
+export type BankReadDiagnostic = {
+  storage_path: string;
+  code: string;
+  message: string;
+};
+
 /** 新建题组时生成一条占位小题（与后端 QuestionGroupRecord 一致） */
 export function defaultItemsForNewGroup(unifiedUi: string, subStem: string): QuestionGroupJson["items"] {
   if (unifiedUi === "mixed") {

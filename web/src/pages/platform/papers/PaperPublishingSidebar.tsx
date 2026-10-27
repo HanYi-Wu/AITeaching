@@ -1,16 +1,27 @@
 import { History, PauseCircle, PlayCircle, Trash2, Wifi } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { PaperPublicationRecord } from "../../../platform/auth";
 import { publicationWindowLabel } from "./paperHelpers";
 
 type Props = {
   publishPanel: ReactNode;
   publications: PaperPublicationRecord[];
-  clock: number;
+  clock?: number;
   busy: string | null;
   onTogglePause: (publication: PaperPublicationRecord) => void | Promise<void>;
   onRevoke: (publication: PaperPublicationRecord) => void | Promise<void>;
 };
+
+function PublicationWindowBadge({ publication, clock: externalClock }: { publication: PaperPublicationRecord; clock?: number }) {
+  const [internalClock, setInternalClock] = useState(() => externalClock ?? Date.now());
+  useEffect(() => {
+    if (externalClock !== undefined) return;
+    const timer = window.setInterval(() => setInternalClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [externalClock]);
+  const clock = externalClock ?? internalClock;
+  return <span className="rounded bg-slate-100 px-2 py-1 text-xs">{publicationWindowLabel(publication, clock)}</span>;
+}
 
 export function PaperPublishingSidebar({ publishPanel, publications, clock, busy, onTogglePause, onRevoke }: Props) {
   return (
@@ -24,7 +35,7 @@ export function PaperPublishingSidebar({ publishPanel, publications, clock, busy
             <article key={publication.id} className="min-w-0 rounded-lg border border-slate-200 p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <h3 className="min-w-0 break-all text-sm font-semibold">{publication.title}</h3>
-                <span className="rounded bg-slate-100 px-2 py-1 text-xs">{publicationWindowLabel(publication, clock)}</span>
+                <PublicationWindowBadge publication={publication} clock={clock} />
               </div>
               <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
                 <div className="break-all">{publication.recipient_scope === "student" ? "指定学生" : "班级"}：{((publication.recipient_scope === "student" ? publication.student_names : publication.class_names) ?? []).join("、") || "-"}</div>

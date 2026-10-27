@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import uuid
 import json
 import asyncio
@@ -9,6 +11,7 @@ import base64
 import re
 import sqlite3
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +23,7 @@ from solaire.web.papers.scoring import (
     question_score_map, score_percent, validate_manual_score,
 )
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
+from solaire.web.papers.class_snapshots import freeze_attempt_class_memberships
 from solaire.web.papers.repository import (
     clean_subject as _clean_subject,
     clean_title as _clean_title,
@@ -235,7 +239,7 @@ def query_papers(
     if subject and subject != "all":
         papers = [paper for paper in papers if str(paper.get("subject") or "") == subject]
     if folder_id:
-        with connect(platform_root) as con:
+        with closing(connect(platform_root)) as con, con:
             folder_rows = con.execute(
                 "WITH RECURSIVE subtree(id) AS (SELECT id FROM content_folders WHERE id=? UNION ALL SELECT child.id FROM content_folders child JOIN subtree parent ON child.parent_id=parent.id) SELECT id FROM subtree",
                 (folder_id,),
@@ -266,7 +270,7 @@ def update_paper_delivery_mode(root: Path, paper_id: str, delivery_mode: str, us
         raise PermissionError("Only teachers and admins can update paper delivery mode")
     clean_mode = normalize_delivery_mode(delivery_mode)
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         existing = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
         if existing is None:
             raise ValueError("paper not found")
@@ -287,7 +291,7 @@ def list_paper_publications(root: Path, *, paper_id: str, user: dict[str, Any]) 
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
     access_clause, access_params = _publication_access_clause(user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         rows = con.execute(
             f"""
             SELECT
@@ -376,7 +380,7 @@ def update_paper_publication(
         updates.append("status = ?")
         params.append(clean_status)
     params.extend([publication_id, paper_id])
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         publication = con.execute(
             "SELECT teacher_id, start_at, end_at, folder_id, status FROM exam_publications WHERE id = ? AND paper_id = ?",
             (publication_id, paper_id),
@@ -406,7 +410,7 @@ def revoke_paper_publication(root: Path, *, paper_id: str, publication_id: str, 
         user=user,
         status="revoked",
     )
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         active = con.execute(
             "SELECT 1 FROM exam_publications WHERE paper_id = ? AND status <> 'revoked' LIMIT 1",
             (paper_id,),
@@ -441,6 +445,8 @@ def _analysis_question_maps(
     publication_id: str | None,
     class_id: str | None = None,
     read_context: FrozenQuestionReadContext | None = None,
+    *,
+    snapshot_rows: list[Any] | None = None,
 ):
     return paper_analysis.analysis_question_maps(
         root,
@@ -452,6 +458,7 @@ def _analysis_question_maps(
         attempt_clause_fn=_analysis_attempt_clause,
         question_maps_fn=_question_maps,
         read_context=read_context,
+        snapshot_rows=snapshot_rows,
     )
 
 
@@ -467,6 +474,8 @@ def _build_module_report(
     publication_id: str | None = None,
     class_id: str | None = None,
     read_context: FrozenQuestionReadContext | None = None,
+    question_data: Any = None,
+    answer_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_module_report(
         root,
@@ -483,6 +492,8 @@ def _build_module_report(
         json_payload_fn=_json_payload,
         risk_level_fn=_risk_level,
         read_context=read_context,
+        question_data=question_data,
+        answer_rows=answer_rows,
     )
 
 
@@ -496,6 +507,8 @@ def _build_question_report(
     publication_id: str | None = None,
     class_id: str | None = None,
     read_context: FrozenQuestionReadContext | None = None,
+    question_data: Any = None,
+    answer_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_question_report(
         root,
@@ -510,6 +523,8 @@ def _build_question_report(
         json_payload_fn=_json_payload,
         risk_level_fn=_risk_level,
         read_context=read_context,
+        question_data=question_data,
+        answer_rows=answer_rows,
     )
 
 
@@ -520,6 +535,7 @@ def _build_class_report(
     user: dict[str, Any],
     publication_id: str | None = None,
     class_id: str | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_class_report(
         root,
@@ -530,6 +546,7 @@ def _build_class_report(
         attempt_clause_fn=_analysis_attempt_clause,
         attempt_status_group_fn=_attempt_status_group,
         score_percent_fn=_score_percent,
+        connection=connection,
     )
 
 
@@ -588,7 +605,8 @@ def analyze_paper(
         raise PermissionError("Only admin, school, and teacher users can analyze papers")
 
     publication_access, publication_params = _publication_access_clause(user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
+        con.execute("BEGIN")
         publication_rows = con.execute(
             f"SELECT * FROM exam_publications ep WHERE paper_id = ? AND {publication_access} ORDER BY created_at DESC, ep.rowid DESC",
             (paper_id, *publication_params),
@@ -619,7 +637,7 @@ def analyze_paper(
         attempt_rows = con.execute(
             f"""
             SELECT
-              sa.*,
+              sa.*, sa.rowid AS snapshot_order,
               ep.id AS publication_id,
               ep.title AS publication_title,
               ep.max_screen_switches,
@@ -654,10 +672,15 @@ def analyze_paper(
             (paper_id, *event_params),
         ).fetchall()
         answer_rows = con.execute(
-            f"SELECT ans.attempt_id, ans.question_id, ans.score FROM student_answers ans "
+            f"SELECT ans.attempt_id, ans.question_id, ans.score, ans.answer_payload, ans.is_correct, "
+            f"sa.score AS attempt_score FROM student_answers ans "
             f"JOIN student_attempts sa ON sa.id=ans.attempt_id JOIN exam_publications ep ON ep.id=sa.publication_id "
             f"WHERE ep.paper_id=? AND {attempt_access}", (paper_id, *attempt_params)
         ).fetchall()
+        classes = _build_class_report(
+            root, paper_id=paper_id, user=user, publication_id=publication_id,
+            class_id=class_id, connection=con,
+        )
 
     allowed_publication_ids = {str(row["id"]) for row in publication_rows}
     attempt_rows = [row for row in attempt_rows if str(row["publication_id"]) in allowed_publication_ids]
@@ -679,6 +702,15 @@ def analyze_paper(
     not_started = 0
     flagged_student_ids: set[str] = set()
     question_read_context = FrozenQuestionReadContext()
+    question_data = None
+    if project_root is not None:
+        try:
+            question_data = _analysis_question_maps(
+                root, project_root, paper, user, publication_id, class_id, question_read_context,
+                snapshot_rows=sorted(attempt_rows, key=lambda row: row["snapshot_order"]),
+            )
+        except (FileNotFoundError, ValueError):
+            question_data = ([], {}, {})
     for row in attempt_rows:
         attempt = row_to_dict(row) or {}
         if project_root is not None:
@@ -787,6 +819,8 @@ def analyze_paper(
         publication_id=publication_id,
         class_id=class_id,
         read_context=question_read_context,
+        question_data=question_data,
+        answer_rows=answer_rows,
     )
     questions = _build_question_report(
         root,
@@ -797,8 +831,9 @@ def analyze_paper(
         publication_id=publication_id,
         class_id=class_id,
         read_context=question_read_context,
+        question_data=question_data,
+        answer_rows=answer_rows,
     )
-    classes = _build_class_report(root, paper_id=paper_id, user=user, publication_id=publication_id, class_id=class_id)
     radar = _build_radar(
         completion_rate=completion_rate,
         average_score=average_score,
@@ -850,7 +885,7 @@ def analyze_paper(
 def list_teacher_classes(root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     init_platform_db(root)
     role = user.get("role")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if role == "teacher":
             rows = con.execute(
                 """
@@ -949,7 +984,7 @@ def _paper_attempt_row(
     attempt_id: str,
     user: dict[str, Any],
 ) -> dict[str, Any]:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         return paper_attempt_row_in_connection(
             con,
             paper_id=paper_id,
@@ -1138,7 +1173,7 @@ def ingest_offline_submission(
     if not questions:
         raise ValueError("试卷没有可批改题目，请先完成组卷")
     now = utc_now()
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         publication = con.execute(
             """
             SELECT ep.id, ep.submission_mode
@@ -1205,6 +1240,7 @@ def ingest_offline_submission(
                 """,
                 (attempt_id, publication_id, student_id, now, now, question_json, answer_json),
             )
+            freeze_attempt_class_memberships(con, [attempt_id], captured_at=now)
         else:
             con.execute(
                 """
@@ -1278,18 +1314,31 @@ def _contains_grading_prompt_injection(value: str) -> bool:
 
 
 def _attempt_scan_payloads(root: Path, attempt_id: str, *, include_content: bool = True) -> list[dict[str, Any]]:
+    return _attempt_scan_payloads_for_attempts(root, [attempt_id], include_content=include_content)[attempt_id]
+
+
+def _attempt_scan_payloads_for_attempts(
+    root: Path,
+    attempt_ids: Sequence[str],
+    *,
+    include_content: bool = False,
+    chunk_size: int = 500,
+) -> dict[str, list[dict[str, Any]]]:
+    ids = list(dict.fromkeys(attempt_ids))
+    grouped: dict[str, list[dict[str, Any]]] = {attempt_id: [] for attempt_id in ids}
+    if not ids:
+        return grouped
     content_column = ", content" if include_content else ""
-    with connect(root) as con:
-        rows = con.execute(
-            f"""
-            SELECT page_index, file_name, mime_type, file_size{content_column}
-            FROM attempt_scan_images
-            WHERE attempt_id = ?
-            ORDER BY page_index
-            """,
-            (attempt_id,),
-        ).fetchall()
-    payloads: list[dict[str, Any]] = []
+    with closing(connect(root)) as con, con:
+        rows = []
+        for start in range(0, len(ids), chunk_size):
+            chunk = ids[start : start + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(con.execute(
+                f"SELECT attempt_id, page_index, file_name, mime_type, file_size{content_column} "
+                f"FROM attempt_scan_images WHERE attempt_id IN ({placeholders}) ORDER BY attempt_id, page_index",
+                chunk,
+            ).fetchall())
     for row in rows:
         payload = {
             "page_index": int(row["page_index"]),
@@ -1301,8 +1350,8 @@ def _attempt_scan_payloads(root: Path, attempt_id: str, *, include_content: bool
             payload["data_url"] = (
                 f"data:{row['mime_type']};base64,{base64.b64encode(bytes(row['content'])).decode('ascii')}"
             )
-        payloads.append(payload)
-    return payloads
+        grouped[str(row["attempt_id"])].append(payload)
+    return grouped
 
 
 def get_attempt_scan_image(
@@ -1316,7 +1365,7 @@ def get_attempt_scan_image(
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
     _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id, user=user)
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         row = con.execute(
             """
             SELECT file_name, mime_type, file_size, content
@@ -1354,6 +1403,7 @@ def list_paper_submissions(
         question_maps_for_attempt=_question_maps_for_attempt,
         answer_public_payload=_answer_public_payload,
         attempt_scan_payloads=_attempt_scan_payloads,
+        attempt_scan_payloads_for_attempts=_attempt_scan_payloads_for_attempts,
         attempt_status_group=_attempt_status_group,
     )
 
@@ -1503,7 +1553,7 @@ def suggest_ai_grades_for_pending_attempts(
         if attempted_question_count >= question_budget:
             break
         attempt_id = str(attempt["attempt_id"])
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             rows = con.execute(
                 "SELECT question_id FROM student_answers WHERE attempt_id = ? AND COALESCE(grading_status, 'pending') = 'pending'",
                 (attempt_id,),
@@ -1580,7 +1630,7 @@ def grade_paper_answer(
     now = utc_now()
     answer_id = _new_id()
     answer: dict[str, Any] | None = None
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         paper_row = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
         paper = row_to_dict(paper_row)
@@ -1683,7 +1733,7 @@ def complete_paper_attempt_grading(
     init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("只有教师或管理员可以完成并发布批改结果")
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         paper_row = con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone()
         paper = row_to_dict(paper_row)
@@ -1762,7 +1812,7 @@ def suggest_ai_grades_for_attempt(
     if len(selected) > 50:
         raise ValueError("单次 AI 预批改最多处理 50 道题，请分批操作")
 
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         if _verify_context:
             _verify_context(con)
         initial_revisions = load_answer_revisions(con, [attempt_id])
@@ -1790,7 +1840,7 @@ def suggest_ai_grades_for_attempt(
     generated: list[dict[str, Any]] = []
     for qid in selected:
         if _verify_context:
-            with connect(root) as con:
+            with closing(connect(root)) as con, con:
                 _verify_context(con)
         answer = by_question.get(qid)
         if answer is None:
@@ -1815,7 +1865,7 @@ def suggest_ai_grades_for_attempt(
             ai_error = "未配置 AI 模型"
         else:
             if _verify_context:
-                with connect(root) as con:
+                with closing(connect(root)) as con, con:
                     _verify_context(con)
             try:
                 suggestion = _run_async_blocking(
@@ -1862,7 +1912,7 @@ def suggest_ai_grades_for_attempt(
         )
 
     suggestions: list[dict[str, Any]] = []
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
         if _verify_context:
             _verify_context(con)

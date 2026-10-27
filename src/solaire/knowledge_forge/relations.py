@@ -30,17 +30,69 @@ def _find_relation_slug(project_root: Path, relation_id: str) -> str | None:
     return None
 
 
+def _is_equivalent_relation(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """判断两条关系记录是否在稳定身份、端点及全部语义 payload 完全一致。"""
+    id_a = a.get("id")
+    id_b = b.get("id")
+    if not id_a or not id_b or id_a != id_b:
+        return False
+    if a.get("from_node_id") != b.get("from_node_id") or a.get("to_node_id") != b.get("to_node_id"):
+        return False
+    ignored = {"conflict", "conflict_reason"}
+    payload_a = {k: v for k, v in a.items() if k not in ignored}
+    payload_b = {k: v for k, v in b.items() if k not in ignored}
+    return payload_a == payload_b
+
+
+def _deduplicate_relations(relations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """对稳定身份、端点及全部语义 payload 完全相同的记录做幂等去重，保留现有排序。
+
+    遇到同 ID 不同 payload，保留两份且明确暴露冲突，不擅自覆盖或删减。
+    """
+    result: list[dict[str, Any]] = []
+    by_id: dict[str, list[dict[str, Any]]] = {}
+
+    for item in relations:
+        rel_id = item.get("id")
+        if not rel_id or not isinstance(rel_id, str):
+            result.append(dict(item))
+            continue
+
+        if rel_id not in by_id:
+            entry = dict(item)
+            by_id[rel_id] = [entry]
+            result.append(entry)
+            continue
+
+        existing_entries = by_id[rel_id]
+        if any(_is_equivalent_relation(existing, item) for existing in existing_entries):
+            # 身份、端点及全部 payload 均一致：幂等收敛，不重复追加
+            continue
+
+        # 同 ID 但 payload 冲突：两份均保留并显式暴露冲突标记
+        entry = dict(item)
+        entry["conflict"] = True
+        entry["conflict_reason"] = "duplicate_id_conflicting_payload"
+        for existing in existing_entries:
+            existing["conflict"] = True
+            existing["conflict_reason"] = "duplicate_id_conflicting_payload"
+        existing_entries.append(entry)
+        result.append(entry)
+
+    return result
+
+
 def list_node_relations(project_root: Path, *, graph: str | None = None) -> list[dict[str, Any]]:
     ensure_graph_layout(project_root)
     if graph:
         state = _load_subject_state(project_root, graph)
-        return [r.model_dump(mode="json") for r in state.relations]
+        return _deduplicate_relations([r.model_dump(mode="json") for r in state.relations])
     meta = _load_meta(project_root)
     all_rels: list[dict[str, Any]] = []
     for sm in meta.subjects:
         state = _load_subject_state(project_root, sm.slug)
         all_rels.extend(r.model_dump(mode="json") for r in state.relations)
-    return all_rels
+    return _deduplicate_relations(all_rels)
 
 
 @graph_mutation
@@ -175,13 +227,36 @@ def delete_node_relation(
     graph: str | None = None,
 ) -> None:
     ensure_graph_layout(project_root)
-    slug = graph or _find_relation_slug(project_root, relation_id)
-    if slug is None:
-        return  # 幂等
-    with graph_lock(project_root, slug):
-        state = _load_subject_state(project_root, slug)
-        state.relations = [r for r in state.relations if r.id != relation_id]
-        _save_subject_state(project_root, slug, state)
+    if graph:
+        with graph_lock(project_root, graph):
+            state = _load_subject_state(project_root, graph)
+            state.relations = [r for r in state.relations if r.id != relation_id]
+            _save_subject_state(project_root, graph, state)
+        return
+    meta = _load_meta(project_root)
+    matches: list[str] = []
+    reference: NodeRelation | None = None
+    for sm in meta.subjects:
+        state = _load_subject_state(project_root, sm.slug)
+        found = [r for r in state.relations if r.id == relation_id]
+        if not found:
+            continue
+        for rel in found:
+            if reference is None:
+                reference = rel
+            elif (
+                reference.from_node_id != rel.from_node_id
+                or reference.to_node_id != rel.to_node_id
+                or reference.relation_type != rel.relation_type
+            ):
+                raise ValueError(f"关系 ID 存在内容冲突，请指定科目图谱后再删除: {relation_id}")
+        matches.append(sm.slug)
+
+    for slug in matches:
+        with graph_lock(project_root, slug):
+            state = _load_subject_state(project_root, slug)
+            state.relations = [r for r in state.relations if r.id != relation_id]
+            _save_subject_state(project_root, slug, state)
 
 
 @graph_mutation

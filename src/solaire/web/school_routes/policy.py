@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from contextlib import closing
 from io import BytesIO
 from typing import Annotated, Any
 
@@ -265,7 +266,7 @@ def _import_school_bundle(
 ) -> dict[str, Any]:
     if _connection is None:
         init_platform_db(root)
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             return _import_school_bundle(root, school_id, bundle, _connection=con)
     results = {
         "classes": import_classes(
@@ -443,7 +444,7 @@ async def school_ai_import_file(
         review_fn = _get_review_school_import_with_ai()
         review = await review_fn(clean_kind, rows)
         init_platform_db(root)
-        with connect(root) as con:
+        with closing(connect(root)) as con, con:
             payload = _require_school_ai_enabled(root, school_id, _connection=con)
             if clean_kind == "teachers":
                 result = import_teachers(root, school_id=school_id, teachers=rows, _connection=con)
