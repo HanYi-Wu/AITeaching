@@ -83,6 +83,35 @@ def test_student_roster_identity_stability_on_rename(tmp_path: Path) -> None:
     assert user_row["email"] == "renamed@school.edu"
 
 
+def test_student_single_status_update_rejects_unsupported_values(tmp_path: Path) -> None:
+    init_platform_db(tmp_path)
+    school = create_school(tmp_path, name="Roster Status School")
+    with connect(tmp_path) as con:
+        con.execute(
+            """
+            INSERT INTO users (id, school_id, role, username, password_hash, display_name, status, created_at, updated_at)
+            VALUES ('u_status', ?, 'student', 'stu_status', 'hash', 'Status Student', 'active', '2026-01-01', '2026-01-01')
+            """,
+            (school["id"],),
+        )
+        con.execute(
+            """
+            INSERT INTO students (id, school_id, user_id, student_no, display_name, status, created_at, updated_at)
+            VALUES ('s_status', ?, 'u_status', 'S001', 'Status Student', 'active', '2026-01-01', '2026-01-01')
+            """,
+            (school["id"],),
+        )
+
+    with pytest.raises(ValueError, match="status must be active or disabled"):
+        update_student(tmp_path, school_id=school["id"], student_id="s_status", status="pending")
+
+    with connect(tmp_path) as con:
+        student_status = con.execute("SELECT status FROM students WHERE id = 's_status'").fetchone()["status"]
+        account_status = con.execute("SELECT status FROM users WHERE id = 'u_status'").fetchone()["status"]
+    assert student_status == "active"
+    assert account_status == "active"
+
+
 def test_teaching_assignment_idempotency_and_cross_school(tmp_path: Path) -> None:
     init_platform_db(tmp_path)
     school_1 = create_school(tmp_path, name="Assign School 1")
