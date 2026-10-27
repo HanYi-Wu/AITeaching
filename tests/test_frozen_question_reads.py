@@ -564,6 +564,7 @@ def test_analysis_reports_share_answers_when_grading_changes_during_the_request(
         result = original_module_report(*args, **kwargs)
         with connect(root) as con:
             con.execute("UPDATE student_answers SET score=4 WHERE id='answer'")
+            con.execute("UPDATE student_attempts SET score=4 WHERE id=?", (attempt_id,))
         return result
     monkeypatch.setattr(paper_service, "_build_module_report", grade_after_modules)
     response = web_client.get(f"/api/papers/{paper['paper_id']}/analysis?publication_id={publication['id']}", headers=teacher)
@@ -571,6 +572,7 @@ def test_analysis_reports_share_answers_when_grading_changes_during_the_request(
     analysis = response.json()["analysis"]
     question = next(item for item in analysis["questions"] if item["question_id"] == "math/q1")
     assert question["average_score_percent"] == analysis["modules"][0]["average_score_percent"] == 60
+    assert analysis["classes"][0]["average_score"] == 30
     answer_reads = [sql for sql in statements if "FROM student_answers ans" in sql]
     assert len(answer_reads) == 1
     assert not any("SELECT sa.question_payload_json FROM student_attempts" in sql for sql in statements)

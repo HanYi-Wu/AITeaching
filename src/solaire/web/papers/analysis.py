@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -331,9 +332,10 @@ def build_class_report(
     attempt_clause_fn: Callable[..., tuple[str, list[str]]],
     attempt_status_group_fn: Callable[[dict[str, Any]], str],
     score_percent_fn: Callable[[object, object], float | None],
+    connection: Any = None,
 ) -> list[dict[str, Any]]:
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with connect(root) as con:
+    with (nullcontext(connection) if connection is not None else connect(root)) as con:
         rows = con.execute(
             f"""
             SELECT

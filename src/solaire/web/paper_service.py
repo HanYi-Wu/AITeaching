@@ -532,6 +532,7 @@ def _build_class_report(
     user: dict[str, Any],
     publication_id: str | None = None,
     class_id: str | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_class_report(
         root,
@@ -542,6 +543,7 @@ def _build_class_report(
         attempt_clause_fn=_analysis_attempt_clause,
         attempt_status_group_fn=_attempt_status_group,
         score_percent_fn=_score_percent,
+        connection=connection,
     )
 
 
@@ -672,6 +674,10 @@ def analyze_paper(
             f"JOIN student_attempts sa ON sa.id=ans.attempt_id JOIN exam_publications ep ON ep.id=sa.publication_id "
             f"WHERE ep.paper_id=? AND {attempt_access}", (paper_id, *attempt_params)
         ).fetchall()
+        classes = _build_class_report(
+            root, paper_id=paper_id, user=user, publication_id=publication_id,
+            class_id=class_id, connection=con,
+        )
 
     allowed_publication_ids = {str(row["id"]) for row in publication_rows}
     attempt_rows = [row for row in attempt_rows if str(row["publication_id"]) in allowed_publication_ids]
@@ -825,7 +831,6 @@ def analyze_paper(
         question_data=question_data,
         answer_rows=answer_rows,
     )
-    classes = _build_class_report(root, paper_id=paper_id, user=user, publication_id=publication_id, class_id=class_id)
     radar = _build_radar(
         completion_rate=completion_rate,
         average_score=average_score,
