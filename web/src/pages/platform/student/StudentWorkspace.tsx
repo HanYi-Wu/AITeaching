@@ -21,6 +21,7 @@ import {
   type StudentPaperRecord,
   type StudentResultRecord,
 } from "../../../platform/auth";
+import { loadSessionToken } from "../../../platform/session";
 import { PlatformShell } from "../PlatformShell";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import { StudentNavButton, StudentAnalysisVisual, StudentResultDetails } from "./StudentPanels";
@@ -72,6 +73,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   );
   const latestResult = results[0] ?? null;
   const mustChangePassword = Boolean(profile.must_change_password);
+  const shouldRefreshResults = activeView === "results" && results.length > 0;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -102,13 +104,21 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     if (activeView === 'exam') return;
     let disposed = false;
     let pending = false;
+    const sessionToken = loadSessionToken();
+    const isCurrentSession = () => !disposed && loadSessionToken() === sessionToken;
     const timer = window.setInterval(() => {
-      if (document.hidden || pending) return;
+      if (document.hidden || pending || !isCurrentSession()) return;
       pending = true;
-      void listStudentPapers().then(result => { if (!disposed) setPapers(result.papers); }).catch(() => {}).finally(() => { pending = false; });
+      const requests = [
+        listStudentPapers().then(result => { if (isCurrentSession()) setPapers(result.papers); }),
+      ];
+      if (shouldRefreshResults) {
+        requests.push(listStudentResults().then(result => { if (isCurrentSession()) setResults(result.results); }));
+      }
+      void Promise.allSettled(requests).finally(() => { pending = false; });
     }, 15000);
     return () => { disposed = true; window.clearInterval(timer); };
-  }, [activeView]);
+  }, [activeView, shouldRefreshResults, user.id]);
 
   useEffect(() => {
     if (mustChangePassword) {
