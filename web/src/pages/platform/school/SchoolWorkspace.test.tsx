@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -362,5 +362,541 @@ describe("SchoolWorkspace", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.getByDisplayValue("Teacher New")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("Teacher Li")).not.toBeInTheDocument();
+  });
+
+  it("isolates list requests across six consecutive search updates", async () => {
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+
+    const baselineCalls = {
+      teachers: mocks.listTeachers.mock.calls.length,
+      classes: mocks.listClasses.mock.calls.length,
+      students: mocks.listStudents.mock.calls.length,
+      assignments: mocks.listTeacherClassAssignments.mock.calls.length,
+      ai: mocks.getSchoolAiSettings.mock.calls.length,
+    };
+
+    const searchInput = screen.getByPlaceholderText("搜索");
+    await userEvent.type(searchInput, "abcdef");
+
+    // Total target list calls increased by exactly 6
+    expect(mocks.listTeachers).toHaveBeenCalledTimes(baselineCalls.teachers + 6);
+
+    // Other lists, options, and AI queries were NOT called
+    expect(mocks.listClasses).toHaveBeenCalledTimes(baselineCalls.classes);
+    expect(mocks.listStudents).toHaveBeenCalledTimes(baselineCalls.students);
+    expect(mocks.listTeacherClassAssignments).toHaveBeenCalledTimes(baselineCalls.assignments);
+    expect(mocks.getSchoolAiSettings).toHaveBeenCalledTimes(baselineCalls.ai);
+
+    // Active teacher choices query (pageSize: 100) was NOT re-triggered
+    const choicesCalls = mocks.listTeachers.mock.calls
+      .slice(baselineCalls.teachers)
+      .filter(([arg]: any) => arg && arg.pageSize === 100);
+    expect(choicesCalls).toHaveLength(0);
+  });
+
+  it("keeps the newest list response when same-account queries resolve out of order", async () => {
+    let resolveQueryA!: (val: unknown) => void;
+    let resolveQueryB!: (val: unknown) => void;
+    const promiseA = new Promise((resolve) => { resolveQueryA = resolve; });
+    const promiseB = new Promise((resolve) => { resolveQueryB = resolve; });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+
+    let callIndex = 0;
+    mocks.listTeachers.mockImplementation(() => {
+      callIndex++;
+      if (callIndex === 1) return promiseA;
+      if (callIndex === 2) return promiseB;
+      return Promise.resolve({ teachers: [], total: 0 });
+    });
+
+    const searchInput = screen.getByPlaceholderText("搜索");
+    // Trigger Query A
+    await userEvent.type(searchInput, "A");
+    // Trigger Query B
+    await userEvent.type(searchInput, "B");
+
+    // Resolve B first with Teacher B
+    resolveQueryB({
+      teachers: [
+        {
+          id: "t_b",
+          school_id: "s1",
+          role: "teacher",
+          username: "teacher_b",
+          display_name: "Teacher B",
+          status: "active",
+          subjects: ["Biology"],
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+
+    expect(await screen.findByDisplayValue("Teacher B")).toBeInTheDocument();
+    expect(screen.getByText("第 1 / 1 页，共 1 条")).toBeInTheDocument();
+
+    // Now resolve Query A late with Teacher A
+    await act(async () => {
+      resolveQueryA({
+        teachers: [
+          {
+            id: "t_a",
+            school_id: "s1",
+            role: "teacher",
+            username: "teacher_a",
+            display_name: "Teacher A",
+            status: "active",
+            subjects: ["Art"],
+          },
+        ],
+        total: 50,
+        page: 1,
+        page_size: 10,
+        total_pages: 5,
+      });
+      await promiseA;
+    });
+
+    // UI and metadata must remain Query B's results
+    expect(screen.getByDisplayValue("Teacher B")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Teacher A")).not.toBeInTheDocument();
+    expect(screen.getByText("第 1 / 1 页，共 1 条")).toBeInTheDocument();
+  });
+
+  it("ignores stale same-account query errors without disturbing the latest request", async () => {
+    const onError = vi.fn();
+    let rejectQueryA!: (err: unknown) => void;
+    let resolveQueryB!: (val: unknown) => void;
+    const promiseA = new Promise((_, reject) => { rejectQueryA = reject; });
+    const promiseB = new Promise((resolve) => { resolveQueryB = resolve; });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={onError}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+    onError.mockClear();
+
+    let callIndex = 0;
+    mocks.listTeachers.mockImplementation(() => {
+      callIndex++;
+      if (callIndex === 1) return promiseA;
+      if (callIndex === 2) return promiseB;
+      return Promise.resolve({ teachers: [], total: 0 });
+    });
+
+    const searchInput = screen.getByPlaceholderText("搜索");
+    await userEvent.type(searchInput, "A");
+    await userEvent.type(searchInput, "B");
+
+    // Reject Query A while Query B is still pending
+    await act(async () => {
+      rejectQueryA(new Error("Stale query network failure"));
+      await promiseA.catch(() => undefined);
+    });
+    expect(onError).not.toHaveBeenCalled();
+
+    // Resolve Query B
+    resolveQueryB({
+      teachers: [
+        {
+          id: "t_b",
+          school_id: "s1",
+          role: "teacher",
+          username: "teacher_b",
+          display_name: "Teacher B",
+          status: "active",
+          subjects: ["Biology"],
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+
+    expect(await screen.findByDisplayValue("Teacher B")).toBeInTheDocument();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("refreshes teacher and assignment options after a teacher write", async () => {
+    mocks.createTeacher.mockResolvedValue({
+      teacher: {
+        id: "t_wang",
+        school_id: "s1",
+        role: "teacher",
+        username: "teacher_wang",
+        display_name: "Teacher Wang",
+        status: "active",
+        subjects: ["Chemistry"],
+      },
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+
+    const baselineCalls = {
+      classes: mocks.listClasses.mock.calls.length,
+      students: mocks.listStudents.mock.calls.length,
+      assignments: mocks.listTeacherClassAssignments.mock.calls.length,
+      ai: mocks.getSchoolAiSettings.mock.calls.length,
+    };
+
+    mocks.listTeachers.mockResolvedValue({
+      teachers: [
+        { id: "t1", school_id: "s1", role: "teacher", username: "teacher_li", display_name: "Teacher Li", status: "active", subjects: ["Math"] },
+        { id: "t_wang", school_id: "s1", role: "teacher", username: "teacher_wang", display_name: "Teacher Wang", status: "active", subjects: ["Chemistry"] },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+
+    await userEvent.type(screen.getByPlaceholderText("登录用户名"), "teacher_wang");
+    await userEvent.type(screen.getByPlaceholderText("初始密码"), "pass123456");
+    await userEvent.type(screen.getByPlaceholderText("教师姓名"), "Teacher Wang");
+    await userEvent.type(screen.getByPlaceholderText("任教学科（逗号分隔）"), "Chemistry");
+    await userEvent.click(screen.getByRole("button", { name: "创建教师" }));
+
+    expect(await screen.findByDisplayValue("Teacher Wang")).toBeInTheDocument();
+
+    // Verify non-dependent endpoints were not called
+    expect(mocks.listClasses).toHaveBeenCalledTimes(baselineCalls.classes);
+    expect(mocks.listStudents).toHaveBeenCalledTimes(baselineCalls.students);
+    expect(mocks.listTeacherClassAssignments).toHaveBeenCalledTimes(baselineCalls.assignments);
+    expect(mocks.getSchoolAiSettings).toHaveBeenCalledTimes(baselineCalls.ai);
+
+    // Verify cross-panel dependent dropdown (Assignments panel teacher select)
+    await userEvent.click(screen.getByTestId("school-page-assignments"));
+    expect(screen.getByRole("option", { name: /Teacher Wang/ })).toBeInTheDocument();
+  });
+
+  it("refreshes class and cross-panel select options after a class write", async () => {
+    mocks.createClass.mockResolvedValue({
+      class: { id: "c_new", school_id: "s1", name: "Class 2", grade: "G10", subject_hint: null },
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-classes"));
+    expect(await screen.findByDisplayValue("Class 1")).toBeInTheDocument();
+
+    const baselineCalls = {
+      teachers: mocks.listTeachers.mock.calls.length,
+      students: mocks.listStudents.mock.calls.length,
+      assignments: mocks.listTeacherClassAssignments.mock.calls.length,
+      ai: mocks.getSchoolAiSettings.mock.calls.length,
+    };
+
+    mocks.listClasses.mockResolvedValue({
+      classes: [
+        { id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: null },
+        { id: "c_new", school_id: "s1", name: "Class 2", grade: "G10", subject_hint: null },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+
+    await userEvent.type(screen.getByPlaceholderText("班级名称，如 高一 1 班"), "Class 2");
+    await userEvent.type(screen.getByPlaceholderText("年级，如 高一"), "G10");
+    await userEvent.click(screen.getByRole("button", { name: "创建班级" }));
+
+    expect(await screen.findByDisplayValue("Class 2")).toBeInTheDocument();
+
+    // Verify non-dependent endpoints were not called
+    expect(mocks.listTeachers).toHaveBeenCalledTimes(baselineCalls.teachers);
+    expect(mocks.listStudents).toHaveBeenCalledTimes(baselineCalls.students);
+    expect(mocks.listTeacherClassAssignments).toHaveBeenCalledTimes(baselineCalls.assignments);
+    expect(mocks.getSchoolAiSettings).toHaveBeenCalledTimes(baselineCalls.ai);
+
+    // Verify cross-panel dependent dropdowns
+    // 1. Assignments panel class select
+    await userEvent.click(screen.getByTestId("school-page-assignments"));
+    expect(screen.getByRole("option", { name: /Class 2/ })).toBeInTheDocument();
+
+    // 2. Students panel class select and filter options
+    await userEvent.click(screen.getByTestId("school-page-students"));
+    expect(screen.getAllByRole("option", { name: /Class 2/ }).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the latest list query when a write finishes after the query changes", async () => {
+    let resolveCreate!: (value: unknown) => void;
+    mocks.createTeacher.mockReturnValue(new Promise((resolve) => { resolveCreate = resolve; }));
+    const teacherLi = {
+      id: "t1", school_id: "s1", role: "teacher", username: "teacher_li",
+      display_name: "Teacher Li", status: "active", subjects: ["Math"],
+    };
+    const teacherLatest = {
+      id: "t_latest", school_id: "s1", role: "teacher", username: "teacher_latest",
+      display_name: "Teacher Latest", status: "active", subjects: ["Science"],
+    };
+    mocks.listTeachers.mockImplementation((query: any = {}) => {
+      if (query.pageSize === 100) return Promise.resolve({ teachers: [teacherLi, teacherLatest] });
+      if (query.q === "Latest") return Promise.resolve({ teachers: [teacherLatest], total: 1, page: 1, page_size: 10, total_pages: 1 });
+      return Promise.resolve({ teachers: [teacherLi, teacherLatest], total: 2, page: 1, page_size: 10, total_pages: 1 });
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText("登录用户名"), "teacher_latest");
+    await userEvent.type(screen.getByPlaceholderText("初始密码"), "pass123456");
+    await userEvent.click(screen.getByRole("button", { name: "创建教师" }));
+
+    // The query controls remain available while the write is pending.
+    await userEvent.type(screen.getByPlaceholderText("搜索"), "Latest");
+    expect(await screen.findByDisplayValue("Teacher Latest")).toBeInTheDocument();
+
+    const listCallCountBeforeWriteCompletes = mocks.listTeachers.mock.calls.filter(
+      ([query]: any[]) => query?.pageSize !== 100,
+    ).length;
+    resolveCreate({ teacher: teacherLatest });
+    await waitFor(() => expect(screen.getByRole("button", { name: "创建教师" })).not.toBeDisabled());
+
+    await waitFor(() => {
+      const listCalls = mocks.listTeachers.mock.calls.filter(([query]: any[]) => query?.pageSize !== 100);
+      expect(listCalls.length).toBeGreaterThan(listCallCountBeforeWriteCompletes);
+      expect(listCalls.at(-1)?.[0]).toEqual(expect.objectContaining({ q: "Latest" }));
+      expect(screen.queryByDisplayValue("Teacher Li")).not.toBeInTheDocument();
+    });
+  });
+
+  it("user perspective: end-to-end navigation, search, filter, and pagination across all panels", async () => {
+    // Mock multi-item paginated response for teachers
+    mocks.listTeachers.mockResolvedValue({
+      teachers: [
+        { id: "t1", school_id: "s1", role: "teacher", username: "teacher_li", display_name: "Teacher Li", status: "active", subjects: ["Math"] },
+        { id: "t2", school_id: "s1", role: "teacher", username: "teacher_zhang", display_name: "Teacher Zhang", status: "active", subjects: ["English"] },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+    mocks.listClasses.mockResolvedValue({
+      classes: [{ id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: null }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+    mocks.listStudents.mockResolvedValue({
+      students: [
+        { id: "stu1", school_id: "s1", student_no: "S001", display_name: "Student One", status: "active", account_username: "stu1", initial_password: "123", class_names: "Class 1" },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+    mocks.listTeacherClassAssignments.mockResolvedValue({
+      assignments: [{ teacher_id: "t1", class_id: "c1", teacher_name: "Teacher Li", class_name: "Class 1" }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    // 1. Overview panel: verify metric cards
+    expect(await screen.findByText("学校数据概览")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "首次使用清单" })).toBeInTheDocument();
+
+    // 2. Teachers panel: navigate, search, filter by status
+    await userEvent.click(screen.getByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Teacher Zhang")).toBeInTheDocument();
+
+    // Teacher search
+    const teacherSearch = screen.getByPlaceholderText("搜索");
+    await userEvent.clear(teacherSearch);
+    await userEvent.type(teacherSearch, "Zhang");
+    await waitFor(() =>
+      expect(mocks.listTeachers).toHaveBeenCalledWith(
+        expect.objectContaining({ q: "Zhang" }),
+      ),
+    );
+
+    // Teacher status filter
+    const statusSelect = screen.getByDisplayValue("全部状态");
+    await userEvent.selectOptions(statusSelect, "active");
+    await waitFor(() =>
+      expect(mocks.listTeachers).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "active" }),
+      ),
+    );
+
+    // 3. Classes panel: navigate and search
+    await userEvent.click(screen.getByTestId("school-page-classes"));
+    expect(await screen.findByDisplayValue("Class 1")).toBeInTheDocument();
+    const classSearch = screen.getByPlaceholderText("搜索");
+    await userEvent.type(classSearch, "Grade 10");
+    await waitFor(() =>
+      expect(mocks.listClasses).toHaveBeenCalledWith(
+        expect.objectContaining({ q: "Grade 10" }),
+      ),
+    );
+
+    // 4. Students panel: navigate, filter by class dropdown
+    await userEvent.click(screen.getByTestId("school-page-students"));
+    expect(await screen.findByDisplayValue("Student One")).toBeInTheDocument();
+    const classFilterSelect = screen.getByDisplayValue("全部班级");
+    await userEvent.selectOptions(classFilterSelect, "c1");
+    await waitFor(() =>
+      expect(mocks.listStudents).toHaveBeenCalledWith(
+        "c1",
+        expect.objectContaining({ page: 1 }),
+      ),
+    );
+
+    // 5. Assignments panel: navigate and verify existing assignment
+    await userEvent.click(screen.getByTestId("school-page-assignments"));
+    expect((await screen.findAllByText("Teacher Li")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Class 1").length).toBeGreaterThan(0);
+
+    // 6. Header global refresh button: click and verify full reload
+    const baselineGlobalCalls = {
+      ai: mocks.getSchoolAiSettings.mock.calls.length,
+      teachers: mocks.listTeachers.mock.calls.length,
+      classes: mocks.listClasses.mock.calls.length,
+      students: mocks.listStudents.mock.calls.length,
+      assignments: mocks.listTeacherClassAssignments.mock.calls.length,
+    };
+    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+    await waitFor(() => {
+      expect(mocks.getSchoolAiSettings.mock.calls.length).toBeGreaterThan(baselineGlobalCalls.ai);
+      expect(mocks.listTeachers.mock.calls.length).toBeGreaterThan(baselineGlobalCalls.teachers);
+      expect(mocks.listClasses.mock.calls.length).toBeGreaterThan(baselineGlobalCalls.classes);
+    });
+  });
+
+  it("user perspective: handles empty data states gracefully across lists", async () => {
+    mocks.listTeachers.mockResolvedValue({ teachers: [], total: 0, page: 1, page_size: 10, total_pages: 1 });
+    mocks.listClasses.mockResolvedValue({ classes: [], total: 0, page: 1, page_size: 10, total_pages: 1 });
+    mocks.listStudents.mockResolvedValue({ students: [], total: 0, page: 1, page_size: 10, total_pages: 1 });
+    mocks.listTeacherClassAssignments.mockResolvedValue({ assignments: [], total: 0, page: 1, page_size: 10, total_pages: 1 });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    // Overview shows 0 metrics without error
+    expect(await screen.findByText("学校数据概览")).toBeInTheDocument();
+
+    // Teachers panel shows empty message "暂无数据"
+    await userEvent.click(screen.getByTestId("school-page-teachers"));
+    expect(await screen.findByText("暂无数据")).toBeInTheDocument();
+
+    // Classes panel shows empty message "暂无数据"
+    await userEvent.click(screen.getByTestId("school-page-classes"));
+    expect(await screen.findByText("暂无数据")).toBeInTheDocument();
+
+    // Students panel shows empty message "暂无数据"
+    await userEvent.click(screen.getByTestId("school-page-students"));
+    expect(await screen.findByText("暂无数据")).toBeInTheDocument();
+
+    // Assignments panel shows empty message "暂无数据"
+    await userEvent.click(screen.getByTestId("school-page-assignments"));
+    expect(await screen.findByText("暂无数据")).toBeInTheDocument();
+  });
+
+  it("user perspective: gracefully handles query errors and allows recovery without page reload", async () => {
+    const onError = vi.fn();
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={onError}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+    onError.mockClear();
+
+    // Simulate query failure
+    mocks.listTeachers.mockRejectedValueOnce(new Error("服务器响应超时"));
+
+    const searchInput = screen.getByPlaceholderText("搜索");
+    await userEvent.type(searchInput, "X");
+
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledWith("服务器响应超时");
+    });
+
+    // User recovers by searching again, next query succeeds
+    mocks.listTeachers.mockResolvedValueOnce({
+      teachers: [
+        { id: "t1", school_id: "s1", role: "teacher", username: "teacher_li", display_name: "Teacher Li", status: "active", subjects: ["Math"] },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+
+    await userEvent.type(searchInput, "Y");
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
   });
 });

@@ -42,6 +42,8 @@ export type PendingSchoolAiImport = {
   review: SchoolAiImportReviewResponse;
 };
 
+type RefreshTarget = "teachers" | "classes" | "students" | "assignments" | "ai";
+
 export const DEFAULT_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
 
 export function splitSubjects(value: string): string[] {
@@ -127,9 +129,35 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   const [schoolAiImportFile, setSchoolAiImportFile] = useState<File | null>(null);
   const [pendingSchoolAiImport, setPendingSchoolAiImport] = useState<PendingSchoolAiImport | null>(null);
 
+  const teacherQueryRef = useRef(teacherQuery);
+  const classQueryRef = useRef(classQuery);
+  const studentQueryRef = useRef(studentQuery);
+  const assignmentQueryRef = useRef(assignmentQuery);
+  const studentClassFilterRef = useRef(studentClassFilter);
+  teacherQueryRef.current = teacherQuery;
+  classQueryRef.current = classQuery;
+  studentQueryRef.current = studentQuery;
+  assignmentQueryRef.current = assignmentQuery;
+  studentClassFilterRef.current = studentClassFilter;
+
   // Track active account to protect against late responses from previously selected account/school
   const activeAccountKey = `${user.id}:${user.school_id ?? ""}`;
   const activeAccountRef = useRef(activeAccountKey);
+
+  const teacherSeqRef = useRef(0);
+  const classSeqRef = useRef(0);
+  const studentSeqRef = useRef(0);
+  const assignmentSeqRef = useRef(0);
+
+  const serializeTeacherQuery = (q: PageQuery) => `${q.q}:${q.status ?? ""}:${q.page}:${q.pageSize}`;
+  const serializeClassQuery = (q: PageQuery) => `${q.q}:${q.page}:${q.pageSize}`;
+  const serializeStudentQuery = (classFilter: string, q: PageQuery) => `${classFilter}:${q.q}:${q.status ?? ""}:${q.page}:${q.pageSize}`;
+  const serializeAssignmentQuery = (q: PageQuery) => `${q.q}:${q.page}:${q.pageSize}`;
+
+  const lastLoadedTeacherQueryRef = useRef<string | null>(null);
+  const lastLoadedClassQueryRef = useRef<string | null>(null);
+  const lastLoadedStudentQueryRef = useRef<string | null>(null);
+  const lastLoadedAssignmentQueryRef = useRef<string | null>(null);
 
   useEffect(() => {
     activeAccountRef.current = `${user.id}:${user.school_id ?? ""}`;
@@ -137,17 +165,152 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
 
   const teacherOptions = useMemo(() => teacherChoices.filter((teacher) => teacher.status === "active"), [teacherChoices]);
 
+  async function fetchTeachersList(query: PageQuery, accountKey: string) {
+    const seq = ++teacherSeqRef.current;
+    const querySnapshot = { ...query };
+    try {
+      const teacherData = await listTeachers(querySnapshot);
+      if (teacherSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
+        return;
+      }
+      setTeachers(teacherData.teachers);
+      setTeacherMeta(mergeMeta(teacherData, querySnapshot, teacherData.teachers.length));
+      setTeacherDrafts(
+        Object.fromEntries(
+          teacherData.teachers.map((teacher) => [
+            teacher.id,
+            {
+              display_name: teacher.display_name || teacher.username,
+              email: optionalText(teacher.email),
+              subjects: teacher.subjects.join(", "),
+            },
+          ]),
+        ),
+      );
+    } catch (e) {
+      if (teacherSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
+        return;
+      }
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function fetchTeacherChoices(accountKey: string) {
+    try {
+      const allTeacherData = await listTeachers({ page: 1, pageSize: 100, status: "active" });
+      if (activeAccountRef.current !== accountKey) return;
+      setTeacherChoices(allTeacherData.teachers);
+      setAssignTeacherId((current) => current || allTeacherData.teachers.find((teacher) => teacher.status === "active")?.id || "");
+    } catch (e) {
+      if (activeAccountRef.current !== accountKey) return;
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function fetchClassesList(query: PageQuery, accountKey: string) {
+    const seq = ++classSeqRef.current;
+    const querySnapshot = { ...query };
+    try {
+      const classData = await listClasses(querySnapshot);
+      if (classSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
+        return;
+      }
+      setClasses(classData.classes);
+      setClassMeta(mergeMeta(classData, querySnapshot, classData.classes.length));
+      setClassDrafts(
+        Object.fromEntries(
+          classData.classes.map((klass) => [klass.id, { name: klass.name, grade: klass.grade || "" }]),
+        ),
+      );
+    } catch (e) {
+      if (classSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
+        return;
+      }
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function fetchClassChoices(accountKey: string) {
+    try {
+      const allClassData = await listClasses({ page: 1, pageSize: 100 });
+      if (activeAccountRef.current !== accountKey) return;
+      setClassChoices(allClassData.classes);
+      setAssignClassId((current) => current || allClassData.classes[0]?.id || "");
+      setStudentClassId((current) => current || allClassData.classes[0]?.id || "");
+    } catch (e) {
+      if (activeAccountRef.current !== accountKey) return;
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function fetchStudentsList(classFilter: string, query: PageQuery, accountKey: string) {
+    const seq = ++studentSeqRef.current;
+    const querySnapshot = { ...query };
+    try {
+      const studentData = await listStudents(classFilter || null, querySnapshot);
+      if (studentSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
+        return;
+      }
+      setStudents(studentData.students);
+      setStudentMeta(mergeMeta(studentData, querySnapshot, studentData.students.length));
+      setStudentDrafts(
+        Object.fromEntries(
+          studentData.students.map((student) => [
+            student.id,
+            {
+              student_no: student.student_no,
+              display_name: student.display_name,
+              email: optionalText(student.email),
+            },
+          ]),
+        ),
+      );
+    } catch (e) {
+      if (studentSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
+        return;
+      }
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function fetchAssignmentsList(query: PageQuery, accountKey: string) {
+    const seq = ++assignmentSeqRef.current;
+    const querySnapshot = { ...query };
+    try {
+      const assignmentData = await listTeacherClassAssignments(querySnapshot);
+      if (assignmentSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
+        return;
+      }
+      setAssignments(assignmentData.assignments);
+      setAssignmentMeta(mergeMeta(assignmentData, querySnapshot, assignmentData.assignments.length));
+    } catch (e) {
+      if (assignmentSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
+        return;
+      }
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function refresh() {
     const requestKey = activeAccountRef.current;
+    const currentTeacherQuery = { ...teacherQueryRef.current };
+    const currentClassQuery = { ...classQueryRef.current };
+    const currentStudentQuery = { ...studentQueryRef.current };
+    const currentAssignmentQuery = { ...assignmentQueryRef.current };
+    const currentStudentClassFilter = studentClassFilterRef.current;
+    const teacherSeq = ++teacherSeqRef.current;
+    const classSeq = ++classSeqRef.current;
+    const studentSeq = ++studentSeqRef.current;
+    const assignmentSeq = ++assignmentSeqRef.current;
     onError(null);
     const [aiData, teacherData, allTeacherData, classData, allClassData, studentData, assignmentData] = await Promise.all([
       getSchoolAiSettings(),
-      listTeachers(teacherQuery),
+      listTeachers(currentTeacherQuery),
       listTeachers({ page: 1, pageSize: 100, status: "active" }),
-      listClasses(classQuery),
+      listClasses(currentClassQuery),
       listClasses({ page: 1, pageSize: 100 }),
-      listStudents(studentClassFilter || null, studentQuery),
-      listTeacherClassAssignments(assignmentQuery),
+      listStudents(currentStudentClassFilter || null, currentStudentQuery),
+      listTeacherClassAssignments(currentAssignmentQuery),
     ]);
 
     // Check if account has changed since request was launched
@@ -156,54 +319,102 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     }
 
     setAiSettings(aiData);
-    setTeachers(teacherData.teachers);
+    if (teacherSeqRef.current === teacherSeq) {
+      setTeachers(teacherData.teachers);
+      setTeacherMeta(mergeMeta(teacherData, currentTeacherQuery, teacherData.teachers.length));
+      setTeacherDrafts(
+        Object.fromEntries(
+          teacherData.teachers.map((teacher) => [
+            teacher.id,
+            {
+              display_name: teacher.display_name || teacher.username,
+              email: optionalText(teacher.email),
+              subjects: teacher.subjects.join(", "),
+            },
+          ]),
+        ),
+      );
+      lastLoadedTeacherQueryRef.current = serializeTeacherQuery(currentTeacherQuery);
+    }
     setTeacherChoices(allTeacherData.teachers);
-    setClasses(classData.classes);
+    if (classSeqRef.current === classSeq) {
+      setClasses(classData.classes);
+      setClassMeta(mergeMeta(classData, currentClassQuery, classData.classes.length));
+      setClassDrafts(
+        Object.fromEntries(
+          classData.classes.map((klass) => [klass.id, { name: klass.name, grade: klass.grade || "" }]),
+        ),
+      );
+      lastLoadedClassQueryRef.current = serializeClassQuery(currentClassQuery);
+    }
     setClassChoices(allClassData.classes);
-    setStudents(studentData.students);
-    setAssignments(assignmentData.assignments);
-    setTeacherMeta(mergeMeta(teacherData, teacherQuery, teacherData.teachers.length));
-    setClassMeta(mergeMeta(classData, classQuery, classData.classes.length));
-    setStudentMeta(mergeMeta(studentData, studentQuery, studentData.students.length));
-    setAssignmentMeta(mergeMeta(assignmentData, assignmentQuery, assignmentData.assignments.length));
-    setTeacherDrafts(
-      Object.fromEntries(
-        teacherData.teachers.map((teacher) => [
-          teacher.id,
-          {
-            display_name: teacher.display_name || teacher.username,
-            email: optionalText(teacher.email),
-            subjects: teacher.subjects.join(", "),
-          },
-        ]),
-      ),
-    );
-    setClassDrafts(
-      Object.fromEntries(
-        classData.classes.map((klass) => [klass.id, { name: klass.name, grade: klass.grade || "" }]),
-      ),
-    );
-    setStudentDrafts(
-      Object.fromEntries(
-        studentData.students.map((student) => [
-          student.id,
-          {
-            student_no: student.student_no,
-            display_name: student.display_name,
-            email: optionalText(student.email),
-          },
-        ]),
-      ),
-    );
+    if (studentSeqRef.current === studentSeq) {
+      setStudents(studentData.students);
+      setStudentMeta(mergeMeta(studentData, currentStudentQuery, studentData.students.length));
+      setStudentDrafts(
+        Object.fromEntries(
+          studentData.students.map((student) => [
+            student.id,
+            {
+              student_no: student.student_no,
+              display_name: student.display_name,
+              email: optionalText(student.email),
+            },
+          ]),
+        ),
+      );
+      lastLoadedStudentQueryRef.current = serializeStudentQuery(currentStudentClassFilter, currentStudentQuery);
+    }
+    if (assignmentSeqRef.current === assignmentSeq) {
+      setAssignments(assignmentData.assignments);
+      setAssignmentMeta(mergeMeta(assignmentData, currentAssignmentQuery, assignmentData.assignments.length));
+      lastLoadedAssignmentQueryRef.current = serializeAssignmentQuery(currentAssignmentQuery);
+    }
     setAssignTeacherId((current) => current || allTeacherData.teachers.find((teacher) => teacher.status === "active")?.id || "");
     setAssignClassId((current) => current || allClassData.classes[0]?.id || "");
     setStudentClassId((current) => current || allClassData.classes[0]?.id || "");
+  }
+
+  async function refreshTargets(targets: RefreshTarget[]) {
+    const accountKey = activeAccountRef.current;
+    const promises: Promise<void>[] = [];
+
+    if (targets.includes("teachers")) {
+      promises.push(fetchTeachersList(teacherQueryRef.current, accountKey));
+      promises.push(fetchTeacherChoices(accountKey));
+    }
+    if (targets.includes("classes")) {
+      promises.push(fetchClassesList(classQueryRef.current, accountKey));
+      promises.push(fetchClassChoices(accountKey));
+    }
+    if (targets.includes("students")) {
+      promises.push(fetchStudentsList(studentClassFilterRef.current, studentQueryRef.current, accountKey));
+    }
+    if (targets.includes("assignments")) {
+      promises.push(fetchAssignmentsList(assignmentQueryRef.current, accountKey));
+    }
+    if (targets.includes("ai")) {
+      promises.push(
+        getSchoolAiSettings().then((aiData) => {
+          if (activeAccountRef.current === accountKey) {
+            setAiSettings(aiData);
+          }
+        }),
+      );
+    }
+
+    await Promise.all(promises);
   }
 
   useEffect(() => {
     let cancelled = false;
     const currentKey = `${user.id}:${user.school_id ?? ""}`;
     activeAccountRef.current = currentKey;
+
+    lastLoadedTeacherQueryRef.current = serializeTeacherQuery(teacherQuery);
+    lastLoadedClassQueryRef.current = serializeClassQuery(classQuery);
+    lastLoadedStudentQueryRef.current = serializeStudentQuery(studentClassFilter, studentQuery);
+    lastLoadedAssignmentQueryRef.current = serializeAssignmentQuery(assignmentQuery);
 
     void refresh().catch((e) => {
       if (!cancelled && activeAccountRef.current === currentKey) {
@@ -215,32 +426,61 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    user.id,
-    user.school_id,
-    teacherQuery.q,
-    teacherQuery.status,
-    teacherQuery.page,
-    teacherQuery.pageSize,
-    classQuery.q,
-    classQuery.page,
-    classQuery.pageSize,
-    studentQuery.q,
-    studentQuery.status,
-    studentQuery.page,
-    studentQuery.pageSize,
-    studentClassFilter,
-    assignmentQuery.q,
-    assignmentQuery.page,
-    assignmentQuery.pageSize,
-  ]);
+  }, [user.id, user.school_id]);
 
-  async function run(action: () => Promise<void>) {
+  useEffect(() => {
+    const key = serializeTeacherQuery(teacherQuery);
+    if (lastLoadedTeacherQueryRef.current === key) {
+      return;
+    }
+    lastLoadedTeacherQueryRef.current = key;
+    void fetchTeachersList(teacherQuery, activeAccountRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacherQuery.q, teacherQuery.status, teacherQuery.page, teacherQuery.pageSize]);
+
+  useEffect(() => {
+    const key = serializeClassQuery(classQuery);
+    if (lastLoadedClassQueryRef.current === key) {
+      return;
+    }
+    lastLoadedClassQueryRef.current = key;
+    void fetchClassesList(classQuery, activeAccountRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classQuery.q, classQuery.page, classQuery.pageSize]);
+
+  useEffect(() => {
+    const key = serializeStudentQuery(studentClassFilter, studentQuery);
+    if (lastLoadedStudentQueryRef.current === key) {
+      return;
+    }
+    lastLoadedStudentQueryRef.current = key;
+    void fetchStudentsList(studentClassFilter, studentQuery, activeAccountRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentQuery.q, studentQuery.status, studentQuery.page, studentQuery.pageSize, studentClassFilter]);
+
+  useEffect(() => {
+    const key = serializeAssignmentQuery(assignmentQuery);
+    if (lastLoadedAssignmentQueryRef.current === key) {
+      return;
+    }
+    lastLoadedAssignmentQueryRef.current = key;
+    void fetchAssignmentsList(assignmentQuery, activeAccountRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignmentQuery.q, assignmentQuery.page, assignmentQuery.pageSize]);
+
+  async function run(
+    action: () => Promise<void>,
+    targets?: RefreshTarget[],
+  ) {
     setBusy(true);
     setNotice(null);
     try {
       await action();
-      await refresh();
+      if (targets && targets.length > 0) {
+        await refreshTargets(targets);
+      } else {
+        await refresh();
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -263,7 +503,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       setTeacherName("");
       setTeacherEmail("");
       setTeacherSubjects("");
-    });
+    }, ["teachers"]);
   }
 
   async function submitClass(event: FormEvent<HTMLFormElement>) {
@@ -274,7 +514,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       setGrade("");
       setStudentClassId(created.class.id);
       setAssignClassId(created.class.id);
-    });
+    }, ["classes"]);
   }
 
   async function submitStudent(event: FormEvent<HTMLFormElement>) {
@@ -287,21 +527,21 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       setStudentNo("");
       setStudentName("");
       setStudentEmail("");
-    });
+    }, ["students"]);
   }
 
   async function submitAssignment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(async () => {
       await assignTeacherClass({ teacher_id: assignTeacherId, class_id: assignClassId });
-    });
+    }, ["assignments"]);
   }
 
   async function setSchoolAiEnabled(enabled: boolean) {
     await run(async () => {
       await updateSchoolAiSettings(enabled);
       setNotice(enabled ? "学校 AI 功能已开启" : "学校 AI 功能已关闭");
-    });
+    }, ["ai"]);
   }
 
   async function handleFile(event: ChangeEvent<HTMLInputElement>, kind: Exclude<SchoolImportKind, "all">) {
@@ -313,7 +553,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       if (kind === "classes") await importClassesFile(file);
       if (kind === "students") await importStudentsFile(file, studentClassId || null);
       if (kind === "assignments") await importTeacherClassAssignmentsFile(file);
-    });
+    }, [kind]);
   }
 
   async function downloadTemplate(kind: SchoolImportKind) {
@@ -403,7 +643,11 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       ]);
       setPendingSchoolAiImport(null);
       setSchoolAiImportFile(null);
-      await refresh();
+      if (pending.kind === "all") {
+        await refresh();
+      } else {
+        await refreshTargets([pending.kind]);
+      }
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
       onError(text);
@@ -497,6 +741,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     setPendingSchoolAiImport,
     teacherOptions,
     refresh,
+    refreshTargets,
     run,
     submitTeacher,
     submitClass,

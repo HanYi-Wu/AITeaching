@@ -81,6 +81,10 @@ import {
   formatStudentAnswer,
 } from "./paperHelpers";
 
+export type ProjectScopeProp =
+  | { ready: false; value: null }
+  | { ready: true; value: string | null };
+
 type Props = {
   openTarget?: { paperId: string; attemptId: string; title: string } | null;
   onOpenTargetConsumed?: () => void;
@@ -91,6 +95,7 @@ type Props = {
   onError?: (message: string | null) => void;
   assignStudent?: { classId: string; studentId: string; name: string } | null;
   onAssignStudentConsumed?: () => void;
+  projectScope?: ProjectScopeProp;
 };
 
 type AcceptedAiSuggestion = {
@@ -102,9 +107,7 @@ type AcceptedAiSuggestion = {
   fields: Array<"score" | "feedback">;
 };
 
-export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError, assignStudent, onAssignStudentConsumed }: Props) {
-  const [clock, setClock] = useState(Date.now());
-  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
+export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError, assignStudent, onAssignStudentConsumed, projectScope }: Props) {
   const [papers, setPapers] = useState<PlatformPaperRecord[]>([]);
   const [paperMeta, setPaperMeta] = useState<PageMeta>({ total: 0, page: 1, pageSize: 10, totalPages: 1 });
   const [paperQuery, setPaperQuery] = useState<PaperQuery>({
@@ -148,7 +151,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const publicationRequestIdRef = useRef(0);
   const submissionRequestIdRef = useRef(0);
   const [gradingAccountId, setGradingAccountId] = useState<string | null>(null);
-  const [gradingProjectId, setGradingProjectId] = useState<string | null>(null);
+  const [localGradingProjectId, setLocalGradingProjectId] = useState<string | null>(null);
+  const listRequestIdRef = useRef(0);
   const [gradingDraftStorageWarning, setGradingDraftStorageWarning] = useState<{ ownerKey: string; visible: boolean }>({ ownerKey: "", visible: false });
   const gradingDraftSourceVersionsRef = useRef(new Map<string, string | null>());
   const restoredGradingDraftKeysRef = useRef(new Set<string>());
@@ -186,6 +190,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   }, []);
 
   useEffect(() => {
+    if (projectScope !== undefined) return;
     let active = true;
     void apiGet<{ bound?: boolean; root?: string | null; project_id?: string | null }>("/api/project/info")
       .then((info) => {
@@ -193,11 +198,15 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         const projectId = info.bound
           ? (info.project_id || info.root || "").trim().replace(/\\/g, "/").replace(/\/+$/, "")
           : "";
-        setGradingProjectId(projectId || null);
+        setLocalGradingProjectId(projectId || null);
       })
-      .catch(() => { if (active) setGradingProjectId(null); });
+      .catch(() => { if (active) setLocalGradingProjectId(null); });
     return () => { active = false; };
-  }, []);
+  }, [projectScope]);
+
+  const gradingProjectId = projectScope !== undefined
+    ? (projectScope.ready ? projectScope.value : null)
+    : localGradingProjectId;
 
   useEffect(() => {
     void listContentFolders("paper").then((result) => setFolders(result.folders)).catch(reportError);
@@ -212,6 +221,13 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recipientScope, selectedClassIds.join(",")]);
+
+  const selectedPaperIdRef = useRef(selectedPaperId);
+  selectedPaperIdRef.current = selectedPaperId;
+  const paperQueryRef = useRef(paperQuery);
+  paperQueryRef.current = paperQuery;
+  const browserFolderIdRef = useRef(browserFolderId);
+  browserFolderIdRef.current = browserFolderId;
 
   const selectedPaper = useMemo(
     () => papers.find((paper) => paper.paper_id === selectedPaperId) ?? papers[0] ?? null,
@@ -318,28 +334,31 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     }
   }
 
-  async function refresh() {
+  async function refresh(targetQuery: PaperQuery = paperQueryRef.current, targetFolderId: string | null = browserFolderIdRef.current) {
+    const requestId = ++listRequestIdRef.current;
     setLoading(true);
     onError?.(null);
     setMessage(null);
     try {
       const [paperData, classData] = await Promise.all([
         listPlatformPapers({
-          q: paperQuery.q,
-          deliveryMode: paperQuery.deliveryMode,
-          status: paperQuery.status,
-          page: paperQuery.page,
-          pageSize: paperQuery.pageSize,
-          folderId: browserFolderId,
+          q: targetQuery.q,
+          deliveryMode: targetQuery.deliveryMode,
+          status: targetQuery.status,
+          page: targetQuery.page,
+          pageSize: targetQuery.pageSize,
+          folderId: targetFolderId,
         }),
         listTeacherAssignedClasses(),
       ]);
+      if (listRequestIdRef.current !== requestId) return;
       setPapers(paperData.papers);
-      setPaperMeta(mergeMeta(paperData, paperQuery, paperData.papers.length));
+      setPaperMeta(mergeMeta(paperData, targetQuery, paperData.papers.length));
       setClasses(classData.classes);
+      const currentSelected = selectedPaperIdRef.current;
       const nextPaperId =
-        selectedPaperId && paperData.papers.some((paper) => paper.paper_id === selectedPaperId)
-          ? selectedPaperId
+        currentSelected && paperData.papers.some((paper) => paper.paper_id === currentSelected)
+          ? currentSelected
           : paperData.papers[0]?.paper_id ?? "";
       setSelectedPaperId(nextPaperId);
       if (nextPaperId) {
@@ -348,14 +367,16 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         setPublications([]);
       }
     } catch (e) {
-      reportError(e);
+      if (listRequestIdRef.current === requestId) reportError(e);
     } finally {
-      setLoading(false);
+      if (listRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
-    void refresh();
+    void refresh(paperQuery, browserFolderId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize, browserFolderId]);
 
@@ -524,8 +545,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     setMessage(null);
     try {
       await uploadPaperScores(selectedPaper.exam_id, file);
-      setMessage("成绩已上传");
       await refresh();
+      setMessage("成绩已上传");
     } catch (e) {
       reportError(e);
     } finally {
@@ -1229,7 +1250,6 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                     />
                   }
                   publications={publications}
-                  clock={clock}
                   busy={busy}
                   onTogglePause={togglePublicationPause}
                   onRevoke={revokePublication}

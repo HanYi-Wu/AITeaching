@@ -9,6 +9,7 @@ import App from "./App";
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(), getCurrentUser: vi.fn(), getPlatformStatus: vi.fn(),
   logoutPlatform: vi.fn(), setPlatformProjectRoot: vi.fn(), setSidebarOpen: vi.fn(),
+  sidebarOpen: false,
 }));
 const school: PlatformUser = { id: "school-user", username: "school", role: "school", display_name: "学校", status: "active" };
 const admin: PlatformUser = { ...school, id: "admin-user", username: "admin", role: "admin" };
@@ -20,15 +21,18 @@ vi.mock("./platform/auth", () => ({
 }));
 vi.mock("./contexts/AgentContext", () => ({
   AgentProvider: ({ children }: { children: ReactNode }) => children,
-  useAgentContext: () => ({ sidebarOpen: false, toggleSidebar: vi.fn(), setSidebarOpen: mocks.setSidebarOpen }),
+  useAgentContext: () => ({ sidebarOpen: mocks.sidebarOpen, toggleSidebar: vi.fn(), setSidebarOpen: mocks.setSidebarOpen }),
 }));
 vi.mock("./contexts/ToolBarContext", () => ({
   ToolBarProvider: ({ children }: { children: ReactNode }) => children,
   useToolBar: () => ({ left: null, right: null }),
 }));
 vi.mock("./components/DesktopTitleBar", () => ({ DesktopTitleBar: () => null }));
-vi.mock("./components/AgentSidebar", () => ({ AgentSidebar: () => null }));
+vi.mock("./components/AgentSidebar", () => ({ AgentSidebar: () => <div data-testid="assistant-panel" /> }));
 vi.mock("./components/TeacherFirstUseGuide", () => ({ TeacherFirstUseGuide: () => null }));
+vi.mock("./pages/platform/papers/PapersWorkspace", () => ({
+  PapersWorkspace: ({ projectScope }: { projectScope?: unknown }) => <div data-testid="paper-project-scope">{JSON.stringify(projectScope)}</div>,
+}));
 vi.mock("./app/routes", () => ({
   BankRoute: () => null, ComposeRoute: () => null, GraphRoute: () => null, TemplateRoute: () => null,
 }));
@@ -51,6 +55,7 @@ describe("role-specific project requests", () => {
   beforeAll(async () => { await setupTestI18n("zh"); });
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.sidebarOpen = false;
     mocks.getPlatformStatus.mockResolvedValue({ admin_exists: true, public_mode: true });
     mocks.apiGet.mockResolvedValue({ bound: true, root: "/teacher-project" });
     mocks.logoutPlatform.mockResolvedValue({});
@@ -80,6 +85,31 @@ describe("role-specific project requests", () => {
     renderApp();
     await screen.findByText("登录页");
     expect(mocks.apiGet).not.toHaveBeenCalled();
+  });
+
+  it("mounts the assistant on first opening and keeps its session while closed", async () => {
+    mocks.getCurrentUser.mockResolvedValue({ user: { ...school, role: "teacher" } });
+    const view = renderApp();
+    await waitFor(() => expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith("/teacher-project"));
+    expect(screen.queryByTestId("assistant-panel")).not.toBeInTheDocument();
+    mocks.sidebarOpen = true;
+    view.rerender(<TestI18nProvider><App /></TestI18nProvider>);
+    const panel = await screen.findByTestId("assistant-panel");
+    mocks.sidebarOpen = false;
+    view.rerender(<TestI18nProvider><App /></TestI18nProvider>);
+    expect(screen.getByTestId("assistant-panel")).toBe(panel);
+  });
+
+  it("shares project scope with papers only after the current account's lookup completes", async () => {
+    let finish!: (value: { bound: boolean; root: string }) => void;
+    mocks.apiGet.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    mocks.getCurrentUser.mockResolvedValue({ user: { ...school, role: "teacher" } });
+    renderApp();
+    await userEvent.click(await screen.findByTestId("nav-papers"));
+    expect(await screen.findByTestId("paper-project-scope")).toHaveTextContent('{"ready":false,"value":null}');
+    await act(async () => { finish({ bound: true, root: "/teacher-project" }); });
+    expect(screen.getByTestId("paper-project-scope")).toHaveTextContent('{"ready":true,"value":"/teacher-project"}');
+    expect(mocks.apiGet).toHaveBeenCalledTimes(1);
   });
 
   it("offers reconnection when restoring the session temporarily fails", async () => {

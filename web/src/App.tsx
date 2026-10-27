@@ -97,6 +97,8 @@ function AppShell() {
   const [assistantOverlayHost, setAssistantOverlayHost] = useState<HTMLDivElement | null>(null);
   const [platformStatus, setPlatformStatus] = useState<PlatformStatus | null>(null);
   const [currentUser, setCurrentUser] = useState<PlatformUser | null>(null);
+  const [infoAccountId, setInfoAccountId] = useState<string | null>(null);
+  const [assistantMounted, setAssistantMounted] = useState(false);
   const [platformLoading, setPlatformLoading] = useState(true);
   const [adminProjectMode, setAdminProjectMode] = useState(false);
   const projectInfoRequestId = useRef(0);
@@ -104,14 +106,22 @@ function AppShell() {
 
   const refreshInfo = useCallback(async () => {
     const requestId = ++projectInfoRequestId.current;
+    setInfoAccountId(null);
     try {
       setErr(null);
       const i = await apiGet<ProjectInfo>("/api/project/info");
-      if (requestId === projectInfoRequestId.current) setInfo(i);
+      if (requestId === projectInfoRequestId.current) {
+        setInfo(i);
+        setInfoAccountId(currentUser?.id ?? "local");
+      }
     } catch (e) {
       if (requestId === projectInfoRequestId.current) setErr(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (sidebarOpen) setAssistantMounted(true);
+  }, [sidebarOpen]);
 
   useEffect(() => {
     const invalidate = () => { projectInfoRequestId.current += 1; };
@@ -196,6 +206,7 @@ function AppShell() {
   }, [sidebarOpen, setSidebarOpen]);
 
   const onAuthenticated = useCallback((user: PlatformUser) => {
+    setAssistantMounted(false);
     platformRequestId.current += 1;
     setPlatformLoading(false);
     setErr(null);
@@ -206,6 +217,7 @@ function AppShell() {
   }, []);
 
   const onLogout = useCallback(async () => {
+    setAssistantMounted(false);
     platformRequestId.current += 1;
     setCurrentUser(null);
     setAdminProjectMode(false);
@@ -430,6 +442,9 @@ function AppShell() {
                   )}
                   {page === "papers" && (
                     <PapersWorkspace
+                      projectScope={infoAccountId === (currentUser?.id ?? "local")
+                        ? { ready: true, value: info?.bound ? info.root ?? null : null }
+                        : { ready: false, value: null }}
                       openTarget={paperOpenTarget}
                       assignStudent={studentPracticeTarget}
                       onAssignStudentConsumed={() => setStudentPracticeTarget(null)}
@@ -464,7 +479,7 @@ function AppShell() {
                 </main>
                 <WorkspaceLoadBoundary>
                 <Suspense fallback={null}>
-                  <AgentSidebar projectBound mode="overlay" overlayHost={assistantOverlayHost} />
+                  {(sidebarOpen || assistantMounted) && <AgentSidebar projectBound mode="overlay" overlayHost={assistantOverlayHost} />}
                 </Suspense>
                 </WorkspaceLoadBoundary>
               </div>

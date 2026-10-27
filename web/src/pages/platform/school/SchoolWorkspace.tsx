@@ -127,7 +127,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               teacherDrafts={data.teacherDrafts}
               setTeacherDrafts={data.setTeacherDrafts}
               busy={data.busy}
-              run={data.run}
+              run={(action) => data.run(action, ["teachers"])}
               setNotice={data.setNotice}
             />
           ) : null}
@@ -141,7 +141,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               classDrafts={data.classDrafts}
               setClassDrafts={data.setClassDrafts}
               busy={data.busy}
-              run={data.run}
+              run={(action) => data.run(action, ["classes"])}
             />
           ) : null}
 
@@ -160,7 +160,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               studentClassFilter={data.studentClassFilter}
               setStudentClassFilter={data.setStudentClassFilter}
               busy={data.busy}
-              run={data.run}
+              run={(action) => data.run(action, ["students"])}
               setNotice={data.setNotice}
             />
           ) : null}
@@ -172,7 +172,7 @@ export function SchoolWorkspace({ user, onLogout, onError }: Props) {
               assignmentQuery={data.assignmentQuery}
               setAssignmentQuery={data.setAssignmentQuery}
               busy={data.busy}
-              run={data.run}
+              run={(action) => data.run(action, ["assignments"])}
             />
           ) : null}
 

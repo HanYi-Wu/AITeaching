@@ -3,10 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PapersWorkspace } from "./PapersWorkspace";
+import { PaperPublishingSidebar } from "./PaperPublishingSidebar";
 import { buildGradingDraftStorageKey } from "./gradingDraftStorage";
 
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
+  apiDownloadBlob: vi.fn(),
   getAccountProfile: vi.fn(),
   listPlatformPaperPublications: vi.fn(),
   listPlatformPapers: vi.fn(),
@@ -28,7 +30,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../api/client")>();
-  return { ...actual, apiGet: mocks.apiGet };
+  return { ...actual, apiGet: mocks.apiGet, apiDownloadBlob: mocks.apiDownloadBlob };
 });
 
 vi.mock("../../../platform/auth", async (importOriginal) => {
@@ -89,6 +91,7 @@ describe("PapersWorkspace", () => {
     vi.clearAllMocks();
     localStorage.clear();
     mocks.apiGet.mockResolvedValue({ bound: true, root: "C:/project", project_id: "project-1" });
+    mocks.apiDownloadBlob.mockResolvedValue({ blob: new Blob(["template"]), filename: "template.csv" });
     mocks.getAccountProfile.mockResolvedValue({ profile: { id: "teacher-1", subjects: [] } });
     Object.defineProperty(URL, "createObjectURL", { writable: true, value: vi.fn(() => "blob:report") });
     Object.defineProperty(URL, "revokeObjectURL", { writable: true, value: vi.fn() });
@@ -1297,5 +1300,674 @@ describe("PapersWorkspace", () => {
     await userEvent.selectOptions(selector, "a2");
     expect(await screen.findByText("学生真实作答二")).toBeInTheDocument();
     expect(screen.queryByText("学生真实作答一")).not.toBeInTheDocument();
+  });
+  it("discards delayed query results and keeps latest query papers, pagination, and publications", async () => {
+    const queryADeferred = deferred<{ papers: any[]; total?: number; page?: number; pageSize?: number; totalPages?: number }>();
+    const paperA = { ...offlinePaper, paper_id: "p-a", title: "Math Midterm", publication_count: 1 };
+    const paperB = { ...offlinePaper, paper_id: "p-b", title: "Physics Final", publication_count: 1 };
+
+    mocks.listPlatformPapers.mockImplementation((params: any) => {
+      if (params.q === "Physics") {
+        return Promise.resolve({ papers: [paperB], total: 1, page: 1, pageSize: 10, totalPages: 1 });
+      }
+      return queryADeferred.promise;
+    });
+
+    mocks.listPlatformPaperPublications.mockImplementation((paperId: string) => {
+      if (paperId === "p-b") {
+        return Promise.resolve({
+          publications: [
+            {
+              id: "pub-b",
+              paper_id: "p-b",
+              title: "Physics Final Pub",
+              status: "published",
+              start_at: "2026-07-04T00:00:00Z",
+              end_at: "2026-07-04T02:00:00Z",
+              recipient_scope: "class",
+              class_ids: ["c1"],
+              class_names: ["Class 1"],
+              submitted_count: 0,
+              attempt_count: 1,
+              max_screen_switches: 0,
+              time_limit_minutes: 60,
+            },
+          ],
+        });
+      }
+      return Promise.resolve({
+        publications: [
+          {
+            id: "pub-a",
+            paper_id: "p-a",
+            title: "Math Midterm Pub",
+            status: "published",
+            start_at: "2026-07-04T00:00:00Z",
+            end_at: "2026-07-04T02:00:00Z",
+            recipient_scope: "class",
+            class_ids: ["c1"],
+            class_names: ["Class 1"],
+            submitted_count: 0,
+            attempt_count: 1,
+            max_screen_switches: 0,
+            time_limit_minutes: 60,
+          },
+        ],
+      });
+    });
+
+    render(<PapersWorkspace />);
+
+    // Query A is pending. Switch to Query B by typing "Physics"
+    const searchInput = screen.getByPlaceholderText("搜索试卷");
+    await userEvent.type(searchInput, "Physics");
+
+    // Query B completes and displays Paper B and its publication
+    expect((await screen.findAllByText("Physics Final")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("Physics Final Pub")).toBeInTheDocument();
+    expect(await screen.findByText("第 1 / 1 页，共 1 条")).toBeInTheDocument();
+
+    // Now Query A resolves late
+    await act(async () => {
+      queryADeferred.resolve({ papers: [paperA], total: 10, page: 1, pageSize: 10, totalPages: 1 });
+      await queryADeferred.promise;
+    });
+
+    // Verify Query B results remain and Query A did not overwrite
+    expect(screen.getAllByText("Physics Final").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Math Midterm")).not.toBeInTheDocument();
+    expect(screen.getByText("Physics Final Pub")).toBeInTheDocument();
+    expect(screen.queryByText("Math Midterm Pub")).not.toBeInTheDocument();
+    expect(screen.getByText("第 1 / 1 页，共 1 条")).toBeInTheDocument();
+    expect(screen.queryByText("共 10 条")).not.toBeInTheDocument();
+  });
+
+  it("does not backfill error when an older query rejects after the latest query succeeds", async () => {
+    let rejectQueryA!: (err: Error) => void;
+    const queryAPromise = new Promise<any>((_, reject) => {
+      rejectQueryA = reject;
+    });
+    const paperB = { ...offlinePaper, paper_id: "p-b", title: "Chemistry Exam" };
+
+    mocks.listPlatformPapers.mockImplementation((params: any) => {
+      if (params.q === "Chemistry") {
+        return Promise.resolve({ papers: [paperB], total: 1, page: 1, pageSize: 10, totalPages: 1 });
+      }
+      return queryAPromise;
+    });
+
+    const onError = vi.fn();
+    render(<PapersWorkspace onError={onError} />);
+
+    // Query A is in flight. Trigger Query B (Chemistry)
+    const searchInput = screen.getByPlaceholderText("搜索试卷");
+    await userEvent.type(searchInput, "Chemistry");
+
+    expect((await screen.findAllByText("Chemistry Exam")).length).toBeGreaterThan(0);
+
+    // Now Query A rejects late
+    await act(async () => {
+      rejectQueryA(new Error("Stale query network failure"));
+      try {
+        await queryAPromise;
+      } catch {
+        // expected
+      }
+    });
+
+    // Query A error should be ignored and not backfilled
+    expect(onError).not.toHaveBeenCalledWith("Stale query network failure");
+    expect(screen.queryByText("Stale query network failure")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Chemistry Exam").length).toBeGreaterThan(0);
+  });
+
+  it("ignores stale folder query responses when switching folders", async () => {
+    const folder1Deferred = deferred<{ papers: any[]; total?: number; page?: number; pageSize?: number; totalPages?: number }>();
+    const paper1 = { ...offlinePaper, paper_id: "p-f1", title: "Folder 1 Paper" };
+    const paper2 = { ...offlinePaper, paper_id: "p-f2", title: "Folder 2 Paper" };
+
+    mocks.listContentFolders.mockResolvedValue({
+      folders: [
+        { id: "f1", owner_teacher_id: "t1", scope: "paper", parent_id: null, kind: "category", name: "Folder One" },
+        { id: "f2", owner_teacher_id: "t1", scope: "paper", parent_id: null, kind: "category", name: "Folder Two" },
+      ],
+    });
+
+    mocks.listPlatformPapers.mockImplementation((params: any) => {
+      if (params.folderId === "f2") {
+        return Promise.resolve({ papers: [paper2], total: 1, page: 1, pageSize: 10, totalPages: 1 });
+      }
+      if (params.folderId === "f1") {
+        return folder1Deferred.promise;
+      }
+      return Promise.resolve({ papers: [], total: 0, page: 1, pageSize: 10, totalPages: 1 });
+    });
+
+    render(<PapersWorkspace />);
+
+    // Switch to folder 1 (delayed)
+    const folder1Items = await screen.findAllByText("Folder One");
+    await userEvent.click(folder1Items[0]);
+
+    // Switch to folder 2 (resolves fast)
+    const folder2Items = await screen.findAllByText("Folder Two");
+    await userEvent.click(folder2Items[0]);
+    expect((await screen.findAllByText("Folder 2 Paper")).length).toBeGreaterThan(0);
+
+    // Folder 1 resolves late
+    await act(async () => {
+      folder1Deferred.resolve({ papers: [paper1], total: 1, page: 1, pageSize: 10, totalPages: 1 });
+      await folder1Deferred.promise;
+    });
+
+    expect(screen.getAllByText("Folder 2 Paper").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Folder 1 Paper")).not.toBeInTheDocument();
+  });
+
+  it("localizes publication clock updates so clock ticks do not re-render PapersWorkspace", async () => {
+    vi.useFakeTimers();
+    mocks.listPlatformPapers.mockResolvedValue({
+      papers: [{ ...offlinePaper, delivery_mode: "online", publication_count: 1 }],
+    });
+    mocks.listPlatformPaperPublications.mockResolvedValue({
+      publications: [
+        {
+          id: "pub1",
+          paper_id: "p1",
+          title: "Midterm",
+          start_at: "2026-07-04T00:00:00Z",
+          end_at: "2026-07-04T02:00:00Z",
+          status: "published",
+          recipient_scope: "class",
+          class_ids: ["c1"],
+          class_names: ["Class 1"],
+          submitted_count: 0,
+          attempt_count: 1,
+          max_screen_switches: 0,
+          time_limit_minutes: 60,
+        },
+      ],
+    });
+
+    render(<PapersWorkspace />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const callsAfterMount = mocks.listPlatformPapers.mock.calls.length;
+
+    // Advance 3 seconds
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    // listPlatformPapers is NOT called again on second ticks
+    expect(mocks.listPlatformPapers.mock.calls.length).toBe(callsAfterMount);
+
+    vi.useRealTimers();
+  });
+
+  it("default omitted projectScope prop still reads /api/project/info and restores draft using fetched project", async () => {
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: null,
+      max_score: 5,
+      answers: [{ question_id: "math/q1", score: null, feedback: null, grading_status: "pending", images: [] }],
+    };
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [submission] });
+
+    // Store draft for teacher-1 / project-1 / p1
+    const storageKey = buildGradingDraftStorageKey({
+      accountId: "teacher-1",
+      projectId: "project-1",
+      paperId: "p1",
+      attemptId: "a1",
+      questionId: "math/q1",
+    });
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        sourceVersion: null,
+        score: "3.5",
+        feedback: "Default scope draft",
+      }),
+    );
+
+    render(<PapersWorkspace />);
+    await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledWith("/api/project/info"));
+
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("3.5");
+    expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("Default scope draft");
+  });
+
+  it("host projectScope with ready=false does not call /api/project/info and does not restore drafts", async () => {
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: null,
+      max_score: 5,
+      answers: [{ question_id: "math/q1", score: null, feedback: null, grading_status: "pending", images: [] }],
+    };
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [submission] });
+
+    const storageKey = buildGradingDraftStorageKey({
+      accountId: "teacher-1",
+      projectId: "project-1",
+      paperId: "p1",
+      attemptId: "a1",
+      questionId: "math/q1",
+    });
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        sourceVersion: null,
+        score: "3.5",
+        feedback: "Pending scope draft",
+      }),
+    );
+
+    render(<PapersWorkspace projectScope={{ ready: false, value: null }} />);
+
+    // Must NOT call /api/project/info
+    expect(mocks.apiGet).not.toHaveBeenCalledWith("/api/project/info");
+
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    // Draft should NOT be restored
+    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("");
+    expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("");
+  });
+
+  it("host projectScope with ready=true and string value isolates drafts to custom scope without calling /api/project/info", async () => {
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: null,
+      max_score: 5,
+      answers: [{ question_id: "math/q1", score: null, feedback: null, grading_status: "pending", images: [] }],
+    };
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [submission] });
+
+    // Store draft for custom scope
+    const storageKey = buildGradingDraftStorageKey({
+      accountId: "teacher-1",
+      projectId: "custom-host-scope",
+      paperId: "p1",
+      attemptId: "a1",
+      questionId: "math/q1",
+    });
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        sourceVersion: null,
+        score: "4.5",
+        feedback: "Custom host scope feedback",
+      }),
+    );
+
+    render(<PapersWorkspace projectScope={{ ready: true, value: "custom-host-scope" }} />);
+
+    // Must NOT call /api/project/info
+    expect(mocks.apiGet).not.toHaveBeenCalledWith("/api/project/info");
+
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("4.5");
+    expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("Custom host scope feedback");
+  });
+
+  it("transitions projectScope from pending to ready and restores drafts for the newly resolved scope", async () => {
+    const submission = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Student One",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: null,
+      max_score: 5,
+      answers: [{ question_id: "math/q1", score: null, feedback: null, grading_status: "pending", images: [] }],
+    };
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
+    mocks.listPaperSubmissions.mockResolvedValue({ submissions: [submission] });
+
+    const storageKey = buildGradingDraftStorageKey({
+      accountId: "teacher-1",
+      projectId: "bound-project",
+      paperId: "p1",
+      attemptId: "a1",
+      questionId: "math/q1",
+    });
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        sourceVersion: null,
+        score: "5",
+        feedback: "Resolved bound draft",
+      }),
+    );
+
+    const { rerender } = render(<PapersWorkspace projectScope={{ ready: false, value: null }} />);
+    expect(mocks.apiGet).not.toHaveBeenCalledWith("/api/project/info");
+
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("");
+
+    // Transition scope to ready
+    rerender(<PapersWorkspace projectScope={{ ready: true, value: "bound-project" }} />);
+
+    expect(await screen.findByDisplayValue("5")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("Resolved bound draft");
+    expect(mocks.apiGet).not.toHaveBeenCalledWith("/api/project/info");
+  });  it("PaperPublishingSidebar independently renders and updates publication window badge without parent clock prop", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const futurePublication = {
+      id: "pub-sidebar-1",
+      paper_id: "p1",
+      title: "Sidebar Test Paper",
+      status: "published",
+      start_at: new Date(now + 60000).toISOString(),
+      end_at: new Date(now + 120000).toISOString(),
+      recipient_scope: "class" as const,
+      class_ids: ["c1"],
+      class_names: ["Class 1"],
+      submitted_count: 0,
+      attempt_count: 5,
+      max_screen_switches: 0,
+      time_limit_minutes: 60,
+    };
+
+    render(
+      <PaperPublishingSidebar
+        publishPanel={<div>Publish Panel Content</div>}
+        publications={[futurePublication]}
+        busy={null}
+        onTogglePause={vi.fn()}
+        onRevoke={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("未开始")).toBeInTheDocument();
+
+    // Advance past start_at
+    await act(async () => {
+      vi.advanceTimersByTime(61000);
+    });
+
+    expect(screen.getByText("进行中")).toBeInTheDocument();
+
+    vi.useRealTimers();
+  });  it("user perspective: browsing, pagination, page size switching and manual refresh", async () => {
+    const generatePapers = (count: number, prefix: string) =>
+      Array.from({ length: count }, (_, i) => ({
+        ...offlinePaper,
+        paper_id: `${prefix}-${i + 1}`,
+        title: `${prefix} Paper ${i + 1}`,
+      }));
+
+    mocks.listPlatformPapers.mockImplementation((params: any) => {
+      const page = params.page || 1;
+      const pageSize = params.pageSize || 10;
+      const total = 25;
+      const totalPages = Math.ceil(total / pageSize);
+      const start = (page - 1) * pageSize;
+      const papers = generatePapers(total, "Exam").slice(start, start + pageSize);
+      return Promise.resolve({ papers, total, page, pageSize, totalPages });
+    });
+
+    render(<PapersWorkspace />);
+
+    // 1. Initial page 1 shows 10 items
+    expect(await screen.findByText("第 1 / 3 页，共 25 条")).toBeInTheDocument();
+    expect(screen.getByText(/Exam Paper 1 ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Exam Paper 10 ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/Exam Paper 11 ·/)).not.toBeInTheDocument();
+
+    // 2. Click "下一页" -> page 2
+    const nextBtn = screen.getByRole("button", { name: "下一页" });
+    const prevBtn = screen.getByRole("button", { name: "上一页" });
+    expect(prevBtn).toBeDisabled();
+    expect(nextBtn).toBeEnabled();
+
+    await userEvent.click(nextBtn);
+    expect(await screen.findByText("第 2 / 3 页，共 25 条")).toBeInTheDocument();
+    expect(screen.getByText(/Exam Paper 11 ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/Exam Paper 1 ·/)).not.toBeInTheDocument();
+    expect(prevBtn).toBeEnabled();
+
+    // 3. Click "上一页" -> returns to page 1
+    await userEvent.click(prevBtn);
+    expect(await screen.findByText("第 1 / 3 页，共 25 条")).toBeInTheDocument();
+    expect(screen.getByText(/Exam Paper 1 ·/)).toBeInTheDocument();
+
+    // 4. Change page size to 20
+    const pageSizeSelect = screen.getByLabelText("每页条数");
+    await userEvent.selectOptions(pageSizeSelect, "20");
+    expect(await screen.findByText("第 1 / 2 页，共 25 条")).toBeInTheDocument();
+    expect(screen.getByText(/Exam Paper 20 ·/)).toBeInTheDocument();
+
+    // 5. Click "刷新"
+    const refreshBtn = screen.getByRole("button", { name: "刷新" });
+    await userEvent.click(refreshBtn);
+    expect(await screen.findByText("第 1 / 2 页，共 25 条")).toBeInTheDocument();
+  });
+
+  it("user perspective: publishing validation, publishing execution, pause/resume, and revoke lifecycle", async () => {
+    const paper = { ...offlinePaper, paper_id: "p1", title: "Active Exam", question_count: 5, delivery_mode: "online" as const };
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [paper] });
+
+    let currentPublication: any = null;
+    mocks.listPlatformPaperPublications.mockImplementation(() =>
+      Promise.resolve({ publications: currentPublication ? [currentPublication] : [] }),
+    );
+
+    mocks.publishPlatformPaper.mockImplementation((_paperId, body: any) => {
+      currentPublication = {
+        id: "pub-1",
+        paper_id: "p1",
+        title: "Active Exam",
+        status: "published",
+        start_at: "2026-07-04T00:00:00Z",
+        end_at: "2026-07-04T02:00:00Z",
+        recipient_scope: "class",
+        class_ids: body.class_ids,
+        class_names: ["Class 1"],
+        submitted_count: 0,
+        attempt_count: 20,
+        max_screen_switches: body.max_screen_switches,
+        time_limit_minutes: body.time_limit_minutes,
+      };
+      return Promise.resolve({ publication: currentPublication });
+    });
+
+    mocks.updatePlatformPaperPublication.mockImplementation((_paperId, _pubId, patch: any) => {
+      currentPublication = { ...currentPublication, ...patch };
+      return Promise.resolve({ publication: currentPublication });
+    });
+
+    mocks.revokePlatformPaperPublication.mockImplementation(() => {
+      currentPublication = null;
+      return Promise.resolve({ ok: true });
+    });
+
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<PapersWorkspace />);
+
+    // Initially publish button is disabled because no class is selected
+    const publishBtn = await screen.findByTestId("paper-publish");
+    expect(publishBtn).toBeDisabled();
+    expect(screen.getByText("请选择至少一个未发布过的班级。")).toBeInTheDocument();
+
+    // User selects class
+    const classCheckbox = screen.getByTestId("paper-class-c1");
+    await userEvent.click(classCheckbox);
+
+    // Still disabled because no folder selected
+    expect(publishBtn).toBeDisabled();
+
+    // User selects folder
+    const folderSelect = screen.getByLabelText("发布文件夹");
+    await userEvent.selectOptions(folderSelect, "f1");
+
+    // Now button is enabled
+    expect(publishBtn).toBeEnabled();
+
+    // User clicks publish
+    await userEvent.click(publishBtn);
+
+    // Publication record appears in sidebar
+    expect(await screen.findByText("暂停收取提交")).toBeInTheDocument();
+
+    // User pauses publication
+    const pauseBtn = screen.getByRole("button", { name: "暂停收取提交" });
+    await userEvent.click(pauseBtn);
+    expect(await screen.findByRole("button", { name: "恢复收取提交" })).toBeInTheDocument();
+
+    // User resumes publication
+    const resumeBtn = screen.getByRole("button", { name: "恢复收取提交" });
+    await userEvent.click(resumeBtn);
+    expect(await screen.findByRole("button", { name: "暂停收取提交" })).toBeInTheDocument();
+
+    // User revokes publication
+    const revokeBtn = screen.getByRole("button", { name: "撤回发布" });
+    await userEvent.click(revokeBtn);
+    expect(await screen.findByText("已撤回发布")).toBeInTheDocument();
+  });
+
+  it("user perspective: teacher grades multiple students with isolated unsaved drafts across paper switches", async () => {
+    const paper1 = { ...offlinePaper, paper_id: "p1", title: "Math Paper" };
+    const paper2 = { ...offlinePaper, paper_id: "p2", title: "English Paper" };
+
+    const submissionP1 = {
+      attempt_id: "a1",
+      publication_id: "pub1",
+      student_name: "Alice",
+      student_no: "S001",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: null,
+      max_score: 5,
+      answers: [{ question_id: "q1", content: "1 + 1 = ?", answer: "2", score: null, feedback: null, grading_status: "pending", images: [] }],
+    };
+
+    const submissionP2 = {
+      attempt_id: "a2",
+      publication_id: "pub2",
+      student_name: "Bob",
+      student_no: "S002",
+      status: "submitted",
+      submitted_at: "2026-08-23T08:30:00Z",
+      score: null,
+      max_score: 10,
+      answers: [{ question_id: "eng1", content: "Translate hello", answer: "你好", score: null, feedback: null, grading_status: "pending", images: [] }],
+    };
+
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [paper1, paper2] });
+    mocks.listPaperSubmissions.mockImplementation((paperId: string) => {
+      if (paperId === "p1") return Promise.resolve({ submissions: [submissionP1] });
+      return Promise.resolve({ submissions: [submissionP2] });
+    });
+    mocks.gradePaperAnswer.mockResolvedValue({
+      answer: { question_id: "q1", score: 5, feedback: "Excellent job!", grading_status: "reviewed" },
+    });
+
+    render(<PapersWorkspace />);
+
+    // 1. Open grading for Paper 1
+    await userEvent.click(await screen.findByTestId("paper-tab-grading"));
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("1 + 1 = ?")).toBeInTheDocument();
+
+    // Type score and comment for Paper 1
+    const scoreInputP1 = screen.getByTestId("paper-grade-q1");
+    const feedbackInputP1 = screen.getByTestId("paper-feedback-q1");
+    await userEvent.type(scoreInputP1, "5");
+    await userEvent.type(feedbackInputP1, "Excellent job!");
+
+    // 2. User switches to Paper 2 in sidebar and loads its grading view
+    await userEvent.click(screen.getByText(/English Paper/));
+    await userEvent.click(screen.getByTestId("paper-tab-grading"));
+    expect(await screen.findByText("Bob")).toBeInTheDocument();
+    expect(screen.getByText("Translate hello")).toBeInTheDocument();
+
+    // Verify Paper 2 does NOT have Paper 1's inputs
+    expect(screen.getByTestId("paper-grade-eng1")).toHaveValue("");
+    expect(screen.getByTestId("paper-feedback-eng1")).toHaveValue("");
+
+    // 3. User switches back to Paper 1
+    await userEvent.click(screen.getByText(/Math Paper/));
+    await userEvent.click(screen.getByTestId("paper-tab-grading"));
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    // Draft score and feedback for Paper 1 are preserved
+    expect(screen.getByTestId("paper-grade-q1")).toHaveValue("5");
+    expect(screen.getByTestId("paper-feedback-q1")).toHaveValue("Excellent job!");
+
+    // 4. Save grading
+    await userEvent.click(screen.getByTestId("paper-save-grade-q1"));
+    await waitFor(() =>
+      expect(mocks.gradePaperAnswer).toHaveBeenCalledWith("p1", "a1", "q1", {
+        score: 5,
+        feedback: "Excellent job!",
+        is_correct: null,
+      }),
+    );
+  });
+
+  it("user perspective: switching delivery mode and handling offline score upload and template download", async () => {
+    const paper = { ...offlinePaper, paper_id: "p1", title: "Hybrid Exam", delivery_mode: "offline" as const };
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [paper] });
+    mocks.updatePlatformPaperDeliveryMode.mockImplementation((_id, mode) =>
+      Promise.resolve({ paper: { ...paper, delivery_mode: mode } }),
+    );
+    mocks.uploadPaperScores.mockResolvedValue({ ok: true, batch_id: "batch-1", student_count: 5 });
+
+    render(<PapersWorkspace />);
+
+    // Initially offline
+    expect(await screen.findByTestId("paper-mode-offline")).toBeDisabled();
+    const onlineBtn = screen.getByTestId("paper-mode-online");
+    expect(onlineBtn).toBeEnabled();
+
+    // User switches to online
+    await userEvent.click(onlineBtn);
+    await waitFor(() => expect(mocks.updatePlatformPaperDeliveryMode).toHaveBeenCalledWith("p1", "online"));
+
+    // User downloads score template
+    const downloadTemplateBtn = screen.getByText("下载成绩模板");
+    await userEvent.click(downloadTemplateBtn);
+    await waitFor(() =>
+      expect(mocks.apiDownloadBlob).toHaveBeenCalledWith(`/api/exams/${encodeURIComponent(paper.exam_id)}/score-template`),
+    );
+
+    // User uploads scores
+    const file = new File(["student,score\nS001,90"], "scores.csv", { type: "text/csv" });
+    const fileInput = document.querySelector('input[type="file"][accept=".csv,.xlsx,.xls"]') as HTMLInputElement;
+    expect(fileInput).toBeInTheDocument();
+    await userEvent.upload(fileInput, file);
+
+    await waitFor(() => expect(mocks.uploadPaperScores).toHaveBeenCalledWith(paper.exam_id, file));
+    expect(await screen.findByText("成绩已上传")).toBeInTheDocument();
   });
 });
