@@ -10,7 +10,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS class_students (
   student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   PRIMARY KEY(class_id, student_id)
 );
+CREATE INDEX IF NOT EXISTS idx_class_students_student ON class_students(student_id, class_id);
 
 CREATE TABLE IF NOT EXISTS teacher_class_assignments (
   teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -100,3 +100,18 @@ def test_teacher_creation_and_import_create_default_folders_in_their_transaction
     with closing(platform_db.connect(tmp_path)) as con:
         assert {row[0] for row in con.execute("SELECT id FROM content_folders")} == folders
         assert con.execute("SELECT 1 FROM users WHERE username='rolled-back'").fetchone() is None
+
+
+def test_version_thirteen_database_gains_student_class_lookup_index(tmp_path):
+    platform_db.init_platform_db(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        con.execute("DROP INDEX IF EXISTS idx_class_students_student")
+        con.execute("PRAGMA user_version = 13")
+
+    platform_db.init_platform_db(tmp_path)
+
+    with closing(platform_db.connect(tmp_path)) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == platform_db.SCHEMA_VERSION
+        assert [row["name"] for row in con.execute("PRAGMA index_info(idx_class_students_student)")] == [
+            "student_id", "class_id",
+        ]

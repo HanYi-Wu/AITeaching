@@ -231,6 +231,35 @@ def test_sql_query_pages_match_python_search_and_sort_semantics(tmp_path: Path) 
     assert assignment_actual == {"assignments": assignment_expected.pop("items"), **assignment_expected}
 
 
+def test_student_class_names_keep_legacy_order_when_query_plans_differ(tmp_path: Path) -> None:
+    school_id = seed_school_data(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        # The student already belongs to class_24; add class_23 second so rowid order
+        # differs from class_id order, then make class-name order differ as well.
+        con.execute(
+            "INSERT INTO class_students (class_id, student_id) VALUES (?, ?)",
+            ("class_23", "student_24"),
+        )
+        con.execute("UPDATE classes SET name = 'Zulu Class' WHERE id = 'class_23'")
+        con.execute("UPDATE classes SET name = 'Alpha Class' WHERE id = 'class_24'")
+        assert [row["name"] for row in con.execute("PRAGMA index_info(idx_class_students_student)")] == [
+            "student_id", "class_id",
+        ]
+        con.execute("ANALYZE")
+
+    legacy_student = next(
+        student
+        for student in roster.list_students(tmp_path, school_id=school_id)
+        if student["id"] == "student_24"
+    )
+    query_student = next(
+        student
+        for student in roster.query_students(tmp_path, school_id=school_id, page_size=100)["students"]
+        if student["id"] == "student_24"
+    )
+    assert query_student["class_names"] == legacy_student["class_names"]
+
+
 def test_sql_paged_queries_fetch_only_page_rows(tmp_path: Path) -> None:
     school_id = seed_school_data(tmp_path)
     cases = [
