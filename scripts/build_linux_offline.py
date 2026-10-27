@@ -1,9 +1,12 @@
 """Build on Linux from a prepared conda runtime and compiled frontend, not user data."""
 import argparse
+import fnmatch
 import hashlib
 import io
 import json
+import posixpath
 from pathlib import Path
+from pathlib import PurePosixPath
 import platform
 import shutil
 import subprocess
@@ -13,6 +16,111 @@ import tempfile
 import tomllib
 
 
+RUNTIME_EXCLUDE_PATTERNS = (
+    'lib/python*/site-packages/solaire/**',
+    'lib/libtesseract.a',
+)
+SOURCE_PATH_PTH_NAME = 'solaire-source.pth'
+
+
+def _runtime_exclusion_records(files):
+    records = []
+    for entry in files:
+        if not any(
+            fnmatch.fnmatchcase(entry.target, pattern)
+            for pattern in RUNTIME_EXCLUDE_PATTERNS
+        ):
+            continue
+        source = Path(entry.source)
+        if source.is_symlink():
+            size = 0
+        elif source.is_file():
+            size = source.stat().st_size
+        else:
+            size = 0
+        records.append({'path': entry.target, 'bytes': size})
+    return records
+
+
+def pack_runtime(runtime, output, staging_dir, conda_pack, console_scripts=()):
+    """Pack dependencies while resolving application modules from release/src."""
+    runtime = Path(runtime).resolve()
+    env = conda_pack.CondaEnv.from_prefix(str(runtime))
+    original_files = list(env.files)
+    exclusion_records = _runtime_exclusion_records(original_files)
+    package_files = [
+        entry for entry in original_files
+        if fnmatch.fnmatchcase(entry.target, RUNTIME_EXCLUDE_PATTERNS[0])
+    ]
+    if not package_files:
+        raise ValueError('Installed solaire package was not found in the runtime environment')
+
+    site_packages = sorted((runtime / 'lib').glob('python*/site-packages'))
+    if len(site_packages) != 1:
+        raise ValueError('Expected exactly one runtime Python site-packages directory')
+    site_target = PurePosixPath(site_packages[0].relative_to(runtime).as_posix())
+    pth_target = (site_target / SOURCE_PATH_PTH_NAME).as_posix()
+
+    filtered = env
+    for pattern in (*RUNTIME_EXCLUDE_PATTERNS, pth_target):
+        filtered = filtered.exclude(pattern)
+    if any(
+        fnmatch.fnmatchcase(entry.target, pattern)
+        for entry in filtered.files
+        for pattern in RUNTIME_EXCLUDE_PATTERNS
+    ):
+        raise ValueError('Runtime exclusion patterns left matching files in the package')
+    remaining_targets = {entry.target for entry in filtered.files}
+    missing_scripts = [
+        name for name in console_scripts if f'bin/{name}' not in remaining_targets
+    ]
+    if missing_scripts:
+        raise ValueError(
+            'Runtime console scripts would be missing: ' + ', '.join(missing_scripts)
+        )
+
+    pth_source = Path(staging_dir) / SOURCE_PATH_PTH_NAME
+    pth_source.write_bytes(
+        (posixpath.relpath('../src', site_target.as_posix()) + '\n').encode('utf-8')
+    )
+    filtered.files.append(
+        conda_pack.File(
+            source=str(pth_source),
+            target=pth_target,
+            is_conda=False,
+            file_mode='text',
+        )
+    )
+    filtered.files.sort(key=lambda entry: entry.target)
+    filtered.pack(output=str(output), format='tar.gz')
+
+    with tarfile.open(output, 'r:*') as archive:
+        packed_targets = {member.name for member in archive.getmembers()}
+        if any(
+            fnmatch.fnmatchcase(target, pattern)
+            for target in packed_targets
+            for pattern in RUNTIME_EXCLUDE_PATTERNS
+        ):
+            raise ValueError('Packed runtime still contains an excluded file')
+        expected_scripts = {f'bin/{name}' for name in console_scripts}
+        if not expected_scripts.issubset(packed_targets):
+            raise ValueError('Packed runtime is missing a console script')
+        packed_pth = archive.extractfile(pth_target)
+        packed_pth_bytes = packed_pth.read() if packed_pth is not None else None
+        expected_pth_bytes = posixpath.relpath('../src', site_target.as_posix()).encode() + b'\n'
+        if packed_pth_bytes != expected_pth_bytes:
+            raise ValueError(
+                f'Packed runtime source path redirect is missing or invalid: {packed_pth_bytes!r}'
+            )
+    return exclusion_records
+
+
+def _archive_unpacked_file_bytes(archive_path):
+    """Count regular-file payload bytes actually present in a tar archive."""
+    with tarfile.open(archive_path, 'r:*') as archive:
+        return sum(member.size for member in archive if member.isfile())
+
+
 def build(runtime, output, *, root=None):
     if root is None:
         root = Path(__file__).resolve().parents[1]
@@ -20,7 +128,8 @@ def build(runtime, output, *, root=None):
 
     if platform.system() != 'Linux' or platform.machine() != 'x86_64':
         raise SystemExit('必须在 Linux x86_64 构建，不能打包 Windows 运行环境')
-    version = tomllib.loads((root / 'pyproject.toml').read_text())['project']['version']
+    project = tomllib.loads((root / 'pyproject.toml').read_text())['project']
+    version = project['version']
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     if not (root / 'web/dist/index.html').is_file():
         raise SystemExit('请先在 web 目录执行 npm ci && npm run build')
@@ -71,7 +180,8 @@ def build(runtime, output, *, root=None):
     output.mkdir(parents=True, exist_ok=True)
     name = f'EducationHelper-{version}-{commit[:10]}-linux-x86_64-offline'
     with tempfile.TemporaryDirectory(prefix='eh-offline-build-') as temporary:
-        package = Path(temporary) / name
+        temporary = Path(temporary)
+        package = temporary / name
         package.mkdir()
         with tempfile.TemporaryDirectory(prefix='eh-source-') as staged:
             stage = Path(staged)
@@ -82,12 +192,40 @@ def build(runtime, output, *, root=None):
             with tarfile.open(package / 'app.tar.gz', 'w:gz') as target:
                 for path in sorted(stage.iterdir()):
                     target.add(path, arcname=path.name)
-            app_size = sum(p.stat().st_size for p in stage.rglob('*') if p.is_file())
-        conda_pack.pack(prefix=str(runtime.resolve()), output=str(package / 'runtime.tar.gz'), format='tar.gz')
+        app_size = _archive_unpacked_file_bytes(package / 'app.tar.gz')
+        excluded_runtime = pack_runtime(
+            runtime,
+            package / 'runtime.tar.gz',
+            temporary,
+            conda_pack,
+            console_scripts=project.get('scripts', {}),
+        )
+        excluded_solaire = sum(
+            item['bytes'] for item in excluded_runtime
+            if fnmatch.fnmatchcase(item['path'], RUNTIME_EXCLUDE_PATTERNS[0])
+        )
+        excluded_tesseract = sum(
+            item['bytes'] for item in excluded_runtime
+            if fnmatch.fnmatchcase(item['path'], RUNTIME_EXCLUDE_PATTERNS[1])
+        )
+        excluded_solaire_count = sum(
+            fnmatch.fnmatchcase(item['path'], RUNTIME_EXCLUDE_PATTERNS[0])
+            for item in excluded_runtime
+        )
+        excluded_tesseract_count = sum(
+            fnmatch.fnmatchcase(item['path'], RUNTIME_EXCLUDE_PATTERNS[1])
+            for item in excluded_runtime
+        )
+        print(
+            f'Runtime exclusions: installed solaire={excluded_solaire_count} files, '
+            f'{excluded_solaire} bytes; libtesseract.a={excluded_tesseract_count} files, '
+            f'{excluded_tesseract} bytes',
+            flush=True,
+        )
         for file in ['install.sh', 'installer.py']:
             shutil.copy2(root / 'scripts/offline' / file, package / file)
         shutil.copy2(root / 'docs/linux-offline-install.md', package / '使用说明.md')
-        runtime_size = sum(p.stat().st_size for p in runtime.rglob('*') if p.is_file())
+        runtime_size = _archive_unpacked_file_bytes(package / 'runtime.tar.gz')
         manifest = {
             'format': 1,
             'version': version,
