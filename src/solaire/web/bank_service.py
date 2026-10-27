@@ -642,7 +642,10 @@ def rename_question_collection(
     new_root = library_root_for_namespace(project_root, f'{subj}/{coll}')
     assert_within_project(project_root, new_root)
     if new_root == old_root:
-        return {"namespace": ns, "changed": False}
+        with bank_write_lock(old_root):
+            if not old_root.is_dir():
+                raise FileNotFoundError(f"题集不存在: {ns}")
+            return {"namespace": ns, "changed": False}
     first, second = sorted((old_root, new_root), key=lambda path: str(path).casefold())
     with bank_write_lock(first), bank_write_lock(second):
         if not old_root.is_dir():

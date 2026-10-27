@@ -45,6 +45,10 @@ def test_rename_collection_moves_directory(tmp_path: Path) -> None:
     new = root / "resource" / "数学" / "新题集"
     assert new.is_dir()
     assert any(new.glob("*.yaml"))
+    unchanged = rename_question_collection(root, namespace="数学/新题集", new_subject="数学", new_collection="新题集")
+    assert unchanged["changed"] is False
+    with pytest.raises(FileNotFoundError):
+        rename_question_collection(root, namespace="数学/旧题集", new_subject="数学", new_collection="旧题集")
 
 
 def test_rename_rejects_main(tmp_path: Path) -> None:
