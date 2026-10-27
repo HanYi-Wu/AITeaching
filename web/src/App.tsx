@@ -448,6 +448,8 @@ function AppShell() {
                   {page === "analysis" && (
                     <AnalysisWorkspace
                       allowHostTools={!platformStatus?.public_mode && currentUser?.role === "admin"}
+                      ownerId={currentUser?.id ?? null}
+                      projectId={info?.bound ? info.root || info.project_id : null}
                       onOpenExamInCompose={(examId) => {
                         setComposeOpenExamId(examId);
                         setPage("compose");
