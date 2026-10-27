@@ -43,6 +43,15 @@ class TaskProjectionStore:
 
     def _init_db(self) -> None:
         with self._connect() as db:
+            # Warm status reads must not reserve the database's write lock.
+            objects = db.execute("""
+                SELECT COUNT(*) FROM sqlite_master
+                WHERE (type = 'table' AND name = 'task_projections')
+                   OR (type = 'index' AND name IN (
+                       'idx_task_proj_owner_scope', 'idx_task_proj_source'))
+            """).fetchone()[0]
+            if objects == 3:
+                return
             db.execute("BEGIN IMMEDIATE")
             db.execute("""
                 CREATE TABLE IF NOT EXISTS task_projections (

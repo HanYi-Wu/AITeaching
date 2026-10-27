@@ -60,6 +60,15 @@ class ExportTaskService:
         assert_within_project(self.root, self.db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
+            # Inspect persisted schema without serializing every status poll.
+            has_index = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name='export_tasks_owner'"
+            ).fetchone()
+            if has_index and any(
+                row["name"] == "recovery_ids_json"
+                for row in db.execute("PRAGMA table_info(export_tasks)")
+            ):
+                return
             db.execute("BEGIN IMMEDIATE")
             db.execute("""CREATE TABLE IF NOT EXISTS export_tasks (
                 id TEXT PRIMARY KEY, owner TEXT NOT NULL, format TEXT NOT NULL,
