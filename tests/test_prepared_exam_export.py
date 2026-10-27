@@ -62,3 +62,14 @@ def test_prepared_inputs_cannot_be_used_for_a_different_exam_or_preview_mode(tmp
         validated.check_source(tmp_path / "other.yaml")
     with pytest.raises(ValueError, match="validation mode"):
         validated.check_source(validated.exam_yaml, preview_relaxed=True)
+
+
+def test_structural_validation_keeps_empty_selection_support(tmp_path):
+    template = tmp_path / "template.yaml"
+    template.write_text("template_id: empty\nsections: []\n", encoding="utf-8")
+    exam = tmp_path / "exam.yaml"
+    exam.write_text("exam_id: empty\ntemplate_ref: empty\ntemplate_path: template.yaml\nselected_items: []\n", encoding="utf-8")
+    prepared = exam_service.run_validate(tmp_path, exam)
+    assert prepared.exam.question_libraries == []
+    with pytest.raises(ValueError, match="non-empty question_libraries"):
+        docx.build_exam_docx(exam, tmp_path / "out", prepared=prepared)

@@ -34,6 +34,8 @@ def _compile_exam_tex_to_pdfs(
     prepared = prepared or prepare_exam(exam_yaml, preview_relaxed=preview_relaxed)
     prepared.check_source(exam_yaml, preview_relaxed=preview_relaxed)
     exam, loaded, template = prepared.exam, prepared.loaded, prepared.template
+    if not exam.question_libraries:
+        raise ValueError("exam.yaml must include non-empty question_libraries")
     tmpl_path = prepared.template_path
     preview_warnings = list(prepared.preview_warnings)
     if preview_relaxed:

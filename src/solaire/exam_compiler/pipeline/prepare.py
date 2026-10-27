@@ -31,8 +31,6 @@ def prepare_exam(exam_yaml: Path, *, preview_relaxed: bool = False) -> PreparedE
     exam_yaml = exam_yaml.resolve()
     with exam_yaml.open(encoding="utf-8") as stream:
         exam = ExamConfig.model_validate(yaml.safe_load(stream))
-    if not exam.question_libraries:
-        raise ValueError("exam.yaml must include non-empty question_libraries")
     loaded = load_all_questions(exam_yaml, [(lib.namespace, lib.path) for lib in exam.question_libraries])
     template_path = resolve_template_yaml_path(exam_yaml, exam)
     template = load_template(template_path)

@@ -236,6 +236,8 @@ def build_exam_docx(
     prepared = prepared or prepare_exam(exam_yaml)
     prepared.check_source(exam_yaml)
     exam, loaded, template = prepared.exam, prepared.loaded, prepared.template
+    if not exam.question_libraries:
+        raise ValueError("exam.yaml must include non-empty question_libraries")
 
     hydrated = hydrate(exam, template, loaded)
     work_dir = work_dir_for_exam(exam_yaml)
