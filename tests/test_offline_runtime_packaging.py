@@ -143,6 +143,39 @@ def test_runtime_pack_keeps_cli_and_adds_relative_source_redirect(tmp_path: Path
     assert not (runtime / "lib/python3.12/site-packages/solaire-source.pth").exists()
 
 
+def test_runtime_pack_ignores_unrelated_python_site_packages(tmp_path: Path):
+    runtime, _ = _runtime_fixture(tmp_path)
+    unrelated = runtime / "lib/python3.13/site-packages/unrelated/__init__.py"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_bytes(b"unrelated runtime package")
+    output = tmp_path / "runtime.tar.gz"
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    pack_runtime(runtime, output, staging, _CondaPack)
+
+    with tarfile.open(output, "r:gz") as archive:
+        targets = {member.name for member in archive.getmembers()}
+        assert "lib/python3.12/site-packages/solaire-source.pth" in targets
+        assert "lib/python3.13/site-packages/unrelated/__init__.py" in targets
+
+
+def test_runtime_pack_rejects_multiple_installed_application_roots(tmp_path: Path):
+    runtime, _ = _runtime_fixture(tmp_path)
+    duplicate = runtime / "lib/python3.13/site-packages/solaire/__init__.py"
+    duplicate.parent.mkdir(parents=True)
+    duplicate.write_bytes(b"second installed application copy")
+    output = tmp_path / "runtime.tar.gz"
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        pack_runtime(runtime, output, staging, _CondaPack)
+
+    assert "lib/python3.12/site-packages" in str(exc_info.value)
+    assert "lib/python3.13/site-packages" in str(exc_info.value)
+
+
 def test_relative_pth_imports_from_release_src(tmp_path: Path):
     release = tmp_path / "release"
     source_package = release / "src" / "solaire"

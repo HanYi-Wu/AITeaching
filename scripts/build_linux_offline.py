@@ -55,10 +55,28 @@ def pack_runtime(runtime, output, staging_dir, conda_pack, console_scripts=()):
     if not package_files:
         raise ValueError('Installed solaire package was not found in the runtime environment')
 
-    site_packages = sorted((runtime / 'lib').glob('python*/site-packages'))
+    site_targets = set()
+    for entry in package_files:
+        parts = PurePosixPath(entry.target).parts
+        try:
+            site_index = parts.index('site-packages')
+        except ValueError:
+            raise ValueError(
+                f'Unexpected installed solaire path: {entry.target}'
+            ) from None
+        if site_index + 1 >= len(parts) or parts[site_index + 1] != 'solaire':
+            raise ValueError(
+                f'Unexpected installed solaire path: {entry.target}'
+            )
+        site_targets.add(PurePosixPath(*parts[:site_index + 1]))
+    site_packages = sorted(site_targets)
     if len(site_packages) != 1:
-        raise ValueError('Expected exactly one runtime Python site-packages directory')
-    site_target = PurePosixPath(site_packages[0].relative_to(runtime).as_posix())
+        candidates = ', '.join(path.as_posix() for path in site_packages) or '(none)'
+        raise ValueError(
+            'Expected exactly one runtime Python site-packages directory containing '
+            f'installed solaire; found: {candidates}'
+        )
+    site_target = site_packages[0]
     pth_target = (site_target / SOURCE_PATH_PTH_NAME).as_posix()
 
     filtered = env
