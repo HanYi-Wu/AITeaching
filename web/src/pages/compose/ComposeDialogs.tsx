@@ -1,5 +1,9 @@
+import { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
-import { PdfPreview } from "../../components/PdfPreview";
+
+const LazyPdfPreview = lazy(() =>
+  import("../../components/PdfPreview").then(({ PdfPreview }) => ({ default: PdfPreview })),
+);
 
 export function OverwriteExportDialog({
   open,
@@ -76,7 +80,9 @@ export function PreviewPdfModal({
         </button>
       </div>
       <div className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-auto rounded-b-lg bg-white p-3">
-        <PdfPreview apiPath={pdfPath} className="min-h-full" />
+        <Suspense fallback={<p className="text-sm text-slate-500" role="status">正在加载 PDF 预览…</p>}>
+          <LazyPdfPreview apiPath={pdfPath} className="min-h-full" />
+        </Suspense>
       </div>
     </div>
   );
