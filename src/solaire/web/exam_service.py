@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 
 from solaire.exam_compiler.facade import (
+    PreparedExam,
+    prepare_exam,
     ExamConfig,
     ExamTemplate,
     LatexmkError,
@@ -20,12 +22,10 @@ from solaire.exam_compiler.facade import (
     build_exam_pdfs,
     format_latexmk_failure_message,
     format_pandoc_failure_message,
-    load_all_questions,
     PandocError,
     load_template,
     precheck_exam_latex_build,
     resolve_template_yaml_path,
-    validate_exam,
 )
 from solaire.exam_compiler.loaders.questions import LoadedQuestions
 from solaire.common.security import assert_within_project as assert_content_path
@@ -336,26 +336,19 @@ def find_export_conflict(project_root: Path, export_label: str, subject: str) ->
 
 def load_exam_for_validation(exam_yaml: Path) -> tuple[ExamConfig, LoadedQuestions, ExamTemplate]:
     """Load exam YAML, questions, template; run structural validate_exam."""
-    with exam_yaml.open(encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    exam = ExamConfig.model_validate(raw)
-    libs = [(lib.namespace, lib.path) for lib in exam.question_libraries]
-    loaded = load_all_questions(exam_yaml, libs)
-    tmpl_path = resolve_template_yaml_path(exam_yaml, exam)
-    template = load_template(tmpl_path)
-    validate_exam(exam, template, loaded)
-    return exam, loaded, template
+    prepared = prepare_exam(exam_yaml)
+    return prepared.exam, prepared.loaded, prepared.template
 
 
-def run_validate(project_root: Path, exam_yaml: Path) -> None:
+def run_validate(project_root: Path, exam_yaml: Path) -> PreparedExam:
     assert_within_project(project_root, exam_yaml)
-    load_exam_for_validation(exam_yaml)
+    return prepare_exam(exam_yaml)
 
 
-def run_latex_precheck(exam_yaml: Path) -> tuple[bool, str | None]:
+def run_latex_precheck(exam_yaml: Path, *, prepared: PreparedExam | None = None) -> tuple[bool, str | None]:
     """Full hydrate → TeX → latexmk; returns (True, None) or (False, user-facing excerpt)."""
     try:
-        precheck_exam_latex_build(exam_yaml)
+        precheck_exam_latex_build(exam_yaml, **({"prepared": prepared} if prepared is not None else {}))
     except LatexmkError as e:
         return False, format_latexmk_failure_message(e)
     return True, None
@@ -372,7 +365,7 @@ def run_validate_with_checks(
     Structural validation plus optional LaTeX precheck and math delimiter static analysis.
     """
     assert_within_project(project_root, exam_yaml)
-    _exam, loaded, _tmpl = load_exam_for_validation(exam_yaml)
+    prepared = prepare_exam(exam_yaml)
     out: dict[str, Any] = {
         "structure_ok": True,
         "latex_ok": None,
@@ -380,9 +373,9 @@ def run_validate_with_checks(
         "math_warnings": [],
     }
     if include_math_static:
-        out["math_warnings"] = analyze_math_static_for_loaded(loaded)
+        out["math_warnings"] = analyze_math_static_for_loaded(prepared.loaded)
     if include_latex_check:
-        ok, err = run_latex_precheck(exam_yaml)
+        ok, err = run_latex_precheck(exam_yaml, prepared=prepared)
         out["latex_ok"] = ok
         out["latex_error_excerpt"] = err
     return out
@@ -396,11 +389,12 @@ def export_pdfs(
     subject: str,
     template: ExamTemplate | None = None,
     dest_dir: Path,
+    prepared: PreparedExam | None = None,
 ) -> tuple[Path, str, str]:
     """Generate both PDFs before replacing the previous pair and exam metadata."""
     return _export_documents(
         project_root, exam_yaml=exam_yaml, export_label=export_label,
-        subject=subject, template=template, dest_dir=dest_dir, format="pdf",
+        subject=subject, template=template, dest_dir=dest_dir, format="pdf", prepared=prepared,
     )
 
 
@@ -412,11 +406,12 @@ def export_docx(
     subject: str,
     template: ExamTemplate | None = None,
     dest_dir: Path,
+    prepared: PreparedExam | None = None,
 ) -> tuple[Path, str, str]:
     """Generate both Word files before replacing the previous pair and metadata."""
     return _export_documents(
         project_root, exam_yaml=exam_yaml, export_label=export_label,
-        subject=subject, template=template, dest_dir=dest_dir, format="docx",
+        subject=subject, template=template, dest_dir=dest_dir, format="docx", prepared=prepared,
     )
 
 
@@ -429,8 +424,12 @@ def _export_documents(
     template: ExamTemplate | None,
     dest_dir: Path,
     format: str,
+    prepared: PreparedExam | None = None,
 ) -> tuple[Path, str, str]:
     assert_within_project(project_root, exam_yaml)
+    if prepared is not None:
+        prepared.check_source(exam_yaml)
+        template = prepared.template
     dest = dest_dir.resolve()
     assert_within_project(project_root, dest)
     exams_root = (project_root / "exams").resolve()
@@ -445,18 +444,22 @@ def _export_documents(
 
     with export_staging(dest) as stage:
         try:
+            build_options = {"prepared": prepared} if prepared is not None else {}
             if format == "pdf":
-                student, teacher, _warnings = build_exam_pdfs(exam_yaml, out_dir=stage)
+                student, teacher, _warnings = build_exam_pdfs(exam_yaml, out_dir=stage, **build_options)
             else:
-                student, teacher = build_exam_docx(exam_yaml, out_dir=stage)
+                student, teacher = build_exam_docx(exam_yaml, out_dir=stage, **build_options)
         except LatexmkError as exc:
             raise RuntimeError(format_latexmk_failure_message(exc)) from exc
         except PandocError as exc:
             raise RuntimeError(format_pandoc_failure_message(exc)) from exc
         files = {student_name: student, teacher_name: teacher}
         if exam_yaml.is_file():
-            with exam_yaml.open(encoding="utf-8") as handle:
-                exam_data = ExamConfig.model_validate(yaml.safe_load(handle))
+            if prepared is not None:
+                exam_data = prepared.exam.model_copy(deep=True)
+            else:
+                with exam_yaml.open(encoding="utf-8") as handle:
+                    exam_data = ExamConfig.model_validate(yaml.safe_load(handle))
             if template is not None:
                 section_scores = {s.section_id: s.score_per_item for s in template.sections}
                 for section in exam_data.selected_items:

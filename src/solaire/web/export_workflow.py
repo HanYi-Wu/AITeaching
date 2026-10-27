@@ -171,15 +171,16 @@ def _export_locked(
             metadata=metadata,
             selected_items=_draft_to_sections(body),
         )
-        run_validate(root, exam_yaml)
+        prepared = run_validate(root, exam_yaml)
         builder = export_pdfs if format == "pdf" else export_docx
         result_dir, student_name, teacher_name = builder(
             root,
             exam_yaml=exam_yaml,
             export_label=body.export_label,
             subject=body.subject,
-            template=load_template(template_path),
+            template=prepared.template if prepared is not None else load_template(template_path),
             dest_dir=destination,
+            **({"prepared": prepared} if prepared is not None else {}),
         )
     except HTTPException:
         restore_build_yaml_from_backup(root, backup)

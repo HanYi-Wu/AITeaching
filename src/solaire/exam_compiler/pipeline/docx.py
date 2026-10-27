@@ -7,14 +7,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from solaire.exam_compiler.loaders.questions import LoadedQuestions, load_all_questions
-from solaire.exam_compiler.loaders.template_loader import load_template, resolve_template_yaml_path
-from solaire.exam_compiler.models import ExamConfig
+from solaire.exam_compiler.loaders.questions import LoadedQuestions
 from solaire.exam_compiler.paths import exam_parent_dir, work_dir_for_exam
 from solaire.exam_compiler.pipeline.hydrate import HydratedExam, HydratedQuestion, hydrate
-from solaire.exam_compiler.pipeline.validate import validate_exam
+from solaire.exam_compiler.pipeline.prepare import PreparedExam, prepare_exam
 from solaire.web.extension_registry import resolve_exe
 from . import docx_markdown as _docx_markdown
 from . import docx_resources as _docx_resources
@@ -27,12 +23,6 @@ _W_NS = _docx_process._W_NS
 _XML_NAMESPACES = _docx_process._XML_NAMESPACES
 PandocError = _docx_process.PandocError
 DocxResourceContext = _docx_resources.DocxResourceContext
-
-
-def _parse_exam(exam_yaml: Path) -> ExamConfig:
-    with exam_yaml.open(encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    return ExamConfig.model_validate(raw)
 
 
 _tail = _docx_process._tail
@@ -236,21 +226,16 @@ def build_exam_docx(
     out_dir: Path | None,
     *,
     clean_workdir: bool = False,
+    prepared: PreparedExam | None = None,
 ) -> tuple[Path, Path]:
     """Build student and teacher DOCX files with Pandoc."""
     exam_yaml = exam_yaml.resolve()
     if not exam_yaml.is_file():
         raise FileNotFoundError(exam_yaml)
 
-    exam = _parse_exam(exam_yaml)
-    if not exam.question_libraries:
-        raise ValueError("exam.yaml must include non-empty question_libraries")
-
-    libs = [(lib.namespace, lib.path) for lib in exam.question_libraries]
-    loaded = load_all_questions(exam_yaml, libs)
-    tmpl_path = resolve_template_yaml_path(exam_yaml, exam)
-    template = load_template(tmpl_path)
-    validate_exam(exam, template, loaded)
+    prepared = prepared or prepare_exam(exam_yaml)
+    prepared.check_source(exam_yaml)
+    exam, loaded, template = prepared.exam, prepared.loaded, prepared.template
 
     hydrated = hydrate(exam, template, loaded)
     work_dir = work_dir_for_exam(exam_yaml)

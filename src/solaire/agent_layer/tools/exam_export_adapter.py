@@ -214,8 +214,8 @@ def _export_paper_locked(ctx: InvocationContext, args: dict[str, Any]) -> ToolRe
             metadata=metadata,
             selected_items=sections,
         )
-        getattr(exam_tools, 'run_validate', run_validate)(root, exam_yaml)
-        template = getattr(exam_tools, 'load_template', load_template)(tpl)
+        prepared = getattr(exam_tools, 'run_validate', run_validate)(root, exam_yaml)
+        template = prepared.template if prepared is not None else getattr(exam_tools, 'load_template', load_template)(tpl)
         exam_dir, s_name, t_name = getattr(exam_tools, 'export_pdfs', export_pdfs)(
             root,
             exam_yaml=exam_yaml,
@@ -223,6 +223,7 @@ def _export_paper_locked(ctx: InvocationContext, args: dict[str, Any]) -> ToolRe
             subject=subject,
             template=template,
             dest_dir=dest_dir,
+            **({"prepared": prepared} if prepared is not None else {}),
         )
     except ValueError as e:
         getattr(exam_tools, 'restore_build_yaml_from_backup', restore_build_yaml_from_backup)(root, backup)
