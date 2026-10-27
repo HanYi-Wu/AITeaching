@@ -231,15 +231,61 @@ def _extract_pptx(path: Path) -> tuple[str, dict[str, Any]]:
     return "\n\n".join(chunks), {"slides": slide_count, "total_slides": len(presentation.slides)}
 
 
-def _extract_pdf(path: Path) -> tuple[str, dict[str, Any]]:
+def _extract_pdf(path: Path, *, max_chars: int = 40_000) -> tuple[str, dict[str, Any]]:
     import pdfplumber
+    from pdfminer.pdfpage import PDFPage
 
     pages: list[str] = []
-    with pdfplumber.open(path) as pdf:
-        for index, page in enumerate(pdf.pages[:MAX_PDF_PAGES], 1):
-            pages.append(f"## 第 {index} 页\n\n{page.extract_text() or ''}")
-        total = len(pdf.pages)
-    return "\n\n".join(pages), {"pages": min(total, MAX_PDF_PAGES), "total_pages": total}
+    content_length = 0
+    extracted_pages = 0
+    char_budget_exceeded = False
+    # Avoid constructing pdfplumber.Page wrapper objects for unextracted pages (> MAX_PDF_PAGES)
+    with pdfplumber.open(path, pages=list(range(1, MAX_PDF_PAGES + 1))) as pdf:
+        # Traverse lightweight page index for exact total_pages without full Page wrappers
+        total = sum(1 for _ in PDFPage.create_pages(pdf.doc))
+        selected_page_count = min(total, MAX_PDF_PAGES)
+        for index, page in enumerate(pdf.pages, 1):
+            text = page.extract_text() or ""
+            heading = f"## 第 {index} 页\n\n"
+            separator = "\n\n" if pages else ""
+            projected_length = content_length + len(separator) + len(heading) + len(text)
+            if projected_length > max_chars:
+                char_budget_exceeded = True
+                content_before_page = "\n\n".join(pages)
+                chars_needed = max_chars + 1 - len(content_before_page) - len(separator) - len(heading)
+                raw_prefix = content_before_page + separator + heading + text[:max(0, chars_needed)]
+                pages = [_bounded(raw_prefix, max_chars)[0]]
+                extracted_pages = index
+                break
+
+            pages.append(heading + text)
+            content_length = projected_length
+            extracted_pages = index
+            if content_length == max_chars and index < selected_page_count:
+                # The current page fits exactly, but a later selected page would be omitted.
+                content_before_page = "\n\n".join(pages)
+                pages = [_bounded(content_before_page + "\0", max_chars)[0]]
+                char_budget_exceeded = True
+                break
+
+        # Explicitly close pages and clear pages_to_parse to prevent pdf.close()
+        # from re-instantiating Page objects when flush_cache() deletes _pages
+        if hasattr(pdf, "_pages"):
+            for p in list(pdf._pages):
+                p.close()
+        pdf.pages_to_parse = []
+
+    metadata: dict[str, Any] = {
+        "pages": min(total, MAX_PDF_PAGES),
+        "total_pages": total,
+        "page_budget": MAX_PDF_PAGES,
+        "extracted_pages": extracted_pages,
+    }
+    if total > MAX_PDF_PAGES:
+        metadata["page_truncated"] = True
+    if char_budget_exceeded:
+        metadata["char_truncated"] = True
+    return "\n\n".join(pages), metadata
 
 
 def extract_attachment(path: Path, *, max_chars: int = 40_000) -> AttachmentExtraction:
@@ -294,10 +340,19 @@ def extract_attachment(path: Path, *, max_chars: int = 40_000) -> AttachmentExtr
         elif suffix == ".pptx":
             content, metadata = _extract_pptx(path)
         elif suffix == ".pdf":
-            content, metadata = _extract_pdf(path)
+            content, metadata = _extract_pdf(path, max_chars=max_chars)
         else:
             return AttachmentExtraction(capability.kind, error_code="unsupported_file_type", error="没有可用解析器。", suggestion=capability.suggestion)
-        bounded, truncated = _bounded(content, max_chars)
+        bounded, is_char_bounded = _bounded(content, max_chars)
+        page_truncated = bool(metadata.pop("page_truncated", False))
+        char_truncated = bool(metadata.pop("char_truncated", False)) or is_char_bounded
+        truncated = is_char_bounded or page_truncated or char_truncated
+        if page_truncated and char_truncated:
+            metadata["truncation_reason"] = "page_limit,char_limit"
+        elif page_truncated:
+            metadata["truncation_reason"] = "page_limit"
+        elif char_truncated:
+            metadata["truncation_reason"] = "char_limit"
         return AttachmentExtraction(capability.kind, content=bounded, truncated=truncated, metadata=metadata)
     except Exception as exc:
         return AttachmentExtraction(

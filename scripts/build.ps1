@@ -74,9 +74,61 @@ if (-not $SkipRust) {
 
 Write-Host "==> 前端 npm ci + build" -ForegroundColor Cyan
 Push-Location (Join-Path $repoRoot "web")
-npm ci
-npm run build
-Pop-Location
+try {
+  npm ci
+  $code = $LASTEXITCODE
+  if ($code -ne 0) {
+    Write-Host "npm ci 失败，退出码: $code" -ForegroundColor Red
+    exit $code
+  }
+  npm run build
+  $code = $LASTEXITCODE
+  if ($code -ne 0) {
+    Write-Host "npm run build 失败，退出码: $code" -ForegroundColor Red
+    exit $code
+  }
+} finally {
+  Pop-Location
+}
+
+# 验证前端构建来源一致性
+$distStamp = Join-Path $repoRoot "web\dist\build-stamp.json"
+if (-not (Test-Path $distStamp)) {
+  Write-Host "前端构建产物缺少 build-stamp.json: $distStamp" -ForegroundColor Red
+  exit 1
+}
+
+# 校验 build-stamp.json
+$pyCmd = if (Get-Command py -ErrorAction SilentlyContinue) { "py" }
+         elseif (Get-Command python -ErrorAction SilentlyContinue) { "python" }
+         elseif (Get-Command uv -ErrorAction SilentlyContinue) { "uv" }
+         else { $null }
+
+if ($pyCmd) {
+  $expectedCommit = & git -C $repoRoot rev-parse HEAD
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$expectedCommit)) {
+    Write-Host "无法读取当前源码 revision，拒绝验证前端构建来源" -ForegroundColor Red
+    exit 1
+  }
+  $expectedCommit = [string]$expectedCommit
+  $stampScript = Join-Path $repoRoot "scripts\build_stamp.py"
+  $webDir = Join-Path $repoRoot "web"
+  $distDir = Join-Path $repoRoot "web\dist"
+  if ($pyCmd -eq "uv") {
+    & uv run --no-sync python $stampScript verify --dist-dir $distDir --web-dir $webDir --expected-commit $expectedCommit
+  } elseif ($pyCmd -eq "py") {
+    & py -3 $stampScript verify --dist-dir $distDir --web-dir $webDir --expected-commit $expectedCommit
+  } else {
+    & python $stampScript verify --dist-dir $distDir --web-dir $webDir --expected-commit $expectedCommit
+  }
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "前端构建来源验证失败 (build_stamp.py)" -ForegroundColor Red
+    exit $LASTEXITCODE
+  }
+} else {
+  Write-Host "无法找到 Python 验证器，拒绝验证前端构建来源" -ForegroundColor Red
+  exit 1
+}
 
 if (-not $skipPy) {
   Write-Host "==> Rebuild embedded Python runtime from clean state" -ForegroundColor Cyan
