@@ -1,11 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 import yaml
 
 from solaire.exam_compiler.models import QuestionGroupRecord, QuestionItem
-from solaire.web.bank_service import get_question_detail, save_bank_record
+from solaire.web.bank_service import delete_question_collection, get_question_detail, rename_question_collection, save_bank_record
 
 
 def question(qid="q1", content="before"):
@@ -66,7 +67,9 @@ def test_group_edit_retains_root_and_member_extensions(tmp_path: Path):
     path = tmp_path / "resource/math/set/legacy.yaml"
     path.parent.mkdir(parents=True)
     group = {"id": "group", "type": "group", "unified": False, "material": "material",
-             "custom": "keep", "items": [{"type": "fill", "content": "part", "answer": "1", "extra": 3}]}
+             "custom": "keep", "metadata": {"review": "pending"}, "answer": "root extension",
+             "content": "root content extension",
+             "items": [{"type": "fill", "content": "part", "answer": "1", "extra": 3}]}
     path.write_text(yaml.safe_dump([question(), group]), encoding="utf-8")
     group["material"] = "edited material"
     save_bank_record(tmp_path, "math/set/group", QuestionGroupRecord.model_validate(group))
@@ -74,6 +77,9 @@ def test_group_edit_retains_root_and_member_extensions(tmp_path: Path):
     assert saved[0] == question()
     assert saved[1]["material"] == "edited material"
     assert saved[1]["custom"] == "keep"
+    assert saved[1]["metadata"] == {"review": "pending"}
+    assert saved[1]["answer"] == "root extension"
+    assert saved[1]["content"] == "root content extension"
     assert saved[1]["items"][0]["extra"] == 3
 
 
@@ -90,3 +96,40 @@ def test_concurrent_creates_keep_one_stable_id(tmp_path: Path):
     assert outcomes.count("created") == 1
     assert outcomes.count("exists") == 3
     assert len(list((tmp_path / "resource/math/set").glob("*.yaml"))) == 1
+
+
+@pytest.mark.parametrize("mutation", ["rename", "delete"])
+def test_collection_change_waits_for_in_flight_question_write(tmp_path: Path, monkeypatch, mutation):
+    from solaire.web import bank_service
+    save_bank_record(tmp_path, "math/set/q1", QuestionItem.model_validate(question()))
+    entered, release, changing = Event(), Event(), Event()
+    write = bank_service.write_text_atomic
+
+    def delayed_write(path, text):
+        entered.set()
+        assert release.wait(5)
+        write(path, text)
+
+    monkeypatch.setattr(bank_service, "write_text_atomic", delayed_write)
+
+    def change_collection():
+        changing.set()
+        if mutation == "rename":
+            rename_question_collection(tmp_path, namespace="math/set", new_subject="math", new_collection="renamed")
+        else:
+            delete_question_collection(tmp_path, "math/set")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        saving = pool.submit(save_bank_record, tmp_path, "math/set/q1", QuestionItem.model_validate(question(content="edited")))
+        assert entered.wait(5)
+        changing_future = pool.submit(change_collection)
+        assert changing.wait(5)
+        try:
+            assert not changing_future.done()
+        finally:
+            release.set()
+        saving.result(timeout=5)
+        changing_future.result(timeout=5)
+    assert not (tmp_path / "resource/math/set").exists()
+    if mutation == "rename":
+        assert get_question_detail(tmp_path, "math/renamed/q1")["question"]["content"] == "edited"

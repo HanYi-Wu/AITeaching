@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import zipfile
 from pathlib import Path
 
@@ -156,3 +157,67 @@ def test_loose_import_without_manifest(tmp_path: Path) -> None:
     r = import_bank_exchange_zip(root, buf.getvalue(), "宽", "松")
     assert r["written"] == 1
     assert not r.get("warnings") or isinstance(r["warnings"], list)
+
+
+def test_legacy_zip_recursively_rewrites_embeds_and_keeps_missing_or_large_placeholders(tmp_path: Path) -> None:
+    root = tmp_path
+    valid_image = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    large_image = b"x" * (5 * 1024 * 1024 + 1)
+    question = _minimal_choice_q("stem").model_dump(mode="json")
+    question["options"]["A"] = ":::EMBED_IMG:image/a.png:::"
+    question["metadata"] = {
+        "source": "archive-source",
+        "nested": {
+            "copied": ":::EMBED_IMG:image/a.png:::",
+            "missing": ":::EMBED_IMG:image/missing.png:::",
+            "large": ":::EMBED_IMG:image/b.png:::",
+        },
+    }
+    group = {
+        "group_id": "g1",
+        "material": "shared",
+        "type": "fill",
+        "items": [{"content": "part", "answer": "1", "metadata": {"caption": ":::EMBED_IMG:image/a.png:::"}}],
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("questions.yaml", yaml.safe_dump({"questions": [question], "groups": [group]}, allow_unicode=True))
+        zf.writestr("image/a.png", valid_image)
+        zf.writestr("image/b.png", large_image)
+
+    result = import_bank_exchange_zip(root, buf.getvalue(), "数学", "目标")
+    qfile = root / "resource" / "数学" / "目标" / "q1.yaml"
+    gfile = root / "resource" / "数学" / "目标" / "g1.yaml"
+    imported_question = yaml.safe_load(qfile.read_text(encoding="utf-8"))
+    imported_group = yaml.safe_load(gfile.read_text(encoding="utf-8"))
+    expected_image = f":::EMBED_IMG:数学/目标/image/{hashlib.sha256(valid_image).hexdigest()[:16]}.png:::"
+
+    assert imported_question["options"]["A"] == expected_image
+    assert imported_question["metadata"]["source"] == "archive-source"
+    assert imported_question["metadata"]["nested"]["copied"] == expected_image
+    assert imported_question["metadata"]["nested"]["missing"] == ":::EMBED_IMG:image/missing.png:::"
+    assert imported_question["metadata"]["nested"]["large"] == ":::EMBED_IMG:image/b.png:::"
+    assert imported_group["items"][0]["metadata"]["caption"] == expected_image
+    assert len(list((root / "resource" / "数学" / "目标" / "image").glob("*.png"))) == 1
+    assert any("未找到图片文件" in warning for warning in result["warnings"])
+    assert any("跳过大文件" in warning for warning in result["warnings"])
+
+
+def test_modern_zip_import_keeps_same_filename_overwrite_policy(tmp_path: Path) -> None:
+    root = tmp_path
+    target = root / "resource" / "math" / "set"
+    target.mkdir(parents=True)
+    existing = {"id": "q1", "type": "fill", "content": "before", "answer": "1", "custom": "old"}
+    (target / "q1.yaml").write_text(yaml.safe_dump(existing), encoding="utf-8")
+    incoming = {"id": "q1", "type": "fill", "content": "after", "answer": "2", "custom": "new"}
+    zdata = io.BytesIO()
+    with zipfile.ZipFile(zdata, "w") as zf:
+        zf.writestr("yaml/q1.yaml", yaml.safe_dump(incoming))
+
+    result = import_bank_exchange_zip(root, zdata.getvalue(), "math", "set")
+
+    saved = yaml.safe_load((target / "q1.yaml").read_text(encoding="utf-8"))
+    assert result["written"] == 1
+    assert saved["content"] == "after"
+    assert saved["answer"] == "2"
+    assert saved["custom"] == "new"

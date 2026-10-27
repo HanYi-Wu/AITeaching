@@ -37,6 +37,7 @@ export type BankDetailState = {
   question: QuestionJson;
   question_display?: QuestionJson;
   file_yaml: string;
+  version?: string;
   storage_path: string;
   storage_kind: string;
   question_group?: QuestionGroupJson | null;

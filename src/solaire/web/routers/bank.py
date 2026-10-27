@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from solaire.exam_compiler.facade import QuestionGroupRecord, QuestionItem, load_all_questions, strip_hydrate_fields
 from solaire.web.auth_api import extract_session_token, require_platform_root
 from solaire.web.auth_service import get_session_user
 from solaire.web.bank_exchange import export_bank_exchange_zip, import_bank_exchange_zip
+from solaire.web.bank_storage import BankVersionConflict
 from solaire.web.bank_service import collections_list, create_question_selection_export, delete_question, delete_question_collection, expand_question_for_web, get_question_detail, import_merged_yaml, list_bank_entries, list_subjects, question_exists, question_selection_export_path, rename_question_collection, save_bank_record, upload_bank_image
 from solaire.web.library_discovery import discover_question_library_refs
 from solaire.web.exam_service import ensure_probe_list_yaml
@@ -237,10 +238,12 @@ def bank_folder_share(body: BankShareBody, request: Request) -> dict[str, Any]:
 
 
 @router.get("/api/bank/items/{qualified_id:path}")
-def bank_item_get(qualified_id: str) -> dict[str, Any]:
+def bank_item_get(qualified_id: str, response: Response) -> dict[str, Any]:
     root = _require_root()
     try:
-        return get_question_detail(root, qualified_id)
+        detail = get_question_detail(root, qualified_id)
+        response.headers["ETag"] = f'"{detail["version"]}"'
+        return detail
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
@@ -248,13 +251,17 @@ def bank_item_get(qualified_id: str) -> dict[str, Any]:
 
 
 @router.post("/api/bank/items/{qualified_id:path}/image")
-async def bank_item_upload_image(qualified_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+async def bank_item_upload_image(qualified_id: str, file: UploadFile = File(...),
+                                 if_match: str | None = Header(default=None, alias="If-Match")) -> dict[str, Any]:
     root = _require_root()
     try:
         body = await file.read()
-        r = upload_bank_image(root, qualified_id, body, file.filename or "image.png")
+        r = upload_bank_image(root, qualified_id, body, file.filename or "image.png", expected_version=if_match)
         ensure_probe_list_yaml(root)
         return r
+    except BankVersionConflict as e:
+        headers = {"ETag": f'"{e.current_version}"'} if e.current_version else None
+        raise HTTPException(status_code=409, detail=str(e), headers=headers) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:
@@ -262,12 +269,17 @@ async def bank_item_upload_image(qualified_id: str, file: UploadFile = File(...)
 
 
 @router.put("/api/bank/items/{qualified_id:path}")
-def bank_item_put(qualified_id: str, body: BankRecordBody) -> dict[str, Any]:
+def bank_item_put(qualified_id: str, body: BankRecordBody, response: Response,
+                  if_match: str | None = Header(default=None, alias="If-Match")) -> dict[str, Any]:
     root = _require_root()
     try:
-        save_bank_record(root, qualified_id, body)
+        result = save_bank_record(root, qualified_id, body, expected_version=if_match)
         ensure_probe_list_yaml(root)
-        return {"ok": True}
+        response.headers["ETag"] = f'"{result["version"]}"'
+        return {"ok": True, **result}
+    except BankVersionConflict as e:
+        headers = {"ETag": f'"{e.current_version}"'} if e.current_version else None
+        raise HTTPException(status_code=409, detail=str(e), headers=headers) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:

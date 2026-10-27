@@ -31,7 +31,17 @@ from solaire.web.exam_service import ensure_probe_list_yaml
 from solaire.web.library_discovery import discover_question_library_refs, library_root_for_namespace, split_qualified_id
 from solaire.web.security import assert_within_project, safe_filename_component
 from solaire.web.teacher_bank import bank_resource_root, bank_export_root
-from solaire.web.bank_storage import bank_write_lock, find_bank_record, read_bank_document, replace_record_data
+from solaire.web.bank_storage import (
+    BankDocument,
+    BankVersionConflict,
+    apply_bank_import,
+    bank_record_version,
+    bank_write_lock,
+    find_bank_record,
+    read_bank_document,
+    replace_record_data,
+    validate_bank_import,
+)
 
 
 def _rel_to_resource(project_root: Path, path: Path) -> str:
@@ -245,6 +255,8 @@ def get_question_detail(project_root: Path, qualified_id: str) -> dict[str, Any]
         "storage_path": _rel_to_resource(project_root, document.path),
         "storage_kind": "single",
         "file_yaml": document.text,
+        "record_yaml": yaml.safe_dump(document.record_data(index), allow_unicode=True, sort_keys=False),
+        "version": bank_record_version(project_root, document, index),
     }
     if isinstance(rec, QuestionItem):
         q = strip_hydrate_fields(rec)
@@ -325,14 +337,15 @@ def upload_bank_image(
     qualified_id: str,
     file_bytes: bytes,
     original_filename: str,
+    *,
+    expected_version: str | None = None,
 ) -> dict[str, str]:
     """Save image under library ``image/``; return resource-relative path and text marker."""
-    ns, _qid = split_qualified_id(qualified_id)
+    ns, qid = split_qualified_id(qualified_id)
     lib = library_root_for_namespace(project_root, ns)
     if not lib.is_dir():
         raise FileNotFoundError(f"Library not found: {ns}")
     image_dir = lib / "image"
-    image_dir.mkdir(parents=True, exist_ok=True)
     assert_within_project(project_root, image_dir)
     if len(file_bytes) > _MAX_BANK_IMAGE_BYTES:
         raise ValueError("图片超过 5MB 限制")
@@ -344,7 +357,14 @@ def upload_bank_image(
     digest = hashlib.sha256(file_bytes).hexdigest()[:16]
     dest = image_dir / f"{digest}{suf}"
     assert_within_project(project_root, dest)
-    dest.write_bytes(file_bytes)
+    from solaire.common.atomic_files import write_bytes_atomic
+    with bank_write_lock(lib):
+        if expected_version is not None:
+            found = find_bank_record(project_root, lib, qid)
+            current = bank_record_version(project_root, *found) if found else None
+            if expected_version.strip().strip('"') != current:
+                raise BankVersionConflict(current)
+        write_bytes_atomic(dest, file_bytes)
     rel = _rel_to_resource(project_root, dest)
     marker = f":::EMBED_IMG:{rel}:::\n"
     return {"resource_rel": rel, "marker": marker}
@@ -361,7 +381,8 @@ def _dump_record_yaml(rec: BankRecord) -> dict[str, Any]:
     return question_item_to_author_dict(rec)
 
 
-def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *, create_only: bool = False) -> dict[str, str]:
+def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *, create_only: bool = False,
+                     expected_version: str | None = None) -> dict[str, str]:
     from solaire.common.answer_logic import PREFIX, decode
     answers = [body.answer] if isinstance(body, QuestionItem) else [str(getattr(item, 'answer', '') if not isinstance(item, dict) else item.get('answer', '')) for item in body.items]
     for answer in answers:
@@ -371,10 +392,12 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *,
     if body.id != qid:
         raise ValueError("题目编号与保存路径不一致；请刷新题目后重试，不能直接修改已有题目的编号")
     lib = library_root_for_namespace(project_root, ns)
-    lib.mkdir(parents=True, exist_ok=True)
-
     with bank_write_lock(lib):
         found = find_bank_record(project_root, lib, qid)
+        if expected_version is not None:
+            current = bank_record_version(project_root, *found) if found is not None else None
+            if expected_version.strip().strip('"') != current:
+                raise BankVersionConflict(current)
         data = _dump_record_yaml(body)
         if found is not None:
             if create_only:
@@ -388,7 +411,10 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *,
                 raise FileExistsError(str(path))
         text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
         write_text_atomic(path, text)
-        return {"storage_path": _rel_to_resource(project_root, path)}
+        saved_index = index if found is not None else 0
+        saved = BankDocument(path, text, data, [])
+        return {"storage_path": _rel_to_resource(project_root, path),
+                "version": bank_record_version(project_root, saved, saved_index)}
 
 
 def save_question(project_root: Path, qualified_id: str, item: QuestionItem, *, create_only: bool = False) -> dict[str, str]:
@@ -429,8 +455,10 @@ def import_merged_yaml(
     yaml_text: str,
     target_subject: str,
     target_collection: str,
+    *,
+    extra_files: dict[Path, bytes] | None = None,
 ) -> dict[str, Any]:
-    """Parse legacy merged YAML and write one file per standalone question or per group (new format)."""
+    """Validate a legacy merged package, then update stable IDs and apply all planned files."""
     ts = target_subject.strip()
     tc = target_collection.strip()
     if not ts or not tc:
@@ -441,37 +469,134 @@ def import_merged_yaml(
         raise ValueError("Empty YAML")
     if not isinstance(raw, dict):
         raise ValueError("Merged import expects a mapping with optional questions: and groups:")
+    questions = raw.get("questions") or []
+    groups = raw.get("groups") or []
+    if not isinstance(questions, list) or not isinstance(groups, list):
+        raise ValueError("Merged import questions and groups must be lists")
+
+    records: list[tuple[str, BankRecord, dict[str, Any]]] = []
+    seen_ids: set[str] = set()
+    for question in questions:
+        if not isinstance(question, dict):
+            raise ValueError("Merged import question must be a mapping")
+        source_meta = question.get("metadata") or {}
+        if not isinstance(source_meta, dict):
+            raise ValueError("Question metadata must be a mapping")
+        metadata = dict(source_meta)
+        metadata.setdefault("source", "人工导入")
+        record = QuestionItem.model_validate({**question, "metadata": metadata})
+        if record.id in seen_ids:
+            raise ValueError(f"题集中存在重复题目编号: {record.id}")
+        seen_ids.add(record.id)
+        records.append((record.id, record, _dump_record_yaml(record)))
+
+    for group in groups:
+        if not isinstance(group, dict):
+            raise ValueError("Merged import group must be a mapping")
+        group_id = str(group.get("group_id") or "").strip()
+        if not group_id:
+            raise ValueError("group without group_id")
+        inner_type = group.get("type")
+        if inner_type not in (
+            "choice",
+            "single_choice",
+            "multiple_choice",
+            "fill",
+            "judge",
+            "short_answer",
+            "reasoning",
+            "essay",
+        ):
+            raise ValueError(f"invalid group inner type: {inner_type!r}")
+        items = group.get("items") or []
+        if not isinstance(items, list):
+            raise ValueError("Group items must be a list")
+        record = QuestionGroupRecord(
+            id=group_id,
+            type="group",
+            material=str(group.get("material") or ""),
+            unified=inner_type,
+            items=items,
+        )
+        if record.id in seen_ids:
+            raise ValueError(f"题集中存在重复题目编号: {record.id}")
+        seen_ids.add(record.id)
+        records.append((record.id, record, _dump_record_yaml(record)))
+
     target = library_root_for_namespace(project_root, ns)
     assert_within_project(project_root, target)
-    target.mkdir(parents=True, exist_ok=True)
+    extra_files = extra_files or {}
+    for path in extra_files:
+        assert_within_project(project_root, path)
+        try:
+            path.resolve().relative_to((project_root / "resource").resolve())
+        except ValueError as exc:
+            raise ValueError("导入资源必须位于项目 resource 目录中") from exc
+
     written = 0
-    for q in raw.get("questions") or []:
-        source_meta = dict(q.get("metadata") or {}) if isinstance(q, dict) else {}
-        source_meta.setdefault("source", "人工导入")
-        qi = QuestionItem.model_validate({**q, "metadata": source_meta})
-        path = target / f"{_safe_filename_id(qi.id)}.yaml"
-        with path.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(question_item_to_author_dict(qi), f, allow_unicode=True, sort_keys=False)
-        written += 1
-    for g in raw.get("groups") or []:
-        gid = str(g.get("group_id") or "").strip()
-        if not gid:
-            raise ValueError("group without group_id")
-        inner_type = g.get("type")
-        if inner_type not in ("choice", "single_choice", "multiple_choice", "fill", "judge", "short_answer", "reasoning", "essay"):
-            raise ValueError(f"invalid group inner type: {inner_type!r}")
-        items_raw = g.get("items") or []
-        rec = QuestionGroupRecord(
-            id=gid,
-            type="group",
-            material=str(g.get("material") or ""),
-            unified=inner_type,
-            items=items_raw,
+    with bank_write_lock(target):
+        existing_documents: dict[Path, BankDocument] = {}
+        existing_ids: dict[str, tuple[Path, int]] = {}
+        for path in iter_question_files(target):
+            assert_within_project(project_root, path)
+            document = read_bank_document(path)
+            resolved_path = document.path.resolve()
+            existing_documents[resolved_path] = document
+            for index, existing_record in enumerate(document.records):
+                if existing_record.id in existing_ids:
+                    other_path, _ = existing_ids[existing_record.id]
+                    raise ValueError(
+                        f"题集中存在重复题目编号: {existing_record.id} ({other_path.name}, {path.name})"
+                    )
+                existing_ids[existing_record.id] = (resolved_path, index)
+
+        planned_by_path: dict[Path, str] = {}
+        path_claims: dict[Path, str] = {}
+        updated_raw: dict[Path, Any] = {}
+        for qid, _record, record_data in records:
+            location = existing_ids.get(qid)
+            if location is not None:
+                path, index = location
+                if path in planned_by_path:
+                    raise ValueError(f"导入题目路径与其他题目写入冲突: {path.name}")
+                document = existing_documents[path]
+                working_document = BankDocument(
+                    document.path,
+                    document.text,
+                    updated_raw.get(path, document.raw),
+                    document.records,
+                )
+                updated_raw[path] = replace_record_data(working_document, index, record_data)
+                written += 1
+                continue
+
+            path = (target / f"{_safe_filename_id(qid)}.yaml").resolve()
+            assert_within_project(project_root, path)
+            prior_claim = path_claims.get(path)
+            if prior_claim is not None and prior_claim != qid:
+                raise ValueError(f"导入题目文件名冲突: {prior_claim} 与 {qid}")
+            if path in updated_raw:
+                raise ValueError(f"导入题目路径与已有题目更新冲突: {path.name}")
+            path_claims[path] = qid
+            planned_by_path[path] = yaml.safe_dump(record_data, allow_unicode=True, sort_keys=False)
+            written += 1
+
+        yaml_files = dict(planned_by_path)
+        yaml_files.update(
+            {
+                path: yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+                for path, data in updated_raw.items()
+            }
         )
-        path = target / f"{_safe_filename_id(gid)}.yaml"
-        with path.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(question_group_to_author_dict(rec), f, allow_unicode=True, sort_keys=False)
-        written += 1
+        validate_bank_import(project_root, target, yaml_files)
+
+        files_to_apply: dict[Path, str | bytes] = dict(yaml_files)
+        for path, data in extra_files.items():
+            if path.resolve() in files_to_apply:
+                raise ValueError(f"导入资源路径冲突: {path.name}")
+            files_to_apply[path] = data
+        apply_bank_import(project_root, files_to_apply)
+
     return {"written": written, "namespace": ns, "subject": ts, "collection": tc}
 
 
@@ -510,8 +635,6 @@ def rename_question_collection(
         raise ValueError("不能重命名默认题库根目录")
     old_root = library_root_for_namespace(project_root, ns)
     assert_within_project(project_root, old_root)
-    if not old_root.is_dir():
-        raise FileNotFoundError(f"题集不存在: {ns}")
     subj = safe_filename_component(new_subject)
     coll = safe_filename_component(new_collection)
     if not subj.strip() or not coll.strip():
@@ -520,10 +643,14 @@ def rename_question_collection(
     assert_within_project(project_root, new_root)
     if new_root == old_root:
         return {"namespace": ns, "changed": False}
-    if new_root.exists():
-        raise ValueError("目标位置已存在同名题集")
-    new_root.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(old_root), str(new_root))
+    first, second = sorted((old_root, new_root), key=lambda path: str(path).casefold())
+    with bank_write_lock(first), bank_write_lock(second):
+        if not old_root.is_dir():
+            raise FileNotFoundError(f"题集不存在: {ns}")
+        if new_root.exists():
+            raise ValueError("目标位置已存在同名题集")
+        new_root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_root), str(new_root))
     ensure_probe_list_yaml(project_root)
     new_ns = f"{subj}/{coll}"
     return {"namespace": new_ns, "changed": True}
@@ -536,9 +663,10 @@ def delete_question_collection(project_root: Path, namespace: str) -> None:
         raise ValueError("不能删除默认题库根目录")
     root = library_root_for_namespace(project_root, ns)
     assert_within_project(project_root, root)
-    if not root.is_dir():
-        raise FileNotFoundError(f"题集不存在: {ns}")
-    shutil.rmtree(root)
+    with bank_write_lock(root):
+        if not root.is_dir():
+            raise FileNotFoundError(f"题集不存在: {ns}")
+        shutil.rmtree(root)
     ensure_probe_list_yaml(project_root)
 
 
