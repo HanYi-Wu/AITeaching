@@ -531,3 +531,45 @@ def test_analysis_reports_preserve_six_argument_question_map_callbacks(tmp_path:
     assert modules[0]["question_ids"] == ["q1"]
     assert questions[0]["question_id"] == "q1"
     assert [len(args) for args in callback_args] == [6, 6]
+
+
+def test_analysis_reports_share_answers_when_grading_changes_during_the_request(web_client, tmp_path, monkeypatch):
+    admin = _bootstrap_admin(web_client)
+    _, _, class_id = _create_school_teacher_class(web_client, admin)
+    school = _headers(web_client.post("/api/auth/login", json={"username": "school_a", "password": "secret123"}).json()["token"])
+    student = web_client.post("/api/school/students/import", headers=school, json={
+        "class_id": class_id, "students": [{"student_no": "S001", "display_name": "Student"}],
+    }).json()["students"][0]
+    _write_exam(tmp_path)
+    teacher = _headers(_teacher_token(web_client))
+    paper = web_client.get("/api/papers", headers=teacher).json()["papers"][0]
+    publication = web_client.post(f"/api/papers/{paper['paper_id']}/publish", headers=teacher, json={"class_ids": [class_id]}).json()["publication"]
+    root = default_platform_root()
+    with connect(root) as con:
+        attempt_id = con.execute("SELECT id FROM student_attempts WHERE publication_id=? AND student_id=?", (publication["id"], student["id"])).fetchone()[0]
+        con.execute("UPDATE student_attempts SET score=3, max_score=10 WHERE id=?", (attempt_id,))
+        con.execute("INSERT INTO student_answers(id, attempt_id, question_id, answer_payload, score, is_correct, responded_at) VALUES ('answer', ?, 'math/q1', '{\"text\":\"A\"}', 3, 0, '2026-01-01')", (attempt_id,))
+
+    statements = []
+    for module in (paper_service, paper_analysis):
+        original_connect = module.connect
+        def traced(path, original=original_connect):
+            con = original(path)
+            con.set_trace_callback(statements.append)
+            return con
+        monkeypatch.setattr(module, "connect", traced)
+    original_module_report = paper_service._build_module_report
+    def grade_after_modules(*args, **kwargs):
+        result = original_module_report(*args, **kwargs)
+        with connect(root) as con:
+            con.execute("UPDATE student_answers SET score=4 WHERE id='answer'")
+        return result
+    monkeypatch.setattr(paper_service, "_build_module_report", grade_after_modules)
+    response = web_client.get(f"/api/papers/{paper['paper_id']}/analysis?publication_id={publication['id']}", headers=teacher)
+    assert response.status_code == 200, response.text
+    analysis = response.json()["analysis"]
+    question = next(item for item in analysis["questions"] if item["question_id"] == "math/q1")
+    assert question["average_score_percent"] == analysis["modules"][0]["average_score_percent"] == 60
+    answer_reads = [sql for sql in statements if "FROM student_answers ans" in sql]
+    assert len(answer_reads) == 1
+    assert not any("SELECT sa.question_payload_json FROM student_attempts" in sql for sql in statements)

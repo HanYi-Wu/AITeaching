@@ -441,6 +441,8 @@ def _analysis_question_maps(
     publication_id: str | None,
     class_id: str | None = None,
     read_context: FrozenQuestionReadContext | None = None,
+    *,
+    snapshot_rows: list[Any] | None = None,
 ):
     return paper_analysis.analysis_question_maps(
         root,
@@ -452,6 +454,7 @@ def _analysis_question_maps(
         attempt_clause_fn=_analysis_attempt_clause,
         question_maps_fn=_question_maps,
         read_context=read_context,
+        snapshot_rows=snapshot_rows,
     )
 
 
@@ -467,6 +470,8 @@ def _build_module_report(
     publication_id: str | None = None,
     class_id: str | None = None,
     read_context: FrozenQuestionReadContext | None = None,
+    question_data: Any = None,
+    answer_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_module_report(
         root,
@@ -483,6 +488,8 @@ def _build_module_report(
         json_payload_fn=_json_payload,
         risk_level_fn=_risk_level,
         read_context=read_context,
+        question_data=question_data,
+        answer_rows=answer_rows,
     )
 
 
@@ -496,6 +503,8 @@ def _build_question_report(
     publication_id: str | None = None,
     class_id: str | None = None,
     read_context: FrozenQuestionReadContext | None = None,
+    question_data: Any = None,
+    answer_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_question_report(
         root,
@@ -510,6 +519,8 @@ def _build_question_report(
         json_payload_fn=_json_payload,
         risk_level_fn=_risk_level,
         read_context=read_context,
+        question_data=question_data,
+        answer_rows=answer_rows,
     )
 
 
@@ -589,6 +600,7 @@ def analyze_paper(
 
     publication_access, publication_params = _publication_access_clause(user)
     with connect(root) as con:
+        con.execute("BEGIN")
         publication_rows = con.execute(
             f"SELECT * FROM exam_publications ep WHERE paper_id = ? AND {publication_access} ORDER BY created_at DESC, ep.rowid DESC",
             (paper_id, *publication_params),
@@ -619,7 +631,7 @@ def analyze_paper(
         attempt_rows = con.execute(
             f"""
             SELECT
-              sa.*,
+              sa.*, sa.rowid AS snapshot_order,
               ep.id AS publication_id,
               ep.title AS publication_title,
               ep.max_screen_switches,
@@ -654,7 +666,8 @@ def analyze_paper(
             (paper_id, *event_params),
         ).fetchall()
         answer_rows = con.execute(
-            f"SELECT ans.attempt_id, ans.question_id, ans.score FROM student_answers ans "
+            f"SELECT ans.attempt_id, ans.question_id, ans.score, ans.answer_payload, ans.is_correct, "
+            f"sa.score AS attempt_score FROM student_answers ans "
             f"JOIN student_attempts sa ON sa.id=ans.attempt_id JOIN exam_publications ep ON ep.id=sa.publication_id "
             f"WHERE ep.paper_id=? AND {attempt_access}", (paper_id, *attempt_params)
         ).fetchall()
@@ -679,6 +692,15 @@ def analyze_paper(
     not_started = 0
     flagged_student_ids: set[str] = set()
     question_read_context = FrozenQuestionReadContext()
+    question_data = None
+    if project_root is not None:
+        try:
+            question_data = _analysis_question_maps(
+                root, project_root, paper, user, publication_id, class_id, question_read_context,
+                snapshot_rows=sorted(attempt_rows, key=lambda row: row["snapshot_order"]),
+            )
+        except (FileNotFoundError, ValueError):
+            question_data = ([], {}, {})
     for row in attempt_rows:
         attempt = row_to_dict(row) or {}
         if project_root is not None:
@@ -787,6 +809,8 @@ def analyze_paper(
         publication_id=publication_id,
         class_id=class_id,
         read_context=question_read_context,
+        question_data=question_data,
+        answer_rows=answer_rows,
     )
     questions = _build_question_report(
         root,
@@ -797,6 +821,8 @@ def analyze_paper(
         publication_id=publication_id,
         class_id=class_id,
         read_context=question_read_context,
+        question_data=question_data,
+        answer_rows=answer_rows,
     )
     classes = _build_class_report(root, paper_id=paper_id, user=user, publication_id=publication_id, class_id=class_id)
     radar = _build_radar(

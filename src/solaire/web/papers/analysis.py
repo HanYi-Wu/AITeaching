@@ -59,17 +59,19 @@ def analysis_question_maps(
     attempt_clause_fn: Callable[..., tuple[str, list[str]]],
     question_maps_fn: Callable[[Path, dict[str, Any]], tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]],
     read_context: FrozenQuestionReadContext | None = None,
+    snapshot_rows: list[Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]]:
     # Published snapshots, not the editable source, define historical exam content.
     clause, params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with connect(root) as con:
-        rows = con.execute(
-            f"SELECT sa.question_payload_json FROM student_attempts sa "
-            f"JOIN exam_publications ep ON ep.id=sa.publication_id WHERE ep.paper_id=? AND {clause} ORDER BY sa.rowid",
-            (paper["id"], *params),
-        ).fetchall()
+    if snapshot_rows is None:
+        with connect(root) as con:
+            snapshot_rows = con.execute(
+                f"SELECT sa.question_payload_json FROM student_attempts sa "
+                f"JOIN exam_publications ep ON ep.id=sa.publication_id WHERE ep.paper_id=? AND {clause} ORDER BY sa.rowid",
+                (paper["id"], *params),
+            ).fetchall()
     by_id: dict[str, dict[str, Any]] = {}
-    for row in rows:
+    for row in snapshot_rows:
         if read_context is not None:
             try:
                 _questions, snapshot_by_id, _scores = read_context.first_questions(
@@ -112,12 +114,16 @@ def build_module_report(
     json_payload_fn: Callable[[object], dict[str, Any]],
     risk_level_fn: Callable[[float | None], str],
     read_context: FrozenQuestionReadContext | None = None,
+    question_data: tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]] | None = None,
+    answer_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
         question_map_args = (root, project_root, paper, user, publication_id, class_id)
-        if read_context is None:
+        if question_data is not None:
+            questions, _by_id, score_by_id = question_data
+        elif read_context is None:
             questions, _by_id, score_by_id = question_maps_fn(*question_map_args)
         else:
             questions, _by_id, score_by_id = question_maps_fn(*question_map_args, read_context)
@@ -154,20 +160,21 @@ def build_module_report(
         return []
 
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with connect(root) as con:
-        rows = con.execute(
-            f"""
-            SELECT ans.question_id, ans.score, ans.is_correct, ans.answer_payload,
-                   sa.score AS attempt_score
-            FROM student_answers ans
-            JOIN student_attempts sa ON sa.id = ans.attempt_id
-            JOIN exam_publications ep ON ep.id = sa.publication_id
-            WHERE ep.paper_id = ? AND {access_clause}
-            """,
-            (paper_id, *access_params),
-        ).fetchall()
+    if answer_rows is None:
+        with connect(root) as con:
+            answer_rows = con.execute(
+                f"""
+                SELECT ans.question_id, ans.score, ans.is_correct, ans.answer_payload,
+                       sa.score AS attempt_score
+                FROM student_answers ans
+                JOIN student_attempts sa ON sa.id = ans.attempt_id
+                JOIN exam_publications ep ON ep.id = sa.publication_id
+                WHERE ep.paper_id = ? AND {access_clause}
+                """,
+                (paper_id, *access_params),
+            ).fetchall()
 
-    for row in rows:
+    for row in answer_rows:
         question_id = str(row["question_id"] or "")
         module_id = question_module.get(question_id)
         if not module_id:
@@ -219,12 +226,16 @@ def build_question_report(
     json_payload_fn: Callable[[object], dict[str, Any]],
     risk_level_fn: Callable[[float | None], str],
     read_context: FrozenQuestionReadContext | None = None,
+    question_data: tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]] | None = None,
+    answer_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
     try:
         question_map_args = (root, project_root, paper, user, publication_id, class_id)
-        if read_context is None:
+        if question_data is not None:
+            questions, _by_id, score_by_id = question_data
+        elif read_context is None:
             questions, _by_id, score_by_id = question_maps_fn(*question_map_args)
         else:
             questions, _by_id, score_by_id = question_maps_fn(*question_map_args, read_context)
@@ -254,20 +265,21 @@ def build_question_report(
         return []
 
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
-    with connect(root) as con:
-        rows = con.execute(
-            f"""
-            SELECT ans.question_id, ans.answer_payload, ans.is_correct, ans.score,
-                   sa.score AS attempt_score
-            FROM student_answers ans
-            JOIN student_attempts sa ON sa.id = ans.attempt_id
-            JOIN exam_publications ep ON ep.id = sa.publication_id
-            WHERE ep.paper_id = ? AND {access_clause}
-            """,
-            (paper_id, *access_params),
-        ).fetchall()
+    if answer_rows is None:
+        with connect(root) as con:
+            answer_rows = con.execute(
+                f"""
+                SELECT ans.question_id, ans.answer_payload, ans.is_correct, ans.score,
+                       sa.score AS attempt_score
+                FROM student_answers ans
+                JOIN student_attempts sa ON sa.id = ans.attempt_id
+                JOIN exam_publications ep ON ep.id = sa.publication_id
+                WHERE ep.paper_id = ? AND {access_clause}
+                """,
+                (paper_id, *access_params),
+            ).fetchall()
 
-    for row in rows:
+    for row in answer_rows:
         question_id = str(row["question_id"] or "")
         item = reports.get(question_id)
         if item is None:
