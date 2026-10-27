@@ -12,8 +12,8 @@ from solaire.web.learning_progress.aggregation import (
 from solaire.web.learning_progress.compatibility import (
     get_authoritative_source_status,
     get_authoritative_target_evidence,
-    get_frozen_baseline,
 )
+from solaire.web.learning_progress.store import get_frozen_baselines
 from solaire.web.platform_db import connect
 
 
@@ -46,21 +46,21 @@ def get_practice_comparison(
     Reads frozen baselines and live target answers via authoritative storage readers,
     detects modified or deleted sources, and computes mastery comparison.
     """
-    # 1. Authoritative source status
+    frozen_baselines = get_frozen_baselines(
+        root, practice_publication_id=practice_publication_id, student_id=student_id,
+    )
+    # Source checks and mastery calculations share the same historical evidence.
     source_status = get_authoritative_source_status(
         root,
         project_root,
         practice_publication_id=practice_publication_id,
         student_id=student_id,
         allowed_student_ids=allowed_student_ids,
+        frozen_baselines=frozen_baselines,
     )
 
     # 2. Frozen baseline
-    baseline_items = get_frozen_baseline(
-        root,
-        practice_publication_id=practice_publication_id,
-        student_id=student_id,
-    )
+    baseline_items = [item.to_dict() for item in frozen_baselines]
 
     # 3. Target evidence
     target_items = get_authoritative_target_evidence(

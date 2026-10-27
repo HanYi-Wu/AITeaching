@@ -75,6 +75,30 @@ def _online_source_snapshot_hash_from_rows(rows: Any) -> str:
     return "online-v1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def compute_online_source_snapshot_hashes(
+    con: sqlite3.Connection, source_student_pairs: list[tuple[str, str]],
+) -> dict[tuple[str, str], str]:
+    """Read score hashes for the exact source/student pairs in a comparison."""
+    pairs = list(dict.fromkeys(source_student_pairs))
+    grouped: dict[tuple[str, str], list[Any]] = {pair: [] for pair in pairs}
+    for start in range(0, len(pairs), 400):
+        chunk = pairs[start : start + 400]
+        placeholders = ",".join("(?,?)" for _ in chunk)
+        rows = con.execute(
+            f"""
+            SELECT sa.publication_id, sa.id AS attempt_id, sa.student_id,
+                   ans.question_id, ans.score, ans.is_correct
+            FROM student_attempts sa JOIN student_answers ans ON ans.attempt_id = sa.id
+            WHERE sa.status = 'submitted' AND (sa.publication_id, sa.student_id) IN ({placeholders})
+            ORDER BY sa.student_id ASC, ans.question_id ASC
+            """,
+            [value for pair in chunk for value in pair],
+        ).fetchall()
+        for row in rows:
+            grouped[(str(row["publication_id"]), str(row["student_id"]))].append(row)
+    return {pair: _online_source_snapshot_hash_from_rows(rows) for pair, rows in grouped.items()}
+
+
 @dataclass(frozen=True, slots=True)
 class GraphQuestionBindingSnapshot:
     graph_root: Path
