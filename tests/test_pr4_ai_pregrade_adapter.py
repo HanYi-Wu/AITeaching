@@ -356,7 +356,7 @@ def test_d15_projection_recorded_in_task_tracking(web_client: TestClient, tmp_pa
     task = service.submit(paper_id=ctx["paper_id"], user=ctx["teacher_user"], attempt_id=ctx["attempt_id"])
     sync_pool.shutdown(wait=True)
 
-    # Query unified task projection via G12 contract directly
+    # Query unified task projection through the public contract.
     proj = get_task_projection(project_root, task["task_id"], owner=f"teacher:{ctx['teacher_id']}")
     assert proj is not None
     assert proj.status == "succeeded"

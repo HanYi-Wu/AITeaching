@@ -1,6 +1,6 @@
 """Tests for Agent task projection adapter (PR4 D14).
 
-Verifies mapping of session/turn/tool/plan lifecycles to durable G12 TaskProjection,
+Verifies mapping of session/turn/tool/plan lifecycles to durable TaskProjection,
 monotonic versioning, owner isolation, cancellation handling, and zero prompt/token logging.
 """
 
