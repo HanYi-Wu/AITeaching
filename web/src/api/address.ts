@@ -1,10 +1,10 @@
 import i18n from "../i18n/i18n";
-import { isTauriShell, waitForTauriShell } from "../lib/tauriEnv";
+import { hasTauriOrigin, isTauriShell, waitForTauriShell } from "../lib/tauriEnv";
 
 let apiBaseResolved: string | null = null;
 let apiBasePromise: Promise<string> | null = null;
 
-/** 生产构建首次打开时，Tauri 注入可能晚于首帧脚本，需短暂等待再判定是否在壳内。 */
+/** Packaged WebViews may execute the entry script before Tauri injects its API. */
 const TAURI_INJECT_WAIT_MS = 5000;
 
 /** 桌面壳内等待本地服务就绪（事件 + 非阻塞 invoke 竞态 + 超时）。 */
@@ -52,9 +52,15 @@ async function waitForShellBackendPort(): Promise<number> {
       resolve(port);
     };
 
+    timeouts.push(
+      setTimeout(() => {
+        fail(i18n.t("localServiceStartTimeout", { ns: "common" }));
+      }, SHELL_BACKEND_WAIT_MS),
+    );
+
     void (async () => {
       try {
-        unlistenReady = await listen<unknown>("backend-ready", (event) => {
+        const stopReady = await listen<unknown>("backend-ready", (event) => {
           const p = event.payload;
           let port = 0;
           if (typeof p === "object" && p !== null && "port" in p) {
@@ -64,8 +70,13 @@ async function waitForShellBackendPort(): Promise<number> {
           }
           if (port > 0) ok(port);
         });
+        if (settled) {
+          stopReady();
+          return;
+        }
+        unlistenReady = stopReady;
 
-        unlistenFail = await listen<{ message: string }>("backend-failed", (event) => {
+        const stopFail = await listen<{ message: string }>("backend-failed", (event) => {
           const m = event.payload?.message;
           if (typeof m === "string" && m.trim()) {
             fail(m);
@@ -73,6 +84,11 @@ async function waitForShellBackendPort(): Promise<number> {
             fail(i18n.t("localServiceFailed", { ns: "common" }));
           }
         });
+        if (settled) {
+          stopFail();
+          return;
+        }
+        unlistenFail = stopFail;
 
         try {
           const port = await invoke<number>("get_backend_port");
@@ -85,15 +101,6 @@ async function waitForShellBackendPort(): Promise<number> {
       }
     })();
 
-    timeouts.push(
-      setTimeout(() => {
-        fail(
-          i18n.t("localServiceStartTimeout", {
-            ns: "common",
-          }),
-        );
-      }, SHELL_BACKEND_WAIT_MS),
-    );
   });
 }
 
@@ -101,8 +108,9 @@ async function resolveApiBase(): Promise<string> {
   if (apiBaseResolved !== null) return apiBaseResolved;
 
   let inShell = isTauriShell();
-  if (!import.meta.env.DEV && !inShell) {
+  if (!inShell && hasTauriOrigin()) {
     inShell = await waitForTauriShell(TAURI_INJECT_WAIT_MS);
+    if (!inShell) throw new Error(i18n.t("localServiceFailed", { ns: "common" }));
   }
 
   if (inShell) {
@@ -123,7 +131,10 @@ async function resolveApiBase(): Promise<string> {
 /** 桌面壳（Tauri）下解析后端端口；浏览器开发环境为空字符串（走 Vite 代理）。 */
 export async function ensureApiBase(): Promise<void> {
   if (!apiBasePromise) {
-    apiBasePromise = resolveApiBase();
+    apiBasePromise = resolveApiBase().catch((error) => {
+      apiBasePromise = null;
+      throw error;
+    });
   }
   await apiBasePromise;
 }

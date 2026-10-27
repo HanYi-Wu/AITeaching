@@ -100,6 +100,7 @@ function AppShell() {
   const [platformLoading, setPlatformLoading] = useState(true);
   const [adminProjectMode, setAdminProjectMode] = useState(false);
   const projectInfoRequestId = useRef(0);
+  const platformRequestId = useRef(0);
 
   const refreshInfo = useCallback(async () => {
     const requestId = ++projectInfoRequestId.current;
@@ -133,28 +134,29 @@ function AppShell() {
   }, [info?.bound, info?.root]);
 
   const refreshPlatform = useCallback(async () => {
+    const requestId = ++platformRequestId.current;
     setPlatformLoading(true);
     try {
       setErr(null);
       const status = await getPlatformStatus();
+      if (requestId !== platformRequestId.current) return;
+      const user = status.admin_exists ? (await getCurrentUser()).user : null;
+      if (requestId !== platformRequestId.current) return;
       setPlatformStatus(status);
-      if (status.admin_exists) {
-        const me = await getCurrentUser();
-        setCurrentUser(me.user);
-      } else {
-        setCurrentUser(null);
-      }
+      setCurrentUser(user);
     } catch (e) {
+      if (requestId !== platformRequestId.current) return;
       setErr(e instanceof Error ? e.message : String(e));
       setPlatformStatus(null);
       setCurrentUser(null);
     } finally {
-      setPlatformLoading(false);
+      if (requestId === platformRequestId.current) setPlatformLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void refreshPlatform();
+    return () => { platformRequestId.current += 1; };
   }, [refreshPlatform]);
 
   /**
@@ -194,6 +196,9 @@ function AppShell() {
   }, [sidebarOpen, setSidebarOpen]);
 
   const onAuthenticated = useCallback((user: PlatformUser) => {
+    platformRequestId.current += 1;
+    setPlatformLoading(false);
+    setErr(null);
     setPlatformStatus((status) => status ? { ...status, admin_exists: true } : status);
     setCurrentUser(user);
     setAdminProjectMode(false);
@@ -201,14 +206,12 @@ function AppShell() {
   }, []);
 
   const onLogout = useCallback(async () => {
-    try {
-      await logoutPlatform();
-    } finally {
-      setCurrentUser(null);
-      setAdminProjectMode(false);
-      setPage("papers");
-      setSidebarOpen(false);
-    }
+    platformRequestId.current += 1;
+    setCurrentUser(null);
+    setAdminProjectMode(false);
+    setPage("papers");
+    setSidebarOpen(false);
+    await logoutPlatform();
   }, [setSidebarOpen]);
 
   const openPapersPage = useCallback(() => {

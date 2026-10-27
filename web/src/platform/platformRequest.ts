@@ -2,6 +2,13 @@ import { resolveApiUrl } from "../api/address";
 import { logApiCall } from "../lib/appLog";
 import { loadSessionToken } from "./session";
 
+export class PlatformRequestError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "PlatformRequestError";
+  }
+}
+
 export function buildQuery(params: Record<string, string | number | null | undefined>): string {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -17,7 +24,7 @@ export async function readJson<T>(response: Response): Promise<T> {
     return response.json() as Promise<T>;
   }
   const message = await readErrorMessage(response);
-  throw new Error(message);
+  throw new PlatformRequestError(message, response.status);
 }
 
 export async function readErrorMessage(response: Response): Promise<string> {
@@ -42,7 +49,7 @@ export async function platformRequest<T>(path: string, init: RequestInit = {}): 
   if (!headers.has("Content-Type") && init.body != null && !bodyIsFormData) {
     headers.set("Content-Type", "application/json");
   }
-  if (token) {
+  if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
   const url = await resolveApiUrl(path);
@@ -59,7 +66,7 @@ export async function platformRequest<T>(path: string, init: RequestInit = {}): 
   if (!response.ok) {
     const detail = await readErrorMessage(response);
     logApiCall({ path, method, ok: false, status: response.status, ms, detail });
-    throw new Error(detail);
+    throw new PlatformRequestError(detail, response.status);
   }
   if (method !== "GET") {
     logApiCall({ path, method, ok: true, status: response.status, ms });

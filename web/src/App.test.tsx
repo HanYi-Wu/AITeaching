@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlatformUser } from "./platform/auth";
 import { setupTestI18n, TestI18nProvider } from "./test/i18nTestUtils";
@@ -80,6 +80,27 @@ describe("role-specific project requests", () => {
     renderApp();
     await screen.findByText("登录页");
     expect(mocks.apiGet).not.toHaveBeenCalled();
+  });
+
+  it("offers reconnection when restoring the session temporarily fails", async () => {
+    mocks.getCurrentUser.mockRejectedValueOnce(new Error("Temporarily unavailable")).mockResolvedValue({ user: school });
+    renderApp();
+    await screen.findByText("平台服务暂时不可用");
+    await userEvent.click(screen.getByRole("button", { name: "重新连接" }));
+    await screen.findByText("学校工作区");
+  });
+
+  it("ignores an old startup response after a new login", async () => {
+    let resolveOld!: (value: { admin_exists: boolean; public_mode: boolean }) => void;
+    mocks.getPlatformStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    mocks.getCurrentUser.mockResolvedValue({ user: null });
+    render(<TestI18nProvider><StrictMode><App /></StrictMode></TestI18nProvider>);
+    await screen.findByText("登录页");
+    await userEvent.click(screen.getByRole("button", { name: "以学校身份登录" }));
+    await screen.findByText("学校工作区");
+    await act(async () => { resolveOld({ admin_exists: false, public_mode: true }); });
+    expect(screen.getByText("学校工作区")).toBeInTheDocument();
+    expect(screen.queryByText("初始化页")).not.toBeInTheDocument();
   });
 
   it.each([true, false])("returns to login after administrator initialization and logout (public mode: %s)", async (publicMode) => {

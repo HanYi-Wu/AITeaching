@@ -5,6 +5,12 @@ export function isTauriShell(): boolean {
   return "__TAURI_INTERNALS__" in w || w.__TAURI__ !== undefined;
 }
 
+/** The packaged WebView origin is available before Tauri finishes injecting its API. */
+export function hasTauriOrigin(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost";
+}
+
 /**
  * 冷启动时脚本可能比 Tauri 注入 `__TAURI__` 更早执行，导致首次误判为「非壳」。
  * 仅在需要时轮询，避免把 API 基址永久锁成空字符串。
