@@ -55,19 +55,21 @@ def test_combined_router_contains_all_subroutes() -> None:
 
 
 def test_router_assembly_combined_routes_count() -> None:
-    # Verify subrouter route definitions sum up to the 38 registered endpoints
+    # Verify subrouter route definitions sum up to the 40 registered endpoints
     total_endpoints = (
         len(schools_router.routes)
         + len(policy_router.routes)
         + len(accounts_router.routes)
         + len(classes_router.routes)
     )
-    assert total_endpoints == 38
+    assert total_endpoints == 40
 
-    # Verify that the combined router exposes all 38 operations across 31 unique paths
+    # The student class-transfer GET and POST add two operations under one path.
+    # Verify the combined router exposes all 40 operations across 32 unique paths.
     app = FastAPI()
     app.include_router(school_api.router, prefix="/api")
     paths = app.openapi()["paths"]
-    assert len(paths) == 31
+    assert len(paths) == 32
+    assert {"get", "post"} <= set(paths["/api/school/students/{student_id}/class-transfer"])
     total_ops = sum(len(methods) for methods in paths.values())
-    assert total_ops == 38
+    assert total_ops == 40
