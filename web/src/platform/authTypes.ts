@@ -117,7 +117,32 @@ export type StudentRecord = {
   account_username?: string | null;
   initial_password?: string | null;
   class_names?: string | null;
+  class_count?: number;
   status: string;
+};
+
+export type StudentTransferClass = {
+  id: string;
+  name: string;
+  grade?: string | null;
+};
+
+export type StudentClassTransferPreview = {
+  student: Pick<StudentRecord, "id" | "student_no" | "display_name">;
+  current_classes: StudentTransferClass[];
+  available_classes: StudentTransferClass[];
+  attempt_count: number;
+  legacy_attempt_count: number;
+};
+
+export type StudentClassTransferResult = {
+  student_id: string;
+  current_class: StudentTransferClass;
+  previous_classes: StudentTransferClass[];
+  retained_attempt_count: number;
+  captured_legacy_attempt_count: number;
+  changed: boolean;
+  transfer_id?: string;
 };
 
 export type PaperSubmissionMode = "online" | "image_manual" | "image_ai" | "offline_scan";

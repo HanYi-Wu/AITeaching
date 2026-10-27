@@ -48,14 +48,23 @@ def _teacher_scope(con: Any, publication_id: str, user: dict[str, Any], class_id
     params: list[Any] = [publication_id]
     where = ""
     if not owner:
-        where += """ AND EXISTS (SELECT 1 FROM class_students cs JOIN teacher_class_assignments tca ON tca.class_id = cs.class_id
-                    JOIN publication_classes pc ON pc.class_id = cs.class_id AND pc.publication_id = sa.publication_id
-                    WHERE cs.student_id = sa.student_id AND tca.teacher_id = ?)"""
+        where += """ AND EXISTS (SELECT 1 FROM attempt_class_memberships acm
+                    JOIN teacher_class_assignments tca ON tca.class_id = acm.class_id
+                    JOIN publication_classes pc ON pc.class_id = acm.class_id AND pc.publication_id = sa.publication_id
+                    WHERE acm.attempt_id = sa.id AND tca.teacher_id = ?)"""
         params.append(user["id"])
     if class_id:
-        where += " AND EXISTS (SELECT 1 FROM class_students cs WHERE cs.student_id = sa.student_id AND cs.class_id = ?)"
+        where += " AND EXISTS (SELECT 1 FROM attempt_class_memberships acm WHERE acm.attempt_id = sa.id AND acm.class_id = ?)"
         params.append(class_id)
-        if con.execute("SELECT 1 FROM publication_classes WHERE publication_id = ? AND class_id = ?", (publication_id, class_id)).fetchone() is None:
+        if con.execute(
+            """SELECT 1 FROM publication_classes
+                 WHERE publication_id=? AND class_id=?
+               UNION ALL
+               SELECT 1 FROM student_attempts sa
+               JOIN attempt_class_memberships acm ON acm.attempt_id=sa.id
+                 WHERE sa.publication_id=? AND acm.class_id=? LIMIT 1""",
+            (publication_id, class_id, publication_id, class_id),
+        ).fetchone() is None:
             raise HTTPException(status_code=403, detail="Class is not included in this publication")
         if role == "teacher" and con.execute("SELECT 1 FROM teacher_class_assignments WHERE teacher_id = ? AND class_id = ?", (user["id"], class_id)).fetchone() is None:
             raise HTTPException(status_code=403, detail="Teacher is not assigned to this class")

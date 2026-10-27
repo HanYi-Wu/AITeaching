@@ -154,9 +154,6 @@ def test_sql_query_pages_match_python_search_and_sort_semantics(tmp_path: Path) 
     assert school_actual == {"schools": school_expected.pop("items"), **school_expected}
     assert organization.query_schools(tmp_path, q="STRASSE")["total"] == 0  # Python lower(), not casefold().
 
-    with closing(platform_db.connect(tmp_path)) as con, con:
-        con.execute("INSERT INTO class_students (class_id, student_id) VALUES (?, ?)", ("class_23", "student_24"))
-
     classes = organization.list_classes(tmp_path, school_id=school_id)
     with closing(platform_db.connect(tmp_path)) as con, con:
         ids = [str(row["id"]) for row in classes]
@@ -234,6 +231,9 @@ def test_sql_query_pages_match_python_search_and_sort_semantics(tmp_path: Path) 
 def test_student_class_names_keep_legacy_order_when_query_plans_differ(tmp_path: Path) -> None:
     school_id = seed_school_data(tmp_path)
     with closing(platform_db.connect(tmp_path)) as con, con:
+        # Simulate an existing database predating the single-current-class rule.
+        con.execute("DROP TRIGGER one_current_class_per_student_insert")
+        con.execute("DROP TRIGGER one_current_class_per_student_update")
         # The student already belongs to class_24; add class_23 second so rowid order
         # differs from class_id order, then make class-name order differ as well.
         con.execute(
@@ -246,6 +246,9 @@ def test_student_class_names_keep_legacy_order_when_query_plans_differ(tmp_path:
             "student_id", "class_id",
         ]
         con.execute("ANALYZE")
+        con.execute("PRAGMA user_version = 14")
+
+    platform_db.init_platform_db(tmp_path)
 
     legacy_student = next(
         student
@@ -258,6 +261,7 @@ def test_student_class_names_keep_legacy_order_when_query_plans_differ(tmp_path:
         if student["id"] == "student_24"
     )
     assert query_student["class_names"] == legacy_student["class_names"]
+    assert query_student["class_count"] == legacy_student["class_count"] == 2
 
 
 def test_sql_paged_queries_fetch_only_page_rows(tmp_path: Path) -> None:

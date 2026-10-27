@@ -37,13 +37,11 @@ def analysis_attempt_clause(
         params = [*params, publication_id]
     if class_id:
         clause = (
-            f"({clause}) AND EXISTS (SELECT 1 FROM publication_classes filter_pc "
-            f"JOIN class_students filter_cs ON filter_cs.class_id = filter_pc.class_id "
-            f"JOIN exam_publications filter_ep ON filter_ep.id = filter_pc.publication_id "
-            f"WHERE filter_pc.publication_id = {attempt_alias}.publication_id "
+            f"({clause}) AND EXISTS (SELECT 1 FROM attempt_class_memberships filter_acm "
+            f"JOIN exam_publications filter_ep ON filter_ep.id = {attempt_alias}.publication_id "
+            f"WHERE filter_acm.attempt_id = {attempt_alias}.id "
             f"AND filter_ep.recipient_scope = 'class' "
-            f"AND filter_pc.class_id = ? AND filter_cs.student_id = "
-            f"{attempt_alias}.student_id)"
+            f"AND filter_acm.class_id = ?)"
         )
         params = [*params, class_id]
     return clause, params
@@ -343,9 +341,9 @@ def build_class_report(
         rows = con.execute(
             f"""
             SELECT
-              c.id AS class_id,
-              c.name AS class_name,
-              c.grade AS class_grade,
+              acm.class_id AS class_id,
+              acm.class_name AS class_name,
+              acm.class_grade AS class_grade,
               sa.id AS attempt_id,
               sa.status,
               sa.started_at,
@@ -357,14 +355,12 @@ def build_class_report(
               (SELECT COUNT(*) FROM student_answers aa WHERE aa.attempt_id = sa.id AND aa.score IS NULL) AS unscored_answer_count,
               COUNT(pe.id) AS screen_switch_count
             FROM exam_publications ep
-            JOIN publication_classes pc ON pc.publication_id = ep.id
-            JOIN classes c ON c.id = pc.class_id
             JOIN student_attempts sa ON sa.publication_id = ep.id
-            JOIN class_students cs ON cs.class_id = c.id AND cs.student_id = sa.student_id
+            JOIN attempt_class_memberships acm ON acm.attempt_id = sa.id
             LEFT JOIN proctor_events pe ON pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'
             WHERE ep.paper_id = ? AND {access_clause}
-            GROUP BY c.id, sa.id
-            ORDER BY c.name
+            GROUP BY acm.class_id, sa.id
+            ORDER BY acm.class_name
             """,
             (paper_id, *access_params),
         ).fetchall()

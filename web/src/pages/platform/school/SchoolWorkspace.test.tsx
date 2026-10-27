@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PlatformRequestError } from "../../../platform/platformRequest";
 import { SchoolWorkspace } from "./SchoolWorkspace";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deleteClass: vi.fn(),
   downloadSchoolImportTemplate: vi.fn(),
   exportStudentAccounts: vi.fn(),
+  getStudentClassTransfer: vi.fn(),
   getSchoolAiSettings: vi.fn(),
   importClassesFile: vi.fn(),
   importSchoolAiFile: vi.fn(),
@@ -33,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   updateSchoolAiSettings: vi.fn(),
   updateStudent: vi.fn(),
   updateTeacher: vi.fn(),
+  transferStudentClass: vi.fn(),
 }));
 
 vi.mock("../../../platform/auth", async (importOriginal) => {
@@ -48,6 +51,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     deleteClass: mocks.deleteClass,
     downloadSchoolImportTemplate: mocks.downloadSchoolImportTemplate,
     exportStudentAccounts: mocks.exportStudentAccounts,
+    getStudentClassTransfer: mocks.getStudentClassTransfer,
     getSchoolAiSettings: mocks.getSchoolAiSettings,
     importClassesFile: mocks.importClassesFile,
     importSchoolAiFile: mocks.importSchoolAiFile,
@@ -67,6 +71,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     updateSchoolAiSettings: mocks.updateSchoolAiSettings,
     updateStudent: mocks.updateStudent,
     updateTeacher: mocks.updateTeacher,
+    transferStudentClass: mocks.transferStudentClass,
   };
 });
 
@@ -660,6 +665,384 @@ describe("SchoolWorkspace", () => {
     // 2. Students panel class select and filter options
     await userEvent.click(screen.getByTestId("school-page-students"));
     expect(screen.getAllByRole("option", { name: /Class 2/ }).length).toBeGreaterThan(0);
+  });
+
+  it("clears deleted class selections and refreshes students without stale responses", async () => {
+    const classOne = { id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: null };
+    const classTwo = { id: "c2", school_id: "s1", name: "Class 2", grade: "G10", subject_hint: null };
+    let availableClasses = [classOne, classTwo];
+    let deleted = false;
+    let resolveStaleStudents!: (value: unknown) => void;
+    const staleStudents = new Promise((resolve) => { resolveStaleStudents = resolve; });
+    const latestStudents = {
+      students: [
+        { id: "stu1", school_id: "s1", student_no: "S001", display_name: "Student One", status: "active", class_names: "Class 2" },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    };
+
+    mocks.listClasses.mockImplementation(async (query: any = {}) => ({
+      classes: availableClasses,
+      total: availableClasses.length,
+      page: query.page ?? 1,
+      page_size: query.pageSize ?? 10,
+      total_pages: 1,
+    }));
+    mocks.listStudents.mockImplementation((classId: string | null) => {
+      if (classId === "c1" && !deleted) return staleStudents;
+      if (deleted) return Promise.resolve(latestStudents);
+      return Promise.resolve({
+        ...latestStudents,
+        students: [{ ...latestStudents.students[0], class_names: "Class 1, Class 2" }],
+      });
+    });
+    mocks.deleteClass.mockImplementation(async (classId: string) => {
+      deleted = true;
+      availableClasses = availableClasses.filter((klass) => klass.id !== classId);
+      return { ok: true, deleted: classId };
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    await userEvent.selectOptions(screen.getByDisplayValue("全部班级"), "c1");
+    await waitFor(() => expect(mocks.listStudents).toHaveBeenCalledWith("c1", expect.anything()));
+    await waitFor(() => expect(resolveStaleStudents).toBeDefined());
+
+    await userEvent.click(screen.getByTestId("school-page-classes"));
+    expect(await screen.findByDisplayValue("Class 1")).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: "删除班级" })[0]);
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    const filter = screen.getByDisplayValue("全部班级") as HTMLSelectElement;
+    expect(filter.value).toBe("");
+    const importClassSelect = screen.getAllByRole("combobox").find((element) =>
+      Array.from((element as HTMLSelectElement).options).some((option) => option.textContent === "未指定班级"),
+    ) as HTMLSelectElement | undefined;
+    expect(importClassSelect?.value).toBe("c2");
+    expect(await screen.findByText("Class 2", { selector: "td" })).toBeInTheDocument();
+    expect(mocks.listStudents).toHaveBeenCalledWith(null, expect.anything());
+
+    await act(async () => {
+      resolveStaleStudents({
+        ...latestStudents,
+        students: [{ ...latestStudents.students[0], class_names: "Class 1, Class 2" }],
+      });
+      await staleStudents;
+    });
+    const studentRow = screen.getByDisplayValue("Student One").closest("tr");
+    expect(studentRow).toHaveTextContent("Class 2");
+    expect(studentRow).not.toHaveTextContent("Class 1");
+  });
+
+  it("marks legacy multi-class student records for review while retaining class names", async () => {
+    mocks.listStudents.mockResolvedValue({
+      students: [{
+        id: "stu_legacy",
+        school_id: "s1",
+        student_no: "S099",
+        display_name: "Legacy Student",
+        status: "active",
+        class_count: 2,
+        class_names: "Class A, Class B",
+      }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    const studentRow = (await screen.findByDisplayValue("Legacy Student")).closest("tr");
+    expect(studentRow).toHaveTextContent("班级归属需核对");
+    expect(studentRow).toHaveTextContent("Class A, Class B");
+  });
+
+  it("previews and explicitly confirms a transfer while retaining exam records", async () => {
+    const classOne = { id: "c1", name: "Class 1", grade: "G10" };
+    const classTwo = { id: "c2", name: "Class 2", grade: "G10" };
+    mocks.listClasses.mockResolvedValue({ classes: [
+      { ...classOne, school_id: "s1", subject_hint: null },
+      { ...classTwo, school_id: "s1", subject_hint: null },
+    ] });
+    mocks.getStudentClassTransfer.mockResolvedValue({
+      student: { id: "stu1", student_no: "S001", display_name: "Student One" },
+      current_classes: [classOne],
+      available_classes: [classOne, classTwo],
+      attempt_count: 4,
+      legacy_attempt_count: 2,
+    });
+    mocks.transferStudentClass.mockResolvedValue({
+      student_id: "stu1",
+      current_class: classTwo,
+      previous_classes: [classOne],
+      retained_attempt_count: 4,
+      captured_legacy_attempt_count: 2,
+      changed: true,
+      transfer_id: "transfer-1",
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", school_id: "s1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    await userEvent.click(screen.getByRole("button", { name: "转班" }));
+    const dialog = await screen.findByRole("dialog", { name: "转班确认" });
+    expect(dialog).toHaveTextContent("Class 1（G10）");
+    expect(dialog).toHaveTextContent("保留 4 份考试记录");
+    expect(dialog).toHaveTextContent("2 份旧考试记录没有冻结的原始班级快照");
+
+    const studentCallsBefore = mocks.listStudents.mock.calls.length;
+    const classCallsBefore = mocks.listClasses.mock.calls.length;
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "目标班级" }), "c2");
+    expect(dialog).toHaveTextContent("Class 1 → Class 2");
+    await userEvent.click(screen.getByRole("button", { name: "确认转班" }));
+
+    await waitFor(() => expect(mocks.transferStudentClass).toHaveBeenCalledWith("stu1", {
+      target_class_id: "c2",
+      expected_class_ids: ["c1"],
+    }));
+    await waitFor(() => expect(mocks.listStudents.mock.calls.length).toBeGreaterThan(studentCallsBefore));
+    await waitFor(() => expect(mocks.listClasses.mock.calls.length).toBeGreaterThan(classCallsBefore));
+    expect(screen.queryByRole("dialog", { name: "转班确认" })).not.toBeInTheDocument();
+  });
+
+  it("refreshes a conflicted transfer preview without resubmitting", async () => {
+    const classOne = { id: "c1", name: "Class 1", grade: "G10" };
+    const classTwo = { id: "c2", name: "Class 2", grade: "G10" };
+    mocks.getStudentClassTransfer
+      .mockResolvedValueOnce({
+        student: { id: "stu1", student_no: "S001", display_name: "Student One" },
+        current_classes: [classOne],
+        available_classes: [classOne, classTwo],
+        attempt_count: 2,
+        legacy_attempt_count: 0,
+      })
+      .mockResolvedValueOnce({
+        student: { id: "stu1", student_no: "S001", display_name: "Student One" },
+        current_classes: [classTwo],
+        available_classes: [classOne, classTwo],
+        attempt_count: 2,
+        legacy_attempt_count: 0,
+      });
+    mocks.transferStudentClass.mockRejectedValueOnce(new PlatformRequestError("班级信息已变化", 409));
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", school_id: "s1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    await userEvent.click(screen.getByRole("button", { name: "转班" }));
+    await screen.findByRole("dialog", { name: "转班确认" });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "目标班级" }), "c2");
+    await userEvent.click(screen.getByRole("button", { name: "确认转班" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "转班确认" });
+    await waitFor(() => expect(dialog).toHaveTextContent("班级信息已变化，已刷新转班预览"));
+    expect(dialog).toHaveTextContent("Class 2");
+    expect((screen.getByRole("combobox", { name: "目标班级" }) as HTMLSelectElement).value).toBe("");
+    expect(mocks.getStudentClassTransfer).toHaveBeenCalledTimes(2);
+    expect(mocks.transferStudentClass).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "确认转班" })).toBeDisabled();
+  });
+
+  it("does not write a transfer notice after the school scope changes during refresh", async () => {
+    const classOne = { id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: null };
+    const classTwo = { id: "c2", school_id: "s1", name: "Class 2", grade: "G10", subject_hint: null };
+    mocks.listClasses.mockResolvedValue({ classes: [classOne, classTwo] });
+    mocks.getStudentClassTransfer.mockResolvedValue({
+      student: { id: "stu1", student_no: "S001", display_name: "Student One" },
+      current_classes: [classOne],
+      available_classes: [classOne, classTwo],
+      attempt_count: 1,
+      legacy_attempt_count: 0,
+    });
+    mocks.transferStudentClass.mockResolvedValue({
+      student_id: "stu1",
+      current_class: { id: "c2", name: "Class 2", grade: "G10" },
+      previous_classes: [{ id: "c1", name: "Class 1", grade: "G10" }],
+      retained_attempt_count: 1,
+      captured_legacy_attempt_count: 0,
+      changed: true,
+      transfer_id: "transfer-2",
+    });
+    let resolveStudentRefresh!: (value: unknown) => void;
+    let holdStudentRefresh = false;
+    mocks.listStudents.mockImplementation(() => {
+      if (!holdStudentRefresh) {
+        return Promise.resolve({ students: [{
+          id: "stu1", school_id: "s1", student_no: "S001", display_name: "Student One",
+          status: "active", class_names: "Class 1",
+        }] });
+      }
+      holdStudentRefresh = false;
+      return new Promise((resolve) => { resolveStudentRefresh = resolve; });
+    });
+
+    const props = {
+      user: { id: "u1", school_id: "s1", role: "school" as const, username: "school_a", display_name: "School A", status: "active" },
+      onLogout: vi.fn(),
+      onError: vi.fn(),
+    };
+    const view = render(<SchoolWorkspace {...props} />);
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    await userEvent.click(screen.getByRole("button", { name: "转班" }));
+    await screen.findByRole("dialog", { name: "转班确认" });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "目标班级" }), "c2");
+    holdStudentRefresh = true;
+    await userEvent.click(screen.getByRole("button", { name: "确认转班" }));
+    await waitFor(() => expect(mocks.transferStudentClass).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(resolveStudentRefresh).toBeDefined());
+
+    view.rerender(
+      <SchoolWorkspace
+        {...props}
+        user={{ ...props.user, id: "u2", school_id: "s2", username: "school_b", display_name: "School B" }}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "转班确认" })).not.toBeInTheDocument());
+    await act(async () => {
+      resolveStudentRefresh({ students: [] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.queryByText(/学生转班完成/)).not.toBeInTheDocument();
+    expect(mocks.transferStudentClass).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a completed transfer when list refresh fails without retrying the transfer", async () => {
+    const classOne = { id: "c1", name: "Class 1", grade: "G10" };
+    const classTwo = { id: "c2", name: "Class 2", grade: "G10" };
+    mocks.getStudentClassTransfer.mockResolvedValue({
+      student: { id: "stu1", student_no: "S001", display_name: "Student One" },
+      current_classes: [classOne],
+      available_classes: [classOne, classTwo],
+      attempt_count: 1,
+      legacy_attempt_count: 0,
+    });
+    mocks.transferStudentClass.mockResolvedValue({
+      student_id: "stu1",
+      current_class: classTwo,
+      previous_classes: [classOne],
+      retained_attempt_count: 1,
+      captured_legacy_attempt_count: 0,
+      changed: true,
+      transfer_id: "transfer-3",
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", school_id: "s1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    await userEvent.click(screen.getByRole("button", { name: "转班" }));
+    await screen.findByRole("dialog", { name: "转班确认" });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "目标班级" }), "c2");
+    mocks.listStudents.mockRejectedValueOnce(new Error("offline"));
+    await userEvent.click(screen.getByRole("button", { name: "确认转班" }));
+
+    expect(await screen.findByText("转班已完成，但学生或班级列表刷新失败，请点击“刷新”重新加载。"))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "转班确认" })).not.toBeInTheDocument();
+    expect(mocks.transferStudentClass).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards a pending transfer preview when the student query or school scope changes", async () => {
+    const classOne = { id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: null };
+    const classTwo = { id: "c2", school_id: "s1", name: "Class 2", grade: "G10", subject_hint: null };
+    mocks.listClasses.mockResolvedValue({ classes: [classOne, classTwo] });
+    const pendingPreviews: Array<(value: unknown) => void> = [];
+    mocks.getStudentClassTransfer.mockImplementation(() => new Promise((resolve) => pendingPreviews.push(resolve)));
+    const props = {
+      user: { id: "u1", school_id: "s1", role: "school" as const, username: "school_a", display_name: "School A", status: "active" },
+      onLogout: vi.fn(),
+      onError: vi.fn(),
+    };
+    const view = render(<SchoolWorkspace {...props} />);
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    await userEvent.click(screen.getByRole("button", { name: "转班" }));
+    await waitFor(() => expect(pendingPreviews).toHaveLength(1));
+    await userEvent.selectOptions(screen.getByDisplayValue("全部班级"), "c2");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "转班确认" })).not.toBeInTheDocument());
+    await act(async () => {
+      pendingPreviews[0]({
+        student: { id: "stu1", student_no: "S001", display_name: "Student One" },
+        current_classes: [],
+        available_classes: [classOne, classTwo],
+        attempt_count: 1,
+        legacy_attempt_count: 0,
+      });
+    });
+    expect(screen.queryByText("正在读取当前班级和考试记录…")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "转班" }));
+    await waitFor(() => expect(pendingPreviews).toHaveLength(2));
+    view.rerender(
+      <SchoolWorkspace
+        {...props}
+        user={{ ...props.user, id: "u2", school_id: "s2", username: "school_b", display_name: "School B" }}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "转班确认" })).not.toBeInTheDocument());
+    await act(async () => {
+      pendingPreviews[1]({
+        student: { id: "stu1", student_no: "S001", display_name: "Student One" },
+        current_classes: [classOne],
+        available_classes: [classOne],
+        attempt_count: 1,
+        legacy_attempt_count: 0,
+      });
+    });
+    expect(screen.queryByText("正在读取当前班级和考试记录…")).not.toBeInTheDocument();
+    expect(mocks.transferStudentClass).not.toHaveBeenCalled();
+  });
+
+  it("does not show the transfer action to teacher or global administrator roles", async () => {
+    for (const role of ["teacher", "admin"] as const) {
+      const view = render(
+        <SchoolWorkspace
+          user={{ id: `u_${role}`, school_id: "s1", role, username: role, display_name: role, status: "active" }}
+          onLogout={vi.fn()}
+          onError={vi.fn()}
+        />,
+      );
+
+      await userEvent.click(await screen.findByTestId("school-page-students"));
+      expect(screen.queryByRole("button", { name: "转班" })).not.toBeInTheDocument();
+      view.unmount();
+    }
   });
 
   it("keeps the latest list query when a write finishes after the query changes", async () => {

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from solaire.web.papers.class_snapshots import freeze_attempt_class_memberships
+
 from contextlib import closing
 import json
 import sys
@@ -106,12 +108,15 @@ def _publish_personalized(
 
         graph_snapshot = load_graph_question_binding_snapshot(project_root) if project_root else None
 
+        attempt_ids: list[str] = []
         for assignment in assignments:
             questions = freeze_question_bindings(
                 project_root,
                 assignment["questions"],
                 graph_snapshot=graph_snapshot,
             )
+            attempt_id = _new_id()
+            attempt_ids.append(attempt_id)
             con.execute(
                 """
                 INSERT INTO student_attempts
@@ -120,7 +125,7 @@ def _publish_personalized(
                 VALUES (?, ?, ?, 'not_started', ?, ?, ?, 3)
                 """,
                 (
-                    _new_id(),
+                    attempt_id,
                     publication_id,
                     assignment["student_id"],
                     json.dumps(questions, ensure_ascii=False),
@@ -135,6 +140,7 @@ def _publish_personalized(
                     ),
                 ),
             )
+        freeze_attempt_class_memberships(con, attempt_ids, captured_at=now)
         from solaire.web.learning_progress.baselines import freeze_personalized_baseline
 
         freeze_personalized_baseline(

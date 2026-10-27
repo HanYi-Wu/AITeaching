@@ -134,6 +134,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   const studentQueryRef = useRef(studentQuery);
   const assignmentQueryRef = useRef(assignmentQuery);
   const studentClassFilterRef = useRef(studentClassFilter);
+  const classChoicesRef = useRef<ClassRecord[]>([]);
   teacherQueryRef.current = teacherQuery;
   classQueryRef.current = classQuery;
   studentQueryRef.current = studentQuery;
@@ -146,6 +147,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
 
   const teacherSeqRef = useRef(0);
   const classSeqRef = useRef(0);
+  const classChoicesSeqRef = useRef(0);
   const studentSeqRef = useRef(0);
   const assignmentSeqRef = useRef(0);
 
@@ -207,13 +209,13 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     }
   }
 
-  async function fetchClassesList(query: PageQuery, accountKey: string) {
+  async function fetchClassesList(query: PageQuery, accountKey: string): Promise<boolean> {
     const seq = ++classSeqRef.current;
     const querySnapshot = { ...query };
     try {
       const classData = await listClasses(querySnapshot);
       if (classSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
-        return;
+        return false;
       }
       setClasses(classData.classes);
       setClassMeta(mergeMeta(classData, querySnapshot, classData.classes.length));
@@ -222,34 +224,63 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
           classData.classes.map((klass) => [klass.id, { name: klass.name, grade: klass.grade || "" }]),
         ),
       );
+      return true;
     } catch (e) {
       if (classSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
-        return;
+        return false;
       }
       onError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   }
 
-  async function fetchClassChoices(accountKey: string) {
+  function applyClassChoices(availableClasses: ClassRecord[]) {
+    const availableIds = new Set(availableClasses.map((klass) => klass.id));
+    const previousIds = new Set(classChoicesRef.current.map((klass) => klass.id));
+    const removed = [...previousIds].some((id) => !availableIds.has(id));
+    const fallbackClassId = availableClasses[0]?.id || "";
+    const currentStudentFilter = studentClassFilterRef.current;
+    const studentFilter = currentStudentFilter && availableIds.has(currentStudentFilter) ? currentStudentFilter : "";
+    const studentFilterChanged = studentFilter !== currentStudentFilter;
+
+    classChoicesRef.current = availableClasses;
+    setClassChoices(availableClasses);
+    setAssignClassId((current) => (current && availableIds.has(current) ? current : fallbackClassId));
+    setStudentClassId((current) => (current && availableIds.has(current) ? current : fallbackClassId));
+    if (studentFilterChanged) {
+      studentClassFilterRef.current = studentFilter;
+      setStudentClassFilter(studentFilter);
+    }
+
+    return { removed, studentFilter, studentFilterChanged };
+  }
+
+  async function fetchClassChoices(accountKey: string): Promise<boolean> {
+    const seq = ++classChoicesSeqRef.current;
     try {
       const allClassData = await listClasses({ page: 1, pageSize: 100 });
-      if (activeAccountRef.current !== accountKey) return;
-      setClassChoices(allClassData.classes);
-      setAssignClassId((current) => current || allClassData.classes[0]?.id || "");
-      setStudentClassId((current) => current || allClassData.classes[0]?.id || "");
+      if (classChoicesSeqRef.current !== seq || activeAccountRef.current !== accountKey) return false;
+      const selection = applyClassChoices(allClassData.classes);
+      if (selection.removed || selection.studentFilterChanged) {
+        const query = { ...studentQueryRef.current };
+        lastLoadedStudentQueryRef.current = serializeStudentQuery(selection.studentFilter, query);
+        if (!await fetchStudentsList(selection.studentFilter, query, accountKey)) return false;
+      }
+      return true;
     } catch (e) {
-      if (activeAccountRef.current !== accountKey) return;
+      if (classChoicesSeqRef.current !== seq || activeAccountRef.current !== accountKey) return false;
       onError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   }
 
-  async function fetchStudentsList(classFilter: string, query: PageQuery, accountKey: string) {
+  async function fetchStudentsList(classFilter: string, query: PageQuery, accountKey: string): Promise<boolean> {
     const seq = ++studentSeqRef.current;
     const querySnapshot = { ...query };
     try {
       const studentData = await listStudents(classFilter || null, querySnapshot);
       if (studentSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
-        return;
+        return false;
       }
       setStudents(studentData.students);
       setStudentMeta(mergeMeta(studentData, querySnapshot, studentData.students.length));
@@ -265,11 +296,13 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
           ]),
         ),
       );
+      return true;
     } catch (e) {
       if (studentSeqRef.current !== seq || activeAccountRef.current !== accountKey) {
-        return;
+        return false;
       }
       onError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   }
 
@@ -298,6 +331,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     const currentStudentQuery = { ...studentQueryRef.current };
     const currentAssignmentQuery = { ...assignmentQueryRef.current };
     const currentStudentClassFilter = studentClassFilterRef.current;
+    const classChoicesSeq = ++classChoicesSeqRef.current;
     const teacherSeq = ++teacherSeqRef.current;
     const classSeq = ++classSeqRef.current;
     const studentSeq = ++studentSeqRef.current;
@@ -347,7 +381,15 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       );
       lastLoadedClassQueryRef.current = serializeClassQuery(currentClassQuery);
     }
-    setClassChoices(allClassData.classes);
+    const classChoicesSelection = classChoicesSeqRef.current === classChoicesSeq
+      ? applyClassChoices(allClassData.classes)
+      : null;
+    if (classChoicesSelection?.removed || classChoicesSelection?.studentFilterChanged) {
+      studentSeqRef.current += 1;
+      const query = { ...studentQueryRef.current };
+      lastLoadedStudentQueryRef.current = serializeStudentQuery(classChoicesSelection.studentFilter, query);
+      void fetchStudentsList(classChoicesSelection.studentFilter, query, requestKey);
+    }
     if (studentSeqRef.current === studentSeq) {
       setStudents(studentData.students);
       setStudentMeta(mergeMeta(studentData, currentStudentQuery, studentData.students.length));
@@ -371,13 +413,11 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       lastLoadedAssignmentQueryRef.current = serializeAssignmentQuery(currentAssignmentQuery);
     }
     setAssignTeacherId((current) => current || allTeacherData.teachers.find((teacher) => teacher.status === "active")?.id || "");
-    setAssignClassId((current) => current || allClassData.classes[0]?.id || "");
-    setStudentClassId((current) => current || allClassData.classes[0]?.id || "");
   }
 
-  async function refreshTargets(targets: RefreshTarget[]) {
+  async function refreshTargets(targets: RefreshTarget[]): Promise<boolean> {
     const accountKey = activeAccountRef.current;
-    const promises: Promise<void>[] = [];
+    const promises: Array<Promise<void | boolean>> = [];
 
     if (targets.includes("teachers")) {
       promises.push(fetchTeachersList(teacherQueryRef.current, accountKey));
@@ -403,7 +443,8 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       );
     }
 
-    await Promise.all(promises);
+    const results = await Promise.all(promises);
+    return results.every((result) => result !== false);
   }
 
   useEffect(() => {

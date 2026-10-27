@@ -63,8 +63,7 @@ def ensure_student_resource_access(root: Path, project_root: Path, user: dict[st
             "JOIN exam_publications ep ON ep.id = sa.publication_id "
             "JOIN paper_records pr ON pr.id = ep.paper_id "
             "WHERE sa.student_id = ? AND sa.status <> 'not_started' "
-            "AND EXISTS (SELECT 1 FROM publication_classes pc JOIN class_students cs ON cs.class_id = pc.class_id "
-            "WHERE pc.publication_id = ep.id AND cs.student_id = sa.student_id)", (student['id'],),
+            "AND ep.status IN ('published', 'paused', 'closed')", (student['id'],),
         ).fetchall()
     for row in rows:
         attempt = dict(row)

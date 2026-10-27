@@ -6,7 +6,7 @@ import sqlite3
 from io import BytesIO
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 
@@ -22,6 +22,7 @@ from solaire.web.school_schemas import (
     BulkStatusBody,
     ResetPasswordBody,
     StudentImportBody,
+    StudentClassTransferBody,
     StudentUpdateBody,
     TeacherCreateBody,
     TeacherImportBody,
@@ -40,6 +41,13 @@ from solaire.web.school_service import (
     reset_teacher_password,
     update_student,
     update_teacher,
+)
+from solaire.web.school.transfers import (
+    StudentClassTransferConflict,
+    StudentClassTransferForbidden,
+    StudentClassTransferNotFound,
+    get_student_class_transfer_preview,
+    transfer_student_class,
 )
 
 router = APIRouter()
@@ -210,6 +218,48 @@ def school_students_list(
     school_id = _require_school(user)
     root = require_platform_root()
     return query_students(root, school_id=school_id, class_id=class_id, q=q, status=status, page=page, page_size=page_size)
+
+
+@router.get("/school/students/{student_id}/class-transfer")
+def school_students_class_transfer_preview(
+    student_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    try:
+        return get_student_class_transfer_preview(root, school_id=school_id, student_id=student_id)
+    except StudentClassTransferNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        _raise_api_error(error)
+
+
+@router.post("/school/students/{student_id}/class-transfer")
+def school_students_class_transfer(
+    student_id: str,
+    body: StudentClassTransferBody,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    try:
+        return transfer_student_class(
+            root,
+            school_id=school_id,
+            student_id=student_id,
+            target_class_id=body.target_class_id,
+            expected_class_ids=body.expected_class_ids,
+            actor_id=str(user["id"]),
+        )
+    except StudentClassTransferConflict as error:
+        raise HTTPException(status_code=409, detail="学生班级信息已变化，请刷新后重试") from error
+    except StudentClassTransferNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except StudentClassTransferForbidden as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except (ValueError, sqlite3.IntegrityError) as error:
+        _raise_api_error(error)
 
 
 @router.get("/school/students/template.xlsx")

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from solaire.web.auth_service import utc_now
+from solaire.web.papers.class_snapshots import freeze_attempt_class_memberships
 from solaire.web.papers.scoring import score_percent
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.papers.exam_timing import (
@@ -73,14 +74,23 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
             SELECT ep.*, pr.exam_id, pr.title AS paper_title, COALESCE(ep.subject, pr.subject) AS subject, pr.id AS paper_id
             FROM exam_publications ep
             JOIN paper_records pr ON pr.id = ep.paper_id
-            JOIN publication_classes pc ON pc.publication_id = ep.id
-            JOIN class_students cs ON cs.class_id = pc.class_id
-            WHERE ep.id = ? AND cs.student_id = ? AND ep.status IN ('published', 'paused', 'closed')
-            LIMIT 1
+            WHERE ep.id = ? AND ep.status IN ('published', 'paused', 'closed')
             """,
-            (publication_id, student_id),
+            (publication_id,),
         ).fetchone()
         if publication is None:
+            raise PermissionError("No assigned publication for this student")
+        current_class_member = con.execute(
+            """SELECT 1 FROM publication_classes pc JOIN class_students cs ON cs.class_id=pc.class_id
+               WHERE pc.publication_id=? AND cs.student_id=? LIMIT 1""",
+            (publication_id, student_id),
+        ).fetchone() is not None
+        assigned = con.execute(
+            """SELECT sa.id FROM student_attempts sa
+               WHERE sa.publication_id=? AND sa.student_id=? LIMIT 1""",
+            (publication_id, student_id),
+        ).fetchone()
+        if not current_class_member and assigned is None:
             raise PermissionError("No assigned publication for this student")
         if publication["practice_kind"] or publication["recipient_scope"] == "student" or publication["folder_id"]:
             # A folder-bound release has a frozen recipient roster. Newly added classmates
@@ -90,20 +100,25 @@ def _ensure_assigned_attempt(root: Path, publication_id: str, student_id: str) -
         else:
             fixed_roster = False
         if fixed_roster:
-            assigned = con.execute(
+            fixed_assignment = con.execute(
                 "SELECT 1 FROM student_attempts WHERE publication_id = ? AND student_id = ?",
                 (publication_id, student_id),
             ).fetchone()
-            if assigned is None:
+            if fixed_assignment is None:
                 raise PermissionError("No personalized practice assigned for this student")
-        else:
-            con.execute(
+        elif current_class_member:
+            attempt_id = _new_id()
+            inserted = con.execute(
                 """
                 INSERT OR IGNORE INTO student_attempts (id, publication_id, student_id, status)
                 VALUES (?, ?, ?, 'not_started')
                 """,
-                (_new_id(), publication_id, student_id),
+                (attempt_id, publication_id, student_id),
             )
+            if inserted.rowcount:
+                freeze_attempt_class_memberships(con, [attempt_id], captured_at=utc_now())
+        elif assigned is None:
+            raise PermissionError("No assigned publication for this student")
         row = con.execute(
             """
             SELECT sa.*, ep.title, ep.description, ep.status AS publication_status, ep.show_results_immediately,
@@ -194,20 +209,22 @@ def list_student_papers(root: Path, project_root: Path, user: dict[str, Any]) ->
             """
             SELECT DISTINCT ep.id
             FROM exam_publications ep
-            JOIN publication_classes pc ON pc.publication_id = ep.id
-            JOIN class_students cs ON cs.class_id = pc.class_id
-            WHERE cs.student_id = ? AND ep.status IN ('published', 'paused', 'closed')
+            WHERE ep.status IN ('published', 'paused', 'closed')
               AND (
-                  (ep.practice_kind IS NULL AND ep.recipient_scope = 'class'
-                   AND NOT EXISTS (SELECT 1 FROM content_folders cf WHERE cf.id=ep.folder_id AND cf.kind='paper'))
+                  ((ep.practice_kind IS NULL AND ep.recipient_scope = 'class'
+                    AND NOT EXISTS (SELECT 1 FROM content_folders cf WHERE cf.id=ep.folder_id AND cf.kind='paper'))
+                   AND EXISTS (
+                     SELECT 1 FROM publication_classes pc JOIN class_students cs ON cs.class_id=pc.class_id
+                     WHERE pc.publication_id=ep.id AND cs.student_id=?
+                   ))
                 OR EXISTS (
-                  SELECT 1 FROM student_attempts assigned
-                  WHERE assigned.publication_id = ep.id AND assigned.student_id = cs.student_id
+                    SELECT 1 FROM student_attempts assigned
+                    WHERE assigned.publication_id=ep.id AND assigned.student_id=?
                 )
               )
             ORDER BY ep.created_at DESC
             """,
-            (student_id,),
+            (student_id, student_id),
         ).fetchall()
     items: list[dict[str, Any]] = []
     for row in pub_rows:

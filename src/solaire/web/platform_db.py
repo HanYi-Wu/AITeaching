@@ -10,7 +10,19 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 16
+
+CLASS_MEMBERSHIP_VIEW_SQL = """
+CREATE VIEW IF NOT EXISTS attempt_class_memberships AS
+SELECT attempt_id, class_id, class_name, class_grade FROM attempt_class_snapshots
+UNION ALL
+SELECT sa.id AS attempt_id, c.id AS class_id, c.name AS class_name, c.grade AS class_grade
+FROM student_attempts sa
+JOIN publication_classes pc ON pc.publication_id = sa.publication_id
+JOIN class_students cs ON cs.class_id = pc.class_id AND cs.student_id = sa.student_id
+JOIN classes c ON c.id = cs.class_id
+WHERE sa.class_membership_frozen = 0
+"""
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -79,6 +91,21 @@ CREATE TABLE IF NOT EXISTS class_students (
   PRIMARY KEY(class_id, student_id)
 );
 CREATE INDEX IF NOT EXISTS idx_class_students_student ON class_students(student_id, class_id);
+CREATE TRIGGER IF NOT EXISTS one_current_class_per_student_insert
+BEFORE INSERT ON class_students
+WHEN EXISTS (
+  SELECT 1 FROM class_students
+  WHERE student_id = NEW.student_id AND class_id != NEW.class_id
+)
+BEGIN SELECT RAISE(ABORT, 'student already belongs to a different class'); END;
+CREATE TRIGGER IF NOT EXISTS one_current_class_per_student_update
+BEFORE UPDATE OF student_id, class_id ON class_students
+WHEN EXISTS (
+  SELECT 1 FROM class_students
+  WHERE student_id = NEW.student_id AND class_id != NEW.class_id
+    AND NOT (student_id = OLD.student_id AND class_id = OLD.class_id)
+)
+BEGIN SELECT RAISE(ABORT, 'student already belongs to a different class'); END;
 
 CREATE TABLE IF NOT EXISTS teacher_class_assignments (
   teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -182,6 +209,7 @@ CREATE TABLE IF NOT EXISTS student_attempts (
   answer_key_json TEXT,
   practice_metadata_json TEXT,
   question_payload_version INTEGER NOT NULL DEFAULT 1,
+  class_membership_frozen INTEGER NOT NULL DEFAULT 0,
   grading_completed_at TEXT,
   grading_completed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   UNIQUE(publication_id, student_id)
@@ -204,6 +232,31 @@ CREATE TABLE IF NOT EXISTS student_answers (
   responded_at TEXT NOT NULL,
   UNIQUE(attempt_id, question_id)
 );
+
+CREATE TABLE IF NOT EXISTS attempt_class_snapshots (
+  attempt_id TEXT NOT NULL REFERENCES student_attempts(id) ON DELETE CASCADE,
+  class_id TEXT NOT NULL,
+  class_name TEXT NOT NULL,
+  class_grade TEXT,
+  captured_at TEXT NOT NULL,
+  source TEXT NOT NULL,
+  PRIMARY KEY(attempt_id, class_id)
+);
+CREATE INDEX IF NOT EXISTS idx_attempt_class_snapshots_class ON attempt_class_snapshots(class_id, attempt_id);
+
+CREATE TABLE IF NOT EXISTS student_class_transfers (
+  id TEXT PRIMARY KEY,
+  school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  actor_id TEXT NOT NULL,
+  from_classes_json TEXT NOT NULL,
+  to_class_id TEXT NOT NULL,
+  to_class_name TEXT NOT NULL,
+  transferred_at TEXT NOT NULL,
+  retained_attempt_count INTEGER NOT NULL,
+  captured_legacy_attempt_count INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_student_class_transfers_student ON student_class_transfers(student_id, transferred_at);
 
 CREATE TABLE IF NOT EXISTS paper_answer_grading_versions (
   attempt_id TEXT NOT NULL REFERENCES student_attempts(id) ON DELETE CASCADE,
@@ -403,8 +456,10 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "student_attempts", "answer_key_json", "TEXT")
         _ensure_column(con, "student_attempts", "practice_metadata_json", "TEXT")
         _ensure_column(con, "student_attempts", "question_payload_version", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(con, "student_attempts", "class_membership_frozen", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "student_attempts", "grading_completed_at", "TEXT")
         _ensure_column(con, "student_attempts", "grading_completed_by", "TEXT REFERENCES users(id) ON DELETE SET NULL")
+        con.execute(CLASS_MEMBERSHIP_VIEW_SQL)
         # Keep legacy records readable after the subject model became mandatory.
         con.execute("UPDATE paper_records SET subject = '通用' WHERE subject IS NULL OR TRIM(subject) = '' OR subject = '未分科'")
         con.execute("UPDATE exam_publications SET subject = (SELECT subject FROM paper_records WHERE id = exam_publications.paper_id) WHERE subject IS NULL OR TRIM(subject) = '' OR subject = '未分科'")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from solaire.web.papers.class_snapshots import freeze_attempt_class_memberships
+
 from contextlib import closing
 
 import json
@@ -385,23 +387,22 @@ def publish_online_paper(
                 "INSERT INTO publication_classes (publication_id, class_id) VALUES (?, ?)",
                 [(publication_id, class_id) for class_id in selected_class_ids],
             )
+            attempt_records = [
+                (
+                    (id_factory or _new_id)(), publication_id, str(row["student_id"]),
+                    frozen_questions_json, frozen_answer_keys_json,
+                )
+                for row in rows
+            ]
             con.executemany(
                 """
                 INSERT OR IGNORE INTO student_attempts
                   (id, publication_id, student_id, status, question_payload_json, answer_key_json, question_payload_version)
                 VALUES (?, ?, ?, 'not_started', ?, ?, 3)
                 """,
-                [
-                    (
-                        (id_factory or _new_id)(),
-                        publication_id,
-                        str(row["student_id"]),
-                        frozen_questions_json,
-                        frozen_answer_keys_json,
-                    )
-                    for row in rows
-                ],
+                attempt_records,
             )
+            freeze_attempt_class_memberships(con, [record[0] for record in attempt_records], captured_at=now)
             effective_src_exam = source_exam_id
             effective_src_batch = source_batch_id
             if (not effective_src_exam or not effective_src_batch) and project_root is not None:

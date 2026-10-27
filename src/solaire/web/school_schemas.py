@@ -81,6 +81,11 @@ class StudentUpdateBody(BaseModel):
     status: str | None = None
 
 
+class StudentClassTransferBody(BaseModel):
+    target_class_id: str = Field(..., min_length=1)
+    expected_class_ids: list[str]
+
+
 class TeacherClassAssignmentBody(BaseModel):
     teacher_id: str = Field(..., min_length=1)
     class_id: str = Field(..., min_length=1)

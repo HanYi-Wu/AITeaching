@@ -239,10 +239,12 @@ def import_students(
     imported: list[dict[str, Any]] = []
     with _import_connection(root, _connection) as con:
         _check_active_school(con, school_id)
+        default_class_name: str | None = None
         if class_id is not None:
-            klass = con.execute("SELECT 1 FROM classes WHERE id = ? AND school_id = ?", (class_id, school_id)).fetchone()
+            klass = con.execute("SELECT name FROM classes WHERE id = ? AND school_id = ?", (class_id, school_id)).fetchone()
             if klass is None:
                 raise ValueError("class not found")
+            default_class_name = str(klass["name"])
         normalized = [
             {
                 "student_no": _cell_text(raw.get("student_no")),
@@ -270,12 +272,71 @@ def import_students(
         )
         students_by_no = {str(row["student_no"]): row_to_dict(row) or {} for row in student_rows}
 
+        resolved_targets: list[tuple[str | None, str | None]] = []
         for idx, row in enumerate(normalized, start=1):
             if not row["student_no"] or not row["display_name"]:
                 raise ValueError(f"Row {idx} (student_no): student_no and display_name are required")
             class_name = str(row["class_name"])
             if class_name and class_name not in classes_by_name:
                 raise ValueError(f"Row {idx} (class_name): class not found: {class_name}")
+            target_class_id = classes_by_name[class_name] if class_name else class_id
+            target_class_name = class_name or default_class_name
+            resolved_targets.append((target_class_id, target_class_name))
+
+        targeted_student_numbers = list(dict.fromkeys(
+            str(row["student_no"])
+            for row, target in zip(normalized, resolved_targets, strict=True)
+            if target[0] is not None
+        ))
+        existing_student_ids = [
+            str(students_by_no[student_no]["id"])
+            for student_no in targeted_student_numbers
+            if student_no in students_by_no and students_by_no[student_no].get("id")
+        ]
+        membership_rows = _fetch_in_values(
+            con,
+            """SELECT cs.student_id, cs.class_id, c.name AS class_name
+               FROM class_students cs JOIN classes c ON c.id = cs.class_id
+               WHERE cs.student_id IN ({})""",
+            existing_student_ids,
+        )
+        memberships_by_student: dict[str, list[tuple[str, str]]] = {}
+        for membership in membership_rows:
+            memberships_by_student.setdefault(str(membership["student_id"]), []).append(
+                (str(membership["class_id"]), str(membership["class_name"]))
+            )
+        for memberships in memberships_by_student.values():
+            memberships.sort(key=lambda item: (item[1], item[0]))
+
+        batch_targets: dict[str, tuple[str, str, int]] = {}
+        for idx, (row, target) in enumerate(zip(normalized, resolved_targets, strict=True), start=1):
+            target_class_id, target_class_name = target
+            if target_class_id is None or target_class_name is None:
+                continue
+            student_no = str(row["student_no"])
+            existing = students_by_no.get(student_no)
+            current_memberships = memberships_by_student.get(str(existing["id"]), []) if existing else []
+            if len(current_memberships) > 1:
+                current_classes = "、".join(name for _, name in current_memberships)
+                raise ValueError(
+                    f"Row {idx} (class): 学生 {student_no} 已关联多个班级（{current_classes}），无法判断当前班级；"
+                    f"本次请求班级“{target_class_name}”，请先核对归属；如需转班，需单独核对处理"
+                )
+            if current_memberships and current_memberships[0][0] != target_class_id:
+                current_class_name = current_memberships[0][1]
+                raise ValueError(
+                    f"Row {idx} (class): 学生 {student_no} 当前属于班级“{current_class_name}”，"
+                    f"请求的班级是“{target_class_name}”；转班需单独核对处理"
+                )
+            previous_target = batch_targets.get(student_no)
+            if previous_target is not None and previous_target[0] != target_class_id:
+                raise ValueError(
+                    f"Row {idx} (class): 学生 {student_no} 在本次导入中被分配到不同班级："
+                    f"第{previous_target[2]}行“{previous_target[1]}”和本行“{target_class_name}”；"
+                    "每名学生只能有一个当前班级；转班需单独核对处理"
+                )
+            if previous_target is None:
+                batch_targets[student_no] = (target_class_id, target_class_name, idx)
 
         account_numbers = list(dict.fromkeys(
             str(row["student_no"])
@@ -286,14 +347,11 @@ def import_students(
         account_usernames = _new_student_usernames(con, school_id, len(account_numbers))
         usernames_by_student_no = dict(zip(account_numbers, account_usernames, strict=False))
 
-        for row in normalized:
+        for idx, row in enumerate(normalized, start=1):
             student_no = str(row["student_no"])
             display_name = str(row["display_name"])
             email = row["email"]
-            target_class_id = class_id
-            class_name = str(row["class_name"])
-            if class_name:
-                target_class_id = classes_by_name[class_name]
+            target_class_id, target_class_name = resolved_targets[idx - 1]
             existing = students_by_no.get(student_no)
             if existing is None:
                 student_id = _new_id()
@@ -387,10 +445,26 @@ def import_students(
                     "account_username": account_username,
                 }
             if target_class_id is not None:
-                con.execute(
-                    "INSERT OR IGNORE INTO class_students (class_id, student_id) VALUES (?, ?)",
-                    (target_class_id, student_id),
-                )
+                try:
+                    con.execute(
+                        "INSERT OR IGNORE INTO class_students (class_id, student_id) VALUES (?, ?)",
+                        (target_class_id, student_id),
+                    )
+                except sqlite3.IntegrityError as error:
+                    if str(error) != "student already belongs to a different class":
+                        raise
+                    current_rows = con.execute(
+                        """SELECT c.name FROM class_students cs
+                           JOIN classes c ON c.id = cs.class_id WHERE cs.student_id = ?
+                           ORDER BY c.name""",
+                        (student_id,),
+                    ).fetchall()
+                    current_classes = "、".join(str(item["name"]) for item in current_rows) or "其他班级"
+                    requested_class = target_class_name or target_class_id
+                    raise ValueError(
+                        f"Row {idx} (class): 学生 {student_no} 当前属于班级“{current_classes}”，"
+                        f"请求的班级是“{requested_class}”；转班需单独核对处理"
+                    ) from error
             students_by_no[student_no] = student
             imported.append(dict(student))
     return {"imported": len(imported), "students": imported}

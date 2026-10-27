@@ -23,6 +23,7 @@ from solaire.web.papers.scoring import (
     question_score_map, score_percent, validate_manual_score,
 )
 from solaire.web.platform_db import connect, init_platform_db, row_to_dict
+from solaire.web.papers.class_snapshots import freeze_attempt_class_memberships
 from solaire.web.papers.repository import (
     clean_subject as _clean_subject,
     clean_title as _clean_title,
@@ -1239,6 +1240,7 @@ def ingest_offline_submission(
                 """,
                 (attempt_id, publication_id, student_id, now, now, question_json, answer_json),
             )
+            freeze_attempt_class_memberships(con, [attempt_id], captured_at=now)
         else:
             con.execute(
                 """

@@ -108,7 +108,8 @@ def list_students(root: Path, *, school_id: str, class_id: str | None = None) ->
             SELECT
               s.*,
               u.username AS account_username,
-              GROUP_CONCAT(c.name, ', ') AS class_names
+              GROUP_CONCAT(c.name, ', ') AS class_names,
+              COUNT(c.id) AS class_count
             FROM students s
             LEFT JOIN users u ON u.id = s.user_id
             LEFT JOIN class_students cs ON cs.student_id = s.id
@@ -151,14 +152,16 @@ def query_students(
     filter_params.extend(search_params)
     student_ctes = f"""
         class_names AS (
-            SELECT cs.student_id, GROUP_CONCAT(c.name, ', ') AS class_names
+            SELECT cs.student_id, GROUP_CONCAT(c.name, ', ') AS class_names,
+                   COUNT(c.id) AS class_count
             FROM class_students cs
             JOIN students scoped_students ON scoped_students.id = cs.student_id AND scoped_students.school_id = ?
             JOIN classes c ON c.id = cs.class_id
             GROUP BY cs.student_id
         ),
         student_rows AS (
-            SELECT s.*, u.username AS account_username, class_names.class_names
+            SELECT s.*, u.username AS account_username, class_names.class_names,
+                   COALESCE(class_names.class_count, 0) AS class_count
             FROM students s
             LEFT JOIN users u ON u.id = s.user_id
             LEFT JOIN class_names ON class_names.student_id = s.id

@@ -18,16 +18,17 @@ from solaire.web.learning_progress.store import get_frozen_baselines
 from solaire.web.platform_db import connect
 
 
-def _class_student_ids(root: Path, class_id: str) -> set[str]:
-    """Return all active student IDs belonging to the given class."""
+def _class_student_ids(root: Path, class_id: str, practice_publication_id: str) -> set[str]:
+    """Return active students whose practice assignment belongs to the class."""
     with closing(connect(root)) as con, con:
         rows = con.execute(
             """
-            SELECT cs.student_id FROM class_students cs
-            JOIN students s ON s.id = cs.student_id
-            WHERE cs.class_id = ? AND s.status = 'active'
+            SELECT DISTINCT sa.student_id FROM student_attempts sa
+            JOIN attempt_class_memberships acm ON acm.attempt_id = sa.id
+            JOIN students s ON s.id = sa.student_id
+            WHERE acm.class_id = ? AND sa.publication_id = ? AND s.status = 'active'
             """,
-            (class_id,),
+            (class_id, practice_publication_id),
         ).fetchall()
     return {str(r["student_id"]) for r in rows}
 
@@ -78,7 +79,7 @@ def get_practice_comparison(
 
     # 4. Optional class scope filtering
     if class_id:
-        allowed_sids = _class_student_ids(root, class_id)
+        allowed_sids = _class_student_ids(root, class_id, practice_publication_id)
         baseline_items = [it for it in baseline_items if str(it.get("student_id")) in allowed_sids]
         target_items = [it for it in target_items if str(it.get("student_id")) in allowed_sids]
 

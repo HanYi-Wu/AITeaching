@@ -36,6 +36,8 @@ def test_upgrade_is_atomic_and_can_retry_after_a_migration_failure(tmp_path, mon
     path.parent.mkdir(parents=True)
     with closing(sqlite3.connect(path)) as con, con:
         con.executescript(platform_db.SCHEMA_SQL)
+        con.execute("DROP TRIGGER one_current_class_per_student_insert")
+        con.execute("DROP TRIGGER one_current_class_per_student_update")
         con.execute("ALTER TABLE users DROP COLUMN preferences_json")
         con.execute("PRAGMA user_version = 11")
 
@@ -74,7 +76,10 @@ def test_concurrent_processes_open_one_complete_database(tmp_path):
     assert all(result.returncode == 0 for result in results), [result.stderr for result in results]
     with closing(platform_db.connect(tmp_path)) as con:
         assert con.execute("PRAGMA user_version").fetchone()[0] == platform_db.SCHEMA_VERSION
-        assert len(con.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchall()) == 2
+        assert {row["name"] for row in con.execute("SELECT name FROM sqlite_master WHERE type='trigger'")} == {
+            "publication_classes_one_active_per_paper", "one_active_attempt_per_paper_folder",
+            "one_current_class_per_student_insert", "one_current_class_per_student_update",
+        }
 
 
 def test_newer_database_is_never_downgraded(tmp_path):
@@ -115,3 +120,54 @@ def test_version_thirteen_database_gains_student_class_lookup_index(tmp_path):
         assert [row["name"] for row in con.execute("PRAGMA index_info(idx_class_students_student)")] == [
             "student_id", "class_id",
         ]
+
+
+def _seed_current_class_memberships(root):
+    platform_db.init_platform_db(root)
+    with closing(platform_db.connect(root)) as con, con:
+        con.execute("INSERT INTO schools (id, name, created_at, updated_at) VALUES ('school', 'School', 'now', 'now')")
+        con.executemany(
+            "INSERT INTO classes (id, school_id, name, created_at, updated_at) VALUES (?, 'school', ?, 'now', 'now')",
+            [("class-a", "A"), ("class-b", "B")],
+        )
+        con.executemany(
+            "INSERT INTO students (id, school_id, student_no, display_name, created_at, updated_at) "
+            "VALUES (?, 'school', ?, ?, 'now', 'now')",
+            [("student-a", "A", "Alice"), ("student-b", "B", "Bob")],
+        )
+        con.executemany(
+            "INSERT INTO class_students (class_id, student_id) VALUES (?, ?)",
+            [("class-a", "student-a"), ("class-b", "student-b")],
+        )
+
+
+def test_database_rejects_a_second_current_class_on_insert_and_update(tmp_path):
+    _seed_current_class_memberships(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        con.execute("INSERT OR IGNORE INTO class_students VALUES ('class-a', 'student-a')")
+        with pytest.raises(sqlite3.IntegrityError, match="student already belongs"):
+            con.execute("INSERT INTO class_students VALUES ('class-b', 'student-a')")
+        with pytest.raises(sqlite3.IntegrityError, match="student already belongs"):
+            con.execute("UPDATE class_students SET student_id='student-a' WHERE student_id='student-b'")
+        assert [tuple(row) for row in con.execute("SELECT class_id, student_id FROM class_students ORDER BY student_id")] == [
+            ("class-a", "student-a"), ("class-b", "student-b"),
+        ]
+
+
+def test_upgrade_preserves_ambiguous_legacy_memberships_and_guards_new_writes(tmp_path):
+    _seed_current_class_memberships(tmp_path)
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        con.execute("DROP TRIGGER one_current_class_per_student_insert")
+        con.execute("DROP TRIGGER one_current_class_per_student_update")
+        con.execute("INSERT INTO class_students VALUES ('class-b', 'student-a')")
+        con.execute("PRAGMA user_version = 14")
+
+    platform_db.init_platform_db(tmp_path)
+
+    with closing(platform_db.connect(tmp_path)) as con, con:
+        assert [row[0] for row in con.execute(
+            "SELECT class_id FROM class_students WHERE student_id='student-a' ORDER BY class_id",
+        )] == ["class-a", "class-b"]
+        assert con.execute("PRAGMA user_version").fetchone()[0] == platform_db.SCHEMA_VERSION
+        with pytest.raises(sqlite3.IntegrityError, match="student already belongs"):
+            con.execute("INSERT INTO class_students VALUES ('class-a', 'student-b')")

@@ -1,10 +1,11 @@
-import { ChangeEvent, Dispatch, FormEvent, SetStateAction } from "react";
-import { KeyRound, Plus, Save, UserCheck, UserX } from "lucide-react";
+import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useEffect, useState } from "react";
+import { ArrowRightLeft, KeyRound, Plus, Save, UserCheck, UserX } from "lucide-react";
 import {
   bulkUpdateStudents,
   resetStudentPassword,
   updateStudent,
   type ClassRecord,
+  type StudentClassTransferResult,
   type StudentRecord,
 } from "../../../../platform/auth";
 import {
@@ -22,6 +23,7 @@ import {
   optionalText,
   type StudentDraft,
 } from "../hooks/useSchoolWorkspaceData";
+import { StudentTransferDialog } from "./StudentTransferDialog";
 
 type StudentsMainProps = {
   students: StudentRecord[];
@@ -39,6 +41,12 @@ type StudentsMainProps = {
   busy: boolean;
   run: (action: () => Promise<void>) => Promise<void>;
   setNotice: Dispatch<SetStateAction<string | null>>;
+  canTransfer: boolean;
+  transferScopeKey: string;
+  onTransferred: (
+    result: StudentClassTransferResult,
+    isCurrent: () => boolean,
+  ) => Promise<void>;
 };
 
 export function StudentsMainPanel({
@@ -57,13 +65,24 @@ export function StudentsMainPanel({
   busy,
   run,
   setNotice,
+  canTransfer,
+  transferScopeKey,
+  onTransferred,
 }: StudentsMainProps) {
+  const [transferSelection, setTransferSelection] = useState<{ student: StudentRecord; scopeKey: string } | null>(null);
+  const transferStudent = transferSelection?.scopeKey === transferScopeKey ? transferSelection.student : null;
+
+  useEffect(() => {
+    setTransferSelection((current) => current?.scopeKey === transferScopeKey ? current : null);
+  }, [transferScopeKey]);
+
   return (
-    <ManagementSection
-      title="学生账号"
-      count={studentMeta.total}
-      controls={
-        <div className="flex flex-wrap items-center gap-2">
+    <>
+      <ManagementSection
+        title="学生账号"
+        count={studentMeta.total}
+        controls={
+          <div className="flex flex-wrap items-center gap-2">
           <Toolbar
             query={studentQuery}
             onQueryChange={(patch) => setStudentQuery((current) => ({ ...current, ...patch, page: patch.page ?? 1 }))}
@@ -104,10 +123,10 @@ export function StudentsMainPanel({
               </option>
             ))}
           </select>
-        </div>
-      }
-    >
-      <div className="overflow-x-auto">
+          </div>
+        }
+      >
+        <div className="overflow-x-auto">
         <table className="min-w-[980px] w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
             <tr>
@@ -164,7 +183,16 @@ export function StudentsMainPanel({
                       }
                     />
                   </td>
-                  <td className="px-3 py-2 text-slate-600">{student.class_names || "-"}</td>
+                  <td className="px-3 py-2 text-slate-600">
+                    {student.class_count !== undefined && student.class_count > 1 ? (
+                      <>
+                        <span className="text-amber-700">班级归属需核对</span>
+                        {student.class_names ? <span className="ml-1">{student.class_names}</span> : null}
+                      </>
+                    ) : (
+                      student.class_names || "-"
+                    )}
+                  </td>
                   <td className="px-3 py-2 font-mono text-xs">{student.account_username || "-"}</td>
                   <td className="px-3 py-2 font-mono text-xs">{student.initial_password || "-"}</td>
                   <td className="px-3 py-2">
@@ -203,6 +231,14 @@ export function StudentsMainPanel({
                         }
                         icon={student.status === "active" ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
                       />
+                      {canTransfer ? (
+                        <IconButton
+                          label="转班"
+                          disabled={busy}
+                          onClick={() => setTransferSelection({ student, scopeKey: transferScopeKey })}
+                          icon={<ArrowRightLeft className="h-4 w-4" />}
+                        />
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -210,9 +246,18 @@ export function StudentsMainPanel({
             })}
           </tbody>
         </table>
-      </div>
-      <Pager meta={studentMeta} onPage={(page) => setStudentQuery((current) => ({ ...current, page }))} />
-    </ManagementSection>
+        </div>
+        <Pager meta={studentMeta} onPage={(page) => setStudentQuery((current) => ({ ...current, page }))} />
+      </ManagementSection>
+      {canTransfer && transferStudent ? (
+        <StudentTransferDialog
+          student={transferStudent}
+          scopeKey={transferScopeKey}
+          onClose={() => setTransferSelection(null)}
+          onTransferred={onTransferred}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -252,6 +297,7 @@ export function StudentsAsidePanel({
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-base font-semibold text-slate-950">录入学生</h2>
         <p className="mt-1 text-sm text-slate-500">单个录入会自动生成学生登录名与初始密码，也可以使用模板批量导入。</p>
+        <p className="mt-2 text-xs leading-5 text-slate-500">每位学生最多一个当前班级；同班重复导入会更新资料，跨班导入会被拒绝，不会自动转班。</p>
         <form className="mt-4 space-y-3" onSubmit={submitStudent}>
           <select
             className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
