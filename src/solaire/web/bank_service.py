@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from solaire.common.atomic_files import write_text_atomic
 from solaire.exam_compiler.facade import (
     BankRecord,
     QuestionGroupRecord,
@@ -30,6 +31,7 @@ from solaire.web.exam_service import ensure_probe_list_yaml
 from solaire.web.library_discovery import discover_question_library_refs, library_root_for_namespace, split_qualified_id
 from solaire.web.security import assert_within_project, safe_filename_component
 from solaire.web.teacher_bank import bank_resource_root, bank_export_root
+from solaire.web.bank_storage import bank_write_lock, find_bank_record, read_bank_document, replace_record_data
 
 
 def _rel_to_resource(project_root: Path, path: Path) -> str:
@@ -229,46 +231,37 @@ def get_question_detail(project_root: Path, qualified_id: str) -> dict[str, Any]
     lib = library_root_for_namespace(project_root, ns)
     if not lib.is_dir():
         raise FileNotFoundError(f"Library not found: {ns}")
-    for ypath in iter_question_files(lib):
-        assert_within_project(project_root, ypath)
-        records = load_questions_from_yaml_file(ypath, ns)
-        for rec in records:
-            if rec.id != qid:
-                continue
-            raw = ypath.read_text(encoding="utf-8")
-            if isinstance(rec, QuestionItem):
-                q = strip_hydrate_fields(rec)
-                q_web = expand_question_for_web(project_root, ns, q)
-                return {
-                    "qualified_id": qualified_id,
-                    "collection": ns,
-                    "namespace": ns,
-                    "subject": subj,
-                    "collection_name": coll,
-                    "question": q.model_dump(mode="json"),
-                    "question_display": q_web.model_dump(mode="json"),
-                    "storage_path": _rel_to_resource(project_root, ypath),
-                    "storage_kind": "single",
-                    "file_yaml": raw,
-                    "question_group": None,
-                    "question_group_preview": None,
-                }
-            assert isinstance(rec, QuestionGroupRecord)
-            return {
-                "qualified_id": qualified_id,
-                "collection": ns,
-                "namespace": ns,
-                "subject": subj,
-                "collection_name": coll,
-                "question": None,
-                "question_display": None,
-                "storage_path": _rel_to_resource(project_root, ypath),
-                "storage_kind": "single",
-                "file_yaml": raw,
-                "question_group": rec.model_dump(mode="json"),
-                "question_group_preview": _expand_group_record_for_web(project_root, ns, rec),
-            }
-    raise FileNotFoundError(f"Question not found: {qualified_id}")
+    found = find_bank_record(project_root, lib, qid)
+    if found is None:
+        raise FileNotFoundError(f"Question not found: {qualified_id}")
+    document, index = found
+    rec = document.records[index]
+    common = {
+        "qualified_id": qualified_id,
+        "collection": ns,
+        "namespace": ns,
+        "subject": subj,
+        "collection_name": coll,
+        "storage_path": _rel_to_resource(project_root, document.path),
+        "storage_kind": "single",
+        "file_yaml": document.text,
+    }
+    if isinstance(rec, QuestionItem):
+        q = strip_hydrate_fields(rec)
+        return {
+            **common,
+            "question": q.model_dump(mode="json"),
+            "question_display": expand_question_for_web(project_root, ns, q).model_dump(mode="json"),
+            "question_group": None,
+            "question_group_preview": None,
+        }
+    return {
+        **common,
+        "question": None,
+        "question_display": None,
+        "question_group": rec.model_dump(mode="json"),
+        "question_group_preview": _expand_group_record_for_web(project_root, ns, rec),
+    }
 
 
 def _text_has_diagram_fence(text: str | None) -> bool:
@@ -380,26 +373,22 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *,
     lib = library_root_for_namespace(project_root, ns)
     lib.mkdir(parents=True, exist_ok=True)
 
-    for ypath in iter_question_files(lib):
-        assert_within_project(project_root, ypath)
-        records = load_questions_from_yaml_file(ypath, ns)
-        for rec in records:
-            if rec.id != qid:
-                continue
-            data = _dump_record_yaml(body)
+    with bank_write_lock(lib):
+        found = find_bank_record(project_root, lib, qid)
+        data = _dump_record_yaml(body)
+        if found is not None:
             if create_only:
                 raise FileExistsError(qualified_id)
-            with ypath.open("w", encoding="utf-8") as f:
-                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-            return {"storage_path": _rel_to_resource(project_root, ypath)}
-
-    path = lib / f"{_safe_filename_id(qid)}.yaml"
-    if path.exists():
-        raise FileExistsError(str(path))
-    data = _dump_record_yaml(body)
-    with path.open("x" if create_only else "w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-    return {"storage_path": _rel_to_resource(project_root, path)}
+            document, index = found
+            path = document.path
+            data = replace_record_data(document, index, data)
+        else:
+            path = lib / f"{_safe_filename_id(qid)}.yaml"
+            if path.exists():
+                raise FileExistsError(str(path))
+        text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        write_text_atomic(path, text)
+        return {"storage_path": _rel_to_resource(project_root, path)}
 
 
 def save_question(project_root: Path, qualified_id: str, item: QuestionItem, *, create_only: bool = False) -> dict[str, str]:
@@ -409,39 +398,30 @@ def save_question(project_root: Path, qualified_id: str, item: QuestionItem, *, 
 def delete_question(project_root: Path, qualified_id: str, storage_path: str | None = None) -> None:
     """删除题目。若提供 ``storage_path``（列表/详情中的 resource 相对路径），只删该文件，避免仅靠题号在过大目录下误删。"""
     ns, qid = split_qualified_id(qualified_id)
-    if storage_path:
-        resource = (project_root / "resource").resolve()
-        rel = storage_path.strip().replace("\\", "/").lstrip("/")
-        ypath = (resource / rel).resolve()
-        assert_within_project(project_root, ypath)
-        lib = library_root_for_namespace(project_root, ns)
-        try:
-            ypath.resolve().relative_to(lib.resolve())
-        except ValueError as e:
-            raise ValueError("题目路径与当前题集不一致，已拒绝删除") from e
-        if not ypath.is_file():
-            raise FileNotFoundError(qualified_id)
-        records = load_questions_from_yaml_file(ypath, ns)
-        for rec in records:
-            if rec.id != qid:
-                continue
-            if len(records) == 1:
-                ypath.unlink()
-                return
-            raise ValueError("无法删除：文件含多条记录时请手动编辑 YAML")
-        raise FileNotFoundError(qualified_id)
     lib = library_root_for_namespace(project_root, ns)
-    for ypath in iter_question_files(lib):
-        assert_within_project(project_root, ypath)
-        records = load_questions_from_yaml_file(ypath, ns)
-        for rec in records:
-            if rec.id != qid:
-                continue
-            if len(records) == 1:
-                ypath.unlink()
-                return
+    with bank_write_lock(lib):
+        if storage_path:
+            resource = (project_root / "resource").resolve()
+            rel = storage_path.strip().replace("\\", "/").lstrip("/")
+            ypath = (resource / rel).resolve()
+            assert_within_project(project_root, ypath)
+            try:
+                ypath.relative_to(lib.resolve())
+            except ValueError as e:
+                raise ValueError("题目路径与当前题集不一致，已拒绝删除") from e
+            if not ypath.is_file():
+                raise FileNotFoundError(qualified_id)
+            document = read_bank_document(ypath)
+            if not any(rec.id == qid for rec in document.records):
+                raise FileNotFoundError(qualified_id)
+        else:
+            found = find_bank_record(project_root, lib, qid)
+            if found is None:
+                raise FileNotFoundError(qualified_id)
+            document, _index = found
+        if len(document.records) != 1:
             raise ValueError("无法删除：文件含多条记录时请手动编辑 YAML")
-    raise FileNotFoundError(qualified_id)
+        document.path.unlink()
 
 
 def import_merged_yaml(
