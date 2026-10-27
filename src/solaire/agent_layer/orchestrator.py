@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import sys
 from contextlib import suppress
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -49,8 +50,6 @@ from solaire.agent_layer.tools import analysis_tools
 from solaire.agent_layer.tool_executor import DraftToolContext, run_draft_tool_loop
 from solaire.agent_layer.utils import tool_calls_signature
 from solaire.agent_layer.llm.token_budget import estimate_messages_tokens
-from solaire.agent_layer.llm.anthropic_messages import AnthropicMessagesAdapter
-from solaire.agent_layer.llm.openai_responses import OpenAIResponsesAdapter
 from solaire.agent_layer.llm.prompt_cache import hash_messages_slice_sha12, hash_text_sha12, hash_tools_payload_sha12
 from solaire.agent_layer.prompts import (
     build_stable_system_prompt,
@@ -81,6 +80,12 @@ _LENGTH_REPEAT_CONTINUE_PROMPT = (
     "请跳过重复部分，直接从尚未完成的位置继续；不要复述已有内容。"
 )
 _LENGTH_REPEAT_LIMIT = 3
+
+
+def _is_loaded_adapter_instance(adapter: Any, module_name: str, class_name: str) -> bool:
+    module = sys.modules.get(module_name)
+    adapter_type = getattr(module, class_name, None) if module is not None else None
+    return isinstance(adapter_type, type) and isinstance(adapter, adapter_type)
 
 
 def _inject_page_context_into_latest_user_message(
@@ -536,13 +541,19 @@ async def run_agent_turn(
             return
 
         provider_system_shape = "dual_system_messages"
-        if isinstance(adapter, AnthropicMessagesAdapter):
+        is_anthropic_adapter = _is_loaded_adapter_instance(
+            adapter, "solaire.agent_layer.llm.anthropic_messages", "AnthropicMessagesAdapter"
+        )
+        is_openai_responses_adapter = _is_loaded_adapter_instance(
+            adapter, "solaire.agent_layer.llm.openai_responses", "OpenAIResponsesAdapter"
+        )
+        if is_anthropic_adapter:
             provider_system_shape = "merged_system"
-        elif isinstance(adapter, OpenAIResponsesAdapter):
+        elif is_openai_responses_adapter:
             provider_system_shape = "responses_instructions"
 
         instructions_sha12: str | None = None
-        if isinstance(adapter, OpenAIResponsesAdapter):
+        if is_openai_responses_adapter:
             instructions_sha12 = hash_text_sha12(f"{_sys_prefix}\n\n{_sys_suffix}")
 
         task_blk = build_task_plan_dynamic_block(session)
