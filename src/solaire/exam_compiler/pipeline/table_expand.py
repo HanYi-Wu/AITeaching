@@ -287,3 +287,27 @@ def expand_tables_for_docx_markdown(text: str) -> str:
         return "\n\n```{=openxml}\n" + table_to_openxml(match.group(1)) + "\n```\n\n"
 
     return TABLE_FENCE_RE.sub(repl, text)
+
+
+def separate_markdown_tables(text: str) -> str:
+    """Keep pipe tables separate from paragraphs and generated question labels."""
+    lines = text.split("\n")
+    output: list[str] = []
+    fence: str | None = None
+    for index, line in enumerate(lines):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence) and not line[marker.end():].strip():
+                fence = None
+        if fence is None and index + 1 < len(lines) and "|" in line and not line.startswith(("    ", "\t")):
+            cells = lines[index + 1].strip().strip("|").split("|")
+            if len(cells) >= 2 and all(re.fullmatch(r"\s*:?-+:?\s*", cell) for cell in cells):
+                if not output:
+                    output.extend(["", ""])
+                elif output[-1].strip():
+                    output.append("")
+        output.append(line)
+    return "\n".join(output)

@@ -14,7 +14,7 @@ from solaire.exam_compiler.pipeline.diagram_expand import (
 )
 from solaire.exam_compiler.pipeline.hydrate import HydratedQuestion
 from solaire.exam_compiler.pipeline.primebrush_expand import _svg_to_png, ensure_primebrush_block_files
-from solaire.exam_compiler.pipeline.table_expand import expand_tables_for_docx_markdown
+from solaire.exam_compiler.pipeline.table_expand import expand_tables_for_docx_markdown, separate_markdown_tables
 from solaire.exam_compiler.qualified_id import namespace_of_qualified
 
 _FENCE_RE = re.compile(r"```(primebrush|mermaid)\s*\n(.*?)```", re.DOTALL)
@@ -348,10 +348,10 @@ def _render_text(
     *,
     context: DocxResourceContext | None = None,
 ) -> str:
-    return _normalize_docx_math_macros(
+    return separate_markdown_tables(_normalize_docx_math_macros(
         _clean_latex_for_markdown(
             expand_tables_for_docx_markdown(
                 _materialize_visuals(text, hq, loaded, media_dir, context=context)
             )
         )
-    )
+    ))
