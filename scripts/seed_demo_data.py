@@ -11,7 +11,7 @@ from solaire.web import state
 from solaire.web.auth_service import hash_password, utc_now
 from solaire.web.exam_workspace_service import workspace_dir
 from solaire.web.paper_service import publish_online_paper, sync_paper_for_exam
-from solaire.web.platform_db import connect, default_platform_root, init_platform_db, row_to_dict
+from solaire.web.platform_db import connect, default_platform_root, ensure_teacher_default_folder, init_platform_db, row_to_dict
 from solaire.web.project_layout import ensure_project_layout
 
 
@@ -70,6 +70,8 @@ def upsert_user(
                 """,
                 (school_id, role, hash_password(password), display_name, must_change, now, user_id),
             )
+        if role == "teacher":
+            ensure_teacher_default_folder(con, user_id)
         updated = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     user = row_to_dict(updated)
     if user is None:

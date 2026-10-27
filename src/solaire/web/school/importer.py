@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from solaire.web.auth_service import hash_password, utc_now
-from solaire.web.platform_db import connect, init_platform_db, row_to_dict
+from solaire.web.platform_db import connect, ensure_teacher_default_folder, init_platform_db, row_to_dict
 from solaire.web.school.common import (
     _cell_text,
     _new_id,
@@ -110,6 +110,7 @@ def import_teachers(
                         [(_new_id(), user_id, subj) for subj in clean_subjects],
                     )
 
+            ensure_teacher_default_folder(con, user_id)
             row = con.execute(
                 """
                 SELECT id, school_id, role, username, display_name, email, status, created_at, updated_at

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schools (
@@ -319,15 +320,33 @@ def connect(root: Path) -> sqlite3.Connection:
 
 
 def init_platform_db(root: Path) -> None:
-    with connect(root) as con:
+    with closing(connect(root)) as con, con:
         previous_version = int(con.execute("PRAGMA user_version").fetchone()[0])
+        if previous_version == SCHEMA_VERSION:
+            return
+        if previous_version > SCHEMA_VERSION:
+            raise RuntimeError(f"Platform database version {previous_version} is newer than supported version {SCHEMA_VERSION}")
+        # SQLite serializes upgrades across processes; another opener may finish while we wait.
+        con.execute("BEGIN IMMEDIATE")
+        previous_version = int(con.execute("PRAGMA user_version").fetchone()[0])
+        if previous_version == SCHEMA_VERSION:
+            return
+        if previous_version > SCHEMA_VERSION:
+            raise RuntimeError(f"Platform database version {previous_version} is newer than supported version {SCHEMA_VERSION}")
         if 0 < previous_version < SCHEMA_VERSION:
             backup_dir = platform_db_path(root).parent / "backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            with sqlite3.connect(backup_dir / f"platform-before-v{SCHEMA_VERSION}-{stamp}.db") as backup:
-                con.backup(backup)
-        con.executescript(SCHEMA_SQL)
+            with closing(sqlite3.connect(backup_dir / f"platform-before-v{SCHEMA_VERSION}-{stamp}.db")) as backup:
+                with closing(connect(root)) as source:
+                    source.backup(backup)
+        # executescript commits pending transactions, so execute each complete DDL statement here.
+        statement = ""
+        for line in SCHEMA_SQL.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                con.execute(statement)
+                statement = ""
         _ensure_column(con, "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "users", "teacher_guide_step", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "users", "avatar_data_url", "TEXT")
@@ -345,7 +364,7 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "paper_records", "folder_id", "TEXT REFERENCES content_folders(id) ON DELETE SET NULL")
         if previous_version < 12:
             con.execute("DROP TRIGGER IF EXISTS publication_classes_one_active_per_paper")
-            con.executescript("""
+            con.execute("""
             CREATE TRIGGER publication_classes_one_active_per_paper
             BEFORE INSERT ON publication_classes
             WHEN EXISTS (
@@ -359,7 +378,7 @@ def init_platform_db(root: Path) -> None:
             BEGIN SELECT RAISE(ABORT, 'paper already published to class'); END;
             """)
             con.execute("DROP TRIGGER IF EXISTS one_active_attempt_per_paper_folder")
-            con.executescript("""
+            con.execute("""
             CREATE TRIGGER one_active_attempt_per_paper_folder
             BEFORE INSERT ON student_attempts
             WHEN EXISTS (
@@ -405,6 +424,19 @@ def init_platform_db(root: Path) -> None:
         """)
         _dedupe_active_publication_classes(con)
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def ensure_teacher_default_folder(con: sqlite3.Connection, teacher_id: str) -> None:
+    """Create a teacher's default folder in the same transaction as the account."""
+    con.execute(
+        """
+        INSERT OR IGNORE INTO content_folders
+          (id, owner_teacher_id, scope, parent_id, kind, name, created_at, updated_at)
+        SELECT 'paper-default-' || id, id, 'paper', NULL, 'category', '默认文件夹', created_at, updated_at
+        FROM users WHERE id = ? AND role = 'teacher'
+        """,
+        (teacher_id,),
+    )
 
 
 def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition: str) -> None:

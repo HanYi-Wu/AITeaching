@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from solaire.web.auth_service import hash_password, utc_now
-from solaire.web.platform_db import connect, init_platform_db, row_to_dict
+from solaire.web.platform_db import connect, ensure_teacher_default_folder, init_platform_db, row_to_dict
 from solaire.web.school.common import (
     _clean_status,
     _new_id,
@@ -48,6 +48,8 @@ def create_user(
             """,
             (user_id, school_id, role, clean_username, hash_password(password), clean_display_name, clean_email, now, now),
         )
+        if role == "teacher":
+            ensure_teacher_default_folder(con, user_id)
         row = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     user = row_to_dict(row)
     if user is None:
@@ -108,6 +110,7 @@ def create_teacher(
             """,
             (user_id, school_id, clean_username, hash_password(password), clean_display_name, clean_email, now, now),
         )
+        ensure_teacher_default_folder(con, user_id)
         if clean_subjects:
             con.executemany(
                 "INSERT INTO teacher_subjects (id, teacher_id, subject) VALUES (?, ?, ?)",
