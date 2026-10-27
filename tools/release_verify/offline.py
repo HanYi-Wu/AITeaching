@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import subprocess
 import tarfile
 import tomllib
@@ -162,12 +163,35 @@ def _verify_runtime(stream, expected, version, package_name, algorithm):
     }
     checked, languages = set(), set()
     metadata_ok = False
+    metadata_sites = set()
+    source_redirect = None
+    installed_package_members = set()
     with tarfile.open(fileobj=reader, mode="r|gz") as runtime:
         for member in runtime:
             name = safe_archive_name(member.name)
+            if name.endswith("/site-packages/solaire-source.pth"):
+                if source_redirect is not None:
+                    raise VerificationError("Duplicate runtime application source redirect")
+                if not member.isfile() or not re.fullmatch(
+                    r"lib/python\d+\.\d+/site-packages/solaire-source\.pth", name
+                ):
+                    raise VerificationError("Invalid runtime application source redirect path")
+                expected_redirect = b"../../../../src\n"
+                if (
+                    member.size != len(expected_redirect)
+                    or runtime.extractfile(member).read() != expected_redirect
+                ):
+                    raise VerificationError("Invalid runtime application source redirect contents")
+                source_redirect = name
+            _, site_separator, installed = name.partition("/site-packages/")
+            if (
+                site_separator
+                and (installed == "solaire" or installed.startswith("solaire/"))
+                and not member.isdir()
+            ):
+                installed_package_members.add(name)
             if not member.isfile():
                 continue
-            installed = name.split("/site-packages/", 1)[-1]
             if installed in python_files:
                 blob, size, _ = python_files[installed]
                 if (
@@ -187,18 +211,32 @@ def _verify_runtime(stream, expected, version, package_name, algorithm):
             if installed == f"{package_name}-{version}.dist-info/METADATA":
                 data = runtime.extractfile(member).read().decode("utf-8")
                 metadata_ok = f"Version: {version}\n" in data.replace("\r\n", "\n")
+                if metadata_ok:
+                    metadata_sites.add(name.removesuffix(installed))
     for _ in iter(lambda: reader.read(1024 * 1024), b""):
         pass
-    if checked != python_files.keys():
+    if source_redirect is not None:
+        if installed_package_members:
+            raise VerificationError(
+                "Installed runtime package shadows the application source redirect"
+            )
+        if source_redirect.removesuffix("solaire-source.pth") not in metadata_sites:
+            raise VerificationError(
+                "Runtime source redirect is outside the application package site"
+            )
+        source_layout = "application-source"
+    elif checked != python_files.keys():
         raise VerificationError(
             "Installed Python sources missing: "
             + ", ".join(sorted(python_files.keys() - checked)[:10])
         )
+    else:
+        source_layout = "installed-package"
     if languages != {"eng", "chi_sim"} or not metadata_ok:
         raise VerificationError(
             "Runtime package version or OCR language data is missing"
         )
-    return reader.hash.hexdigest(), len(checked)
+    return reader.hash.hexdigest(), len(checked), source_layout
 
 
 def verify_offline_bundle(
@@ -235,6 +273,7 @@ def verify_offline_bundle(
     seen, calculated = set(), {}
     manifest = None
     app_count = runtime_count = 0
+    runtime_source_layout = None
     stamp_raw = None
     frontend_outputs = None
     index_html = None
@@ -267,7 +306,7 @@ def verify_offline_bundle(
                     body, expected, algorithm
                 )
             elif name == "runtime.tar.gz":
-                calculated[name], runtime_count = _verify_runtime(
+                calculated[name], runtime_count, runtime_source_layout = _verify_runtime(
                     source, expected, version, package_name, algorithm
                 )
             elif name in ancillary:
@@ -393,6 +432,8 @@ def verify_offline_bundle(
         "bytes": bundle.stat().st_size,
         "app_sources_verified": app_count,
         "installed_python_sources_verified": runtime_count,
+        "runtime_python_source_layout": runtime_source_layout,
+        "runtime_source_redirect_verified": runtime_source_layout == "application-source",
         "ocr_languages": ["eng", "chi_sim"],
         "frontend_provenance": frontend_provenance,
     }

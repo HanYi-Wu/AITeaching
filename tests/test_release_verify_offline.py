@@ -1,4 +1,4 @@
-"""Offline verification follows both source copies and nested integrity hashes."""
+"""Offline verification checks application sources and either runtime layout."""
 
 import hashlib
 import io
@@ -22,7 +22,7 @@ def _tar(files):
     return buffer.getvalue()
 
 
-def _package(tmp_path, *, tamper=None):
+def _package(tmp_path, *, tamper=None, source_redirect=False):
     repo = tmp_path / "repo"
     repo.mkdir()
     files = {
@@ -81,6 +81,27 @@ def _package(tmp_path, *, tamper=None):
             for lang in ("eng", "chi_sim")
         }
     )
+    redirect_name = "lib/python3.12/site-packages/solaire-source.pth"
+    if source_redirect:
+        runtime = {
+            name: body for name, body in runtime.items()
+            if "/site-packages/solaire/" not in name
+        }
+        runtime[redirect_name] = b"../../../../src\n"
+    if tamper == "missing-redirect":
+        runtime.pop(redirect_name)
+    elif tamper == "redirect-target":
+        runtime[redirect_name] = b"../../../../old-src\n"
+    elif tamper == "mixed-runtime":
+        runtime["lib/python3.12/site-packages/solaire/local_override.py"] = b"pass\n"
+    elif tamper == "duplicate-redirect":
+        runtime["lib/python3.13/site-packages/solaire-source.pth"] = runtime[redirect_name]
+    elif tamper == "misplaced-redirect":
+        runtime["lib/python3.13/site-packages/solaire-source.pth"] = runtime.pop(redirect_name)
+    elif tamper == "metadata":
+        runtime.pop("lib/python3.12/site-packages/solaire_education-1.6.7.dist-info/METADATA")
+    elif tamper == "ocr":
+        runtime.pop("share/tessdata/chi_sim.traineddata")
     if tamper == "runtime":
         runtime["lib/python3.12/site-packages/solaire/web/app.py"] = (
             b"app = 'wrong version'\n"
@@ -120,10 +141,40 @@ def test_offline_app_and_installed_runtime_both_match_commit(tmp_path):
     result = verify_offline_bundle(bundle, repo)
     assert result["app_sources_verified"] == 5
     assert result["installed_python_sources_verified"] == 2
+    assert result["runtime_python_source_layout"] == "installed-package"
+    assert result["runtime_source_redirect_verified"] is False
 
 
 @pytest.mark.parametrize("tamper", ["runtime", "app", "manifest"])
 def test_consistently_rehashed_but_wrong_code_or_version_is_rejected(tmp_path, tamper):
     bundle, repo = _package(tmp_path, tamper=tamper)
     with pytest.raises(VerificationError):
+        verify_offline_bundle(bundle, repo)
+
+
+def test_offline_runtime_imports_verified_application_sources(tmp_path):
+    bundle, repo = _package(tmp_path, source_redirect=True)
+    result = verify_offline_bundle(bundle, repo)
+    assert result["app_sources_verified"] == 5
+    assert result["installed_python_sources_verified"] == 0
+    assert result["runtime_python_source_layout"] == "application-source"
+    assert result["runtime_source_redirect_verified"] is True
+
+
+@pytest.mark.parametrize(
+    ("tamper", "message"),
+    [
+        ("app", "Source .* mismatch"),
+        ("missing-redirect", "Installed Python sources missing"),
+        ("redirect-target", "redirect contents"),
+        ("mixed-runtime", "shadows"),
+        ("duplicate-redirect", "Duplicate runtime"),
+        ("misplaced-redirect", "outside the application package site"),
+        ("metadata", "outside the application package site"),
+        ("ocr", "OCR language data is missing"),
+    ],
+)
+def test_source_redirect_cannot_bypass_code_or_dependency_checks(tmp_path, tamper, message):
+    bundle, repo = _package(tmp_path, source_redirect=True, tamper=tamper)
+    with pytest.raises(VerificationError, match=message):
         verify_offline_bundle(bundle, repo)
