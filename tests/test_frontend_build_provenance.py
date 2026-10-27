@@ -6,8 +6,11 @@ import copy
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tarfile
 
 import pytest
@@ -202,78 +205,151 @@ def _build_offline_bundle(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="requires Windows cmd.exe and PowerShell to execute scripts/build.ps1",
+)
 def test_build_ps1_stops_on_npm_ci_and_build_failure(tmp_path: Path):
-    """Simulate npm failure and assert build.ps1 immediately stops with non-zero exit code."""
-    fake_web = tmp_path / "web"
-    fake_web.mkdir(parents=True)
-    fake_dist = fake_web / "dist"
-    fake_dist.mkdir()
-    (fake_dist / "old-marker.txt").write_text("old dist", encoding="utf-8")
+    """Exercise the production build script with fake external commands."""
+    powershell = shutil.which("powershell") or shutil.which("powershell.exe")
+    if not powershell or not shutil.which("cmd.exe"):
+        pytest.skip("requires Windows PowerShell and cmd.exe")
 
-    # A mock script replicating the build.ps1 error handling logic for npm
-    script = tmp_path / "test_npm_stop.ps1"
-    script.write_text(
-        """
-param([string]$FailStep)
-$ErrorActionPreference = "Stop"
-$webDir = Split-Path $PSScriptRoot -Parent
-Push-Location (Join-Path $PSScriptRoot "web")
-try {
-  if ($FailStep -eq "ci") {
-    cmd.exe /c "exit 42"
-  } else {
-    cmd.exe /c "exit 0"
-  }
-  $code = $LASTEXITCODE
-  if ($code -ne 0) {
-    Write-Host "npm ci failed: $code" -ForegroundColor Red
-    exit $code
-  }
+    repo_root = tmp_path / "build fixture"
+    scripts_dir = repo_root / "scripts"
+    web_dir = repo_root / "web"
+    dist_dir = web_dir / "dist"
+    assets_dir = dist_dir / "assets"
+    fake_bin = tmp_path / "fake commands"
+    scripts_dir.mkdir(parents=True)
+    assets_dir.mkdir(parents=True)
+    fake_bin.mkdir()
 
-  if ($FailStep -eq "build") {
-    cmd.exe /c "exit 84"
-  } else {
-    cmd.exe /c "exit 0"
-  }
-  $code = $LASTEXITCODE
-  if ($code -ne 0) {
-    Write-Host "npm run build failed: $code" -ForegroundColor Red
-    exit $code
-  }
-} finally {
-  Pop-Location
-}
-
-# Next packaging step should never be reached on failure
-Set-Content (Join-Path $PSScriptRoot "reached_packaging.txt") "packaged"
-exit 0
-""",
+    source_root = Path(__file__).resolve().parents[1]
+    shutil.copy2(source_root / "scripts" / "build.ps1", scripts_dir / "build.ps1")
+    shutil.copy2(
+        source_root / "scripts" / "build_stamp.py", scripts_dir / "build_stamp.py"
+    )
+    (web_dir / "package.json").write_text(
+        '{"name":"build-script-fixture","version":"1.0.0"}\n', encoding="utf-8"
+    )
+    (web_dir / "src").mkdir()
+    (web_dir / "src" / "App.tsx").write_text("export const App = 1;\n", encoding="utf-8")
+    (dist_dir / "index.html").write_text(
+        '<html><body><script src="/assets/app.js"></script></body></html>\n',
         encoding="utf-8",
     )
+    (assets_dir / "app.js").write_text("console.log('fixture');\n", encoding="utf-8")
 
-    # 1. npm ci fails
-    proc_ci = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-FailStep", "ci"],
-        capture_output=True,
+    subprocess.run(["git", "init", "-q", str(repo_root)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo_root), "config", "core.autocrlf", "false"], check=True
     )
-    assert proc_ci.returncode == 42
-    assert not (tmp_path / "reached_packaging.txt").exists()
+    subprocess.run(["git", "-C", str(repo_root), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "build script fixture",
+        ],
+        check=True,
+    )
 
-    # 2. npm build fails
-    proc_build = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-FailStep", "build"],
-        capture_output=True,
+    npm_log = tmp_path / "npm calls.txt"
+    verifier_log = tmp_path / "verifier calls.txt"
+    (fake_bin / "npm.cmd").write_text(
+        "\r\n".join(
+            [
+                "@echo off",
+                '>>"%FAKE_NPM_LOG%" echo %*',
+                'if /I "%FAKE_NPM_MODE%"=="ci-fail" if /I "%~1"=="ci" exit /b 42',
+                'if /I "%FAKE_NPM_MODE%"=="build-fail" if /I "%~1"=="run" if /I "%~2"=="build" exit /b 84',
+                'if /I "%~1"=="run" if /I "%~2"=="build" (',
+                '  "%TEST_PYTHON%" "%FAKE_PROJECT_ROOT%\\scripts\\build_stamp.py" generate --web-dir "%FAKE_PROJECT_ROOT%\\web" --repo-root "%FAKE_PROJECT_ROOT%" --output "%FAKE_PROJECT_ROOT%\\web\\dist\\build-stamp.json"',
+                "  if errorlevel 1 exit /b 1",
+                ")",
+                "exit /b 0",
+                "",
+            ]
+        ),
+        encoding="ascii",
     )
-    assert proc_build.returncode == 84
-    assert not (tmp_path / "reached_packaging.txt").exists()
+    (fake_bin / "py.cmd").write_text(
+        "\r\n".join(
+            [
+                "@echo off",
+                '>>"%FAKE_VERIFIER_LOG%" echo %*',
+                'if /I "%~1"=="-3" goto without_version',
+                '"%TEST_PYTHON%" %*',
+                "exit /b %errorlevel%",
+                ":without_version",
+                "shift",
+                '"%TEST_PYTHON%" %1 %2 %3 %4 %5 %6 %7 %8 %9',
+                "exit /b %errorlevel%",
+                "",
+            ]
+        ),
+        encoding="ascii",
+    )
 
-    # 3. both succeed
-    proc_ok = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-FailStep", "none"],
-        capture_output=True,
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": str(fake_bin) + os.pathsep + env.get("PATH", ""),
+            "FAKE_NPM_LOG": str(npm_log),
+            "FAKE_VERIFIER_LOG": str(verifier_log),
+            "FAKE_PROJECT_ROOT": str(repo_root),
+            "TEST_PYTHON": sys.executable,
+        }
     )
-    assert proc_ok.returncode == 0
-    assert (tmp_path / "reached_packaging.txt").exists()
+
+    def run_build(mode: str) -> subprocess.CompletedProcess:
+        npm_log.write_text("", encoding="utf-8")
+        verifier_log.write_text("", encoding="utf-8")
+        call_env = env | {"FAKE_NPM_MODE": mode}
+        return subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(scripts_dir / "build.ps1"),
+                "-SkipRust",
+                "-SkipPythonRuntime",
+                "-SkipTauri",
+            ],
+            cwd=repo_root,
+            env=call_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+
+    proc_ci = run_build("ci-fail")
+    assert proc_ci.returncode == 42, proc_ci.stdout + proc_ci.stderr
+    assert npm_log.read_text(encoding="utf-8").splitlines() == ["ci"]
+    assert verifier_log.read_text(encoding="utf-8") == ""
+
+    proc_build = run_build("build-fail")
+    assert proc_build.returncode == 84, proc_build.stdout + proc_build.stderr
+    assert npm_log.read_text(encoding="utf-8").splitlines() == ["ci", "run build"]
+    assert verifier_log.read_text(encoding="utf-8") == ""
+
+    proc_ok = run_build("success")
+    assert proc_ok.returncode == 0, proc_ok.stdout + proc_ok.stderr
+    assert npm_log.read_text(encoding="utf-8").splitlines() == ["ci", "run build"]
+    assert "verify" in verifier_log.read_text(encoding="utf-8")
+    assert "Build stamp verified:" in proc_ok.stdout
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import subprocess
 import tracemalloc
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -454,7 +455,9 @@ def test_user_perspective_file_reading_journeys(tmp_path: Path) -> None:
     assert trav_res.status == "failed"
 
 
-def test_user_perspective_pdf_upload_and_reading_flow(tmp_path: Path) -> None:
+def test_user_perspective_pdf_upload_and_reading_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Simulate real end-to-end user journey:
 
     - User uploads PDF via /api/agent/upload
@@ -468,7 +471,7 @@ def test_user_perspective_pdf_upload_and_reading_flow(tmp_path: Path) -> None:
     from solaire.web.app import app
     from solaire.web import state
 
-    state.get_content_root = lambda: tmp_path
+    monkeypatch.setattr(state, "get_content_root", lambda: tmp_path)
 
     # Case A: Normal 5-page PDF upload and agent reading
     pdf_stream = BytesIO()
@@ -479,53 +482,53 @@ def test_user_perspective_pdf_upload_and_reading_flow(tmp_path: Path) -> None:
         c.showPage()
     c.save()
 
-    client = TestClient(app)
-    up_res = client.post(
-        "/api/agent/upload",
-        files={"file": ("syllabus.pdf", pdf_stream.getvalue(), "application/pdf")},
-        data={"session_id": "sess_user_flow"},
-    )
-    assert up_res.status_code == 200
-    uploaded_rel = up_res.json()["path"]
+    with closing(TestClient(app)) as client:
+        up_res = client.post(
+            "/api/agent/upload",
+            files={"file": ("syllabus.pdf", pdf_stream.getvalue(), "application/pdf")},
+            data={"session_id": "sess_user_flow"},
+        )
+        assert up_res.status_code == 200
+        uploaded_rel = up_res.json()["path"]
 
-    ctx = InvocationContext(project_root=tmp_path, session_id="sess_user_flow")
-    agent_read = invoke_registered_tool("file.read", {"path": uploaded_rel}, ctx)
-    assert agent_read.status == "succeeded"
-    assert agent_read.data["kind"] == "document"
-    assert agent_read.data["truncated"] is False
-    assert agent_read.data["metadata"]["total_pages"] == 5
-    assert agent_read.data["metadata"]["pages"] == 5
-    assert "Lecture 1" in agent_read.data["content"]
-    assert "Lecture 5" in agent_read.data["content"]
+        ctx = InvocationContext(project_root=tmp_path, session_id="sess_user_flow")
+        agent_read = invoke_registered_tool("file.read", {"path": uploaded_rel}, ctx)
+        assert agent_read.status == "succeeded"
+        assert agent_read.data["kind"] == "document"
+        assert agent_read.data["truncated"] is False
+        assert agent_read.data["metadata"]["total_pages"] == 5
+        assert agent_read.data["metadata"]["pages"] == 5
+        assert "Lecture 1" in agent_read.data["content"]
+        assert "Lecture 5" in agent_read.data["content"]
 
-    # Case B: 100-page textbook upload with page budget protection
-    heavy_stream = BytesIO()
-    c2 = canvas.Canvas(heavy_stream)
-    for i in range(1, 101):
-        c2.drawString(100, 700, f"Textbook Chapter {i}")
-        c2.showPage()
-    c2.save()
+        # Case B: 100-page textbook upload with page budget protection
+        heavy_stream = BytesIO()
+        c2 = canvas.Canvas(heavy_stream)
+        for i in range(1, 101):
+            c2.drawString(100, 700, f"Textbook Chapter {i}")
+            c2.showPage()
+        c2.save()
 
-    up_heavy = client.post(
-        "/api/agent/upload",
-        files={"file": ("textbook.pdf", heavy_stream.getvalue(), "application/pdf")},
-        data={"session_id": "sess_heavy_flow"},
-    )
-    assert up_heavy.status_code == 200
-    heavy_rel = up_heavy.json()["path"]
+        up_heavy = client.post(
+            "/api/agent/upload",
+            files={"file": ("textbook.pdf", heavy_stream.getvalue(), "application/pdf")},
+            data={"session_id": "sess_heavy_flow"},
+        )
+        assert up_heavy.status_code == 200
+        heavy_rel = up_heavy.json()["path"]
 
-    ctx_heavy = InvocationContext(project_root=tmp_path, session_id="sess_heavy_flow")
-    heavy_read = invoke_registered_tool("file.read", {"path": heavy_rel}, ctx_heavy)
-    assert heavy_read.status == "succeeded"
-    assert heavy_read.data["truncated"] is True
-    assert heavy_read.data["metadata"]["total_pages"] == 100
-    assert heavy_read.data["metadata"]["pages"] == MAX_PDF_PAGES
-    assert heavy_read.data["metadata"]["truncation_reason"] == "page_limit"
+        ctx_heavy = InvocationContext(project_root=tmp_path, session_id="sess_heavy_flow")
+        heavy_read = invoke_registered_tool("file.read", {"path": heavy_rel}, ctx_heavy)
+        assert heavy_read.status == "succeeded"
+        assert heavy_read.data["truncated"] is True
+        assert heavy_read.data["metadata"]["total_pages"] == 100
+        assert heavy_read.data["metadata"]["pages"] == MAX_PDF_PAGES
+        assert heavy_read.data["metadata"]["truncation_reason"] == "page_limit"
 
-    # Case C: Corrupt PDF file uploaded by mistake
-    fake_pdf = tmp_path / "resource" / "corrupted.pdf"
-    fake_pdf.write_bytes(b"This is not a real PDF file header")
-    corrupt_read = invoke_registered_tool("file.read", {"path": "resource/corrupted.pdf"}, ctx)
-    assert corrupt_read.status == "failed"
-    assert corrupt_read.error_code == "extract_failed"
-    assert "建议" in corrupt_read.data.get("suggestion", "") or "损坏" in corrupt_read.error_message
+        # Case C: Corrupt PDF file uploaded by mistake
+        fake_pdf = tmp_path / "resource" / "corrupted.pdf"
+        fake_pdf.write_bytes(b"This is not a real PDF file header")
+        corrupt_read = invoke_registered_tool("file.read", {"path": "resource/corrupted.pdf"}, ctx)
+        assert corrupt_read.status == "failed"
+        assert corrupt_read.error_code == "extract_failed"
+        assert "建议" in corrupt_read.data.get("suggestion", "") or "损坏" in corrupt_read.error_message
