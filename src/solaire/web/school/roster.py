@@ -10,8 +10,11 @@ from solaire.web.platform_db import connect, init_platform_db, row_to_dict
 from solaire.web.school.common import (
     _clean_status,
     _contains_query,
+    _fetch_sql_page,
     _new_id,
     _page,
+    _register_school_query_functions,
+    _sql_search_clause,
     _student_with_account,
 )
 
@@ -129,21 +132,58 @@ def query_students(
     page: int = 1,
     page_size: int = 10,
 ) -> dict[str, Any]:
-    students = list_students(root, school_id=school_id, class_id=class_id)
+    init_platform_db(root)
+    params: list[object] = [school_id, school_id]
+    class_filter = ""
+    if class_id:
+        class_filter = "AND EXISTS (SELECT 1 FROM class_students cs_filter WHERE cs_filter.student_id = s.id AND cs_filter.class_id = ?)"
+        params.append(class_id)
+    filters = ""
+    filter_params: list[object] = []
     if status and status != "all":
-        students = [student for student in students if str(student.get("status") or "") == status]
-    if q:
-        students = [
-            student
-            for student in students
-            if _contains_query(
-                student,
-                q,
-                ["student_no", "display_name", "email", "account_username", "class_names", "status"],
-            )
-        ]
-    result = _page(students, page=page, page_size=page_size)
-    return {"students": result.pop("items"), **result}
+        filters += " AND status = ?"
+        filter_params.append(status)
+    search, search_params = _sql_search_clause(
+        q, "student_no, display_name, email, account_username, class_names, status"
+    )
+    filters += search
+    filter_params.extend(search_params)
+    student_ctes = f"""
+        class_names AS (
+            SELECT cs.student_id, GROUP_CONCAT(c.name, ', ') AS class_names
+            FROM class_students cs
+            JOIN students scoped_students ON scoped_students.id = cs.student_id AND scoped_students.school_id = ?
+            JOIN classes c ON c.id = cs.class_id
+            GROUP BY cs.student_id
+        ),
+        student_rows AS (
+            SELECT s.*, u.username AS account_username, class_names.class_names
+            FROM students s
+            LEFT JOIN users u ON u.id = s.user_id
+            LEFT JOIN class_names ON class_names.student_id = s.id
+            WHERE s.school_id = ? {class_filter}
+        )
+    """
+    query_params = (*params, *filter_params)
+    with connect(root) as con:
+        _register_school_query_functions(con)
+        students, total, clean_page, clean_page_size, total_pages = _fetch_sql_page(
+            con,
+            ctes=student_ctes,
+            rows_sql=f"SELECT * FROM student_rows WHERE 1 = 1{filters}",
+            params=query_params,
+            order_by="created_at DESC",
+            identity_column="id",
+            page=page,
+            page_size=page_size,
+        )
+    return {
+        "students": students,
+        "total": total,
+        "page": clean_page,
+        "page_size": clean_page_size,
+        "total_pages": total_pages,
+    }
 
 
 def update_student(
@@ -245,9 +285,11 @@ def list_teacher_class_assignments(
     page_size: int = 10,
 ) -> dict[str, Any]:
     init_platform_db(root)
-    with connect(root) as con:
-        rows = con.execute(
-            """
+    search, search_params = _sql_search_clause(
+        q, "teacher_username, teacher_name, teacher_status, class_name, class_grade, subject"
+    )
+    assignment_ctes = """
+        assignment_rows AS (
             SELECT
               tca.teacher_id,
               tca.class_id,
@@ -261,23 +303,28 @@ def list_teacher_class_assignments(
             JOIN users u ON u.id = tca.teacher_id
             JOIN classes c ON c.id = tca.class_id
             WHERE u.school_id = ? AND c.school_id = ?
-            ORDER BY u.display_name, c.grade, c.name, tca.subject
-            """,
-            (school_id, school_id),
-        ).fetchall()
-    assignments = [row_to_dict(row) or {} for row in rows]
-    if q:
-        assignments = [
-            assignment
-            for assignment in assignments
-            if _contains_query(
-                assignment,
-                q,
-                ["teacher_username", "teacher_name", "teacher_status", "class_name", "class_grade", "subject"],
-            )
-        ]
-    result = _page(assignments, page=page, page_size=page_size)
-    return {"assignments": result.pop("items"), **result}
+        )
+    """
+    params = (school_id, school_id, *search_params)
+    with connect(root) as con:
+        _register_school_query_functions(con)
+        assignments, total, clean_page, clean_page_size, total_pages = _fetch_sql_page(
+            con,
+            ctes=assignment_ctes,
+            rows_sql=f"SELECT * FROM assignment_rows WHERE 1 = 1{search}",
+            params=params,
+            order_by="teacher_name, class_grade, class_name, subject",
+            identity_column="teacher_id",
+            page=page,
+            page_size=page_size,
+        )
+    return {
+        "assignments": assignments,
+        "total": total,
+        "page": clean_page,
+        "page_size": clean_page_size,
+        "total_pages": total_pages,
+    }
 
 
 def remove_teacher_class_assignment(
