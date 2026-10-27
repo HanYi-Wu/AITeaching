@@ -30,7 +30,13 @@ from solaire.agent_layer.plan_document import (
     normalize_rel_path,
     validate_agent_plan_rel_path,
 )
-from solaire.agent_layer.task_tracker import set_plan
+from solaire.agent_layer.task_tracker import (
+    build_task_plan_dynamic_block,
+    handle_confirmation_resume,
+    resolve_plan_and_execution_path,
+    set_plan,
+    verify_authoritative_actor_and_policy,
+)
 from solaire.agent_layer.registry import (
     HOST_CONTROL_TOOL_NAMES,
     invoke_registered_tool,
@@ -53,7 +59,14 @@ from solaire.agent_layer.prompts import (
     format_page_context_brief,
     whitelist_project_ctx_for_prompt,
 )
-from solaire.agent_layer.task_tracker import build_task_plan_dynamic_block
+# task_tracker imports above
+
+from solaire.agent_layer.stream_dispatcher import (
+    StreamDispatcher,
+    dispatch_agent_turn_sse,
+    format_sse_comment,
+    format_sse_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -270,50 +283,7 @@ async def _resolve_plan_and_exec_path(
     emit: EmitFn,
 ) -> bool:
     """Resolve plan clear/execution paths from project_ctx. Returns True if should abort turn."""
-    raw_clear = project_ctx.get("_clear_pending_plan_path")
-    if isinstance(raw_clear, str) and raw_clear.strip():
-        cnorm = normalize_rel_path(raw_clear.strip())
-        pend = session.pending_plan_path
-        if pend and normalize_rel_path(pend) == cnorm:
-            session.pending_plan_path = None
-            session.execution_plan_path = None
-            session.touch()
-
-    raw_exec = project_ctx.get("_execution_plan_path")
-    if not (isinstance(raw_exec, str) and raw_exec.strip()):
-        return False
-
-    ep = normalize_rel_path(raw_exec.strip())
-    if not ep:
-        await emit("error", {"code": "invalid_plan", "message": "执行计划路径无效。"})
-        save_session(project_root, session)
-        await emit("done", {"usage": {}})
-        return True
-    ok_plan, plan_err = validate_agent_plan_rel_path(project_root, ep)
-    if not ok_plan:
-        await emit("error", {"code": "invalid_plan", "message": plan_err})
-        save_session(project_root, session)
-        await emit("done", {"usage": {}})
-        return True
-    pend = session.pending_plan_path
-    if pend is None or normalize_rel_path(pend) != ep:
-        await emit(
-            "error",
-            {
-                "code": "plan_not_approved",
-                "message": "请先在对话中生成计划，并在界面点击「执行」后再运行；若计划已变更请重新生成。",
-            },
-        )
-        save_session(project_root, session)
-        await emit("done", {"usage": {}})
-        return True
-    session.execution_plan_path = ep
-    steps = load_plan_steps_from_rel_path(project_root, ep)
-    if steps:
-        set_plan(session, steps)
-        await emit("task_update", {"steps": list(session.task_plan)})
-    session.touch()
-    return False
+    return await resolve_plan_and_execution_path(project_root, session, project_ctx, emit)
 
 
 async def _handle_confirmation_resume(
@@ -326,82 +296,14 @@ async def _handle_confirmation_resume(
     emit: EmitFn,
 ) -> str | None:
     """Handle confirmation resume. Returns user_message override (or None on early exit)."""
-    confirm_accepted = confirm_accepted is True
-    pending = session.pending_confirmations.pop(confirm_action_id, None)
-    if pending is None:
-        await emit("error", {"code": "unknown_action", "message": "无效或已过期的确认项"})
-        save_session(project_root, session)
-        await emit("done", {"usage": {}})
-        return None
-    if confirm_accepted is False:
-        await emit("text_delta", {"text": "已取消该操作。"})
-        session.draft_assistant = None
-        session.draft_tool_results = []
-        save_session(project_root, session)
-        await emit("done", {"usage": {}})
-        return None
-    register_approval(session, ctx, pending.tool_name, pending.arguments)
-    ran_ok = True
-    if pending.tool_name == "analysis.save_script" and pending.arguments.get("code"):
-        ok, err = analysis_tools.validate_python_syntax(str(pending.arguments["code"]))
-        if not ok:
-            ran_ok = False
-            session.draft_tool_results.append(
-                {
-                    "tool_call_id": pending.tool_call_id,
-                    "name": pending.tool_name,
-                    "content": json.dumps(
-                        {"tool": pending.tool_name, "error": err},
-                        ensure_ascii=False,
-                    ),
-                }
-            )
-            append_audit(
-                project_root,
-                session_id=session.session_id,
-                tool_name=pending.tool_name,
-                status="failed",
-                detail={"confirmed": True, "syntax": err},
-            )
-            await emit(
-                "tool_result",
-                {
-                    "tool_name": pending.tool_name,
-                    "status": "failed",
-                    "summary": err[:200],
-                },
-            )
-    if ran_ok:
-        tr = invoke_registered_tool(pending.tool_name, pending.arguments, ctx)
-        payload = tr.data if tr.status == "succeeded" else {**tr.data, "error": tr.error_message, "error_code": tr.error_code}
-        session.draft_tool_results.append(
-            {
-                "tool_call_id": pending.tool_call_id,
-                "name": pending.tool_name,
-                "content": tool_result_to_content(pending.tool_name, payload),
-            }
-        )
-        append_audit(
-            project_root,
-            session_id=session.session_id,
-            tool_name=pending.tool_name,
-            status=tr.status,
-            detail={"confirmed": True},
-        )
-        await emit(
-            "tool_result",
-            {
-                "tool_name": pending.tool_name,
-                "status": tr.status,
-                "summary": summarize_tool_result(pending.tool_name, payload),
-            },
-        )
-        if ctx.session and pending.tool_name in (
-            "agent.set_task_plan",
-            "agent.update_task_step",
-        ):
-            await emit("task_update", {"steps": list(ctx.session.task_plan)})
-    return ""
+    return await handle_confirmation_resume(
+        project_root=project_root,
+        session=session,
+        ctx=ctx,
+        confirm_action_id=confirm_action_id,
+        confirm_accepted=confirm_accepted,
+        emit=emit,
+    )
 
 
 async def run_agent_turn(
@@ -433,6 +335,7 @@ async def run_agent_turn(
         public_mode=bool(project_ctx.get("_public_mode")),
         host_control_authorized=bool(project_ctx.get("_host_control_authorized", True)),
         platform_user=project_ctx.get("_platform_user") if isinstance(project_ctx.get("_platform_user"), dict) else None,
+        platform_root=project_ctx.get("_platform_root"),
     )
     cm = ContextManager(include_subtask_tool=True)
     full_ctx = {**project_ctx, "_project_root": project_root}
@@ -453,6 +356,14 @@ async def run_agent_turn(
     skill_guidance = sk.prompt_fragment if sk else None
     skill_catalog = skills_mod.build_skill_catalog(project_root)
     page_context_brief = format_page_context_brief(page_ctx_dict if page_ctx_dict else None)
+
+    try:
+        verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=False)
+    except Exception as e:
+        await emit("error", {"code": "user_inactive", "message": f"权限复核未通过: {e}"})
+        save_session(project_root, session)
+        await emit("done", {"usage": {}})
+        return
 
     if await _resolve_plan_and_exec_path(project_root, session, project_ctx, emit):
         return
@@ -598,6 +509,16 @@ async def run_agent_turn(
 
         prompt_token_est = estimate_context_prompt_tokens(settings.provider, settings.base_url, api_messages)
         peak_context_est = max(peak_context_est, prompt_token_est)
+
+        try:
+            verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=True)
+        except Exception as e:
+            err_msg = str(e)
+            code = "school_ai_disabled" if ("School AI" in err_msg or "AI API" in err_msg) else "user_inactive"
+            await emit("error", {"code": code, "message": f"策略复核未通过: {err_msg}"})
+            save_session(project_root, session)
+            await emit("done", _pack_done_event(settings, usage_acc, peak_context_est))
+            return
 
         try:
             full_content, streamed_tools, udelta, round_reasoning, finish_reason = await _llm_round_call(
@@ -830,48 +751,20 @@ async def run_agent_turn(
 SSE_HEARTBEAT_SECONDS = 10
 
 
-async def iter_agent_turn_sse(
+def iter_agent_turn_sse(
     project_root: Path,
     session: SessionState,
     **kwargs: Any,
 ) -> AsyncIterator[str]:
     """Stream SSE as events are produced."""
-    import json as _json
-
-    queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
-
-    async def emit(ev: str, data: dict[str, Any]) -> None:
-        await queue.put((ev, data))
-
     emit_kw = kwargs.pop("emit", None)
     if emit_kw is not None:
         raise ValueError("emit is reserved")
 
-    async def runner() -> None:
-        try:
-            await run_agent_turn(project_root, session, emit=emit, **kwargs)
-        except Exception as e:
-            await emit("error", {"code": "internal", "message": str(e)})
-            await emit("done", {"usage": {}})
-        finally:
-            await queue.put(None)
-
-    task = asyncio.create_task(runner())
-    try:
-        while True:
-            try:
-                item = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
-            except TimeoutError:
-                # SSE comments keep proxies alive without adding chat text/tokens.
-                yield ": keepalive\n\n"
-                continue
-            if item is None:
-                break
-            ev, data = item
-            yield f"event: {ev}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
-        await task
-    finally:
-        if not task.done():
-            task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+    return dispatch_agent_turn_sse(
+        project_root,
+        session,
+        run_turn_fn=lambda *a, **kw: run_agent_turn(*a, **kw),
+        heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
+        **kwargs,
+    )

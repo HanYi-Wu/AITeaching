@@ -3,9 +3,10 @@ from pathlib import Path
 import pytest
 
 from solaire.agent_layer import orchestrator
+from solaire.agent_layer.models import SessionState
 
 
-def test_idle_stream_heartbeats_without_restarting_turn_and_cancels_on_disconnect(monkeypatch):
+def test_idle_stream_heartbeats_without_restarting_turn_and_cancels_on_disconnect(monkeypatch, tmp_path):
     async def check():
         started = []
         stopped = asyncio.Event()
@@ -19,7 +20,7 @@ def test_idle_stream_heartbeats_without_restarting_turn_and_cancels_on_disconnec
 
         monkeypatch.setattr(orchestrator, "run_agent_turn", run)
         monkeypatch.setattr(orchestrator, "SSE_HEARTBEAT_SECONDS", 0.01, raising=False)
-        stream = orchestrator.iter_agent_turn_sse(Path('.'), None)
+        stream = orchestrator.iter_agent_turn_sse(tmp_path, SessionState(session_id="idle-test"))
         try:
             assert await asyncio.wait_for(anext(stream), 0.3) == ": keepalive\n\n"
             assert await asyncio.wait_for(anext(stream), 0.3) == ": keepalive\n\n"
@@ -31,13 +32,13 @@ def test_idle_stream_heartbeats_without_restarting_turn_and_cancels_on_disconnec
     asyncio.run(check())
 
 
-def test_stream_preserves_events_and_finishes(monkeypatch):
+def test_stream_preserves_events_and_finishes(monkeypatch, tmp_path):
     async def run(*args, emit, **kwargs):
         await emit("done", {"usage": {}})
 
     async def check():
         monkeypatch.setattr(orchestrator, "run_agent_turn", run)
-        return [chunk async for chunk in orchestrator.iter_agent_turn_sse(Path('.'), None)]
+        return [chunk async for chunk in orchestrator.iter_agent_turn_sse(tmp_path, SessionState(session_id="done-test"))]
 
     assert asyncio.run(check()) == ['event: done\ndata: {"usage": {}}\n\n']
 

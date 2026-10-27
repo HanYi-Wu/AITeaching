@@ -64,6 +64,10 @@ async def run_subagent(
 
     while True:
         round_i += 1
+        from solaire.agent_layer.task_tracker import verify_authoritative_actor_and_policy
+        verify_authoritative_actor_and_policy(
+            inner_ctx.platform_root or inner_ctx.project_root, inner_ctx.platform_user, is_ai_call=True,
+        )
         resp = await llm_chat(messages, tools=otools, temperature=0.2)
         if resp.tool_calls:
             sig = tool_calls_signature(resp.tool_calls)

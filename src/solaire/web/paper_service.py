@@ -1700,6 +1700,7 @@ def suggest_ai_grades_for_attempt(
     attempt_id: str,
     user: dict[str, Any],
     question_ids: list[str] | None = None,
+    _verify_context=None,
 ) -> list[dict[str, Any]]:
     from solaire.agent_layer.llm.router import load_llm_settings
 
@@ -1722,6 +1723,9 @@ def suggest_ai_grades_for_attempt(
         raise ValueError("单次 AI 预批改最多处理 50 道题，请分批操作")
 
     with connect(root) as con:
+        if _verify_context:
+            _verify_context(con)
+        initial_revisions = load_answer_revisions(con, [attempt_id])
         rows = con.execute(
             f"""
             SELECT *
@@ -1745,6 +1749,9 @@ def suggest_ai_grades_for_attempt(
     has_api_key = bool(load_llm_settings(project_root).api_key)
     generated: list[dict[str, Any]] = []
     for qid in selected:
+        if _verify_context:
+            with connect(root) as con:
+                _verify_context(con)
         answer = by_question.get(qid)
         if answer is None:
             continue
@@ -1767,6 +1774,9 @@ def suggest_ai_grades_for_attempt(
         elif not has_api_key:
             ai_error = "未配置 AI 模型"
         else:
+            if _verify_context:
+                with connect(root) as con:
+                    _verify_context(con)
             try:
                 suggestion = _run_async_blocking(
                     _ai_grade_answer(
@@ -1813,7 +1823,14 @@ def suggest_ai_grades_for_attempt(
 
     suggestions: list[dict[str, Any]] = []
     with connect(root) as con:
+        con.execute("BEGIN IMMEDIATE")
+        if _verify_context:
+            _verify_context(con)
+        current_revisions = load_answer_revisions(con, [attempt_id])
         for item in generated:
+            key = (attempt_id, item["question_id"])
+            if current_revisions.get(key, 0) != initial_revisions.get(key, 0):
+                continue
             updated = con.execute(
                 """
                 UPDATE student_answers

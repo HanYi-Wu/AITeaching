@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from solaire.web.auth_api import require_platform_root
+
 import asyncio
 import re
 import time
@@ -28,6 +30,7 @@ from solaire.agent_layer.llm.router import ModelRouter, load_llm_settings
 from solaire.agent_layer.llm.errors import llm_error_message as _llm_connection_error_message
 from solaire.agent_layer.memory import list_topic_filenames, read_index, read_topic, write_index, write_topic
 from solaire.agent_layer.cancel_signal import clear_cancel, request_cancel
+from solaire.agent_layer.stream_dispatcher import format_sse_event
 from solaire.agent_layer.orchestrator import iter_agent_turn_sse
 from solaire.agent_layer.skills import list_skills_public
 from solaire.agent_layer.context_meter import context_meter_for_session
@@ -530,6 +533,7 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
             not is_public or bool(getattr(request.state, "host_control_authorized", False))
         ),
         "_platform_user": platform_user,
+        "_platform_root": require_platform_root(),
     }
     if body.page_context is not None:
         ctx = {**ctx, "page_context": body.page_context.model_dump(exclude_none=True)}
@@ -558,9 +562,7 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
         user_msg += "\n".join(attachment_lines)
 
     async def gen():
-        import json as _json
-
-        yield f"event: session\ndata: {_json.dumps({'session_id': s.session_id}, ensure_ascii=False)}\n\n"
+        yield format_sse_event("session", {"session_id": s.session_id})
         async with aclosing(iter_agent_turn_sse(
             root,
             s,

@@ -616,7 +616,7 @@ def test_batch_create_nodes_all_failed_status(tmp_path: Path) -> None:
     assert tr.data.get("error_count", 0) >= 1
 
 
-def test_batch_create_nodes_partial_success_reports_counts(tmp_path: Path) -> None:
+def test_batch_create_nodes_validates_entire_batch_before_writing(tmp_path: Path) -> None:
     ctx = InvocationContext(project_root=tmp_path, session_id="s1", session=SessionState(session_id="s1"))
     tr = invoke_registered_tool(
         "graph.batch_create_nodes",
@@ -628,14 +628,12 @@ def test_batch_create_nodes_partial_success_reports_counts(tmp_path: Path) -> No
         },
         ctx,
     )
-    assert tr.status == "succeeded"
-    assert tr.data.get("partial_success") is True
-    assert tr.data.get("ok_count") == 1
-    assert tr.data.get("error_count") == 1
-    from solaire.agent_layer.compactor import summarize_tool_result
-
-    summ = summarize_tool_result("graph.batch_create_nodes", tr.data)
-    assert "成功" in summ and "未成功" in summ
+    assert tr.status == "failed"
+    assert tr.data.get("partial_success") is False
+    assert tr.data.get("ok_count") == 0
+    assert tr.data.get("error_count") == 2
+    from solaire.knowledge_forge import list_concept_nodes
+    assert list_concept_nodes(tmp_path) == []
 
 
 def test_batch_bind_questions_parse_only_fails(tmp_path: Path) -> None:

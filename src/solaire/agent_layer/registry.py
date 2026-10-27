@@ -14,7 +14,136 @@ from solaire.agent_layer.tools.tool_definitions import (
     subtask_tool_schema,
 )
 
-_TOOL_BY_NAME: dict[str, RegisteredTool] = {t.name: t for t in TOOLS}
+
+class ToolContractError(ValueError):
+    """Base exception for tool registry contract violations."""
+
+
+class DuplicateToolError(ToolContractError):
+    """Raised when registering a tool whose name is already registered."""
+
+
+class MissingHandlerError(ToolContractError):
+    """Raised when a tool is registered without a valid callable handler."""
+
+
+class InvalidToolSchemaError(ToolContractError):
+    """Raised when a tool schema or parameter definition violates contract rules."""
+
+
+def validate_registered_tool(tool: RegisteredTool) -> None:
+    """Validate that a tool definition conforms to registry contract expectations.
+
+    Contract rules:
+      1. Instance must be a RegisteredTool.
+      2. Tool name must be a non-empty string without whitespace.
+      3. Handler must be non-None and callable.
+      4. parameters_schema must be a dict with top-level 'type': 'object'.
+      5. If properties are defined, they must be a dict.
+      6. If required properties are declared, they must exist in properties.
+      7. Description must be a non-empty string.
+      8. Risk must be a valid ToolRisk enum instance.
+    """
+    if not isinstance(tool, RegisteredTool):
+        raise ToolContractError(f"Expected RegisteredTool instance, got {type(tool).__name__}")
+
+    if not isinstance(tool.name, str) or not tool.name.strip():
+        raise InvalidToolSchemaError(f"Tool {tool!r}: name must be a non-empty string")
+
+    if any(c.isspace() for c in tool.name):
+        raise InvalidToolSchemaError(f"Tool '{tool.name}': name cannot contain whitespace")
+
+    if tool.handler is None:
+        raise MissingHandlerError(f"Tool '{tool.name}': handler is missing (None)")
+
+    if not callable(tool.handler):
+        raise MissingHandlerError(f"Tool '{tool.name}': handler is not callable ({type(tool.handler).__name__})")
+
+    if not isinstance(tool.parameters_schema, dict):
+        raise InvalidToolSchemaError(
+            f"Tool '{tool.name}': parameters_schema must be a dict, got {type(tool.parameters_schema).__name__}"
+        )
+
+    schema_type = tool.parameters_schema.get("type")
+    if schema_type != "object":
+        raise InvalidToolSchemaError(
+            f"Tool '{tool.name}': parameters_schema['type'] must be 'object', got {schema_type!r}"
+        )
+
+    properties = tool.parameters_schema.get("properties")
+    if properties is not None and not isinstance(properties, dict):
+        raise InvalidToolSchemaError(
+            f"Tool '{tool.name}': parameters_schema['properties'] must be a dict if defined"
+        )
+
+    required = tool.parameters_schema.get("required")
+    if required is not None:
+        if not isinstance(required, (list, tuple, set)):
+            raise InvalidToolSchemaError(
+                f"Tool '{tool.name}': parameters_schema['required'] must be a sequence"
+            )
+        props_keys = properties.keys() if isinstance(properties, dict) else set()
+        for field_name in required:
+            if not isinstance(field_name, str):
+                raise InvalidToolSchemaError(
+                    f"Tool '{tool.name}': required item {field_name!r} must be a string"
+                )
+            if field_name not in props_keys:
+                raise InvalidToolSchemaError(
+                    f"Tool '{tool.name}': required property '{field_name}' is not defined in schema properties"
+                )
+
+    if not isinstance(tool.description, str) or not tool.description.strip():
+        raise InvalidToolSchemaError(f"Tool '{tool.name}': description must be a non-empty string")
+
+    from solaire.agent_layer.models import ToolRisk
+
+    if not isinstance(tool.risk, ToolRisk):
+        raise InvalidToolSchemaError(
+            f"Tool '{tool.name}': risk must be a ToolRisk enum instance, got {tool.risk!r}"
+        )
+
+
+def build_tool_registry(tools: Iterable[RegisteredTool]) -> dict[str, RegisteredTool]:
+    """Validate and build an indexed tool lookup dictionary.
+
+    Ensures no tool names are duplicated and all tools satisfy the registry contract.
+    """
+    catalog: dict[str, RegisteredTool] = {}
+    for tool in tools:
+        validate_registered_tool(tool)
+        if tool.name in catalog:
+            raise DuplicateToolError(f"Duplicate tool registration: '{tool.name}' is already registered")
+        catalog[tool.name] = tool
+    return catalog
+
+
+def register_tool(tool: RegisteredTool, *, replace: bool = False) -> None:
+    """Register a new tool into the global registry with contract validation.
+
+    Raises:
+        DuplicateToolError: If tool.name is already registered and replace is False.
+        MissingHandlerError: If tool handler is missing or not callable.
+        InvalidToolSchemaError: If parameters_schema or metadata violates contract.
+    """
+    validate_registered_tool(tool)
+    if not replace and tool.name in _TOOL_BY_NAME:
+        raise DuplicateToolError(f"Duplicate tool registration: '{tool.name}' is already registered")
+    _TOOL_BY_NAME[tool.name] = tool
+    if tool.name not in _ALL_TOOL_NAMES:
+        _ALL_TOOL_NAMES.append(tool.name)
+        _ALL_TOOL_NAMES.sort()
+
+
+def unregister_tool(name: str) -> RegisteredTool | None:
+    """Unregister a tool from the global registry (useful for testing or dynamic cleanup)."""
+    removed = _TOOL_BY_NAME.pop(name, None)
+    if removed is not None and name in _ALL_TOOL_NAMES:
+        _ALL_TOOL_NAMES.remove(name)
+    return removed
+
+
+_TOOL_BY_NAME: dict[str, RegisteredTool] = build_tool_registry(TOOLS)
 _ALL_TOOL_NAMES: list[str] = sorted(_TOOL_BY_NAME.keys())
 HOST_CONTROL_TOOL_NAMES = frozenset({"analysis.save_script", "analysis.run_script"})
 
@@ -291,8 +420,16 @@ def invoke_registered_tool(name: str, args: dict[str, Any], ctx: InvocationConte
     from solaire.common.actor_context import actor
     token = actor.set(ctx.platform_user)
     try:
+        from solaire.agent_layer.task_tracker import verify_authoritative_actor_and_policy
+        from solaire.agent_layer.failure_recovery import is_tool_ai_powered
+        verify_authoritative_actor_and_policy(
+            ctx.platform_root or ctx.project_root, ctx.platform_user,
+            is_ai_call=is_tool_ai_powered(name),
+        )
         return rt.handler(ctx, args)
     except PermissionError as exc:
         return ToolResult(status="failed", error_code="permission_denied", error_message=str(exc))
+    except OSError as exc:
+        return ToolResult(status="failed", error_code="io_error", error_message=str(exc))
     finally:
         actor.reset(token)
