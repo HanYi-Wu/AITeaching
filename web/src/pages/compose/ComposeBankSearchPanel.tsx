@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { memo, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { KatexPlainPreview } from "../../components/KatexText";
 import { MetadataFilterControls } from "../../components/MetadataFilterControls";
@@ -40,6 +40,99 @@ export type ComposeBankSearchPanelProps = {
   onDropPaperItemToRemove: (sectionId: string, qid: string) => void;
   onError: (msg: string | null) => void;
 };
+
+type ComposeQuestionListProps = Pick<
+  ComposeBankSearchPanelProps,
+  "contentSyncing" | "totalQuestionCount" | "filteredQuestions" | "selectedLeftIds" | "selectedLeftIdsSet" | "onLeftBankClick"
+>;
+
+const ComposeQuestionList = memo(function ComposeQuestionList({
+  contentSyncing,
+  totalQuestionCount,
+  filteredQuestions,
+  selectedLeftIds,
+  selectedLeftIdsSet,
+  onLeftBankClick,
+}: ComposeQuestionListProps) {
+  const { t } = useTranslation(["compose", "common", "lib"]);
+
+  return (
+    <ul className="min-h-0 flex-1 overflow-auto p-2">
+      {contentSyncing ? (
+        <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-700">
+          正在更新内容库...
+        </div>
+      ) : totalQuestionCount === 0 ? (
+        <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
+          <p className="font-medium text-slate-800">{t("compose:emptyBank")}</p>
+          <p className="mt-2 text-xs leading-relaxed text-slate-500">
+            {t("compose:emptyBankHint")}
+          </p>
+        </li>
+      ) : filteredQuestions.length === 0 ? (
+        <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
+          <p className="font-medium text-slate-800">{t("compose:emptyFilter")}</p>
+          <p className="mt-2 text-xs text-slate-500">{t("compose:emptyFilterHint")}</p>
+        </li>
+      ) : (
+        filteredQuestions.map((q, index) => {
+          const isBundle = q.type === "group";
+          return (
+            <li key={q.qualified_id}>
+              <button
+                type="button"
+                draggable
+                onDragStart={(event) =>
+                  event.dataTransfer.setData(
+                    "application/x-originreach-bank-qids",
+                    JSON.stringify(
+                      selectedLeftIdsSet.has(q.qualified_id) ? selectedLeftIds : [q.qualified_id],
+                    ),
+                  )
+                }
+                onClick={(e) => onLeftBankClick(q, index, e)}
+                className={cn(
+                  "mb-1 w-full rounded-lg border px-2 py-2 text-left text-sm transition-colors",
+                  selectedLeftIdsSet.has(q.qualified_id)
+                    ? "border-slate-900 bg-slate-100"
+                    : "border-transparent bg-slate-50 hover:border-slate-200 hover:bg-white",
+                )}
+              >
+                <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
+                  {t(`lib:questionTypes.${q.type}`, { defaultValue: q.type })}
+                </span>
+                {isBundle ? (
+                  <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-900">
+                    {t("compose:bundleBadge")}
+                  </span>
+                ) : null}
+                <span title={q.qualified_id} className="ml-1 font-mono text-[11px] text-slate-800 [overflow-wrap:anywhere]">{q.qualified_id}</span>
+                <QuestionHoverDetails id={q.qualified_id}>
+                  <KatexPlainPreview
+                    text={q.content_preview}
+                    className="mt-1 line-clamp-3 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
+                  />
+                </QuestionHoverDetails>
+                {Object.keys(q.metadata ?? {}).length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {Object.entries(q.metadata ?? {}).map(([k, v]) => (
+                      <span
+                        key={k}
+                        className="rounded-full bg-slate-200/80 px-1.5 py-0.5 text-[10px] text-slate-600"
+                      >
+                        {k}:{String(v)}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </button>
+            </li>
+          );
+        })
+      )}
+    </ul>
+  );
+});
 
 export function ComposeBankSearchPanel({
   subject,
@@ -232,80 +325,14 @@ export function ComposeBankSearchPanel({
           可将题目拖入右侧小节；多选后也可用箭头加入。
         </p>
       </div>
-      <ul className="min-h-0 flex-1 overflow-auto p-2">
-        {contentSyncing ? (
-          <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-700">
-            正在更新内容库...
-          </div>
-        ) : totalQuestionCount === 0 ? (
-          <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
-            <p className="font-medium text-slate-800">{t("compose:emptyBank")}</p>
-            <p className="mt-2 text-xs leading-relaxed text-slate-500">
-              {t("compose:emptyBankHint")}
-            </p>
-          </li>
-        ) : filteredQuestions.length === 0 ? (
-          <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
-            <p className="font-medium text-slate-800">{t("compose:emptyFilter")}</p>
-            <p className="mt-2 text-xs text-slate-500">{t("compose:emptyFilterHint")}</p>
-          </li>
-        ) : (
-          filteredQuestions.map((q, index) => {
-            const isBundle = q.type === "group";
-            return (
-              <li key={q.qualified_id}>
-                <button
-                  type="button"
-                  draggable
-                  onDragStart={(event) =>
-                    event.dataTransfer.setData(
-                      "application/x-originreach-bank-qids",
-                      JSON.stringify(
-                        selectedLeftIdsSet.has(q.qualified_id) ? selectedLeftIds : [q.qualified_id],
-                      ),
-                    )
-                  }
-                  onClick={(e) => onLeftBankClick(q, index, e)}
-                  className={cn(
-                    "mb-1 w-full rounded-lg border px-2 py-2 text-left text-sm transition-colors",
-                    selectedLeftIdsSet.has(q.qualified_id)
-                      ? "border-slate-900 bg-slate-100"
-                      : "border-transparent bg-slate-50 hover:border-slate-200 hover:bg-white",
-                  )}
-                >
-                  <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
-                    {t(`lib:questionTypes.${q.type}`, { defaultValue: q.type })}
-                  </span>
-                  {isBundle ? (
-                    <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-900">
-                      {t("compose:bundleBadge")}
-                    </span>
-                  ) : null}
-                  <span title={q.qualified_id} className="ml-1 font-mono text-[11px] text-slate-800 [overflow-wrap:anywhere]">{q.qualified_id}</span>
-                  <QuestionHoverDetails id={q.qualified_id}>
-                    <KatexPlainPreview
-                      text={q.content_preview}
-                      className="mt-1 line-clamp-3 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
-                    />
-                  </QuestionHoverDetails>
-                  {Object.keys(q.metadata ?? {}).length > 0 && (
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {Object.entries(q.metadata ?? {}).map(([k, v]) => (
-                        <span
-                          key={k}
-                          className="rounded-full bg-slate-200/80 px-1.5 py-0.5 text-[10px] text-slate-600"
-                        >
-                          {k}:{String(v)}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </button>
-              </li>
-            );
-          })
-        )}
-      </ul>
+      <ComposeQuestionList
+        contentSyncing={contentSyncing}
+        totalQuestionCount={totalQuestionCount}
+        filteredQuestions={filteredQuestions}
+        selectedLeftIds={selectedLeftIds}
+        selectedLeftIdsSet={selectedLeftIdsSet}
+        onLeftBankClick={onLeftBankClick}
+      />
     </section>
   );
 }

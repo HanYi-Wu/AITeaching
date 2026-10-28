@@ -130,6 +130,72 @@ describe("export result integration", () => {
     });
   });
 
+  it("keeps the mounted bank list unchanged while typing, then commits search and selection normally", async () => {
+    const questionRows = [1, 2, 3].map((id) => ({
+      id: `q${id}`,
+      qualified_id: `数学/main/q${id}`,
+      namespace: "main",
+      collection: "main",
+      subject: "数学",
+      type: "single_choice",
+      answer: "A",
+      content_preview: `题目 ${id}：求 $x_{${id}}+1$ 的值`,
+      content: `题目 ${id}：求 $x_{${id}}+1$ 的值`,
+      analysis: "",
+      metadata: {},
+    }));
+    const normalGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string) =>
+      path === "/api/questions" ? { questions: questionRows } : normalGet(path),
+    );
+    const mounted = renderWorkspace();
+    const getVisibleQuestionIds = () =>
+      Array.from(mounted.container.querySelectorAll<HTMLSpanElement>('button[draggable="true"] span[title]'))
+        .map((span) => span.getAttribute("title"));
+    const getQuestionButton = (qid: string) =>
+      Array.from(mounted.container.querySelectorAll<HTMLSpanElement>('button[draggable="true"] span[title]'))
+        .find((span) => span.getAttribute("title") === qid)?.closest("button") ?? null;
+
+    await waitFor(() => expect(getVisibleQuestionIds()).toEqual(questionRows.map((question) => question.qualified_id)));
+    await userEvent.click(screen.getByRole("button", { name: /筛选/ }));
+    const searchInput = await screen.findByPlaceholderText("id / 题干摘要…");
+    await userEvent.click(searchInput);
+    expect(searchInput).toHaveFocus();
+    fireEvent.change(searchInput, { target: { value: "题目 2" } });
+    expect(getVisibleQuestionIds()).toEqual(questionRows.map((question) => question.qualified_id));
+
+    fireEvent.keyDown(searchInput, { key: "Enter", code: "Enter", keyCode: 229 });
+    expect(getVisibleQuestionIds()).toEqual(questionRows.map((question) => question.qualified_id));
+    expect(searchInput).toHaveFocus();
+
+    fireEvent.keyDown(searchInput, { key: "Enter", code: "Enter", keyCode: 13 });
+    await waitFor(() => expect(getVisibleQuestionIds()).toEqual(["数学/main/q2"]));
+    expect(searchInput).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "查看结果" }));
+    await userEvent.click(screen.getByRole("button", { name: /筛选/ }));
+    const reopenedSearchInput = await screen.findByPlaceholderText("id / 题干摘要…");
+    expect(reopenedSearchInput).toHaveValue("题目 2");
+    await userEvent.click(reopenedSearchInput);
+    expect(reopenedSearchInput).toHaveFocus();
+
+    fireEvent.change(reopenedSearchInput, { target: { value: "" } });
+    fireEvent.keyDown(reopenedSearchInput, { key: "Enter", code: "Enter", keyCode: 13 });
+    await waitFor(() => expect(getVisibleQuestionIds()).toEqual(questionRows.map((question) => question.qualified_id)));
+    await userEvent.click(screen.getByRole("button", { name: "查看结果" }));
+
+    const q2Button = getQuestionButton("数学/main/q2");
+    const q3Button = getQuestionButton("数学/main/q3");
+    expect(q2Button).not.toBeNull();
+    expect(q3Button).not.toBeNull();
+    await userEvent.click(q2Button!);
+    await waitFor(() => expect(getQuestionButton("数学/main/q2")).toHaveClass("border-slate-900"));
+    fireEvent.click(q3Button!, { ctrlKey: true });
+    await waitFor(() => expect(getQuestionButton("数学/main/q3")).toHaveClass("border-slate-900"));
+    expect(getQuestionButton("数学/main/q2")).toHaveClass("border-slate-900");
+    expect(getQuestionButton("数学/main/q3")).toHaveClass("border-slate-900");
+    expect(getQuestionButton("数学/main/q1")).not.toHaveClass("border-slate-900");
+  });
+
   async function loadedWorkspace() {
     const mounted = renderWorkspace({ accountId: "teacher", projectRoot: "C:/project", openExamId: examId });
     await waitFor(() => expect(screen.getByRole("spinbutton", { name: "每题分值" })).toHaveValue(5));
