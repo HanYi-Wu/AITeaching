@@ -122,6 +122,17 @@ function flattenTree(node: TreeNode): { id: string; x: number; y: number }[] {
   return result;
 }
 
+type TreePosition = { id: string; x: number; y: number };
+
+/** Build an ID index with Array.find's first-match behavior for duplicate IDs. */
+function indexFirstPositionById(positions: TreePosition[]): Map<string, TreePosition> {
+  const byId = new Map<string, TreePosition>();
+  for (const position of positions) {
+    if (!byId.has(position.id)) byId.set(position.id, position);
+  }
+  return byId;
+}
+
 // ---------------------------------------------------------------------------
 // Node component
 // ---------------------------------------------------------------------------
@@ -324,13 +335,14 @@ export function MindMapCanvas({
     const tree = buildTree(graphNodes, VIRTUAL_ROOT_ID, childrenByParent, collapsed);
     assignPositions(tree, 0, 0, true);
     const positions = flattenTree(tree);
+    const positionById = indexFirstPositionById(positions);
 
     // Build RF nodes
     const rfNodes: Node[] = [
       {
         id: VIRTUAL_ROOT_ID,
         type: "mindmap",
-        position: { x: 0, y: positions.find((p) => p.id === VIRTUAL_ROOT_ID)?.y ?? 0 },
+        position: { x: 0, y: positionById.get(VIRTUAL_ROOT_ID)?.y ?? 0 },
         data: {
           label: activeGraphName,
           isVirtualRoot: true,
@@ -351,7 +363,7 @@ export function MindMapCanvas({
     ];
 
     for (const n of graphNodes) {
-      const pos = positions.find((p) => p.id === n.id);
+      const pos = positionById.get(n.id);
       if (!pos) continue;
       const hasChildren = (childrenByParent.get(n.id) ?? []).length > 0;
       const isCollapsedNode = collapsed.has(n.id);

@@ -221,12 +221,16 @@ export function layoutWithForceDirected(
     }
   }
 
-  /** 有边相连的节点对：仅用弹簧定距，避免斥力把相邻节点再推开 */
-  const adjacentPair = new Set<string>();
+  /** 有边相连的节点对：仅用弹簧定距，避免斥力把相邻节点再推开。 */
+  // Base-n pair keys are unique while their maximum remains a safe JS integer.
+  // Retain the old string representation as a correctness fallback for unusually
+  // large graphs whose pair indexes would exceed Number.MAX_SAFE_INTEGER.
+  const numericPairKeysSafe = n <= Math.floor(Math.sqrt(Number.MAX_SAFE_INTEGER));
+  const adjacentPair = new Set<number | string>();
   for (const { si, ti } of edgeIdxs) {
     const a = Math.min(si, ti);
     const b = Math.max(si, ti);
-    adjacentPair.add(`${a},${b}`);
+    adjacentPair.add(numericPairKeysSafe ? a * n + b : `${a},${b}`);
   }
 
   const repulsionBase = FORCE_DEFAULT.repulsionBase;
@@ -247,7 +251,7 @@ export function layoutWithForceDirected(
         const dist = Math.sqrt(distSq);
         const ri = radii[i];
         const rj = radii[j];
-        const pairKey = `${i},${j}`;
+        const pairKey = numericPairKeysSafe ? i * n + j : `${i},${j}`;
         const isAdjacent = adjacentPair.has(pairKey);
 
         if (!isAdjacent) {
