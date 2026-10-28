@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from solaire.common.security import assert_within_project
+from solaire.common.yaml_utils import safe_load_yaml
 from solaire.web.draft_service import (
     _sections_from_raw,
     normalize_draft_name,
@@ -112,7 +113,7 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
     root = _exams_root(project_root)
     if not root.is_dir():
         return []
-    rows: list[tuple[float, dict[str, Any]]] = []
+    rows: list[tuple[float, dict[str, Any], bool]] = []
     for label_dir in root.iterdir():
         if not label_dir.is_dir():
             continue
@@ -131,6 +132,9 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
                 continue
             try:
                 mtime = yp.stat().st_mtime
+                template_ref = None
+                template_path = None
+                needs_template_read = bool(cfg)
                 if cfg:
                     updated = str(cfg.get("updated_at") or "")
                     status = str(cfg.get("status") or "draft")
@@ -139,9 +143,11 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
                     sub = str(cfg.get("subject") or "")
                 else:
                     with yp.open(encoding="utf-8") as f:
-                        raw = yaml.safe_load(f)
+                        raw = safe_load_yaml(f)
                     if not isinstance(raw, dict):
                         continue
+                    template_ref = raw.get("template_ref")
+                    template_path = raw.get("template_path")
                     updated = str(raw.get("updated_at") or "")
                     status = "draft"
                     display = str(raw.get("name") or eid)
@@ -155,13 +161,14 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
                             "name": display,
                             "subject": sub,
                             "export_label": el,
-                            "template_ref": None,
-                            "template_path": None,
+                            "template_ref": template_ref,
+                            "template_path": template_path,
                             "updated_at": updated,
                             "has_pdf": any(subj_dir.glob("*.pdf")),
                             "has_docx": any(subj_dir.glob("*.docx")),
                             "status": status if status in ("draft", "exported") else "draft",
                         },
+                        needs_template_read,
                     ),
                 )
             except OSError:
@@ -170,21 +177,21 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
     out = [r[1] for r in rows]
     for row in out:
         _fill_identity_from_exam_path_fields(row, str(row["exam_id"]))
-    for row in out:
-        eid = row["exam_id"]
-        yp = exam_yaml_path(project_root, eid)
-        try:
-            with yp.open(encoding="utf-8") as f:
-                raw = yaml.safe_load(f)
+    for _, row, needs_template_read in rows:
+        if needs_template_read:
+            eid = row["exam_id"]
+            yp = exam_yaml_path(project_root, eid)
+            try:
+                with yp.open(encoding="utf-8") as f:
+                    raw = safe_load_yaml(f)
+            except OSError:
+                continue
             if isinstance(raw, dict):
                 row["template_ref"] = raw.get("template_ref")
-                tp = raw.get("template_path")
-                if tp is None:
-                    row["template_path"] = None
-                else:
-                    row["template_path"] = _norm_template_path_rel(str(tp))
-        except OSError:
-            pass
+                row["template_path"] = raw.get("template_path")
+        tp = row.get("template_path")
+        if tp is not None:
+            row["template_path"] = _norm_template_path_rel(str(tp))
     return out
 
 

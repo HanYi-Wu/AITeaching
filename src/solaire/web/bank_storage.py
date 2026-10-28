@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from solaire.common.atomic_files import write_bytes_atomic, write_text_atomic
+from solaire.common.yaml_utils import safe_load_yaml
 from solaire.exam_compiler.models import BankRecord, QuestionGroupRecord, QuestionItem, parse_bank_root
 from solaire.exam_compiler.loaders.questions import iter_question_files
 from solaire.web.security import assert_within_project
@@ -124,7 +125,7 @@ def read_bank_document(path: Path) -> BankDocument:
 
 
 def parse_bank_document(path: Path, text: str) -> BankDocument:
-    raw = yaml.safe_load(text)
+    raw = safe_load_yaml(text)
     if raw is None:
         roots = []
     elif isinstance(raw, list):
