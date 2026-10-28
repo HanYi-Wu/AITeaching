@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from io import BytesIO
+import re
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook
@@ -9,6 +10,11 @@ from fastapi.testclient import TestClient
 
 from solaire.agent_layer.attachments import (
     SUPPORTED_UPLOAD_SUFFIXES,
+    MAX_COLUMNS_PER_SHEET,
+    MAX_ROWS_PER_SHEET,
+    MAX_SHEETS,
+    _bounded,
+    _markdown_table,
     capability_for_filename,
     extract_attachment,
 )
@@ -38,6 +44,35 @@ def _workbook_bytes() -> bytes:
     return stream.getvalue()
 
 
+def _legacy_xlsx_content(path: Path) -> str:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=True, data_only=True, keep_links=False)
+    try:
+        chunks = []
+        for sheet in workbook.worksheets[:MAX_SHEETS]:
+            rows = []
+            for index, row in enumerate(sheet.iter_rows(values_only=True)):
+                if index >= MAX_ROWS_PER_SHEET:
+                    break
+                rows.append(list(row[:MAX_COLUMNS_PER_SHEET]))
+            chunks.append(f"## 工作表: {sheet.title}\n\n{_markdown_table(rows)}")
+        return "\n\n".join(chunks)
+    finally:
+        workbook.close()
+
+
+def _remove_xlsx_dimensions(path: Path) -> Path:
+    output = path.with_name(f"{path.stem}-unsized{path.suffix}")
+    with ZipFile(path) as source, ZipFile(output, "w") as destination:
+        for entry in source.infolist():
+            data = source.read(entry.filename)
+            if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", entry.filename):
+                data = re.sub(rb"<dimension\b[^>]*/>", b"", data)
+            destination.writestr(entry, data)
+    return output
+
+
 def test_common_format_registry_is_explicit_and_actionable() -> None:
     expected = {
         ".txt", ".md", ".yaml", ".yml", ".csv", ".tsv", ".json", ".xml", ".html", ".htm", ".rtf",
@@ -62,6 +97,100 @@ def test_xlsx_extraction_returns_sheet_rows(tmp_path: Path) -> None:
     assert "Knowledge" in result.content
     assert "linear functions" in result.content
     assert result.truncated is False
+
+
+def test_xlsx_output_matches_legacy_at_exact_char_boundary(tmp_path: Path) -> None:
+    path = _workbook(tmp_path / "exact-boundary.xlsx")
+    expected_full = _legacy_xlsx_content(path)
+
+    exact = extract_attachment(path, max_chars=len(expected_full))
+    assert exact.content == expected_full
+    assert exact.truncated is False
+
+    one_short = extract_attachment(path, max_chars=len(expected_full) - 1)
+    expected_bounded, truncated = _bounded(expected_full, len(expected_full) - 1)
+    assert one_short.content == expected_bounded
+    assert one_short.truncated is truncated is True
+
+
+def test_xlsx_unknown_dimension_preserves_ragged_table_width(tmp_path: Path) -> None:
+    path = tmp_path / "ragged.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Ragged"
+    sheet.append(["A", "B"])
+    sheet.append([f"value-{index}" for index in range(MAX_COLUMNS_PER_SHEET)])
+    workbook.save(path)
+    workbook.close()
+    path = _remove_xlsx_dimensions(path)
+
+    from openpyxl import load_workbook
+
+    reader = load_workbook(path, read_only=True, data_only=True, keep_links=False)
+    try:
+        assert reader.worksheets[0].max_column is None
+        assert [len(row) for row in reader.worksheets[0].iter_rows(values_only=True)] == [2, 50]
+    finally:
+        reader.close()
+
+    result = extract_attachment(path)
+    assert result.content == _legacy_xlsx_content(path)
+    assert "value-49" in result.content
+
+
+def test_xlsx_unknown_dimension_first_row_at_column_cap_and_empty_sheet(tmp_path: Path) -> None:
+    path = tmp_path / "wide.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Wide"
+    sheet.append([f"head-{index}" for index in range(MAX_COLUMNS_PER_SHEET)])
+    sheet.append(["short"])
+    workbook.save(path)
+    workbook.close()
+    path = _remove_xlsx_dimensions(path)
+
+    wide_result = extract_attachment(path)
+    assert wide_result.content == _legacy_xlsx_content(path)
+    assert "head-49" in wide_result.content
+
+    empty_path = tmp_path / "empty.xlsx"
+    empty_workbook = Workbook()
+    empty_workbook.save(empty_path)
+    empty_workbook.close()
+    empty_result = extract_attachment(empty_path)
+    assert empty_result.content == _legacy_xlsx_content(empty_path)
+    assert "(空表)" in empty_result.content
+
+
+def test_xlsx_consumes_bounded_tail_after_char_limit_and_closes_workbook(tmp_path: Path, monkeypatch) -> None:
+    path = _workbook(tmp_path / "tail-error.xlsx")
+
+    class RaisingSheet:
+        title = "Tail"
+        max_column = 1
+
+        def iter_rows(self, *, values_only: bool):
+            assert values_only is True
+            yield ("x" * 10_000,)
+            for _ in range(MAX_ROWS_PER_SHEET - 1):
+                yield ("tail",)
+            raise ValueError("late row parse error")
+
+    class FakeWorkbook:
+        worksheets = [RaisingSheet()]
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_workbook = FakeWorkbook()
+    monkeypatch.setattr("openpyxl.load_workbook", lambda *args, **kwargs: fake_workbook)
+
+    result = extract_attachment(path, max_chars=24)
+
+    assert result.error_code == "extract_failed"
+    assert result.error == "文件解析失败：late row parse error"
+    assert fake_workbook.closed is True
 
 
 def test_text_extraction_is_bounded_and_reports_truncation(tmp_path: Path) -> None:

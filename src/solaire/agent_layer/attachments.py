@@ -166,22 +166,88 @@ def _extract_text(path: Path) -> str:
     return text
 
 
-def _extract_xlsx(path: Path) -> tuple[str, dict[str, Any]]:
+def _extract_xlsx(path: Path, *, max_chars: int = 40_000) -> tuple[str, dict[str, Any]]:
     from openpyxl import load_workbook
 
     workbook = load_workbook(path, read_only=True, data_only=True, keep_links=False)
     chunks: list[str] = []
+    content_chars = 0
+    char_limit_reached = False
     sheet_count = 0
-    for sheet in workbook.worksheets[:MAX_SHEETS]:
-        sheet_count += 1
-        rows: list[list[Any]] = []
-        for index, row in enumerate(sheet.iter_rows(values_only=True)):
-            if index >= MAX_ROWS_PER_SHEET:
-                break
-            rows.append(list(row[:MAX_COLUMNS_PER_SHEET]))
-        chunks.append(f"## 工作表: {sheet.title}\n\n{_markdown_table(rows)}")
-    workbook.close()
-    return "\n\n".join(chunks), {"sheets": sheet_count}
+
+    def append(text: str) -> None:
+        nonlocal content_chars, char_limit_reached
+        if char_limit_reached or not text:
+            return
+        remaining = max_chars + 1 - content_chars
+        if remaining <= 0:
+            char_limit_reached = True
+            return
+        fragment = text[:remaining]
+        chunks.append(fragment)
+        content_chars += len(fragment)
+        if len(fragment) < len(text) or content_chars > max_chars:
+            char_limit_reached = True
+
+    def render_row(row: tuple[Any, ...] | list[Any], width: int) -> list[str]:
+        return [
+            _display_cell(row[index]) if index < len(row) else ""
+            for index in range(width)
+        ]
+
+    try:
+        for sheet_index, sheet in enumerate(workbook.worksheets[:MAX_SHEETS]):
+            sheet_count += 1
+            if sheet_index:
+                append("\n\n")
+            append(f"## 工作表: {sheet.title}\n\n")
+
+            rows = iter(sheet.iter_rows(values_only=True))
+            first_row = next(rows, None)
+            if first_row is None:
+                append("(空表)")
+                continue
+
+            first_values = list(first_row[:MAX_COLUMNS_PER_SHEET])
+            declared_width = sheet.max_column
+            if (
+                not char_limit_reached
+                and declared_width is None
+                and len(first_values) < MAX_COLUMNS_PER_SHEET
+            ):
+                # An unsized worksheet can have ragged rows. Keep the legacy maximum
+                # width across the bounded rows before formatting its table.
+                table_rows = [first_values]
+                for index, row in enumerate(rows, start=1):
+                    if index >= MAX_ROWS_PER_SHEET:
+                        break
+                    table_rows.append(list(row[:MAX_COLUMNS_PER_SHEET]))
+                append(_markdown_table(table_rows))
+                continue
+
+            width = (
+                min(declared_width, MAX_COLUMNS_PER_SHEET)
+                if declared_width is not None
+                else MAX_COLUMNS_PER_SHEET
+            )
+            if not char_limit_reached:
+                header = render_row(first_values, width)
+                append(f"| {' | '.join(header)} |\n")
+                append(f"| {' | '.join(['---'] * width)} |")
+
+            # Continue consuming rows even after the output budget is known. This
+            # preserves errors raised while parsing rows within the legacy limit.
+            for index, row in enumerate(rows, start=1):
+                if index >= MAX_ROWS_PER_SHEET:
+                    break
+                if not char_limit_reached:
+                    values = list(row[:width])
+                    body = render_row(values, width)
+                    append(f"\n| {' | '.join(body)} |")
+    finally:
+        workbook.close()
+
+    return "".join(chunks), {"sheets": sheet_count}
 
 
 def _extract_xls(path: Path) -> tuple[str, dict[str, Any]]:
@@ -332,7 +398,7 @@ def extract_attachment(path: Path, *, max_chars: int = 40_000) -> AttachmentExtr
         if suffix in TEXT_SUFFIXES:
             content = _extract_text(path)
         elif suffix == ".xlsx":
-            content, metadata = _extract_xlsx(path)
+            content, metadata = _extract_xlsx(path, max_chars=max_chars)
         elif suffix == ".xls":
             content, metadata = _extract_xls(path)
         elif suffix == ".docx":
