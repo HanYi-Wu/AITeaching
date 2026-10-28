@@ -269,11 +269,10 @@ class OpenAICompatAdapter:
                 else:
                     raise
 
-        tc_parts: dict[int, dict[str, str]] = {}
+        tc_parts: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
         usage: dict[str, int] | None = None
         reasoning_buf = ""
-        content_buf = ""
 
         async for event in stream:
             if getattr(event, "usage", None) is not None and event.usage is not None:
@@ -294,7 +293,6 @@ class OpenAICompatAdapter:
             ch0 = event.choices[0]
             delta = ch0.delta
             if delta.content:
-                content_buf += delta.content
                 yield ChatChunk(delta_content=delta.content)
             dr = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
             if dr:
@@ -305,7 +303,7 @@ class OpenAICompatAdapter:
                 for tc in delta.tool_calls:
                     idx = int(tc.index)
                     if idx not in tc_parts:
-                        tc_parts[idx] = {"id": "", "name": "", "arguments": ""}
+                        tc_parts[idx] = {"id": "", "name": "", "arguments": []}
                     if getattr(tc, "id", None):
                         tc_parts[idx]["id"] = tc.id or tc_parts[idx]["id"]
                     fn = tc.function
@@ -313,20 +311,24 @@ class OpenAICompatAdapter:
                         if getattr(fn, "name", None):
                             tc_parts[idx]["name"] += fn.name or ""
                         if getattr(fn, "arguments", None):
-                            tc_parts[idx]["arguments"] += fn.arguments or ""
+                            argument_fragment = fn.arguments or ""
+                            if not isinstance(argument_fragment, str):
+                                raise TypeError("tool call argument fragment must be a string")
+                            tc_parts[idx]["arguments"].append(argument_fragment)
             if ch0.finish_reason:
                 finish_reason = ch0.finish_reason
 
         assembled: list[dict[str, Any]] = []
         for idx in sorted(tc_parts.keys()):
             p = tc_parts[idx]
+            p["arguments"] = "".join(p["arguments"]) or "{}"
             assembled.append(
                 {
                     "id": p["id"] or f"call_{idx}",
                     "type": "function",
                     "function": {
                         "name": p["name"],
-                        "arguments": p["arguments"] or "{}",
+                        "arguments": p["arguments"],
                     },
                 }
             )
