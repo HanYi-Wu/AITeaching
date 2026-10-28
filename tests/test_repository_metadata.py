@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.6.7"
+VERSION = "1.7.0"
 
 
 def test_product_versions_are_aligned() -> None:

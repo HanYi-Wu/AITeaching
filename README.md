@@ -1,8 +1,8 @@
 # 源远教学平台（OriginReach，OR）
 
-面向学校、教师和学生的教学与考试系统；其中 AI 助手称为“源远智能体”。当前代码版本为 **1.6.7**，包含 Web 界面、Python API、AI 工具和可选桌面壳。适合在本机或学校内网部署。
+面向学校、教师和学生的教学与考试系统；其中 AI 助手称为“源远智能体”。当前代码版本为 **1.7.0**，包含 Web 界面、Python API、AI 工具和可选桌面壳。适合在本机或学校内网部署。
 
-1.6.7 修复目录内容标签、教师目录权限错误、全新安装依赖与中文脚本分析问题。本次同版本修订进一步修复模板连续新建、组卷模板选择、文件夹删除与重名处理、手机登录布局、日志复制和教师分析页报错，并替换完整 Linux 离线安装／更新包。详见 [1.6.7 说明](docs/release-1.6.7.md)。
+1.7.0 增加可恢复的导出与编辑草稿、统一任务状态和复练效果对比，完善题库编辑、考试发布、学生作答与教师批改，优化分析、文档转换和大型页面交互，并修复并发保存、迟到响应和历史班级显示等问题。逐项变化见 [1.7.0 升级说明](docs/release-1.7.0.md)。
 
 1.6.6 增加教师个人练习发布、试卷文件夹的一人一份校验、目录与标签管理，并允许组卷覆盖模板默认题量。版本变更见内置手册的更新日志；1.6.2 的模块化重构见 [1.6.2 说明](docs/release-1.6.2.md)。
 
@@ -70,7 +70,7 @@ AI 密钥在管理员设置中保存；Windows 与 Linux 的配置独立。AI �
 | `tests` / `web/src/**/__tests__` | 后端和前端测试 |
 | `scripts` | 安装、更新、构建与辅助脚本 |
 
-[产品介绍（双创素材）](docs/product-introduction-for-innovation-plan.md) · [1.5.6 功能文档](docs/feature-specification-1.5.6.md) · [AI 接口](docs/api/agent.md) · [更新日志](src/solaire/web/assets/help_docs/changelog.md) · [题目分组说明](docs/bank-folders-and-ui-fixes.md)
+[1.5.6 功能文档](docs/feature-specification-1.5.6.md) · [AI 接口](docs/api/agent.md) · [更新日志](src/solaire/web/assets/help_docs/changelog.md) · [题目分组说明](docs/bank-folders-and-ui-fixes.md)
 
 ```bash
 python -m pytest tests
