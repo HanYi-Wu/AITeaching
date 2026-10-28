@@ -1,6 +1,9 @@
 import { FileImage } from "lucide-react";
+import { memo } from "react";
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
 import type { PaperSubmissionAnswerRecord } from "../../../platform/auth";
+
+const MemoizedKatexText = memo(KatexText);
 
 type Props = {
   answer: PaperSubmissionAnswerRecord;
@@ -38,17 +41,17 @@ export default function GradingQuestionCard({
       {versionChanged ? (
         <p role="status" className="mt-2 text-xs text-amber-700">服务器批改版本已变化，本地草稿基于较早内容；保存前会请你确认。</p>
       ) : null}
-      {answer.content ? <KatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}
+      {answer.content ? <MemoizedKatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}
       <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-sm">
         <span className="font-semibold">参考答案：</span>
-        <KatexText text={answer.correct_answer ?? '未配置参考答案'} className="inline" />
+        <MemoizedKatexText text={answer.correct_answer ?? '未配置参考答案'} className="inline" />
       </div>
       {answer.options && Object.keys(answer.options).length > 0 ? (
         <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
           {Object.entries(answer.options).map(([optionKey, optionText]) => (
             <div key={optionKey} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
               <span className="mr-1 font-semibold">{optionKey}.</span>
-              <KatexText text={optionText} className="inline" />
+              <MemoizedKatexText text={optionText} className="inline" />
             </div>
           ))}
         </div>
