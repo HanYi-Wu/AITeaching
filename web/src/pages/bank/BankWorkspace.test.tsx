@@ -7,6 +7,7 @@ import { ApiError } from "../../api/errors";
 import { notifyContentLibraryChanged } from "../../lib/contentEvents";
 import { ToolBarProvider, useToolBar } from "../../contexts/ToolBarContext";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
+import i18n from "../../i18n/i18n";
 import type { BankQuestionEditorPanelProps, QuestionJson } from "../../components/BankQuestionEditorPanel";
 import { BankWorkspace } from "./BankWorkspace";
 
@@ -255,6 +256,41 @@ describe("bank toolbar uses the current selection and edits", () => {
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(`/api/bank/items/${encodeURIComponent(qid)}`, expect.objectContaining({ analysis: "final edit" })));
     await waitFor(() => expect((screen.getByRole("textbox", { name: "题目 YAML" }) as HTMLTextAreaElement).value).toContain("final edit"));
+  });
+
+  it("uses the latest YAML draft for sidebar switch confirmation and keeps the current question when canceled", async () => {
+    const q2 = "数学/default/q2";
+    const q2Question = { id: "q2", type: "fill", content: "Question two", answer: "8", analysis: "", metadata: {} };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === `/api/bank/items/${encodeURIComponent(q2)}`) {
+        return { qualified_id: q2, question: q2Question, file_yaml: yaml.dump(q2Question), storage_path: "resource/数学/default/q2.yaml", storage_kind: "single" };
+      }
+      return baseGet(path);
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await openFirstQuestion();
+    await userEvent.click(screen.getByRole("tab", { name: "源文件" }));
+    const editor = screen.getByRole("textbox", { name: "题目 YAML" });
+    const latestYaml = yaml.dump({ ...savedQuestion, analysis: "latest unsaved YAML" });
+    fireEvent.change(editor, { target: { value: latestYaml } });
+
+    await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q2/ }));
+    expect(confirm).toHaveBeenCalledWith("当前题目有未保存的修改，切换将放弃修改，是否继续？");
+    expect(screen.getByTestId("editor-question-id")).toHaveTextContent(qid);
+    expect((screen.getByRole("textbox", { name: "题目 YAML" }) as HTMLTextAreaElement).value).toBe(latestYaml);
+    expect(mocks.get).not.toHaveBeenCalledWith(`/api/bank/items/${encodeURIComponent(q2)}`);
+
+    await act(async () => { await i18n.changeLanguage("en"); });
+    await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q2/ }));
+    expect(confirm).toHaveBeenLastCalledWith("You have unsaved changes. Switch anyway and discard them?");
+    expect(screen.getByTestId("editor-question-id")).toHaveTextContent(qid);
+
+    await act(async () => { await i18n.changeLanguage("zh"); });
+    confirm.mockReturnValue(true);
+    await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q2/ }));
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent(q2);
   });
 
   it("saves the final metadata values after editing their name and content separately", async () => {

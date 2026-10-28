@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -27,7 +28,7 @@ export interface BankSidebarProps {
   onRequestDelete: (item: BankListItem) => void;
 }
 
-export function BankSidebar({
+export const BankSidebar = memo(function BankSidebar({
   folders,
   setFolders,
   filteredItems,
@@ -165,4 +166,4 @@ export function BankSidebar({
       />
     </section>
   );
-}
+});

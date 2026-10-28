@@ -907,22 +907,34 @@ export function BankWorkspace({
     return yamlDirty || formDirty || metaRowsDirty;
   }, [selectedId, detail, rawYaml, metaRows]);
 
-  const trySelectId = useCallback(
-    (qid: string | null) => {
-      if (qid === selectedId) return true;
-      if (dirty && !window.confirm(t("switchTabDiscard"))) {
-        return false;
-      }
-      detailRequestSeqRef.current++;
-      selectedIdRef.current = qid;
-      setDetail(null);
-      setRawYaml("");
-      setMetaRows([]);
-      setSelectedId(qid);
-      return true;
-    },
-    [selectedId, dirty, t],
-  );
+  const translateRef = useRef(t);
+  translateRef.current = t;
+  const trySelectId = useCallback((qid: string | null) => {
+    const currentSelectedId = selectedIdRef.current;
+    const currentDraft = draftRef.current;
+    if (qid === currentSelectedId) return true;
+
+    const baseline = currentSelectedId ? baselineRef.current[currentSelectedId] : undefined;
+    const currentDraftIsDirty = Boolean(
+      currentSelectedId &&
+      currentDraft.selectedId === currentSelectedId &&
+      currentDraft.detail?.qualified_id === currentSelectedId &&
+      baseline &&
+      (currentDraft.rawYaml !== baseline.yaml ||
+        JSON.stringify(currentDraft.detail) !== baseline.detailJson ||
+        JSON.stringify(currentDraft.metaRows) !== baseline.metaRowsJson),
+    );
+    if (currentDraftIsDirty && !window.confirm(translateRef.current("switchTabDiscard"))) {
+      return false;
+    }
+    detailRequestSeqRef.current++;
+    selectedIdRef.current = qid;
+    setDetail(null);
+    setRawYaml("");
+    setMetaRows([]);
+    setSelectedId(qid);
+    return true;
+  }, []);
 
   const openOrFocusTab = useCallback(
     (qid: string) => {

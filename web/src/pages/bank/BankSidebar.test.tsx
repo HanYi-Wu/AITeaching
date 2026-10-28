@@ -86,4 +86,36 @@ describe("BankSidebar component", () => {
     await userEvent.click(deleteBtn);
     expect(onRequestDelete).toHaveBeenCalledWith(sampleItems[0]);
   });
+
+  it("refreshes changed list, selection, and graph props through memo", () => {
+    const { rerender } = render(
+      <TestI18nProvider><BankSidebar {...defaultProps} /></TestI18nProvider>,
+    );
+    const secondItem: BankListItem = {
+      ...sampleItems[0],
+      id: "q2",
+      qualified_id: "数学/default/q2",
+      content_preview: "新题摘要",
+      storage_path: "resource/q2.yaml",
+    };
+    rerender(
+      <TestI18nProvider>
+        <BankSidebar
+          {...defaultProps}
+          filteredItems={[...sampleItems, secondItem]}
+          allItems={[...sampleItems, secondItem]}
+          selectedExportIds={["数学/default/q1"]}
+          selectedId="数学/default/q1"
+          graphLinkIndex={{
+            "数学/default/q1": [{ id: "kp2", canonical_name: "更新知识点", node_kind: "concept" }],
+          }}
+        />
+      </TestI18nProvider>,
+    );
+
+    expect(screen.getByRole("checkbox", { name: "选择导出 数学/default/q1" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "选择导出 数学/default/q2" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更新知识点" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择导出 数学/default/q1" }).closest("li")).toHaveClass("border-slate-900");
+  });
 });
