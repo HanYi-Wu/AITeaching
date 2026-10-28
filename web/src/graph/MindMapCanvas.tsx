@@ -145,7 +145,7 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
   const isInlineEditing = Boolean((data as { isInlineEditing?: boolean }).isInlineEditing);
   const inlineValue = String((data as { inlineValue?: string }).inlineValue ?? data.label ?? "");
   const onInlineChange = (data as { onInlineChange?: (v: string) => void }).onInlineChange;
-  const onInlineCommit = (data as { onInlineCommit?: () => void }).onInlineCommit;
+  const onInlineCommit = (data as { onInlineCommit?: (value: string) => void }).onInlineCommit;
   const onToggleCollapse = (data as { onToggleCollapse?: () => void }).onToggleCollapse;
 
   if (isVirtualRoot) {
@@ -211,10 +211,10 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
               if (isImeComposingKeyboardEvent(e)) return;
               if (e.key === "Enter" || e.key === "Escape") {
                 e.preventDefault();
-                onInlineCommit?.();
+                onInlineCommit?.(e.currentTarget.value);
               }
             }}
-            onBlur={() => onInlineCommit?.()}
+            onBlur={(e) => onInlineCommit?.(e.currentTarget.value)}
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
@@ -306,7 +306,13 @@ export function MindMapCanvas({
   });
   const [inlineEditId, setInlineEditId] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState("");
+  const inlineEditValueRef = useRef("");
   const rfRef = useRef<{ fitView: (opts?: any) => void } | null>(null);
+
+  const updateInlineEditValue = useCallback((value: string) => {
+    inlineEditValueRef.current = value;
+    setInlineEditValue(value);
+  }, []);
 
   // Build children map by primary_parent_id
   const childrenByParent = useMemo(() => {
@@ -378,11 +384,12 @@ export function MindMapCanvas({
           hasChildren,
           isCollapsed: isCollapsedNode,
           isInlineEditing: isEditing,
-          inlineValue: isEditing ? inlineEditValue : n.canonical_name,
-          onInlineChange: (v: string) => setInlineEditValue(v),
-          onInlineCommit: async () => {
-            if (inlineEditValue.trim() && inlineEditValue.trim() !== n.canonical_name) {
-              await onRenameNode(n.id, inlineEditValue.trim());
+          inlineValue: isEditing ? inlineEditValueRef.current : n.canonical_name,
+          onInlineChange: updateInlineEditValue,
+          onInlineCommit: async (value: string) => {
+            const nextName = value.trim();
+            if (nextName && nextName !== n.canonical_name) {
+              await onRenameNode(n.id, nextName);
             }
             setInlineEditId(null);
           },
@@ -450,7 +457,22 @@ export function MindMapCanvas({
 
     setNodes(rfNodes);
     setEdges(rfEdges);
-  }, [graphNodes, relations, childrenByParent, collapsed, crossRelTypeFilter, inlineEditId, inlineEditValue, activeGraphName, layoutNonce, t, onRenameNode]);
+  }, [graphNodes, relations, childrenByParent, collapsed, crossRelTypeFilter, inlineEditId, activeGraphName, layoutNonce, t, onRenameNode, updateInlineEditValue]);
+
+  // Draft keystrokes update only the active custom node. Tree geometry and edges do not depend
+  // on the draft text, so keep their full rebuild tied to edit start/end and graph state changes.
+  useEffect(() => {
+    if (!inlineEditId) return;
+    setNodes((prev) => {
+      let changed = false;
+      const next = prev.map((node) => {
+        if (node.id !== inlineEditId || node.data.inlineValue === inlineEditValue) return node;
+        changed = true;
+        return { ...node, data: { ...node.data, inlineValue: inlineEditValue } };
+      });
+      return changed ? next : prev;
+    });
+  }, [inlineEditId, inlineEditValue, setNodes]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -508,8 +530,8 @@ export function MindMapCanvas({
     if (node.id === VIRTUAL_ROOT_ID) return;
     setInlineEditId(node.id);
     const gn = graphNodes.find((n) => n.id === node.id);
-    setInlineEditValue(gn?.canonical_name ?? "");
-  }, [graphNodes]);
+    updateInlineEditValue(gn?.canonical_name ?? "");
+  }, [graphNodes, updateInlineEditValue]);
 
   const handleEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     if (edge.id.startsWith("cross-")) {
