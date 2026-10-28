@@ -28,6 +28,7 @@ def analysis_attempt_clause(
     publication_id: str | None,
     *,
     attempt_alias: str = "sa",
+    attempt_id_column: str = "id",
     class_id: str | None = None,
     attempt_access_clause_fn: Callable[..., tuple[str, list[str]]] = attempt_access_clause,
 ) -> tuple[str, list[str]]:
@@ -39,7 +40,7 @@ def analysis_attempt_clause(
         clause = (
             f"({clause}) AND EXISTS (SELECT 1 FROM attempt_class_memberships filter_acm "
             f"JOIN exam_publications filter_ep ON filter_ep.id = {attempt_alias}.publication_id "
-            f"WHERE filter_acm.attempt_id = {attempt_alias}.id "
+            f"WHERE filter_acm.attempt_id = {attempt_alias}.{attempt_id_column} "
             f"AND filter_ep.recipient_scope = 'class' "
             f"AND filter_acm.class_id = ?)"
         )
@@ -97,6 +98,22 @@ def analysis_question_maps(
     return question_maps_fn(project_root, paper)
 
 
+def _answer_payload_has_content(
+    row: Any,
+    row_index: int,
+    *,
+    json_payload_fn: Callable[[object], dict[str, Any]],
+    answer_payload_presence: list[bool | None] | None,
+) -> bool:
+    if answer_payload_presence is None:
+        return bool(json_payload_fn(row["answer_payload"]))
+    cached = answer_payload_presence[row_index]
+    if cached is None:
+        cached = bool(json_payload_fn(row["answer_payload"]))
+        answer_payload_presence[row_index] = cached
+    return cached
+
+
 def build_module_report(
     root: Path,
     *,
@@ -115,6 +132,7 @@ def build_module_report(
     read_context: FrozenQuestionReadContext | None = None,
     question_data: tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]] | None = None,
     answer_rows: list[Any] | None = None,
+    answer_payload_presence: list[bool | None] | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
@@ -173,14 +191,18 @@ def build_module_report(
                 (paper_id, *access_params),
             ).fetchall()
 
-    for row in answer_rows:
+    for answer_index, row in enumerate(answer_rows):
         question_id = str(row["question_id"] or "")
         module_id = question_module.get(question_id)
         if not module_id:
             continue
         item = modules[module_id]
-        payload = json_payload_fn(row["answer_payload"])
-        if payload:
+        if _answer_payload_has_content(
+            row,
+            answer_index,
+            json_payload_fn=json_payload_fn,
+            answer_payload_presence=answer_payload_presence,
+        ):
             item["answered_count"] = int(item["answered_count"]) + 1
         if row["score"] is not None and row["attempt_score"] is not None:
             max_score = float(score_by_id.get(question_id) or 0)
@@ -227,6 +249,7 @@ def build_question_report(
     read_context: FrozenQuestionReadContext | None = None,
     question_data: tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, float]] | None = None,
     answer_rows: list[Any] | None = None,
+    answer_payload_presence: list[bool | None] | None = None,
 ) -> list[dict[str, Any]]:
     if project_root is None:
         return []
@@ -278,13 +301,17 @@ def build_question_report(
                 (paper_id, *access_params),
             ).fetchall()
 
-    for row in answer_rows:
+    for answer_index, row in enumerate(answer_rows):
         question_id = str(row["question_id"] or "")
         item = reports.get(question_id)
         if item is None:
             continue
-        payload = json_payload_fn(row["answer_payload"])
-        if payload:
+        if _answer_payload_has_content(
+            row,
+            answer_index,
+            json_payload_fn=json_payload_fn,
+            answer_payload_presence=answer_payload_presence,
+        ):
             item["answered_count"] = int(item["answered_count"]) + 1
         if row["score"] is not None and row["attempt_score"] is not None:
             max_score = float(score_by_id.get(question_id) or 0)
@@ -333,6 +360,12 @@ def build_class_report(
     connection: Any = None,
 ) -> list[dict[str, Any]]:
     access_clause, access_params = attempt_clause_fn(user, publication_id, class_id=class_id)
+    visible_access_clause, visible_access_params = attempt_clause_fn(
+        user,
+        publication_id,
+        attempt_alias="visible_sa",
+        class_id=class_id,
+    )
     with ExitStack() as stack:
         con = connection
         if con is None:
@@ -359,10 +392,16 @@ def build_class_report(
             JOIN attempt_class_memberships acm ON acm.attempt_id = sa.id
             LEFT JOIN proctor_events pe ON pe.attempt_id = sa.id AND pe.event_type = 'visibility_hidden'
             WHERE ep.paper_id = ? AND {access_clause}
+              AND acm.attempt_id IN (
+                SELECT visible_sa.id
+                FROM student_attempts visible_sa
+                JOIN exam_publications visible_ep ON visible_ep.id = visible_sa.publication_id
+                WHERE visible_ep.paper_id = ? AND {visible_access_clause}
+              )
             GROUP BY acm.class_id, sa.id
             ORDER BY acm.class_name
             """,
-            (paper_id, *access_params),
+            (paper_id, *access_params, paper_id, *visible_access_params),
         ).fetchall()
 
     classes: dict[str, dict[str, Any]] = {}

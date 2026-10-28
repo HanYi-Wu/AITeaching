@@ -476,6 +476,7 @@ def _build_module_report(
     read_context: FrozenQuestionReadContext | None = None,
     question_data: Any = None,
     answer_rows: list[Any] | None = None,
+    answer_payload_presence: list[bool | None] | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_module_report(
         root,
@@ -494,6 +495,7 @@ def _build_module_report(
         read_context=read_context,
         question_data=question_data,
         answer_rows=answer_rows,
+        answer_payload_presence=answer_payload_presence,
     )
 
 
@@ -509,6 +511,7 @@ def _build_question_report(
     read_context: FrozenQuestionReadContext | None = None,
     question_data: Any = None,
     answer_rows: list[Any] | None = None,
+    answer_payload_presence: list[bool | None] | None = None,
 ) -> list[dict[str, Any]]:
     return paper_analysis.build_question_report(
         root,
@@ -525,6 +528,7 @@ def _build_question_report(
         read_context=read_context,
         question_data=question_data,
         answer_rows=answer_rows,
+        answer_payload_presence=answer_payload_presence,
     )
 
 
@@ -574,12 +578,14 @@ def _analysis_attempt_clause(
     publication_id: str | None,
     *,
     attempt_alias: str = "sa",
+    attempt_id_column: str = "id",
     class_id: str | None = None,
 ) -> tuple[str, list[str]]:
     return paper_analysis.analysis_attempt_clause(
         user,
         publication_id,
         attempt_alias=attempt_alias,
+        attempt_id_column=attempt_id_column,
         class_id=class_id,
         attempt_access_clause_fn=_attempt_access_clause,
     )
@@ -633,7 +639,13 @@ def analyze_paper(
         ).fetchall()]
         publication_rows = [row for row in publication_rows if str(row["id"]) == publication_id]
         attempt_access, attempt_params = _analysis_attempt_clause(user, publication_id, class_id=class_id)
-        event_access, event_params = _analysis_attempt_clause(user, publication_id, attempt_alias="pe", class_id=class_id)
+        event_access, event_params = _analysis_attempt_clause(
+            user,
+            publication_id,
+            attempt_alias="pe",
+            attempt_id_column="attempt_id",
+            class_id=class_id,
+        )
         attempt_rows = con.execute(
             f"""
             SELECT
@@ -641,14 +653,6 @@ def analyze_paper(
               ep.id AS publication_id,
               ep.title AS publication_title,
               ep.max_screen_switches,
-              (SELECT COUNT(*) FROM student_answers aa WHERE aa.attempt_id = sa.id) AS answer_count,
-              (SELECT COUNT(*) FROM student_answers aa WHERE aa.attempt_id = sa.id AND aa.score IS NULL) AS unscored_answer_count,
-              (
-                SELECT GROUP_CONCAT(c.name)
-                FROM publication_classes pc
-                JOIN classes c ON c.id = pc.class_id
-                WHERE pc.publication_id = ep.id
-              ) AS class_names,
               s.student_no,
               s.display_name,
               u.username AS account_username
@@ -677,6 +681,17 @@ def analyze_paper(
             f"JOIN student_attempts sa ON sa.id=ans.attempt_id JOIN exam_publications ep ON ep.id=sa.publication_id "
             f"WHERE ep.paper_id=? AND {attempt_access}", (paper_id, *attempt_params)
         ).fetchall()
+        attempt_class_rows = con.execute(
+            f"""
+            SELECT acm.attempt_id, acm.class_id, acm.class_name
+            FROM attempt_class_memberships acm
+            JOIN student_attempts sa ON sa.id = acm.attempt_id
+            JOIN exam_publications ep ON ep.id = sa.publication_id
+            WHERE ep.paper_id = ? AND {attempt_access}
+            ORDER BY acm.attempt_id, acm.class_id
+            """,
+            (paper_id, *attempt_params),
+        ).fetchall()
         classes = _build_class_report(
             root, paper_id=paper_id, user=user, publication_id=publication_id,
             class_id=class_id, connection=con,
@@ -688,8 +703,19 @@ def analyze_paper(
 
     events_by_attempt: dict[str, list[dict[str, Any]]] = {}
     scores_by_attempt: dict[str, dict[str, float | None]] = {}
+    answer_counts_by_attempt: dict[str, list[int]] = {}
     for answer in answer_rows:
-        scores_by_attempt.setdefault(str(answer['attempt_id']), {})[str(answer['question_id'])] = answer['score']
+        attempt_key = str(answer['attempt_id'])
+        stats = answer_counts_by_attempt.setdefault(attempt_key, [0, 0])
+        stats[0] += 1
+        if answer["score"] is None:
+            stats[1] += 1
+        scores_by_attempt.setdefault(attempt_key, {})[str(answer['question_id'])] = answer['score']
+    class_names_by_attempt: dict[str, list[str]] = {}
+    for membership in attempt_class_rows:
+        class_name = membership["class_name"]
+        if class_name:
+            class_names_by_attempt.setdefault(str(membership["attempt_id"]), []).append(str(class_name))
     for row in event_rows:
         event = row_to_dict(row) or {}
         events_by_attempt.setdefault(str(event.get("attempt_id")), []).append(event)
@@ -705,23 +731,73 @@ def analyze_paper(
     question_data = None
     if project_root is not None:
         try:
+            ordered_snapshots = sorted(attempt_rows, key=lambda row: row["snapshot_order"])
+            unique_snapshots = []
+            seen_question_payloads: set[str] = set()
+            for snapshot in ordered_snapshots:
+                question_payload_key = str(snapshot["question_payload_json"] or "[]")
+                if question_payload_key in seen_question_payloads:
+                    continue
+                seen_question_payloads.add(question_payload_key)
+                unique_snapshots.append(snapshot)
             question_data = _analysis_question_maps(
                 root, project_root, paper, user, publication_id, class_id, question_read_context,
-                snapshot_rows=sorted(attempt_rows, key=lambda row: row["snapshot_order"]),
+                snapshot_rows=unique_snapshots,
             )
         except (FileNotFoundError, ValueError):
             question_data = ([], {}, {})
+    question_snapshot_counts: dict[tuple[str, str, int], int] = {}
+    if project_root is not None:
+        for row in attempt_rows:
+            question_payload_key = str(row["question_payload_json"] or "[]")
+            answer_key = str(row["answer_key_json"] or "{}")
+            version = int(row["question_payload_version"] or 1)
+            cache_key = (question_payload_key, answer_key, version)
+            question_snapshot_counts[cache_key] = question_snapshot_counts.get(cache_key, 0) + 1
+    safe_question_payloads: dict[str, bool] = {}
+    canonical_max_by_snapshot: dict[tuple[str, str, int], float] = {}
     for row in attempt_rows:
         attempt = row_to_dict(row) or {}
         if project_root is not None:
-            _questions, _by_id, score_by_id = _question_maps_for_attempt(
-                root,
-                project_root,
-                paper,
-                attempt,
-                read_context=question_read_context,
+            question_payload_key = str(attempt.get("question_payload_json") or "[]")
+            answer_key = str(attempt.get("answer_key_json") or "{}")
+            version = int(attempt.get("question_payload_version") or 1)
+            cache_key = (question_payload_key, answer_key, version)
+            can_reuse_score_map = (
+                bool(attempt.get("question_payload_json"))
+                and version >= 3
+                and question_snapshot_counts.get(cache_key, 0) > 1
             )
-            canonical_max = round(sum(score_by_id.values()), 2)
+            if can_reuse_score_map:
+                safe = safe_question_payloads.get(question_payload_key)
+                if safe is None:
+                    try:
+                        parsed_questions = json.loads(question_payload_key)
+                    except (TypeError, json.JSONDecodeError):
+                        safe = False
+                    else:
+                        safe = (
+                            isinstance(parsed_questions, list)
+                            and all(
+                                isinstance(question, dict) and not _is_placeholder_question(question)
+                                for question in parsed_questions
+                            )
+                        )
+                    safe_question_payloads[question_payload_key] = safe
+                can_reuse_score_map = safe
+            if can_reuse_score_map and cache_key in canonical_max_by_snapshot:
+                canonical_max = canonical_max_by_snapshot[cache_key]
+            else:
+                _questions, _by_id, score_by_id = _question_maps_for_attempt(
+                    root,
+                    project_root,
+                    paper,
+                    attempt,
+                    read_context=question_read_context,
+                )
+                canonical_max = round(sum(score_by_id.values()), 2)
+                if can_reuse_score_map:
+                    canonical_max_by_snapshot[cache_key] = canonical_max
             if canonical_max > 0:
                 attempt["max_score"] = canonical_max
         status_group = _attempt_status_group(attempt)
@@ -731,9 +807,10 @@ def analyze_paper(
             in_progress += 1
         else:
             not_started += 1
+        answer_count, unscored_answer_count = answer_counts_by_attempt.get(str(attempt.get("id")), [0, 0])
         score_percent = (
             _score_percent(attempt.get("score"), attempt.get("max_score"))
-            if int(attempt.get("answer_count") or 0) > 0 and int(attempt.get("unscored_answer_count") or 0) == 0
+            if answer_count > 0 and unscored_answer_count == 0
             else None
         )
         if score_percent is not None:
@@ -770,7 +847,7 @@ def analyze_paper(
                 "publication_id": attempt.get("publication_id"),
                 "publication_title": attempt.get("publication_title"),
                 "question_scores": scores_by_attempt.get(str(attempt.get("id")), {}) if score_percent is not None else {},
-                "class_names": [part for part in str(attempt.get("class_names") or "").split(",") if part],
+                "class_names": class_names_by_attempt.get(str(attempt.get("id")), []),
                 "status": status_group,
                 "score": attempt.get("score"),
                 "max_score": attempt.get("max_score"),
@@ -808,6 +885,7 @@ def analyze_paper(
         event_type = str(row["event_type"] or "unknown")
         event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
     exceeded_student_count = len(flagged_student_ids)
+    answer_payload_presence = [None] * len(answer_rows) if project_root is not None else None
     modules = _build_module_report(
         root,
         paper_id=paper_id,
@@ -821,6 +899,7 @@ def analyze_paper(
         read_context=question_read_context,
         question_data=question_data,
         answer_rows=answer_rows,
+        answer_payload_presence=answer_payload_presence,
     )
     questions = _build_question_report(
         root,
@@ -833,6 +912,7 @@ def analyze_paper(
         read_context=question_read_context,
         question_data=question_data,
         answer_rows=answer_rows,
+        answer_payload_presence=answer_payload_presence,
     )
     radar = _build_radar(
         completion_rate=completion_rate,

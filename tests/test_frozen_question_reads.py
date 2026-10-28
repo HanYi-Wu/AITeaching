@@ -523,6 +523,52 @@ def test_analysis_reports_preserve_six_argument_question_map_callbacks(tmp_path:
     assert [len(args) for args in callback_args] == [6, 6]
 
 
+def test_direct_analysis_report_calls_keep_uncached_payload_callbacks(tmp_path: Path) -> None:
+    from solaire.web.platform_db import init_platform_db
+
+    init_platform_db(tmp_path)
+    question = {"question_id": "q1", "header": "1", "section_id": "Choice", "score_per_item": 1}
+    payload_calls: list[object] = []
+    answer_rows = [
+        {
+            "question_id": "q1",
+            "answer_payload": '{"answer":"A"}',
+            "score": 1.0,
+            "is_correct": 1,
+            "attempt_score": 1.0,
+        }
+    ]
+
+    def question_maps(*_args):
+        return [question], {"q1": question}, {"q1": 1.0}
+
+    def payload(value):
+        payload_calls.append(value)
+        return {"answer": "A"}
+
+    common = {
+        "root": tmp_path,
+        "project_root": tmp_path,
+        "paper": {"id": "paper"},
+        "user": {"role": "admin"},
+        "question_maps_fn": question_maps,
+        "attempt_clause_fn": lambda *_args, **_kwargs: ("1=1", []),
+        "json_payload_fn": payload,
+        "risk_level_fn": lambda _value: "low",
+        "answer_rows": answer_rows,
+    }
+    modules = paper_analysis.build_module_report(
+        **common,
+        paper_id="paper",
+        students=[],
+        average_score=None,
+    )
+    questions = paper_analysis.build_question_report(**common, paper_id="paper")
+
+    assert payload_calls == ['{"answer":"A"}', '{"answer":"A"}']
+    assert modules[0]["answered_count"] == questions[0]["answered_count"] == 1
+
+
 def test_analysis_reports_share_answers_when_grading_changes_during_the_request(web_client, tmp_path, monkeypatch):
     admin = _bootstrap_admin(web_client)
     _, _, class_id = _create_school_teacher_class(web_client, admin)
