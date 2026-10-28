@@ -20,3 +20,8 @@ def test_grade_sheet_has_chinese_units_blanks_for_ungraded_and_safe_names():
     assert wb['逐题成绩']['D3'].value is None
     assert wb['逐题成绩']['D1'].data_type == 's'
     assert wb['成绩单'].auto_filter.ref
+    assert wb['成绩单'].freeze_panes == 'A2'
+    assert wb['summary'].freeze_panes == 'A2'
+    assert wb['summary'].auto_filter.ref == 'A1:B14'
+    assert wb['summary'].column_dimensions['A'].width == 27
+    assert len(wb['summary']._charts) == 1

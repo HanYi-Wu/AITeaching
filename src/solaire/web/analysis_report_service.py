@@ -38,11 +38,19 @@ def _excel_value(value: Any) -> Any:
 
 def _write_table(ws, headers: list[str], rows: list[list[Any]]) -> None:
     ws.append(headers)
+    row_number = ws.max_row
+    widths = [max(12, min(42, len(header) + 4)) for header in headers]
     for row in rows:
         ws.append([_excel_value(value) for value in row])
-        for cell in ws[ws.max_row]:
+        row_number += 1
+        for index, cell in enumerate(ws[row_number], start=1):
             if isinstance(cell.value, str):
                 cell.data_type = "s"  # User-controlled names must never become Excel formulas.
+            if index <= len(widths):
+                widths[index - 1] = max(
+                    widths[index - 1],
+                    min(42, len(_safe_text(cell.value)) + 2),
+                )
     header_fill = PatternFill("solid", fgColor="E2E8F0")
     for cell in ws[1]:
         if isinstance(cell.value, str):
@@ -52,11 +60,7 @@ def _write_table(ws, headers: list[str], rows: list[list[Any]]) -> None:
         cell.alignment = Alignment(vertical="center")
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    for index, header in enumerate(headers, start=1):
-        width = max(12, min(42, len(header) + 4))
-        for cell in ws.iter_cols(min_col=index, max_col=index, min_row=2):
-            for item in cell:
-                width = max(width, min(42, len(_safe_text(item.value)) + 2))
+    for index, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(index)].width = width
 
 
