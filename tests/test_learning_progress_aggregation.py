@@ -134,3 +134,106 @@ def test_class_aggregation_only_includes_paired_students() -> None:
     assert summary["pre_percentage"] == 50.0
     assert summary["post_percentage"] == 75.0
     assert summary["delta_percentage_points"] == 25.0
+
+
+def test_class_aggregation_preserves_status_priority_and_modified_source() -> None:
+    baselines = {
+        "stu-d": [{"student_id": "stu-d", "knowledge_node_id": "k1", "effective_score": 0.1, "effective_max_score": 3.0, "source_question_id": "b-d"}],
+        "stu-c": [{"student_id": "stu-c", "knowledge_node_id": "k1", "effective_score": 0.2, "effective_max_score": 3.0, "source_question_id": "b-c"}],
+        "stu-b": [{"student_id": "stu-b", "knowledge_node_id": "k1", "effective_score": 0.3, "effective_max_score": 3.0, "source_question_id": "b-b"}],
+        "stu-a": [{"student_id": "stu-a", "knowledge_node_id": "k1", "effective_score": 0.4, "effective_max_score": 3.0, "source_question_id": "b-a"}],
+    }
+    targets = {
+        "stu-d": [{"student_id": "stu-d", "knowledge_node_id": "k1", "effective_score": 1.0, "effective_max_score": 3.0, "question_id": "t-d", "status": "graded"}],
+        "stu-c": [
+            {"student_id": "stu-c", "knowledge_node_id": "k1", "effective_score": None, "effective_max_score": 3.0, "question_id": "t-c1", "status": "target_ungraded"},
+            {"student_id": "stu-c", "knowledge_node_id": "k1", "effective_score": None, "effective_max_score": 3.0, "question_id": "t-c2", "status": "target_unreleased"},
+        ],
+        "stu-b": [
+            {"student_id": "stu-b", "knowledge_node_id": "k1", "effective_score": None, "effective_max_score": 3.0, "question_id": "t-b1", "status": "target_unsubmitted"},
+            {"student_id": "stu-b", "knowledge_node_id": "k1", "effective_score": None, "effective_max_score": 3.0, "question_id": "t-b2", "status": "target_ungraded"},
+        ],
+        "stu-a": [{"student_id": "stu-a", "knowledge_node_id": "k1", "effective_score": 1.0, "effective_max_score": 3.0, "question_id": "t-a", "status": "graded"}],
+    }
+
+    result = calculate_class_comparison(
+        baselines,
+        targets,
+        source_status={"status": "source_modified", "is_modified": True},
+    )
+    summary = result["node_summaries"][0]
+    assert result["status"] == "source_modified"
+    assert summary["status"] == "source_modified"
+    assert summary["is_modified"] is True
+    assert summary["matched_student_count"] == 2
+    assert summary["unpaired_reasons"] == {
+        "target_unsubmitted": 1,
+        "target_ungraded": 1,
+    }
+    # Sorting student IDs before summing keeps the historical round-to-4 policy.
+    assert summary["pre_score_rate"] == 0.0833
+    assert summary["pre_percentage"] == 8.3
+    assert summary["post_score_rate"] == 0.3333
+    assert summary["post_percentage"] == 33.3
+    assert summary["delta_percentage_points"] == 25.0
+
+    missing_source = calculate_class_comparison(
+        {"stu-1": [{"student_id": "stu-1", "knowledge_node_id": "k1", "effective_score": 2.0, "effective_max_score": 4.0}]},
+        {"stu-1": [{"student_id": "stu-1", "knowledge_node_id": "k1", "effective_score": 3.0, "effective_max_score": 4.0, "status": "graded"}]},
+        source_status={"status": "source_missing", "is_missing": True},
+    )
+    missing_summary = missing_source["node_summaries"][0]
+    assert missing_source["status"] == "source_missing"
+    assert missing_summary["status"] == "source_missing"
+    assert missing_summary["matched_student_count"] == 0
+    assert missing_summary["unpaired_reasons"] == {"source_missing": 1}
+    assert missing_summary["delta_percentage_points"] is None
+
+
+def test_class_aggregation_preserves_stringified_node_id_matching() -> None:
+    baselines = {
+        "stu-1": [
+            {"student_id": "stu-1", "knowledge_node_id": "0", "effective_score": 1.0, "effective_max_score": 2.0, "source_question_id": "q-string-zero"},
+            {"student_id": "stu-1", "knowledge_node_id": 0, "effective_score": 1.0, "effective_max_score": 2.0, "source_question_id": "q-int-zero"},
+            {"student_id": "stu-1", "knowledge_node_id": "None", "effective_score": 1.0, "effective_max_score": 2.0, "source_question_id": "q-string-none"},
+            {"student_id": "stu-1", "knowledge_node_id": None, "effective_score": 1.0, "effective_max_score": 2.0, "source_question_id": "q-missing"},
+        ]
+    }
+    targets = {
+        "stu-1": [
+            {"student_id": "stu-1", "knowledge_node_id": "0", "effective_score": 1.5, "effective_max_score": 2.0, "question_id": "t-string-zero", "status": "graded"},
+            {"student_id": "stu-1", "knowledge_node_id": 0, "effective_score": 1.5, "effective_max_score": 2.0, "question_id": "t-int-zero", "status": "graded"},
+            {"student_id": "stu-1", "knowledge_node_id": "None", "effective_score": 1.5, "effective_max_score": 2.0, "question_id": "t-string-none", "status": "graded"},
+            {"student_id": "stu-1", "knowledge_node_id": None, "effective_score": 1.5, "effective_max_score": 2.0, "question_id": "t-missing", "status": "graded"},
+        ]
+    }
+
+    result = calculate_class_comparison(baselines, targets)
+    assert [item["knowledge_node_id"] for item in result["node_summaries"]] == ["0", "None"]
+    by_node = {item["knowledge_node_id"]: item for item in result["node_summaries"]}
+    assert by_node["0"]["pre_question_count"] == 2
+    assert by_node["0"]["post_question_count"] == 2
+    assert by_node["0"]["pre_score_rate"] == 0.5
+    assert by_node["0"]["post_score_rate"] == 0.75
+    # As in the old str(value) filter, None rows match a literal "None" node.
+    assert by_node["None"]["pre_question_count"] == 2
+    assert by_node["None"]["post_question_count"] == 2
+    assert by_node["None"]["pre_score_rate"] == 0.5
+    assert by_node["None"]["post_score_rate"] == 0.75
+
+
+def test_class_aggregation_preserves_builtin_float_sum_cancellation() -> None:
+    scores_by_student = {"stu-a": 1e16, "stu-b": 1.0, "stu-c": -1e16}
+    baselines = {
+        sid: [{"student_id": sid, "knowledge_node_id": "k1", "effective_score": score, "effective_max_score": 1.0}]
+        for sid, score in scores_by_student.items()
+    }
+    targets = {
+        sid: [{"student_id": sid, "knowledge_node_id": "k1", "effective_score": score, "effective_max_score": 1.0, "status": "graded"}]
+        for sid, score in scores_by_student.items()
+    }
+
+    summary = calculate_class_comparison(baselines, targets)["node_summaries"][0]
+    expected_rate = round(round(sum(scores_by_student.values()), 4) / 3.0, 4)
+    assert summary["pre_score_rate"] == expected_rate
+    assert summary["post_score_rate"] == expected_rate

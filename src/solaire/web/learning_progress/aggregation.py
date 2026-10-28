@@ -212,105 +212,118 @@ def calculate_class_comparison(
     is_source_modified = bool(source_status and source_status.get("is_modified"))
 
     all_nodes: set[str] = set()
-    for items in baselines_by_student.values():
-        for it in items:
-            nid = it.get("knowledge_node_id")
-            if nid:
-                all_nodes.add(str(nid))
-    for items in targets_by_student.values():
-        for it in items:
-            nid = it.get("knowledge_node_id")
-            if nid:
-                all_nodes.add(str(nid))
+    for grouped_items in (baselines_by_student, targets_by_student):
+        for items in grouped_items.values():
+            for it in items:
+                nid = it.get("knowledge_node_id")
+                if nid:
+                    all_nodes.add(str(nid))
 
     all_student_ids = sorted(set(baselines_by_student.keys()) | set(targets_by_student.keys()))
-    node_summaries: list[dict[str, Any]] = []
+    sorted_nodes = sorted(all_nodes)
+    node_accumulators: dict[str, dict[str, Any]] = {
+        nid: {
+            "matched_student_count": 0,
+            "unpaired_reasons": {},
+            # Keep values in sorted student order and use sum() after grouping.
+            # Python 3.12+ uses improved summation for floats, so += is not
+            # equivalent for cancellation and extreme values.
+            "pre_scores": [],
+            "pre_max_scores": [],
+            "post_scores": [],
+            "post_max_scores": [],
+            "pre_questions": set(),
+            "post_questions": set(),
+        }
+        for nid in sorted_nodes
+    }
 
-    for nid in sorted(all_nodes):
-        paired_students: list[str] = []
-        pre_scores: list[float] = []
-        pre_max_scores: list[float] = []
-        post_scores: list[float] = []
-        post_max_scores: list[float] = []
-        pre_all_questions: set[str] = set()
-        post_all_questions: set[str] = set()
+    for sid in all_student_ids:
+        baseline_by_node: dict[str, list[dict[str, Any]]] = {}
+        for it in baselines_by_student.get(sid, []):
+            baseline_by_node.setdefault(str(it.get("knowledge_node_id")), []).append(it)
 
-        unpaired_reasons: dict[str, int] = {}
+        target_by_node: dict[str, list[dict[str, Any]]] = {}
+        for it in targets_by_student.get(sid, []):
+            target_by_node.setdefault(str(it.get("knowledge_node_id")), []).append(it)
 
-        for sid in all_student_ids:
-            b_items = [it for it in baselines_by_student.get(sid, []) if str(it.get("knowledge_node_id")) == nid]
-            t_items = [it for it in targets_by_student.get(sid, []) if str(it.get("knowledge_node_id")) == nid]
+        for nid in sorted_nodes:
+            # Group keys deliberately stringify even missing/falsy ids. The old
+            # filter compared str(value) to node ids, so a missing id can match
+            # a real node whose id is the string "None".
+            b_items = baseline_by_node.get(nid, [])
+            t_items = target_by_node.get(nid, [])
 
             pre_agg = calculate_knowledge_score_rate(b_items)
             post_agg = calculate_knowledge_score_rate(t_items)
-
             target_statuses = {it.get("status") for it in t_items}
 
+            accumulator = node_accumulators[nid]
+            unpaired_reasons = accumulator["unpaired_reasons"]
             if is_source_missing:
                 unpaired_reasons["source_missing"] = unpaired_reasons.get("source_missing", 0) + 1
                 continue
-
             if not b_items or pre_agg["score_rate"] is None:
                 unpaired_reasons["missing_baseline"] = unpaired_reasons.get("missing_baseline", 0) + 1
                 continue
-
             if not t_items or "target_unsubmitted" in target_statuses:
                 unpaired_reasons["target_unsubmitted"] = unpaired_reasons.get("target_unsubmitted", 0) + 1
                 continue
-
             if "target_ungraded" in target_statuses:
                 unpaired_reasons["target_ungraded"] = unpaired_reasons.get("target_ungraded", 0) + 1
                 continue
-
             if "target_unreleased" in target_statuses:
                 unpaired_reasons["target_unreleased"] = unpaired_reasons.get("target_unreleased", 0) + 1
                 continue
-
             if post_agg["score_rate"] is None:
                 unpaired_reasons["missing_target"] = unpaired_reasons.get("missing_target", 0) + 1
                 continue
 
-            # Student is fully paired
-            paired_students.append(sid)
-            pre_all_questions.update(str(it["source_question_id"]) for it in b_items if it.get("source_question_id"))
-            post_all_questions.update(str(it["question_id"]) for it in t_items if it.get("question_id"))
-            pre_scores.append(pre_agg["total_score"])
-            pre_max_scores.append(pre_agg["total_max_score"])
-            post_scores.append(post_agg["total_score"])
-            post_max_scores.append(post_agg["total_max_score"])
+            # Students are visited in the same sorted order as before, preserving
+            # the order of floating-point additions for every node.
+            accumulator["matched_student_count"] += 1
+            accumulator["pre_questions"].update(
+                str(it["source_question_id"]) for it in b_items if it.get("source_question_id")
+            )
+            accumulator["post_questions"].update(
+                str(it["question_id"]) for it in t_items if it.get("question_id")
+            )
+            accumulator["pre_scores"].append(pre_agg["total_score"])
+            accumulator["pre_max_scores"].append(pre_agg["total_max_score"])
+            accumulator["post_scores"].append(post_agg["total_score"])
+            accumulator["post_max_scores"].append(post_agg["total_max_score"])
 
-        sum_pre_score = round(sum(pre_scores), 4)
-        sum_pre_max = round(sum(pre_max_scores), 4)
-        sum_post_score = round(sum(post_scores), 4)
-        sum_post_max = round(sum(post_max_scores), 4)
+    node_summaries: list[dict[str, Any]] = []
+    for nid in sorted_nodes:
+        accumulator = node_accumulators[nid]
+        sum_pre_score = round(sum(accumulator["pre_scores"]), 4)
+        sum_pre_max = round(sum(accumulator["pre_max_scores"]), 4)
+        sum_post_score = round(sum(accumulator["post_scores"]), 4)
+        sum_post_max = round(sum(accumulator["post_max_scores"]), 4)
 
         pre_rate = round(sum_pre_score / sum_pre_max, 4) if sum_pre_max > 0 else None
         post_rate = round(sum_post_score / sum_post_max, 4) if sum_post_max > 0 else None
-
         pre_pct = round(pre_rate * 100, 1) if pre_rate is not None else None
         post_pct = round(post_rate * 100, 1) if post_rate is not None else None
-
         delta_pp: float | None = None
         if pre_pct is not None and post_pct is not None and not is_source_missing:
             delta_pp = round(post_pct - pre_pct, 1)
-
-        q_diff = len(post_all_questions) - len(pre_all_questions)
 
         node_summaries.append({
             "knowledge_node_id": nid,
             "status": "source_missing" if is_source_missing else ("source_modified" if is_source_modified else "valid"),
             "is_modified": is_source_modified,
-            "matched_student_count": len(paired_students),
-            "unpaired_student_count": len(all_student_ids) - len(paired_students),
-            "unpaired_reasons": unpaired_reasons,
+            "matched_student_count": accumulator["matched_student_count"],
+            "unpaired_student_count": len(all_student_ids) - accumulator["matched_student_count"],
+            "unpaired_reasons": accumulator["unpaired_reasons"],
             "pre_score_rate": pre_rate,
             "pre_percentage": pre_pct,
             "post_score_rate": post_rate,
             "post_percentage": post_pct,
             "delta_percentage_points": delta_pp,
-            "pre_question_count": len(pre_all_questions),
-            "post_question_count": len(post_all_questions),
-            "question_difference": q_diff,
+            "pre_question_count": len(accumulator["pre_questions"]),
+            "post_question_count": len(accumulator["post_questions"]),
+            "question_difference": len(accumulator["post_questions"]) - len(accumulator["pre_questions"]),
         })
 
     return {
