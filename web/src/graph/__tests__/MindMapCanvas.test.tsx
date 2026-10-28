@@ -41,7 +41,7 @@ vi.mock("@xyflow/react", async () => {
     const Component = nodeTypes[node.type];
     return React.createElement(
       "div",
-      { "data-node-id": node.id, draggable: true, onClick: handleClick, onDoubleClick: handleDoubleClick, onDragEnd: handleDragEnd },
+      { "data-node-id": node.id, tabIndex: 0, draggable: true, onClick: handleClick, onDoubleClick: handleDoubleClick, onDragEnd: handleDragEnd },
       React.createElement(CustomNode, { Component, id: node.id, data: node.data, selected: Boolean(node.selected) }),
     );
   });
@@ -100,6 +100,13 @@ const relations: GraphRelationRow[] = [
 ];
 
 const noOp = () => undefined;
+
+function deferredVoid() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
 function renderMindMap(overrides: Partial<ComponentProps<typeof MindMapCanvas>> = {}) {
   const props: ComponentProps<typeof MindMapCanvas> = {
     graphNodes,
@@ -223,6 +230,78 @@ describe("MindMapCanvas inline editing", () => {
     expect(input).toBeInTheDocument();
     expect(input).toHaveValue("未保存草稿");
     expect(dataFor("child")?.isInlineEditing).toBe(true);
+  });
+
+  it("keeps node B's new draft and focus when node A's earlier rename resolves", async () => {
+    const pendingSaves: Array<{ nodeId: string; name: string; deferred: ReturnType<typeof deferredVoid> }> = [];
+    const onRenameNode = vi.fn((nodeId: string, name: string) => {
+      const pending = deferredVoid();
+      pendingSaves.push({ nodeId, name, deferred: pending });
+      return pending.promise;
+    });
+    const user = userEvent.setup();
+    const mounted = renderMindMap({ onRenameNode });
+    await waitFor(() => expect(mocks.latestNodes).toHaveLength(graphNodes.length + 1));
+
+    await user.dblClick(nodeElement("parent", mounted.container)!);
+    const inputA = await screen.findByDisplayValue("父节点");
+    await user.type(inputA, " A 草稿");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(onRenameNode).toHaveBeenCalledWith("parent", "父节点 A 草稿"));
+
+    await user.dblClick(nodeElement("child", mounted.container)!);
+    const inputB = await screen.findByDisplayValue("子节点");
+    await user.type(inputB, " B 草稿");
+    expect(inputB).toHaveValue("子节点 B 草稿");
+    expect(inputB).toHaveFocus();
+    expect(pendingSaves[0]).toMatchObject({ nodeId: "parent", name: "父节点 A 草稿" });
+
+    await act(async () => { pendingSaves[0].deferred.resolve(); await pendingSaves[0].deferred.promise; });
+    expect(screen.getByDisplayValue("子节点 B 草稿")).toBe(inputB);
+    expect(inputB).toHaveFocus();
+
+    await act(async () => {
+      for (const pending of pendingSaves.slice(1)) pending.deferred.resolve();
+      await Promise.all(pendingSaves.slice(1).map((pending) => pending.deferred.promise));
+    });
+    expect(screen.getByDisplayValue("子节点 B 草稿")).toBe(inputB);
+    expect(inputB).toHaveFocus();
+  });
+
+  it("does not let a previous save close a fresh edit of the same node", async () => {
+    const pendingSaves: Array<{ nodeId: string; name: string; deferred: ReturnType<typeof deferredVoid> }> = [];
+    const onRenameNode = vi.fn((nodeId: string, name: string) => {
+      const pending = deferredVoid();
+      pendingSaves.push({ nodeId, name, deferred: pending });
+      return pending.promise;
+    });
+    const user = userEvent.setup();
+    const mounted = renderMindMap({ onRenameNode });
+    await waitFor(() => expect(mocks.latestNodes).toHaveLength(graphNodes.length + 1));
+
+    await user.dblClick(nodeElement("parent", mounted.container)!);
+    const firstInput = await screen.findByDisplayValue("父节点");
+    await user.type(firstInput, " A 旧草稿");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(onRenameNode).toHaveBeenCalledWith("parent", "父节点 A 旧草稿"));
+
+    await user.dblClick(nodeElement("parent", mounted.container)!);
+    const freshInput = await screen.findByDisplayValue("父节点");
+    await user.click(freshInput);
+    await user.type(freshInput, " A 新草稿");
+    expect(freshInput).toHaveValue("父节点 A 新草稿");
+    expect(freshInput).toHaveFocus();
+
+    await act(async () => { pendingSaves[0].deferred.resolve(); await pendingSaves[0].deferred.promise; });
+    expect(screen.getByDisplayValue("父节点 A 新草稿")).toBe(freshInput);
+    expect(freshInput).toHaveFocus();
+
+    await act(async () => {
+      for (const pending of pendingSaves.slice(1)) pending.deferred.resolve();
+      await Promise.all(pendingSaves.slice(1).map((pending) => pending.deferred.promise));
+    });
+    expect(screen.getByDisplayValue("父节点 A 新草稿")).toBe(freshInput);
+    expect(freshInput).toHaveFocus();
   });
 
   it("keeps a late node commit tied to the draft from its own input", async () => {

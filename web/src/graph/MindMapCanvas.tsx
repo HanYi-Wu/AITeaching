@@ -307,6 +307,9 @@ export function MindMapCanvas({
   const [inlineEditId, setInlineEditId] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState("");
   const inlineEditValueRef = useRef("");
+  // The state rebuilds callbacks for same-node re-edits; the ref stays current across async saves.
+  const [inlineEditGeneration, setInlineEditGeneration] = useState(0);
+  const inlineEditGenerationRef = useRef(0);
   const rfRef = useRef<{ fitView: (opts?: any) => void } | null>(null);
 
   const updateInlineEditValue = useCallback((value: string) => {
@@ -368,6 +371,7 @@ export function MindMapCanvas({
       },
     ];
 
+    const editGeneration = inlineEditGenerationRef.current;
     for (const n of graphNodes) {
       const pos = positionById.get(n.id);
       if (!pos) continue;
@@ -391,7 +395,7 @@ export function MindMapCanvas({
             if (nextName && nextName !== n.canonical_name) {
               await onRenameNode(n.id, nextName);
             }
-            setInlineEditId(null);
+            if (inlineEditGenerationRef.current === editGeneration) setInlineEditId(null);
           },
           onToggleCollapse: () => setCollapsed((prev) => {
             const ns = new Set(prev);
@@ -457,7 +461,7 @@ export function MindMapCanvas({
 
     setNodes(rfNodes);
     setEdges(rfEdges);
-  }, [graphNodes, relations, childrenByParent, collapsed, crossRelTypeFilter, inlineEditId, activeGraphName, layoutNonce, t, onRenameNode, updateInlineEditValue]);
+  }, [graphNodes, relations, childrenByParent, collapsed, crossRelTypeFilter, inlineEditId, inlineEditGeneration, activeGraphName, layoutNonce, t, onRenameNode, updateInlineEditValue]);
 
   // Draft keystrokes update only the active custom node. Tree geometry and edges do not depend
   // on the draft text, so keep their full rebuild tied to edit start/end and graph state changes.
@@ -528,6 +532,9 @@ export function MindMapCanvas({
 
   const handleNodeDoubleClick = useCallback((_: React.MouseEvent, node: Node) => {
     if (node.id === VIRTUAL_ROOT_ID) return;
+    const nextEditGeneration = inlineEditGenerationRef.current + 1;
+    inlineEditGenerationRef.current = nextEditGeneration;
+    setInlineEditGeneration(nextEditGeneration);
     setInlineEditId(node.id);
     const gn = graphNodes.find((n) => n.id === node.id);
     updateInlineEditValue(gn?.canonical_name ?? "");
