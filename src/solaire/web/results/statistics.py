@@ -70,9 +70,18 @@ def compute_statistics(
 
     # Primary: exact header match
     header_to_idx = {h: i for i, h in enumerate(header) if h not in ("姓名", "学号")}
+    question_csv_headers = [q.csv_header() for q in questions]
 
     # Fallback: position-based mapping for score columns
     score_col_indices: list[int] = [i for i, h in enumerate(header) if h not in ("姓名", "学号")]
+    question_score_columns: list[tuple[int | None, bool]] = []
+    for qi, question_header in enumerate(question_csv_headers):
+        if question_header in header_to_idx:
+            question_score_columns.append((header_to_idx[question_header], False))
+        elif qi < len(score_col_indices):
+            question_score_columns.append((score_col_indices[qi], True))
+        else:
+            question_score_columns.append((None, False))
 
     students: list[dict[str, Any]] = []
     column_warnings: list[str] = []
@@ -83,15 +92,11 @@ def compute_statistics(
         student_id = row[col_id].strip() if col_id >= 0 else ""
         scores: list[float | None] = []
         matched_by_position = False
-        for qi, q in enumerate(questions):
-            raw = None
-            if q.csv_header() in header_to_idx:
-                idx = header_to_idx[q.csv_header()]
-                raw = row[idx].strip() if idx < len(row) else None
-            elif qi < len(score_col_indices):
-                idx = score_col_indices[qi]
-                raw = row[idx].strip() if idx < len(row) else None
+        for qi, _q in enumerate(questions):
+            idx, used_position_fallback = question_score_columns[qi]
+            if used_position_fallback:
                 matched_by_position = True
+            raw = row[idx].strip() if idx is not None and idx < len(row) else None
             scores.append(_safe_float(raw))
         if matched_by_position and not column_warnings:
             column_warnings.append(
@@ -125,7 +130,7 @@ def compute_statistics(
                 err_rate = None
         question_stats.append({
             "question_id": q.question_id,
-            "header": q.csv_header(),
+            "header": question_csv_headers[qi],
             "section_id": q.section_id,
             "score_per_item": q.score_per_item,
             "answered_count": len(answered),
@@ -176,6 +181,10 @@ def compute_statistics(
             graph_state = None
 
     exam_qids = {q.question_id for q in questions}
+    question_index_by_id: dict[str, int] = {}
+    for qi, question in enumerate(questions):
+        question_index_by_id.setdefault(question.question_id, qi)
+
     node_question_map: dict[str, list[str]] = {}
     bound_qids_flat: set[str] = set()
     matching_bindings: list[tuple[str, str]] = []
@@ -197,15 +206,16 @@ def compute_statistics(
             continue
         min_fuzzy = 1.0
         for qid in bound_qids:
-            for qi, q in enumerate(questions):
-                if q.question_id == qid:
-                    answered = [s["scores"][qi] for s in students if s["scores"][qi] is not None]
-                    if answered:
-                        if q.score_per_item and q.score_per_item > 0:
-                            fuzzy_ratios = [min(max(s / q.score_per_item, 0.0), 1.0) for s in answered]
-                            avg_fuzzy = sum(fuzzy_ratios) / len(fuzzy_ratios)
-                            min_fuzzy = min(min_fuzzy, avg_fuzzy)
-                    break
+            qi = question_index_by_id.get(qid)
+            if qi is None:
+                continue
+            question = questions[qi]
+            # Preserve the existing rule: zero or invalid question maxima do not
+            # contribute to node mastery, even though question_stats may show 0.
+            if question.score_per_item and question.score_per_item > 0:
+                avg_fuzzy = question_stats[qi]["avg_score_ratio"]
+                if avg_fuzzy is not None:
+                    min_fuzzy = min(min_fuzzy, avg_fuzzy)
         mastery = min_fuzzy if min_fuzzy < 1.0 else 1.0
         error_rate = 1.0 - mastery
         node_stats.append({
@@ -218,13 +228,13 @@ def compute_statistics(
 
     # Warn about unbound questions
     unbound_warnings: list[dict[str, str]] = []
-    for q in questions:
+    for qi, q in enumerate(questions):
         if q.question_id not in bound_qids_flat:
             unbound_warnings.append({
                 "question_id": q.question_id,
-                "header": q.csv_header(),
+                "header": question_csv_headers[qi],
                 "section_id": q.section_id,
-                "message": f"第{q.csv_header()}题（{q.question_id}）未绑定知识点节点，请在知识图谱页面绑定后再查看节点统计",
+                "message": f"第{question_csv_headers[qi]}题（{q.question_id}）未绑定知识点节点，请在知识图谱页面绑定后再查看节点统计",
             })
 
     # Save computed analysis atomically with source fingerprint

@@ -228,6 +228,137 @@ class TestComputeStatistics:
         a2 = compute_statistics(tmp_path, _eid("recompute-test"), batch_id)
         assert a1["student_count"] == a2["student_count"] == 1
 
+    def test_csv_fallback_short_rows_and_duplicate_question_id_keep_existing_semantics(self, tmp_path: Path) -> None:
+        import yaml
+        from solaire.knowledge_forge.models import (
+            ConceptNode,
+            GraphMeta,
+            GraphState,
+            QuestionBinding,
+            SubjectMeta,
+        )
+        from solaire.knowledge_forge.storage import _save_meta, _save_subject_state
+
+        ensure_project_layout(tmp_path)
+        exam_id = _eid("statistics-column-mapping")
+        rd = _exam_workspace(tmp_path, "statistics-column-mapping")
+        exam = ExamConfig(
+            exam_id=exam_id,
+            template_ref="default",
+            metadata={"title": "Column mapping", "subject": "数学"},
+            question_libraries=[],
+            template_path="templates/test.yaml",
+            selected_items=[
+                SelectedSection(
+                    section_id="first",
+                    question_ids=["shared", "zero", "unbound"],
+                    score_per_item=5.0,
+                    score_overrides={"zero": 0.0},
+                ),
+                SelectedSection(
+                    section_id="second",
+                    question_ids=["shared", "tail"],
+                    score_per_item=5.0,
+                    score_overrides={"shared": 10.0},
+                ),
+            ],
+        )
+        (rd / "exam.yaml").write_text(
+            yaml.safe_dump(exam.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        batch_id = "direct"
+        score_dir = rd / "scores" / batch_id
+        score_dir.mkdir(parents=True)
+        with (score_dir / "scores.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["姓名", "学号", "legacy-a", "legacy-b", "legacy-c", "legacy-d", "legacy-e"])
+            writer.writerow(["甲", "S1", "2", "0", "3", "9", "0"])
+            writer.writerow(["", "", "", "", "", "", ""])
+            writer.writerow(["乙", "S2", "4", "0", "5", "5"])
+
+        graph_state = GraphState(
+            nodes=[
+                ConceptNode(id="node-shared", canonical_name="重复题绑定"),
+                ConceptNode(id="node-zero", canonical_name="零分题"),
+            ],
+            bindings=[
+                QuestionBinding(question_qualified_id="shared", node_id="node-shared"),
+                QuestionBinding(question_qualified_id="zero", node_id="node-zero"),
+            ],
+        )
+        _save_meta(tmp_path, GraphMeta(subjects=[SubjectMeta(slug=_SUBJ, display_name=_SUBJ, node_count=2)]))
+        _save_subject_state(tmp_path, _SUBJ, graph_state)
+
+        analysis = compute_statistics(tmp_path, exam_id, batch_id)
+        questions = {item["header"]: item for item in analysis["question_stats"]}
+        nodes = {item["node_id"]: item for item in analysis["node_stats"]}
+        students = analysis["student_stats"]
+
+        # Legacy unmatched headers map by position; the final short row leaves
+        # its absent column blank, and an all-empty row is ignored.
+        assert questions["1.1"]["avg_raw_score"] == 3.0
+        assert questions["2.1"]["avg_raw_score"] == 7.0
+        assert questions["2.2"]["answered_count"] == 1
+        assert questions["2.2"]["avg_raw_score"] == 0.0
+        assert len(students) == 2
+        assert [(item["student_id"], item["rank"]) for item in students] == [("S1", 1), ("S2", 2)]
+
+        # A graph binding to a repeated id uses the first flattened question.
+        assert nodes["node-shared"]["mastery_fuzzy"] == 0.6
+        # A zero maximum is excluded from node mastery even though its per-question ratio is 0.
+        assert questions["1.2"]["avg_score_ratio"] == 0.0
+        assert nodes["node-zero"]["mastery_fuzzy"] == 1.0
+        assert {item["question_id"] for item in analysis["warnings"]} == {"unbound", "tail"}
+
+    def test_non_finite_scores_keep_question_and_node_statistics(self, tmp_path: Path) -> None:
+        import math
+        from solaire.knowledge_forge.models import (
+            ConceptNode,
+            GraphMeta,
+            GraphState,
+            QuestionBinding,
+            SubjectMeta,
+        )
+        from solaire.knowledge_forge.storage import _save_meta, _save_subject_state
+
+        ensure_project_layout(tmp_path)
+        exam_id = _eid("statistics-non-finite")
+        rd = _exam_workspace(tmp_path, "statistics-non-finite")
+        _write_exam_yaml(rd, exam_id, [("s1", 3)])
+        batch_id = "direct"
+        score_dir = rd / "scores" / batch_id
+        score_dir.mkdir(parents=True)
+        (score_dir / "scores.csv").write_text(
+            "姓名,学号,1.1,1.2,1.3\n甲,S1,nan,inf,-inf\n",
+            encoding="utf-8-sig",
+        )
+        graph_state = GraphState(
+            nodes=[
+                ConceptNode(id="node-nan", canonical_name="NaN"),
+                ConceptNode(id="node-inf", canonical_name="Positive infinity"),
+                ConceptNode(id="node-negative-inf", canonical_name="Negative infinity"),
+            ],
+            bindings=[
+                QuestionBinding(question_qualified_id="q_1_1", node_id="node-nan"),
+                QuestionBinding(question_qualified_id="q_1_2", node_id="node-inf"),
+                QuestionBinding(question_qualified_id="q_1_3", node_id="node-negative-inf"),
+            ],
+        )
+        _save_meta(tmp_path, GraphMeta(subjects=[SubjectMeta(slug=_SUBJ, display_name=_SUBJ, node_count=3)]))
+        _save_subject_state(tmp_path, _SUBJ, graph_state)
+
+        analysis = compute_statistics(tmp_path, exam_id, batch_id)
+        questions = {item["question_id"]: item for item in analysis["question_stats"]}
+        nodes = {item["node_id"]: item for item in analysis["node_stats"]}
+        assert math.isnan(questions["q_1_1"]["avg_raw_score"])
+        assert math.isnan(questions["q_1_1"]["avg_score_ratio"])
+        assert questions["q_1_2"]["avg_score_ratio"] == 1.0
+        assert questions["q_1_3"]["avg_score_ratio"] == 0.0
+        assert nodes["node-nan"]["mastery_fuzzy"] == 1.0
+        assert nodes["node-inf"]["mastery_fuzzy"] == 1.0
+        assert nodes["node-negative-inf"]["mastery_fuzzy"] == 0.0
+
     def test_avg_raw_score_keeps_original_points(self, tmp_path: Path) -> None:
         ensure_project_layout(tmp_path)
         rd = _exam_workspace(tmp_path, "raw-score-test")
