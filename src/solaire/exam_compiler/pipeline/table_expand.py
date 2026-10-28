@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 import yaml
 
+from solaire.common.yaml_utils import safe_load_yaml
 from solaire.exam_compiler.latex_util import latex_escape_text
 
 TABLE_FENCE_RE = re.compile(r"```solaire-table\s*\n(.*?)```", re.DOTALL)
@@ -74,8 +75,12 @@ def _cell(raw: Any) -> TableCell:
     )
 
 
-def parse_table(source: str) -> list[list[TableCell]]:
-    raw = yaml.safe_load(source)
+def _parse_table_rows(source: str) -> list[list[TableCell]]:
+    try:
+        raw = safe_load_yaml(source)
+    except yaml.YAMLError:
+        # Keep PyYAML's established diagnostics on invalid table YAML.
+        raw = yaml.safe_load(source)
     if not isinstance(raw, dict) or raw.get("version") != 1:
         raise ValueError("unsupported solaire-table version")
     rows = raw.get("rows")
@@ -86,6 +91,11 @@ def parse_table(source: str) -> list[list[TableCell]]:
         if not isinstance(row, list):
             raise ValueError("each table row must be an array")
         out.append([_cell(c) for c in row])
+    return out
+
+
+def parse_table(source: str) -> list[list[TableCell]]:
+    out = _parse_table_rows(source)
     expand_table(out)
     return out
 
@@ -153,7 +163,7 @@ def _col_width(width: int, span: int = 1) -> str:
 
 
 def table_to_latex(source: str) -> str:
-    expanded = expand_table(parse_table(source))
+    expanded = expand_table(_parse_table_rows(source))
     spec = "|" + "|".join([rf"p{{{_col_width(expanded.width)}}}" for _ in range(expanded.width)]) + "|"
     lines = [r"\begin{center}", r"\small", rf"\begin{{tabular}}{{{spec}}}", r"\hline"]
     if any(anchor.cell.row_span > 1 for anchor in expanded.anchors):
@@ -232,7 +242,7 @@ def _cell_paragraphs(text: str) -> str:
 
 
 def table_to_openxml(source: str) -> str:
-    expanded = expand_table(parse_table(source))
+    expanded = expand_table(_parse_table_rows(source))
     grid = "".join('<w:gridCol w:w="2400"/>' for _ in range(expanded.width))
     rows: list[str] = []
     for r, row in enumerate(expanded.slots):
