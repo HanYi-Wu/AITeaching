@@ -12,6 +12,7 @@ if (typeof document !== "undefined" && isTauriShell()) {
 if (typeof document !== "undefined") {
   const theme = localStorage.getItem("eh-theme") || "classic";
   document.documentElement.dataset.ehTheme = theme;
+  document.documentElement.dataset.ehDensity = "comfortable";
 }
 
 installGlobalLogging();

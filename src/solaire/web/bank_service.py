@@ -42,6 +42,10 @@ from solaire.web.bank_storage import (
     replace_record_data,
     validate_bank_import,
 )
+from solaire.web.bank_reads import (
+    answer_relation_needs_review as answer_relation_requires_review,
+    preview_text,
+)
 
 
 def _rel_to_resource(project_root: Path, path: Path) -> str:
@@ -50,9 +54,7 @@ def _rel_to_resource(project_root: Path, path: Path) -> str:
 
 
 def _preview(content: str, n: int = 200) -> str:
-    t = strip_primebrush_fences_for_preview(content or "", max_len=10_000)
-    t = t.replace("\n", " ")
-    return t if len(t) <= n else t[: n - 3] + "..."
+    return preview_text(content, n)
 
 
 def _subject_collection_from_namespace(ns: str) -> tuple[str, str]:
@@ -68,6 +70,7 @@ def bank_catalog(project_root: Path) -> tuple[list[dict[str, Any]], list[dict[st
     """Return readable entries and per-file diagnostics from one scan per library."""
     out: list[dict[str, Any]] = []
     diagnostics: list[dict[str, str]] = []
+    resource_dir = (project_root / "resource").resolve()
     for ref in discover_question_library_refs(project_root):
         ns = ref["namespace"]
         subj, coll = _subject_collection_from_namespace(ns)
@@ -78,15 +81,14 @@ def bank_catalog(project_root: Path) -> tuple[list[dict[str, Any]], list[dict[st
         diagnostics.extend(index.diagnostics)
         for document in index.documents:
             ypath = document.path
-            rel = _rel_to_resource(project_root, ypath)
+            rel = ypath.resolve().relative_to(resource_dir).as_posix()
             for rec in document.records:
                 answer_relation_needs_review = False
                 if isinstance(rec, QuestionItem):
-                    q = strip_hydrate_fields(rec)
-                    preview = _preview(q.content)
-                    typ = q.type
-                    meta = dict(q.metadata) if q.metadata else {}
-                    answer_relation_needs_review = not q.answer.startswith(':::ANSWER_LOGIC:') and bool(re.search(r'或者|而且|或|且|和', q.answer))
+                    preview = _preview(rec.content)
+                    typ = rec.type
+                    meta = dict(rec.metadata) if rec.metadata else {}
+                    answer_relation_needs_review = answer_relation_requires_review(rec.answer)
                 else:
                     assert isinstance(rec, QuestionGroupRecord)
                     preview = _preview(rec.material)
@@ -138,7 +140,7 @@ def list_question_rows_for_web(project_root: Path) -> tuple[list[dict[str, Any]]
             for record in document.records:
                 qualified_id = f"{namespace}/{record.id}"
                 if isinstance(record, QuestionItem):
-                    question = strip_hydrate_fields(record)
+                    question = record
                     try:
                         displayed = expand_question_for_web(project_root, namespace, question)
                     except Exception:

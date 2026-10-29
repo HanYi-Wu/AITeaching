@@ -13,11 +13,14 @@ import { loadSessionToken } from "../../platform/session";
 import {
   buildMetadataFilterDefinitions,
   hasActiveMetadataFilters,
-  matchesMetadataFilters,
   type MetadataFilters,
 } from "../../lib/metadataFilters";
 import type { BankFolders } from "../../components/BankFolderExplorer";
 import type { BankCollectionRow, BankListItem, BankReadDiagnostic } from "./bankModel";
+import {
+  filterBankList,
+  filterMetadataScopeItems,
+} from "./listing/bankFilterPipeline";
 
 export interface UseBankListOptions {
   onError: (msg: string | null) => void;
@@ -43,6 +46,7 @@ export function useBankList({ onError }: UseBankListOptions) {
   const [loading, setLoading] = useState(false);
 
   const reqSeqRef = useRef(0);
+  const searchCache = useMemo(() => new WeakMap<BankListItem, string>(), [items]);
 
   const loadList = useCallback(async () => {
     const currentSeq = ++reqSeqRef.current;
@@ -129,20 +133,10 @@ export function useBankList({ onError }: UseBankListOptions) {
     });
   }, [collections, filterSubject]);
 
-  const metadataScopeItems = useMemo(() => {
-    return items.filter((it) => {
-      if (filterSubject !== "__all__" && (it.subject ?? "") !== filterSubject) {
-        return false;
-      }
-      if (filterCollection !== "__all__" && it.collection !== filterCollection) {
-        return false;
-      }
-      if (filterType !== "__all__" && it.type !== filterType) {
-        return false;
-      }
-      return true;
-    });
-  }, [items, filterSubject, filterCollection, filterType]);
+  const metadataScopeItems = useMemo(
+    () => filterMetadataScopeItems(items, filterSubject, filterCollection, filterType),
+    [items, filterSubject, filterCollection, filterType],
+  );
 
   const metadataFilterDefinitions = useMemo(
     () => buildMetadataFilterDefinitions(metadataScopeItems),
@@ -157,40 +151,17 @@ export function useBankList({ onError }: UseBankListOptions) {
     [deferredMetadataFilters],
   );
 
-  const metadataScopeSearchItems = useMemo(
+  const filtered = useMemo(
     () =>
-      metadataScopeItems.map((it) => ({
-        item: it,
-        searchText: [
-          it.qualified_id,
-          it.content_preview,
-          it.group_id ?? "",
-          it.group_material ?? "",
-          JSON.stringify(it.metadata ?? {}),
-        ]
-          .join("\n")
-          .toLowerCase(),
-      })),
-    [metadataScopeItems],
+      filterBankList(
+        metadataScopeItems,
+        deferredSearch,
+        filterCategory,
+        activeMetadataFilters,
+        searchCache,
+      ),
+    [activeMetadataFilters, metadataScopeItems, deferredSearch, filterCategory, searchCache],
   );
-
-  const filtered = useMemo(() => {
-    const q = deferredSearch.trim().toLowerCase();
-    return metadataScopeSearchItems
-      .filter(({ item, searchText }) => {
-        if (
-          filterCategory !== "__all__" &&
-          String(item.metadata?.category || "未分类") !== filterCategory
-        ) {
-          return false;
-        }
-        if (activeMetadataFilters && !matchesMetadataFilters(item.metadata, activeMetadataFilters)) {
-          return false;
-        }
-        return !q || searchText.includes(q);
-      })
-      .map(({ item }) => item);
-  }, [activeMetadataFilters, metadataScopeSearchItems, deferredSearch, filterCategory]);
 
   const bankFilterSummary = useMemo(() => {
     const all = t("bank:filterAllLabel");

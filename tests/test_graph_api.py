@@ -6,6 +6,40 @@ import yaml
 from fastapi.testclient import TestClient
 
 
+def test_notes_update_keeps_omitted_properties_and_explicit_null_clears_parent(web_client):
+    parent_id, node_id = "editing/parent", "editing/child"
+    assert web_client.post("/api/graph/nodes", json={"id": parent_id, "canonical_name": "Parent"}).status_code == 200
+    created = web_client.post("/api/graph/nodes", json={
+        "id": node_id, "canonical_name": "Child", "node_kind": "skill",
+        "aliases": ["kept alias"], "tags": ["kept tag"], "subject": "数学",
+        "description": "kept description", "source": "kept source", "primary_parent_id": parent_id,
+        "layout_x": 10, "layout_y": 20,
+    })
+    assert created.status_code == 200, created.text
+    updated = web_client.put(f"/api/graph/nodes/{node_id}", json={
+        "canonical_name": "Child", "notes": [{"id": "n1", "body": "new note"}],
+    })
+    assert updated.status_code == 200, updated.text
+    node = next(item for item in web_client.get("/api/graph/nodes").json()["nodes"] if item["id"] == node_id)
+    assert node["aliases"] == ["kept alias"]
+    assert node["tags"] == ["kept tag"]
+    assert node["node_kind"] == "skill"
+    assert node["source"] == "kept source"
+    assert node["description"] == "kept description"
+    assert node["primary_parent_id"] == parent_id
+    cleared = web_client.put(f"/api/graph/nodes/{node_id}", json={
+        "canonical_name": "Child", "primary_parent_id": None, "subject": None,
+        "description": None, "layout_x": None, "layout_y": None,
+    })
+    assert cleared.status_code == 200, cleared.text
+    node = next(item for item in web_client.get("/api/graph/nodes").json()["nodes"] if item["id"] == node_id)
+    assert node["primary_parent_id"] is None
+    assert node["subject"] is None
+    assert node["description"] is None
+    assert node["layout_x"] is None and node["layout_y"] is None
+    assert node["notes"][0]["body"] == "new note"
+
+
 def test_conflicting_relation_delete_returns_a_validation_error(web_client, monkeypatch):
     from solaire.web.routers import graph
     headers = _teacher_headers(web_client)

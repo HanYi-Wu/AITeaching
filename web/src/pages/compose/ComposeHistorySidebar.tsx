@@ -1,9 +1,11 @@
 import { useTranslation } from "react-i18next";
 import { ContentFolders } from "../../components/ContentFolders";
+import { ContentSelectionControls } from "../../components/ContentSelectionControls";
 import { TagChips } from "../../components/ContentTags";
 import { cn } from "../../lib/utils";
 import type { ContentFolder, ContentTag, FolderDeleteResult } from "../../platform/auth";
 import type { ExamWorkspaceSummary } from "../../types/compose";
+import { setContentItemDragData } from "../../lib/contentSelection";
 
 export type ComposeHistorySidebarProps = {
   busy: boolean;
@@ -15,6 +17,12 @@ export type ComposeHistorySidebarProps = {
   onFolderUpdated: (folder: ContentFolder) => void;
   onFolderDeleted: (result: FolderDeleteResult) => void;
   onDropItemToFolder: (itemId: string, folderId: string | null) => void;
+  selectedComposeItemIds: string[];
+  movingComposeItems: boolean;
+  onToggleComposeItem: (itemId: string) => void;
+  onToggleVisibleComposeItems: (visibleIds: string[]) => void;
+  onClearComposeItems: () => void;
+  onMoveComposeItemsToFolder: (itemIds: string[], folderId: string | null) => void | Promise<void>;
   draftExamRows: ExamWorkspaceSummary[];
   exportedExamRows: ExamWorkspaceSummary[];
   taggedItems: Record<string, ContentTag[]>;
@@ -34,6 +42,12 @@ export function ComposeHistorySidebar({
   onFolderUpdated,
   onFolderDeleted,
   onDropItemToFolder,
+  selectedComposeItemIds,
+  movingComposeItems,
+  onToggleComposeItem,
+  onToggleVisibleComposeItems,
+  onClearComposeItems,
+  onMoveComposeItemsToFolder,
   draftExamRows,
   exportedExamRows,
   taggedItems,
@@ -43,6 +57,7 @@ export function ComposeHistorySidebar({
   onError,
 }: ComposeHistorySidebarProps) {
   const { t } = useTranslation(["compose", "common"]);
+  const visibleComposeItemIds = [...draftExamRows, ...exportedExamRows].map((exam) => exam.exam_id);
 
   return (
     <aside className="flex w-48 shrink-0 flex-col border-r border-slate-200 bg-slate-50 xl:w-56">
@@ -56,6 +71,8 @@ export function ComposeHistorySidebar({
           onUpdated={onFolderUpdated}
           onDeleted={onFolderDeleted}
           onDropItem={onDropItemToFolder}
+          onDropItems={onMoveComposeItemsToFolder}
+          dropItemsBusy={movingComposeItems}
           onError={onError}
         />
       </div>
@@ -65,6 +82,16 @@ export function ComposeHistorySidebar({
         </h2>
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-auto p-2">
+        <ContentSelectionControls
+          scope="compose"
+          folders={composeFolders}
+          visibleItemIds={visibleComposeItemIds}
+          selectedItemIds={selectedComposeItemIds}
+          busy={busy || movingComposeItems}
+          onSelectVisible={() => onToggleVisibleComposeItems(visibleComposeItemIds)}
+          onClearSelection={onClearComposeItems}
+          onMoveSelected={onMoveComposeItemsToFolder}
+        />
         <div>
           <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
             {t("compose:draftsGroup")}
@@ -75,22 +102,20 @@ export function ComposeHistorySidebar({
             <ul className="space-y-1">
               {draftExamRows.map((d) => (
                 <li key={d.exam_id} className="flex min-w-0 items-stretch gap-0.5">
+                  <label className="flex w-6 shrink-0 items-center justify-center" title="选择这份草稿">
+                    <input type="checkbox" aria-label={`选择草稿 ${d.name || d.exam_id}`} checked={selectedComposeItemIds.includes(d.exam_id)} disabled={busy || movingComposeItems} onChange={() => onToggleComposeItem(d.exam_id)} />
+                  </label>
                   <button
                     type="button"
-                    draggable
-                    onDragStart={(event) =>
-                      event.dataTransfer.setData(
-                        "application/x-or-content-item",
-                        JSON.stringify({ scope: "compose", id: d.exam_id }),
-                      )
-                    }
+                    draggable={!busy && !movingComposeItems}
+                    onDragStart={(event) => setContentItemDragData(event.dataTransfer, "compose", d.exam_id, selectedComposeItemIds)}
                     className={cn(
                       "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs [overflow-wrap:anywhere]",
                       currentExamId === d.exam_id
                         ? "border-slate-900 bg-slate-100"
                         : "border-slate-200 bg-white hover:border-slate-300",
                     )}
-                    disabled={busy}
+                    disabled={busy || movingComposeItems}
                     onClick={() => onLoadDraftExam(d.exam_id)}
                   >
                     <span className="font-medium text-slate-900">{d.name || d.exam_id}</span>
@@ -112,7 +137,7 @@ export function ComposeHistorySidebar({
                   <button
                     type="button"
                     className="flex w-5 shrink-0 items-center justify-center self-stretch rounded text-[14px] leading-none text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
-                    disabled={busy}
+                    disabled={busy || movingComposeItems}
                     title={t("compose:deleteDraft")}
                     aria-label={t("compose:deleteDraft")}
                     onClick={(e) => {
@@ -137,22 +162,20 @@ export function ComposeHistorySidebar({
             <ul className="space-y-1">
               {exportedExamRows.map((ex) => (
                 <li key={ex.exam_id} className="flex min-w-0 items-stretch gap-0.5">
+                  <label className="flex w-6 shrink-0 items-center justify-center" title="选择这份试卷">
+                    <input type="checkbox" aria-label={`选择试卷 ${ex.export_label || ex.name || ex.exam_id}`} checked={selectedComposeItemIds.includes(ex.exam_id)} disabled={busy || movingComposeItems} onChange={() => onToggleComposeItem(ex.exam_id)} />
+                  </label>
                   <button
                     type="button"
-                    draggable
-                    onDragStart={(event) =>
-                      event.dataTransfer.setData(
-                        "application/x-or-content-item",
-                        JSON.stringify({ scope: "compose", id: ex.exam_id }),
-                      )
-                    }
+                    draggable={!busy && !movingComposeItems}
+                    onDragStart={(event) => setContentItemDragData(event.dataTransfer, "compose", ex.exam_id, selectedComposeItemIds)}
                     className={cn(
                       "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-left text-xs [overflow-wrap:anywhere]",
                       currentExamId === ex.exam_id
                         ? "border-slate-900 bg-slate-100"
                         : "border-slate-200 bg-white hover:border-slate-300",
                     )}
-                    disabled={busy}
+                    disabled={busy || movingComposeItems}
                     onClick={() => onLoadExportedExam(ex)}
                   >
                     <span className="font-medium text-slate-900">
@@ -168,7 +191,7 @@ export function ComposeHistorySidebar({
                   <button
                     type="button"
                     className="flex w-5 shrink-0 items-center justify-center self-stretch rounded text-[14px] leading-none text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
-                    disabled={busy}
+                    disabled={busy || movingComposeItems}
                     title={t("compose:deleteExportedExam")}
                     aria-label={t("compose:deleteExportedExam")}
                     onClick={(e) => {

@@ -192,6 +192,7 @@ export type PlatformPaperRecord = {
   has_docx: boolean;
   latest_batch_id?: string | null;
   publication_count: number;
+  has_publication_history?: boolean;
   published_class_count: number;
   total_student_count?: number;
   submitted_student_count?: number;

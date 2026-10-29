@@ -9,6 +9,7 @@ import App from "./App";
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(), getCurrentUser: vi.fn(), getPlatformStatus: vi.fn(),
   logoutPlatform: vi.fn(), setPlatformProjectRoot: vi.fn(), setSidebarOpen: vi.fn(),
+  resetAgentContext: vi.fn(),
   sidebarOpen: false,
 }));
 const school: PlatformUser = { id: "school-user", username: "school", role: "school", display_name: "学校", status: "active" };
@@ -21,7 +22,7 @@ vi.mock("./platform/auth", () => ({
 }));
 vi.mock("./contexts/AgentContext", () => ({
   AgentProvider: ({ children }: { children: ReactNode }) => children,
-  useAgentContext: () => ({ sidebarOpen: mocks.sidebarOpen, toggleSidebar: vi.fn(), setSidebarOpen: mocks.setSidebarOpen }),
+  useAgentContext: () => ({ sidebarOpen: mocks.sidebarOpen, toggleSidebar: vi.fn(), setSidebarOpen: mocks.setSidebarOpen, resetAgentContext: mocks.resetAgentContext }),
 }));
 vi.mock("./contexts/ToolBarContext", () => ({
   ToolBarProvider: ({ children }: { children: ReactNode }) => children,
@@ -34,7 +35,10 @@ vi.mock("./pages/platform/papers/PapersWorkspace", () => ({
   PapersWorkspace: ({ projectScope }: { projectScope?: unknown }) => <div data-testid="paper-project-scope">{JSON.stringify(projectScope)}</div>,
 }));
 vi.mock("./app/routes", () => ({
-  BankRoute: () => null, ComposeRoute: () => null, GraphRoute: () => null, TemplateRoute: () => null,
+  BankRoute: () => null,
+  ComposeRoute: ({ onRefreshInfo }: { onRefreshInfo: () => Promise<void> }) => <button onClick={() => void onRefreshInfo()}>刷新项目范围</button>,
+  GraphRoute: () => null,
+  TemplateRoute: () => null,
 }));
 vi.mock("./pages/platform/school/SchoolWorkspace", () => ({ SchoolWorkspace: () => <div>学校工作区</div> }));
 vi.mock("./pages/platform/student/StudentWorkspace", () => ({ StudentWorkspace: () => <div>学生工作区</div> }));
@@ -171,5 +175,43 @@ describe("role-specific project requests", () => {
     await screen.findByText("学校工作区");
     await act(async () => { finish({ bound: true, root: "/previous-teacher-project" }); });
     expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith(null);
+  });
+
+  it("remounts the assistant and resets its context when the bound project scope changes", async () => {
+    mocks.sidebarOpen = true;
+    mocks.getCurrentUser.mockResolvedValue({ user: { ...school, role: "teacher" } });
+    mocks.apiGet.mockResolvedValueOnce({ bound: true, root: "/project-a" }).mockResolvedValueOnce({ bound: true, root: "/project-b" });
+    const user = userEvent.setup();
+    renderApp();
+    const originalPanel = await screen.findByTestId("assistant-panel");
+    await waitFor(() => expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith("/project-a"));
+    const resetsBeforeScopeChange = mocks.resetAgentContext.mock.calls.length;
+
+    await user.click(await screen.findByRole("button", { name: "刷新项目范围" }));
+    await waitFor(() => expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith("/project-b"));
+    await waitFor(() => expect(mocks.resetAgentContext.mock.calls.length).toBeGreaterThan(resetsBeforeScopeChange));
+    const scopedPanel = await screen.findByTestId("assistant-panel");
+    expect(scopedPanel).not.toBe(originalPanel);
+  });
+
+  it("applies account density and resets it when the account logs out", async () => {
+    mocks.getCurrentUser.mockResolvedValue({ user: {
+      ...school,
+      role: "teacher",
+      preferences: { density: "compact" },
+    } });
+    const user = userEvent.setup();
+    renderApp();
+
+    await screen.findByRole("button", { name: "退出" });
+    await waitFor(() => expect(document.documentElement.dataset.ehDensity).toBe("compact"));
+
+    await user.click(screen.getByRole("button", { name: "退出" }));
+    await screen.findByText("登录页");
+    expect(document.documentElement.dataset.ehDensity).toBe("comfortable");
+
+    await user.click(screen.getByRole("button", { name: "以学校身份登录" }));
+    await screen.findByText("学校工作区");
+    expect(document.documentElement.dataset.ehDensity).toBe("comfortable");
   });
 });

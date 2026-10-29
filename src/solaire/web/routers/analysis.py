@@ -4,16 +4,67 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from fastapi import HTTPException, Query
+from typing import Annotated
+from fastapi import Depends, HTTPException, Query
 from solaire.edu_analysis.core import delete_script_api, get_job, get_script_api, invoke_tool, list_jobs_api, list_scripts_api, list_tools, run_builtin, run_script_with_request_id, save_script_doc
 from solaire.edu_analysis.diagnosis import class_heatmap_v1, knowledge_diagnosis_v1, student_knowledge_diagnosis_v1, teaching_suggestions_v1
+from solaire.web.analysis_folders import AnalysisFoldersCorruptError, mutate as mutate_analysis_folders, read as read_analysis_folders, visible_item_ids as visible_analysis_item_ids
+from solaire.web.auth_api import require_platform_root
+from solaire.web.export_lock import ExportBusyError
 from solaire.web.security import assert_within_project
 from solaire.web.remediation_service import create_remediation_draft, plan_remediation_draft
+from solaire.web.papers.api_support import current_organizer_teacher, require_content_project_root
 from fastapi import APIRouter
 from solaire.web.request_context import _require_root
 from solaire.web.schemas.analysis import AnalysisRemediationDraftBody, AnalysisRunBuiltinBody, AnalysisRunFolderScriptBody, AnalysisRunScriptBody, AnalysisScriptBody, AnalysisToolInvokeBody
+from solaire.web.schemas.analysis_folders import AnalysisFolderMutationBody
 
 router = APIRouter()
+
+
+@router.get("/api/analysis/folders")
+def analysis_folders_list(
+    user: Annotated[dict[str, Any], Depends(current_organizer_teacher)],
+) -> dict[str, Any]:
+    project_root = require_content_project_root()
+    try:
+        return read_analysis_folders(project_root, owner_id=str(user["id"]))
+    except ExportBusyError as exc:
+        raise HTTPException(status_code=503, detail="分析文件夹正在更新，请稍后重试") from exc
+    except AnalysisFoldersCorruptError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=403 if isinstance(exc, PermissionError) else 400, detail=str(exc)) from exc
+
+
+@router.post("/api/analysis/folders")
+def analysis_folders_mutate(
+    body: AnalysisFolderMutationBody,
+    user: Annotated[dict[str, Any], Depends(current_organizer_teacher)],
+) -> dict[str, Any]:
+    project_root = require_content_project_root()
+    owner_id = str(user["id"])
+    try:
+        visible_ids = (
+            visible_analysis_item_ids(project_root, require_platform_root(), owner_id=owner_id)
+            if body.action in {"assign", "move"}
+            else set()
+        )
+        return mutate_analysis_folders(
+            project_root,
+            owner_id=owner_id,
+            action=body.action,
+            folder_id=body.folder_id,
+            name=body.name,
+            ids=body.ids,
+            visible_item_ids=visible_ids,
+        )
+    except ExportBusyError as exc:
+        raise HTTPException(status_code=503, detail="分析文件夹正在更新，请稍后重试") from exc
+    except AnalysisFoldersCorruptError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=403 if isinstance(exc, PermissionError) else 400, detail=str(exc)) from exc
 
 
 def _resolve_under_analysis(root: Path, rel: str) -> Path:

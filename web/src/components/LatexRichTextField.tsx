@@ -101,6 +101,8 @@ export function LatexRichTextField({
   const mermaidRenderSeqRef = useRef(0);
   const lastEmittedRef = useRef<string | null>(null);
   const composingRef = useRef(false);
+  const compositionFrameRef = useRef<number | null>(null);
+  const compositionFrameVersionRef = useRef(0);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -131,6 +133,26 @@ export function LatexRichTextField({
   const anyPopupOpen = !!(mathPopup || mermaidPopup || imagePopup || tablePopup);
 
   const minH = `${Math.max(6, minRows * 1.45)}rem`;
+
+  const scheduleCompositionCommit = useCallback((commit: () => void) => {
+    if (compositionFrameRef.current !== null) {
+      window.cancelAnimationFrame(compositionFrameRef.current);
+    }
+    const version = ++compositionFrameVersionRef.current;
+    compositionFrameRef.current = window.requestAnimationFrame(() => {
+      if (version !== compositionFrameVersionRef.current) return;
+      compositionFrameRef.current = null;
+      commit();
+    });
+  }, []);
+
+  useLayoutEffect(() => () => {
+    compositionFrameVersionRef.current++;
+    if (compositionFrameRef.current !== null) {
+      window.cancelAnimationFrame(compositionFrameRef.current);
+      compositionFrameRef.current = null;
+    }
+  }, []);
 
   /* ─── Lint ─── */
   const lintResults = useMemo<MathLintResult[]>(() => lintMathContent(value), [value]);
@@ -198,7 +220,9 @@ export function LatexRichTextField({
     if (composingRef.current) return;
     const isFocused = document.activeElement === root;
     if (isFocused && value === lastEmittedRef.current) return;
-    buildEditorDom(root, value);
+    // A popup keeps a reference to its widget. Replacing the whole tree while
+    // it is open prevents a stale popup from editing a newly supplied value.
+    buildEditorDom(root, value, !anyPopupOpen);
     lastEmittedRef.current = value;
   }, [value, mode]);
 
@@ -768,7 +792,7 @@ export function LatexRichTextField({
           }}
           onCompositionEnd={() => {
             composingRef.current = false;
-            window.requestAnimationFrame(() => {
+            scheduleCompositionCommit(() => {
               emitFromEditor();
               syncHiddenSelection();
             });
@@ -795,9 +819,9 @@ export function LatexRichTextField({
           onCompositionEnd={(e) => {
             composingRef.current = false;
             const target = e.currentTarget;
-            window.requestAnimationFrame(() => {
+            scheduleCompositionCommit(() => {
               lastEmittedRef.current = target.value;
-              onChange(target.value);
+              onChangeRef.current(target.value);
             });
           }}
           placeholder={placeholder}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
   apiAnalysisListJobs,
@@ -53,6 +53,8 @@ import { AnalysisBatchSelector } from "./AnalysisBatchSelector";
 import { useAnalysisDiagnosis } from "./useAnalysisDiagnosis";
 import { AnalysisDiagnosisPanel } from "./AnalysisDiagnosisPanel";
 import { AnalysisResultView } from "./AnalysisResultView";
+import { AnalysisFoldersPanel, ANALYSIS_ITEMS_MIME, type AnalysisFolderFilter } from "./AnalysisFoldersPanel";
+import { useAnalysisFolders } from "./useAnalysisFolders";
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -103,6 +105,8 @@ export function AnalysisWorkspace({
   const [historyQuery, setHistoryQuery] = useState("");
   const [historySubject, setHistorySubject] = useState("all");
   const [historyMode, setHistoryMode] = useState<"all" | "online" | "offline">("all");
+  const [analysisFolderFilter, setAnalysisFolderFilter] = useState<AnalysisFolderFilter>("all");
+  const [selectedAnalysisItemIds, setSelectedAnalysisItemIds] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rightChartRef = useRef<HTMLDivElement>(null);
   const onlineAnalysisRequestIdRef = useRef(0);
@@ -157,6 +161,7 @@ export function AnalysisWorkspace({
   const previousMetadataScopeKeyRef = useRef(metadataScopeKey);
   const metadataScopeReady = previousMetadataScopeKeyRef.current === metadataScopeKey;
   const hostToolsAvailable = allowHostTools && metadataScopeReady;
+  const analysisFolders = useAnalysisFolders(ownerProjectScopeKey, ownerProjectScopeReady);
 
   const {
     diagLoading,
@@ -218,6 +223,8 @@ export function AnalysisWorkspace({
     setLoadingOnlinePapers(false);
     setLoadingOnlineAnalysis(false);
     setLoadingDetail(false);
+    setAnalysisFolderFilter("all");
+    setSelectedAnalysisItemIds([]);
   }, [ownerProjectScopeKey, invalidateDiagnosis]);
 
   useEffect(() => {
@@ -303,22 +310,58 @@ export function AnalysisWorkspace({
     ...onlinePapers.map((item) => item.subject),
     ...legacyExams.map((item) => item.subject),
   ].filter(Boolean) as string[])).sort(), [onlinePapers, legacyExams]);
+  const visibleAnalysisItemIds = useMemo(() => [
+    ...onlinePapers.map((paper) => `paper:${paper.paper_id}`),
+    ...legacyExams.map((exam) => `exam:${exam.exam_id}`),
+  ], [onlinePapers, legacyExams]);
+  const selectedAnalysisItemSet = useMemo(() => new Set(selectedAnalysisItemIds), [selectedAnalysisItemIds]);
+  const folderMatches = useCallback((itemId: string) => {
+    if (analysisFolderFilter === "all") return true;
+    if (analysisFolderFilter === "unassigned") return !analysisFolders.items[itemId];
+    return analysisFolders.items[itemId] === analysisFolderFilter;
+  }, [analysisFolderFilter, analysisFolders.items]);
+  const toggleAnalysisItem = useCallback((itemId: string) => {
+    setSelectedAnalysisItemIds((current) => {
+      if (current.includes(itemId)) return current.filter((selectedId) => selectedId !== itemId);
+      if (current.length >= 200) return current;
+      return [...current, itemId];
+    });
+  }, []);
+  const assignAnalysisItems = useCallback(async (itemIds: string[], folderId: string | null) => {
+    if (await analysisFolders.assignItems(itemIds, folderId)) {
+      const assigned = new Set(itemIds);
+      setSelectedAnalysisItemIds((current) => current.filter((itemId) => !assigned.has(itemId)));
+    }
+  }, [analysisFolders.assignItems]);
+  const startAnalysisItemDrag = useCallback((event: DragEvent<HTMLDivElement>, itemId: string) => {
+    const ids = selectedAnalysisItemSet.has(itemId) ? selectedAnalysisItemIds : [itemId];
+    event.dataTransfer.setData(ANALYSIS_ITEMS_MIME, JSON.stringify({ scope: "analysis", ids }));
+    event.dataTransfer.effectAllowed = "move";
+  }, [selectedAnalysisItemIds, selectedAnalysisItemSet]);
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleAnalysisItemIds);
+    setSelectedAnalysisItemIds((current) => current.filter((itemId) => visibleIds.has(itemId)));
+  }, [visibleAnalysisItemIds]);
+
   const filteredOnlinePapers = useMemo(() => {
     const needle = historyQuery.trim().toLowerCase();
     return onlinePapers.filter((paper) =>
       (historyMode === "all" || paper.delivery_mode === historyMode) &&
       (historySubject === "all" || paper.subject === historySubject) &&
+      folderMatches(`paper:${paper.paper_id}`) &&
       (!needle || `${paper.title} ${paper.exam_id} ${paper.subject || ""}`.toLowerCase().includes(needle)),
     );
-  }, [historyMode, historyQuery, historySubject, onlinePapers]);
+  }, [historyMode, historyQuery, historySubject, onlinePapers, folderMatches]);
   const filteredLegacyExams = useMemo(() => {
     const needle = historyQuery.trim().toLowerCase();
     return legacyExams.filter((exam) =>
       historyMode !== "online" &&
       (historySubject === "all" || exam.subject === historySubject) &&
+      folderMatches(`exam:${exam.exam_id}`) &&
       (!needle || `${exam.exam_title} ${exam.exam_id} ${exam.subject || ""}`.toLowerCase().includes(needle)),
     );
-  }, [historyMode, historyQuery, historySubject, legacyExams]);
+  }, [historyMode, historyQuery, historySubject, legacyExams, folderMatches]);
 
   const handleOnlinePaperSelect = useCallback(async (paper: PlatformPaperRecord, publicationId?: string, classId?: string) => {
     if (ownerProjectScopeKeyRef.current !== ownerProjectScopeKey) return;
@@ -746,6 +789,21 @@ export function AnalysisWorkspace({
             <div className="relative"><Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-400" /><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="搜索考试名称" className="w-full rounded border border-slate-300 bg-white py-1.5 pl-7 pr-2 text-xs" /></div>
             <div className="grid grid-cols-2 gap-2"><select value={historySubject} onChange={(event) => setHistorySubject(event.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs"><option value="all">全部学科</option>{historySubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}</select><select value={historyMode} onChange={(event) => setHistoryMode(event.target.value as "all" | "online" | "offline")} className="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs"><option value="all">全部形式</option><option value="online">线上</option><option value="offline">线下</option></select></div>
           </div>
+          <AnalysisFoldersPanel
+            folders={analysisFolders.folders}
+            assignments={analysisFolders.items}
+            visibleItemIds={visibleAnalysisItemIds}
+            filter={analysisFolderFilter}
+            onFilterChange={setAnalysisFolderFilter}
+            selectedItemIds={selectedAnalysisItemIds}
+            busy={analysisFolders.busy}
+            loading={analysisFolders.loading}
+            error={analysisFolders.error}
+            onCreateFolder={analysisFolders.createFolder}
+            onRenameFolder={analysisFolders.renameFolder}
+            onDeleteFolder={analysisFolders.deleteFolder}
+            onAssignItems={assignAnalysisItems}
+          />
           <div>
             <div className="mb-2 flex items-center justify-between gap-2">
               <h4 className="text-xs font-semibold text-slate-600">考试记录与分析</h4>
@@ -760,7 +818,21 @@ export function AnalysisWorkspace({
                   const hasImportedScores = paper.score_batch_count > 0;
                   const hasBothSources = hasSubmittedAnswers && hasImportedScores;
                   return (
-                    <div key={paper.paper_id} className="flex items-stretch rounded hover:bg-slate-100">
+                    <div
+                      key={paper.paper_id}
+                      className="flex items-stretch rounded hover:bg-slate-100"
+                      draggable
+                      onDragStart={(event) => startAnalysisItemDrag(event, `paper:${paper.paper_id}`)}
+                    >
+                      <label className="flex shrink-0 items-center pl-2" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择归类 ${paper.title}`}
+                          checked={selectedAnalysisItemSet.has(`paper:${paper.paper_id}`)}
+                          disabled={!selectedAnalysisItemSet.has(`paper:${paper.paper_id}`) && selectedAnalysisItemIds.length >= 200}
+                          onChange={() => toggleAnalysisItem(`paper:${paper.paper_id}`)}
+                        />
+                      </label>
                       <button
                         type="button"
                         onClick={() => {
@@ -803,7 +875,21 @@ export function AnalysisWorkspace({
                   );
                 })}
                 {filteredLegacyExams.map((exam) => (
-                  <div key={exam.exam_id} className="flex items-stretch rounded hover:bg-slate-100">
+                    <div
+                      key={exam.exam_id}
+                      className="flex items-stretch rounded hover:bg-slate-100"
+                      draggable
+                      onDragStart={(event) => startAnalysisItemDrag(event, `exam:${exam.exam_id}`)}
+                    >
+                      <label className="flex shrink-0 items-center pl-2" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择归类 ${exam.exam_title || exam.exam_id}`}
+                          checked={selectedAnalysisItemSet.has(`exam:${exam.exam_id}`)}
+                          disabled={!selectedAnalysisItemSet.has(`exam:${exam.exam_id}`) && selectedAnalysisItemIds.length >= 200}
+                          onChange={() => toggleAnalysisItem(`exam:${exam.exam_id}`)}
+                        />
+                      </label>
                     <button
                       type="button"
                       onClick={() => void handleExamSelect(exam.exam_id)}

@@ -51,6 +51,30 @@ export function useNodePanelState({
   // Active tracking for race condition and late response guard
   const activeNodeIdRef = useRef<string | null>(selectedNode?.id ?? null);
   const requestSeqRef = useRef<number>(0);
+  const mountedRef = useRef(true);
+  const identity = JSON.stringify([activeSlug, selectedNode?.id ?? null]);
+  const identityRef = useRef(identity);
+  if (identityRef.current !== identity) {
+    identityRef.current = identity;
+    requestSeqRef.current += 1;
+  }
+  activeNodeIdRef.current = selectedNode?.id ?? null;
+  const snapshotRef = useRef<{ identity: string; node: GraphNodeRow | null } | null>(null);
+  const detailsSeqRef = useRef(0);
+  const errorRef = useRef(onError);
+  errorRef.current = onError;
+  const isCurrent = (nodeId: string | undefined, sequence: number) =>
+    mountedRef.current && Boolean(nodeId) && activeNodeIdRef.current === nodeId && requestSeqRef.current === sequence;
+  const canStart = () => mountedRef.current && identityRef.current === identity && Boolean(selectedNode);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestSeqRef.current += 1;
+      detailsSeqRef.current += 1;
+    };
+  }, []);
 
   // Edit state
   const [draftName, setDraftName] = useState("");
@@ -89,88 +113,94 @@ export function useNodePanelState({
   const [noteDraftBody, setNoteDraftBody] = useState("");
   const noteTextAreaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Synchronize when selectedNode changes
+  // Identity changes discard the previous node's activity. A refreshed snapshot
+  // only updates fields that still match the previous server value.
   useEffect(() => {
-    activeNodeIdRef.current = selectedNode?.id ?? null;
-    requestSeqRef.current += 1;
+    const previous = snapshotRef.current;
+    const switched = previous?.identity !== identity;
+    snapshotRef.current = { identity, node: selectedNode };
     const currentSeq = requestSeqRef.current;
+    const detailsSeq = ++detailsSeqRef.current;
 
-    if (!selectedNode) {
+    if (switched) {
+      setBusy(false);
       setBoundQuestions([]);
       setNodeFiles([]);
       setBoundSel(new Set());
+      setBankSel(new Set());
+      setFileSel(new Set());
       setBankOpen(false);
       setFileOpen(false);
-      setNotesList([]);
-      setDraftName("");
-      setDraftSubject("");
-      setDraftTags("");
-      setDraftAliases("");
-      setDraftKind("concept");
-      setDraftPrimaryParent("");
       setNoteComposerOpen(false);
       setNoteEditingId(null);
       setNoteDraftBody("");
+      setRelTo("");
+    }
+    if (!selectedNode) {
+      setNotesList([]);
+      setDraftName(""); setDraftSubject(""); setDraftTags(""); setDraftAliases("");
+      setDraftKind("concept"); setDraftPrimaryParent("");
       return;
     }
+    const old = switched ? null : previous?.node;
+    const updateText = (setter: React.Dispatch<React.SetStateAction<string>>, value: string, before: string) =>
+      setter((current) => switched || current === before ? value : current);
+    updateText(setDraftName, selectedNode.canonical_name ?? "", old?.canonical_name ?? "");
+    updateText(setDraftSubject, selectedNode.subject ?? "", old?.subject ?? "");
+    updateText(setDraftTags, (selectedNode.tags ?? []).join(", "), (old?.tags ?? []).join(", "));
+    updateText(setDraftAliases, (selectedNode.aliases ?? []).join(", "), (old?.aliases ?? []).join(", "));
+    updateText(setDraftPrimaryParent, selectedNode.primary_parent_id ?? "", old?.primary_parent_id ?? "");
+    setDraftKind((current) => switched || current === (old?.node_kind ?? "concept")
+      ? (selectedNode.node_kind as "concept" | "skill" | "causal") ?? "concept" : current);
+    setNotesList((current) => {
+      const before = old?.notes ?? [];
+      const unchanged = current.length === before.length && current.every((note, index) =>
+        note.id === before[index].id && note.body === (before[index].body ?? "") && note.created_at === before[index].created_at);
+      return switched || unchanged ? (selectedNode.notes ?? []).map((note) => ({ ...note, body: note.body ?? "" })) : current;
+    });
 
-    setDraftName(selectedNode.canonical_name ?? "");
-    setDraftSubject(selectedNode.subject ?? "");
-    setDraftTags((selectedNode.tags ?? []).join(", "));
-    setDraftAliases((selectedNode.aliases ?? []).join(", "));
-    setDraftKind((selectedNode.node_kind as "concept" | "skill" | "causal") ?? "concept");
-    setDraftPrimaryParent(selectedNode.primary_parent_id ?? "");
-    setNotesList(
-      (selectedNode.notes ?? []).map((n) => ({
-        id: n.id,
-        body: n.body ?? "",
-        created_at: n.created_at,
-      })),
-    );
-    setNoteComposerOpen(false);
-    setNoteEditingId(null);
-    setNoteDraftBody("");
-
-    // Load bound questions and files with sequence and nodeId guard
     const nodeId = selectedNode.id;
     void (async () => {
       try {
-        const [q, f] = await Promise.all([
-          apiGraphListQuestionsForNode(nodeId, activeSlug),
-          apiGraphListNodeFiles(nodeId, activeSlug),
+        const [questions, files] = await Promise.all([
+          apiGraphListQuestionsForNode(nodeId, activeSlug), apiGraphListNodeFiles(nodeId, activeSlug),
         ]);
-        if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
-          setBoundQuestions(q.questions as BoundQuestion[]);
-          setNodeFiles(f.links as NodeFileLink[]);
+        if (isCurrent(nodeId, currentSeq) && detailsSeqRef.current === detailsSeq) {
+          setBoundQuestions(questions.questions as BoundQuestion[]);
+          setNodeFiles(files.links as NodeFileLink[]);
         }
-      } catch (e) {
-        if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
-          onError(e instanceof Error ? e.message : String(e));
+      } catch (error) {
+        if (isCurrent(nodeId, currentSeq) && detailsSeqRef.current === detailsSeq) {
+          errorRef.current(error instanceof Error ? error.message : String(error));
         }
       }
     })();
-  }, [selectedNode, activeSlug, onError]);
+  }, [selectedNode, activeSlug, identity]);
 
   // File search with debounce
   useEffect(() => {
     if (!fileOpen) return;
+    const nodeId = selectedNode?.id;
+    const sequence = requestSeqRef.current;
+    let active = true;
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
+          if (!active || !isCurrent(nodeId, sequence)) return;
           const r = await apiGraphListResourceFiles(fileQ, 600);
-          setFileList(r.files ?? []);
+          if (active && isCurrent(nodeId, sequence)) setFileList(r.files ?? []);
         } catch {
           /* ignore */
         }
       })();
     }, 300);
-    return () => window.clearTimeout(timer);
-  }, [fileOpen, fileQ]);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [fileOpen, fileQ, identity]);
 
   // Persist notes with late response guard
   const persistNotes = useCallback(
     async (next: GraphNodeNoteRow[]): Promise<boolean> => {
-      if (!selectedNode) return false;
+      if (!selectedNode || !canStart()) return false;
       const nodeId = selectedNode.id;
       const currentSeq = requestSeqRef.current;
       setBusy(true);
@@ -189,18 +219,17 @@ export function useNodePanelState({
           },
           activeSlug,
         );
-        if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
-          setNotesList(next);
-        }
+        if (!isCurrent(nodeId, currentSeq)) return false;
+        setNotesList(next);
         onSaved();
         return true;
       } catch (e) {
-        if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+        if (isCurrent(nodeId, currentSeq)) {
           onError(e instanceof Error ? e.message : String(e));
         }
         return false;
       } finally {
-        if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+        if (isCurrent(nodeId, currentSeq)) {
           setBusy(false);
         }
       }
@@ -211,7 +240,7 @@ export function useNodePanelState({
   // Save node edit changes with late response guard
   const saveEdits = async () => {
     if (isImeCompositionActive()) return;
-    if (!selectedNode) return;
+    if (!selectedNode || !canStart()) return;
     const nodeId = selectedNode.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
@@ -227,7 +256,6 @@ export function useNodePanelState({
           subject: draftSubject.trim() || null,
           level: (selectedNode.level ?? "").trim() || null,
           tags: splitCsv(draftTags),
-          source: null,
           layout_x: selectedNode.layout_x ?? null,
           layout_y: selectedNode.layout_y ?? null,
           primary_parent_id: draftPrimaryParent.trim() || null,
@@ -239,13 +267,13 @@ export function useNodePanelState({
         },
         activeSlug,
       );
-      onSaved();
+      if (isCurrent(nodeId, currentSeq)) onSaved();
     } catch (e) {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
@@ -253,7 +281,7 @@ export function useNodePanelState({
 
   // Delete node
   const deleteNode = async () => {
-    if (!selectedNode) return;
+    if (!selectedNode || !canStart()) return;
     const nodeId = selectedNode.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
@@ -264,13 +292,13 @@ export function useNodePanelState({
       } else {
         await apiGraphDeleteNode(nodeId, activeSlug);
       }
-      onDeleted();
+      if (isCurrent(nodeId, currentSeq)) onDeleted();
     } catch (e) {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
@@ -278,7 +306,7 @@ export function useNodePanelState({
 
   // Relations
   const addRelation = async () => {
-    if (!selectedNode) return;
+    if (!selectedNode || !canStart()) return;
     if (!relTo) {
       onError(t("errPickNodeRel"));
       return;
@@ -292,70 +320,73 @@ export function useNodePanelState({
         { from_node_id: nodeId, to_node_id: relTo, relation_type: relType },
         activeSlug,
       );
-      onSaved();
+      if (isCurrent(nodeId, currentSeq)) onSaved();
     } catch (e) {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
   };
 
   const removeRelation = async (rid: string) => {
+    if (!canStart()) return;
     const nodeId = selectedNode?.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
     onError(null);
     try {
       await apiGraphDeleteRelation(rid, activeSlug);
-      onSaved();
+      if (isCurrent(nodeId, currentSeq)) onSaved();
     } catch (e) {
-      if (nodeId && activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (nodeId && activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
   };
 
   const reverseRelation = async (rid: string) => {
+    if (!canStart()) return;
     const nodeId = selectedNode?.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
     onError(null);
     try {
       await apiGraphUpdateRelation(rid, { reverse: true }, activeSlug);
-      onSaved();
+      if (isCurrent(nodeId, currentSeq)) onSaved();
     } catch (e) {
-      if (nodeId && activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (nodeId && activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
   };
 
   const changeRelationType = async (rid: string, newType: string) => {
+    if (!canStart()) return;
     const nodeId = selectedNode?.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
     onError(null);
     try {
       await apiGraphUpdateRelation(rid, { relation_type: newType }, activeSlug);
-      onSaved();
+      if (isCurrent(nodeId, currentSeq)) onSaved();
     } catch (e) {
-      if (nodeId && activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (nodeId && activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
@@ -363,89 +394,95 @@ export function useNodePanelState({
 
   // Questions
   const openBank = async () => {
+    if (!selectedNode || !canStart()) return;
+    const nodeId = selectedNode.id;
+    const currentSeq = requestSeqRef.current;
     setBankOpen(true);
     setBankSel(new Set());
     setBankSubject("");
     setBankType("");
     try {
       const r = await apiBankItems();
-      setBankItems(r.items ?? []);
+      if (isCurrent(nodeId, currentSeq)) setBankItems(r.items ?? []);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrent(nodeId, currentSeq)) onError(e instanceof Error ? e.message : String(e));
     }
   };
 
   const bindSelectedQuestions = async () => {
-    if (!selectedNode || bankSel.size === 0) return;
+    if (!selectedNode || !canStart() || bankSel.size === 0) return;
     const nodeId = selectedNode.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
     onError(null);
     try {
       await apiGraphBindBatch(nodeId, Array.from(bankSel), activeSlug);
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBankOpen(false);
         setBankSel(new Set());
       }
+      if (!isCurrent(nodeId, currentSeq)) return;
       const q = await apiGraphListQuestionsForNode(nodeId, activeSlug);
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBoundQuestions(q.questions as BoundQuestion[]);
       }
     } catch (e) {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
   };
 
   const unbindQ = async (qid: string) => {
-    if (!selectedNode) return;
+    if (!selectedNode || !canStart()) return;
     const nodeId = selectedNode.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
     onError(null);
     try {
       await apiGraphUnbindBinding({ question_qualified_id: qid, node_id: nodeId }, activeSlug);
+      if (!isCurrent(nodeId, currentSeq)) return;
       const q = await apiGraphListQuestionsForNode(nodeId, activeSlug);
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBoundQuestions(q.questions as BoundQuestion[]);
       }
     } catch (e) {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
   };
 
   const unbindSelectedBound = async () => {
-    if (!selectedNode || boundSel.size === 0) return;
+    if (!selectedNode || !canStart() || boundSel.size === 0) return;
     const nodeId = selectedNode.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
     onError(null);
     try {
       await apiGraphUnbindBatch(nodeId, Array.from(boundSel), activeSlug);
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBoundSel(new Set());
       }
+      if (!isCurrent(nodeId, currentSeq)) return;
       const q = await apiGraphListQuestionsForNode(nodeId, activeSlug);
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBoundQuestions(q.questions as BoundQuestion[]);
       }
     } catch (e) {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
@@ -453,58 +490,63 @@ export function useNodePanelState({
 
   // Files
   const attachSelectedFiles = async () => {
-    if (!selectedNode || fileSel.size === 0) return;
+    if (!selectedNode || !canStart() || fileSel.size === 0) return;
     const nodeId = selectedNode.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
     onError(null);
     try {
       for (const p of fileSel) {
+        if (!isCurrent(nodeId, currentSeq)) return;
         await apiGraphAttachFile({ node_id: nodeId, relative_path: p }, activeSlug);
       }
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setFileOpen(false);
       }
+      if (!isCurrent(nodeId, currentSeq)) return;
       const f = await apiGraphListNodeFiles(nodeId, activeSlug);
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setNodeFiles(f.links as NodeFileLink[]);
       }
     } catch (e) {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
   };
 
   const uploadAndAttach = async (file: File | null) => {
-    if (!file || !selectedNode) return;
+    if (!file || !selectedNode || !canStart()) return;
     const nodeId = selectedNode.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
     onError(null);
     try {
       const up = await apiGraphUploadMaterial(file);
+      if (!isCurrent(nodeId, currentSeq)) return;
       await apiGraphAttachFile({ node_id: nodeId, relative_path: up.relative_path }, activeSlug);
+      if (!isCurrent(nodeId, currentSeq)) return;
       const f = await apiGraphListNodeFiles(nodeId, activeSlug);
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setNodeFiles(f.links as NodeFileLink[]);
       }
     } catch (e) {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }
   };
 
   const detachFile = async (linkId: string) => {
+    if (!canStart()) return;
     const nodeId = selectedNode?.id;
     const currentSeq = requestSeqRef.current;
     setBusy(true);
@@ -512,17 +554,18 @@ export function useNodePanelState({
     try {
       await apiGraphDetachFile(linkId, activeSlug);
       if (nodeId) {
-        const f = await apiGraphListNodeFiles(nodeId, activeSlug);
-        if (activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+        if (!isCurrent(nodeId, currentSeq)) return;
+      const f = await apiGraphListNodeFiles(nodeId, activeSlug);
+        if (isCurrent(nodeId, currentSeq)) {
           setNodeFiles(f.links as NodeFileLink[]);
         }
       }
     } catch (e) {
-      if (nodeId && activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         onError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (nodeId && activeNodeIdRef.current === nodeId && requestSeqRef.current === currentSeq) {
+      if (isCurrent(nodeId, currentSeq)) {
         setBusy(false);
       }
     }

@@ -84,7 +84,7 @@ export default function App() {
 
 function AppShell() {
   const { t } = useTranslation(["app", "common"]);
-  const { toggleSidebar, sidebarOpen, setSidebarOpen } = useAgentContext();
+  const { toggleSidebar, sidebarOpen, setSidebarOpen, resetAgentContext } = useAgentContext();
   const { left: toolBarLeft, right: toolBarRight } = useToolBar();
   const [page, setPage] = useState<AppPage>("compose");
   const [composeOwner, setComposeOwner] = useState<string | null>(null);
@@ -103,6 +103,20 @@ function AppShell() {
   const [adminProjectMode, setAdminProjectMode] = useState(false);
   const projectInfoRequestId = useRef(0);
   const platformRequestId = useRef(0);
+  const assistantScope = JSON.stringify([
+    currentUser?.id ?? null,
+    infoAccountId === (currentUser?.id ?? "local") && info?.bound ? info.root || info.project_id || null : null,
+  ]);
+
+  useLayoutEffect(() => {
+    resetAgentContext?.();
+  }, [assistantScope, resetAgentContext]);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.ehDensity = currentUser?.preferences?.density === "compact"
+      ? "compact"
+      : "comfortable";
+  }, [currentUser?.id, currentUser?.preferences?.density]);
 
   const refreshInfo = useCallback(async () => {
     const requestId = ++projectInfoRequestId.current;
@@ -434,6 +448,7 @@ function AppShell() {
                   {page === "graph" && (
                     <GraphRoute
                       info={info}
+                      accountId={currentUser?.id ?? null}
                       onRefreshInfo={refreshInfo}
                       onError={setErr}
                       focusNodeId={graphFocusNodeId}
@@ -479,7 +494,7 @@ function AppShell() {
                 </main>
                 <WorkspaceLoadBoundary>
                 <Suspense fallback={null}>
-                  {(sidebarOpen || assistantMounted) && <AgentSidebar projectBound mode="overlay" overlayHost={assistantOverlayHost} />}
+                  {(sidebarOpen || assistantMounted) && <AgentSidebar key={assistantScope} projectBound mode="overlay" overlayHost={assistantOverlayHost} />}
                 </Suspense>
                 </WorkspaceLoadBoundary>
               </div>

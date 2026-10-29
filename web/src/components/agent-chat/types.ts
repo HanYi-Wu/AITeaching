@@ -4,7 +4,7 @@ export type FileAttachment = {
   original_name: string;
 };
 
-export type ChatLine =
+type ChatLineContent =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
   | {
@@ -31,6 +31,8 @@ export type ChatLine =
       resolved?: "execute" | "modify" | "cancel";
     }
   | { kind: "system"; text: string };
+
+export type ChatLine = ChatLineContent & { key?: string };
 
 export type TaskStep = { title: string; status: string };
 

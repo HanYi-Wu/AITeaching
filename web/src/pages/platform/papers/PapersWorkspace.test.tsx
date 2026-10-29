@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   listTeacherClassStudents: vi.fn(),
   listContentFolders: vi.fn(),
   listTaggedItems: vi.fn(),
+  moveContentItemsToFolder: vi.fn(),
   updatePlatformPaperDeliveryMode: vi.fn(),
   publishPlatformPaper: vi.fn(),
   revokePlatformPaperPublication: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     listTeacherClassStudents: mocks.listTeacherClassStudents,
     listContentFolders: mocks.listContentFolders,
     listTaggedItems: mocks.listTaggedItems,
+    moveContentItemsToFolder: mocks.moveContentItemsToFolder,
     updatePlatformPaperDeliveryMode: mocks.updatePlatformPaperDeliveryMode,
     publishPlatformPaper: mocks.publishPlatformPaper,
     revokePlatformPaperPublication: mocks.revokePlatformPaperPublication,
@@ -99,6 +101,7 @@ describe("PapersWorkspace", () => {
       classes: [{ id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: "Math", subject: "Math" }],
     });
     mocks.listContentFolders.mockResolvedValue({ folders: [{ id: "f1", owner_teacher_id: "t1", scope: "paper", parent_id: null, kind: "category", name: "默认文件夹" }] });
+    mocks.moveContentItemsToFolder.mockResolvedValue({ ok: true, moved_count: 1 });
     mocks.listTaggedItems.mockResolvedValue({ items: {} });
     mocks.listTeacherClassStudents.mockResolvedValue({ students: [{ id: "s1", student_no: "S001", display_name: "张三", status: "active" }] });
     mocks.listPlatformPaperPublications.mockResolvedValue({ publications: [] });
@@ -129,6 +132,59 @@ describe("PapersWorkspace", () => {
     await userEvent.click(screen.getByLabelText(/Class 1/));
     await userEvent.selectOptions(screen.getByLabelText("发布文件夹"), "f1");
     expect(screen.getByTestId("paper-publish")).toBeEnabled();
+  });
+
+  it("selects and drags a group of movable papers, then clears selection after a successful batch move", async () => {
+    const papers = [
+      { ...offlinePaper, paper_id: "p1", title: "Paper One" },
+      { ...offlinePaper, paper_id: "p2", title: "Paper Two", exam_id: "quiz/Science" },
+    ];
+    mocks.listPlatformPapers.mockResolvedValue({ papers, total: papers.length, page: 1, page_size: 10, total_pages: 1 });
+    mocks.moveContentItemsToFolder.mockResolvedValue({ ok: true, moved_count: 2 });
+    render(<PapersWorkspace />);
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "选择试卷 Paper One" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "选择试卷 Paper Two" }));
+    const setData = vi.fn();
+    fireEvent.dragStart(screen.getByTestId("paper-list-item-p1"), { dataTransfer: { setData } as unknown as DataTransfer });
+    expect(setData).toHaveBeenCalledWith("application/x-or-content-items", JSON.stringify({ scope: "paper", ids: ["p1", "p2"] }));
+    expect(setData).toHaveBeenCalledWith("application/x-or-content-item", JSON.stringify({ scope: "paper", id: "p1" }));
+
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "批量移动到文件夹" }), "f1");
+    await userEvent.click(screen.getByRole("button", { name: "移动所选" }));
+    await waitFor(() => expect(mocks.moveContentItemsToFolder).toHaveBeenCalledWith("paper", ["p1", "p2"], "f1"));
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "选择试卷 Paper One" })).not.toBeChecked());
+  });
+
+  it("keeps paper selections after a rejected batch and prevents selecting published papers", async () => {
+    mocks.listPlatformPapers.mockResolvedValue({
+      papers: [
+        { ...offlinePaper, paper_id: "p1", title: "Movable Paper" },
+        { ...offlinePaper, paper_id: "p2", title: "Published Paper", publication_count: 1 },
+        { ...offlinePaper, paper_id: "p3", title: "Revoked History Paper", has_publication_history: true },
+      ],
+      total: 3, page: 1, page_size: 10, total_pages: 1,
+    });
+    mocks.moveContentItemsToFolder.mockRejectedValue(new Error("move rejected"));
+    render(<PapersWorkspace />);
+
+    const movable = await screen.findByRole("checkbox", { name: "选择试卷 Movable Paper" });
+    const published = screen.getByRole("checkbox", { name: "选择试卷 Published Paper" });
+    const revokedHistory = screen.getByRole("checkbox", { name: "选择试卷 Revoked History Paper" });
+    expect(published).toBeDisabled();
+    expect(revokedHistory).toBeDisabled();
+    expect(screen.getByTestId("paper-list-item-p2")).toHaveAttribute("draggable", "false");
+    expect(screen.getByTestId("paper-list-item-p3")).toHaveAttribute("draggable", "false");
+    await userEvent.click(movable);
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "批量移动到文件夹" }), "f1");
+    await userEvent.click(screen.getByRole("button", { name: "移动所选" }));
+
+    await waitFor(() => expect(mocks.moveContentItemsToFolder).toHaveBeenCalledWith("paper", ["p1"], "f1"));
+    expect(await screen.findByText("move rejected")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择试卷 Movable Paper" })).toBeChecked();
+    await userEvent.click(screen.getByTestId("paper-list-item-p3"));
+    expect(screen.getByLabelText("试卷所在文件夹")).toBeDisabled();
+    expect(screen.getByLabelText("试卷所在文件夹")).toHaveAttribute("title", "已有发布记录，请移动整个文件夹，以保留答卷和统计关系");
   });
 
   it("publishes an online paper to selected classes", async () => {

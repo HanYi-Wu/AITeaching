@@ -11,11 +11,17 @@ const mocks = vi.hoisted(() => ({
   apiAgentSafetyModePut: vi.fn(),
   getAccountProfile: vi.fn(),
   updateAccountCredentials: vi.fn(),
+  updateAccountProfile: vi.fn(),
 }));
 
 vi.mock("../../platform/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../platform/auth")>();
-  return { ...actual, getAccountProfile: mocks.getAccountProfile, updateAccountCredentials: mocks.updateAccountCredentials };
+  return {
+    ...actual,
+    getAccountProfile: mocks.getAccountProfile,
+    updateAccountCredentials: mocks.updateAccountCredentials,
+    updateAccountProfile: mocks.updateAccountProfile,
+  };
 });
 
 vi.mock("../../api/client", async (importOriginal) => {
@@ -72,6 +78,16 @@ describe("SettingsWorkspace role gating", () => {
     });
     mocks.getAccountProfile.mockResolvedValue({ profile: { id: "t1", role: "teacher", username: "teacher", display_name: "教师", status: "active" } });
     mocks.updateAccountCredentials.mockResolvedValue({ user: { id: "t1", role: "teacher", username: "teacher", display_name: "教师", status: "active" } });
+    mocks.updateAccountProfile.mockImplementation(async (payload) => ({
+      profile: {
+        id: "t1",
+        role: "teacher",
+        username: "teacher",
+        display_name: "教师",
+        status: "active",
+        preferences: payload.preferences,
+      },
+    }));
   });
 
   it("hides model and extension configuration for teachers and keeps logs inside settings", async () => {
@@ -98,5 +114,31 @@ describe("SettingsWorkspace role gating", () => {
     await userEvent.type(screen.getByLabelText("确认新密码"), "newpass2");
     await userEvent.click(screen.getByRole("button", { name: "修改密码" }));
     await waitFor(() => expect(mocks.updateAccountCredentials).toHaveBeenCalledWith({ current_password: "oldpass1", new_password: "newpass2" }));
+  });
+
+  it("loads density and saves the selected density to the account profile", async () => {
+    mocks.getAccountProfile.mockResolvedValueOnce({
+      profile: {
+        id: "t1",
+        role: "teacher",
+        username: "teacher",
+        display_name: "教师",
+        status: "active",
+        preferences: { density: "compact" },
+      },
+    });
+    const user = userEvent.setup();
+    renderSettings("teacher");
+
+    const density = await screen.findByLabelText("界面密度");
+    await waitFor(() => expect(document.documentElement.dataset.ehDensity).toBe("compact"));
+    expect(density).toHaveValue("compact");
+
+    await user.selectOptions(density, "comfortable");
+    await user.click(screen.getByRole("button", { name: "保存个性化设置" }));
+    await waitFor(() => expect(mocks.updateAccountProfile).toHaveBeenCalledWith(expect.objectContaining({
+      preferences: expect.objectContaining({ density: "comfortable" }),
+    })));
+    await waitFor(() => expect(document.documentElement.dataset.ehDensity).toBe("comfortable"));
   });
 });

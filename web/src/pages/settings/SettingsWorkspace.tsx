@@ -67,7 +67,9 @@ export function SettingsWorkspace({
       setProfile(value);
       setSubjectsText((value.subjects ?? []).join("、"));
       setTheme(value.preferences?.theme ?? "classic");
-      setDensity(value.preferences?.density ?? "comfortable");
+      const loadedDensity = value.preferences?.density === "compact" ? "compact" : "comfortable";
+      setDensity(loadedDensity);
+      document.documentElement.dataset.ehDensity = loadedDensity;
       setFontScale(Number(value.preferences?.font_scale ?? 1));
       setAvatarDataUrl(value.avatar_data_url ?? null);
     }).catch((error) => onError(error instanceof Error ? error.message : String(error)));
@@ -85,9 +87,9 @@ export function SettingsWorkspace({
       setProfile(result.profile);
       onProfileUpdated?.(result.profile);
       document.documentElement.dataset.ehTheme = theme;
+      document.documentElement.dataset.ehDensity = density === "compact" ? "compact" : "comfortable";
       document.documentElement.style.fontSize = `${fontScale * 100}%`;
       localStorage.setItem("eh-theme", theme);
-      localStorage.setItem("eh-density", density);
       setMsg("个性化设置已保存");
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));

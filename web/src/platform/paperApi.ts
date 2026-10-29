@@ -194,6 +194,12 @@ export function movePaperToFolder(paperId: string, folderId: string): Promise<{ 
   return platformRequest(`/api/organizer/papers/${encodeURIComponent(paperId)}/folder`, { method: "POST", body: JSON.stringify({ folder_id: folderId }) });
 }
 
+export function moveContentItemsToFolder(scope: "compose" | "paper", itemIds: string[], folderId: string | null): Promise<{ ok: boolean; moved_count: number }> {
+  return platformRequest("/api/organizer/folder-items/move", {
+    method: "POST", body: JSON.stringify({ scope, item_ids: itemIds, folder_id: folderId }),
+  });
+}
+
 export function listFolderItems(scope: "template" | "compose"): Promise<{ items: Record<string, string> }> {
   return platformRequest(`/api/organizer/folder-items?scope=${scope}`);
 }

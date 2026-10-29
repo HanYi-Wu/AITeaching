@@ -6,7 +6,7 @@
  *
  * All shared state is managed via useGraphStore (Zustand).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, Upload } from "lucide-react";
 import {
@@ -39,15 +39,38 @@ import { confirmDialog } from "../../lib/confirmDialog";
 import { cn } from "../../lib/utils";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
 
-export function GraphWorkspace({
-  onError,
-  focusNodeId = null,
-  onFocusConsumed,
-}: {
+type GraphWorkspaceProps = {
   onError: (s: string | null) => void;
+  scope?: string;
   focusNodeId?: string | null;
   onFocusConsumed?: () => void;
-}) {
+};
+
+type GraphListSnapshot = {
+  graphs: Awaited<ReturnType<typeof apiGraphListGraphs>>["graphs"];
+  requestSeq: number;
+};
+
+export function GraphWorkspace(props: GraphWorkspaceProps) {
+  const { scope } = props;
+  const projectScope = useGraphStore((state) => state.projectScope);
+  const bindProjectScope = useGraphStore((state) => state.bindProjectScope);
+
+  useLayoutEffect(() => {
+    if (scope === undefined) return;
+    if (bindProjectScope(scope)) useGraphUndoStore.getState().clear();
+  }, [scope, bindProjectScope]);
+
+  if (scope !== undefined && projectScope !== scope) return null;
+  return <GraphWorkspaceContent {...props} />;
+}
+
+function GraphWorkspaceContent({
+  onError,
+  scope,
+  focusNodeId = null,
+  onFocusConsumed,
+}: GraphWorkspaceProps) {
   const { t } = useTranslation(["graph", "common"]);
   const { setPageContext } = useAgentContext();
   const { setToolBar, clearToolBar } = useToolBar();
@@ -65,6 +88,19 @@ export function GraphWorkspace({
     connectingFromId, setConnectingFromId,
     busy, setBusy,
   } = useGraphStore();
+
+  const isCurrentScope = useCallback(
+    () => scope === undefined || useGraphStore.getState().projectScope === scope,
+    [scope],
+  );
+  const isCurrentGraphSelection = useCallback(
+    (slug: string | null) => isCurrentScope() && useGraphStore.getState().activeSlug === slug,
+    [isCurrentScope],
+  );
+  const isCurrentGraph = useCallback(
+    (slug: string | null): slug is string => slug !== null && isCurrentGraphSelection(slug),
+    [isCurrentGraphSelection],
+  );
 
   // Connect relation type pending selection
   const [pendingConnectSource, setPendingConnectSource] = useState<string | null>(null);
@@ -132,20 +168,9 @@ export function GraphWorkspace({
     return () => clearToolBar();
   }, [viewMode, setViewMode, t, setToolBar, clearToolBar]);
 
-  // Load graph list on mount
-  const loadGraphList = useCallback(async () => {
-    try {
-      const r = await apiGraphListGraphs();
-      setGraphs(r.graphs);
-      return r.graphs;
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-      return [];
-    }
-  }, [setGraphs, onError]);
-
   const isMountedRef = useRef(true);
   const loadSeqRef = useRef(0);
+  const graphListSeqRef = useRef(0);
   const activeSlugRef = useRef(activeSlug);
   activeSlugRef.current = activeSlug;
 
@@ -154,15 +179,40 @@ export function GraphWorkspace({
     return () => {
       isMountedRef.current = false;
       loadSeqRef.current += 1;
+      graphListSeqRef.current += 1;
     };
   }, []);
 
+  // Load graph list on mount
+  const loadGraphList = useCallback(async () => {
+    if (!isCurrentScope() || !isMountedRef.current) return null;
+    const requestSeq = ++graphListSeqRef.current;
+    try {
+      const r = await apiGraphListGraphs();
+      if (!isMountedRef.current || requestSeq !== graphListSeqRef.current || !isCurrentScope()) return null;
+      setGraphs(r.graphs);
+      return { graphs: r.graphs, requestSeq } satisfies GraphListSnapshot;
+    } catch (e) {
+      if (isMountedRef.current && requestSeq === graphListSeqRef.current && isCurrentScope()) {
+        onError(e instanceof Error ? e.message : String(e));
+      }
+      return null;
+    }
+  }, [isCurrentScope, setGraphs, onError]);
+
+  const isCurrentGraphList = useCallback((result: GraphListSnapshot | null): result is GraphListSnapshot => (
+    result !== null
+      && isMountedRef.current
+      && result.requestSeq === graphListSeqRef.current
+      && isCurrentScope()
+  ), [isCurrentScope]);
+
   // Load graph data for active slug with generation/identity isolation
   const loadGraphData = useCallback(async (slug: string | null) => {
-    if (slug !== activeSlugRef.current) return;
+    if (!isCurrentGraphSelection(slug) || slug !== activeSlugRef.current) return;
     const currentSeq = ++loadSeqRef.current;
     if (!slug) {
-      if (isMountedRef.current && currentSeq === loadSeqRef.current) {
+      if (isMountedRef.current && currentSeq === loadSeqRef.current && isCurrentGraphSelection(slug)) {
         setGraphNodes([]);
         setRelations([]);
         setBusy(false);
@@ -177,7 +227,7 @@ export function GraphWorkspace({
         apiGraphListRelations(slug),
         apiGraphGetTaxonomy(),
       ]);
-      if (!isMountedRef.current || currentSeq !== loadSeqRef.current || activeSlugRef.current !== slug) {
+      if (!isMountedRef.current || currentSeq !== loadSeqRef.current || activeSlugRef.current !== slug || !isCurrentGraphSelection(slug)) {
         return;
       }
       setGraphNodes(n.nodes);
@@ -186,27 +236,31 @@ export function GraphWorkspace({
       setSubjects(tx.subjects?.length ? tx.subjects : [i18n.t("defaultSubject", { ns: "graph" })]);
       setLevels(tx.levels?.length ? tx.levels : [i18n.t("defaultLevel1", { ns: "graph" }), i18n.t("defaultLevel2", { ns: "graph" })]);
     } catch (e) {
-      if (!isMountedRef.current || currentSeq !== loadSeqRef.current || activeSlugRef.current !== slug) {
+      if (!isMountedRef.current || currentSeq !== loadSeqRef.current || activeSlugRef.current !== slug || !isCurrentGraphSelection(slug)) {
         return;
       }
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (isMountedRef.current && currentSeq === loadSeqRef.current && activeSlugRef.current === slug) {
+      if (isMountedRef.current && currentSeq === loadSeqRef.current && activeSlugRef.current === slug && isCurrentGraphSelection(slug)) {
         setBusy(false);
       }
     }
-  }, [onError, setBusy, setGraphNodes, setKindCounts, setRelations, setSubjects, setLevels]);
+  }, [isCurrentGraphSelection, onError, setBusy, setGraphNodes, setKindCounts, setRelations, setSubjects, setLevels]);
 
   // Initial load
   useEffect(() => {
     void (async () => {
-      const gs = await loadGraphList();
-      if (gs.length > 0 && !activeSlug) {
-        setActiveSlug(gs[0].slug);
-      }
+      const result = await loadGraphList();
+      if (!isCurrentGraphList(result)) return;
+      const gs = result.graphs;
+      const currentSlug = useGraphStore.getState().activeSlug;
+      const nextSlug = currentSlug && gs.some((graph) => graph.slug === currentSlug)
+        ? currentSlug
+        : gs[0]?.slug ?? null;
+      if (nextSlug !== currentSlug) setActiveSlug(nextSlug);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isCurrentGraphList, loadGraphList, setActiveSlug]);
 
   // Reload when active slug changes
   useEffect(() => {
@@ -218,8 +272,9 @@ export function GraphWorkspace({
   }, [loadGraphData, activeSlug]);
 
   const pushUndoFrame = useCallback((f: { undo: () => Promise<void>; redo: () => Promise<void> }) => {
+    if (!isCurrentScope()) return;
     useGraphUndoStore.getState().pushFrame(f);
-  }, []);
+  }, [isCurrentScope]);
 
   useEffect(() => {
     useGraphUndoStore.getState().clear();
@@ -234,57 +289,66 @@ export function GraphWorkspace({
 
   // Create new graph
   const handleCreateGraph = useCallback(async (displayName: string) => {
+    if (!isCurrentScope()) return;
     setBusy(true);
     onError(null);
     try {
       const r = await apiGraphCreateGraph({ display_name: displayName });
-      await loadGraphList();
+      if (!isCurrentScope()) return;
+      const result = await loadGraphList();
+      if (!isCurrentGraphList(result)) return;
       setActiveSlug(r.slug);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentScope()) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isCurrentScope()) setBusy(false);
     }
-  }, [setBusy, onError, loadGraphList, setActiveSlug]);
+  }, [isCurrentScope, isCurrentGraphList, setBusy, onError, loadGraphList, setActiveSlug]);
 
   const handleDeleteGraph = useCallback(async (slug: string) => {
+    if (!isCurrentScope()) return;
     const graph = graphs.find((g) => g.slug === slug);
     const ok = await confirmDialog(t("confirmDeleteGraph", { name: graph?.display_name ?? slug }));
-    if (!ok) return;
+    if (!ok || !isCurrentScope()) return;
     setBusy(true);
     onError(null);
     try {
       await apiGraphDeleteGraph(slug);
-      const gs = await loadGraphList();
-      if (activeSlug === slug) {
-        setActiveSlug(gs[0]?.slug ?? null);
+      if (!isCurrentScope()) return;
+      const result = await loadGraphList();
+      if (!isCurrentGraphList(result)) return;
+      if (useGraphStore.getState().activeSlug === slug) {
+        setActiveSlug(result.graphs[0]?.slug ?? null);
       }
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentScope()) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isCurrentScope()) setBusy(false);
     }
-  }, [graphs, t, setBusy, onError, loadGraphList, activeSlug, setActiveSlug]);
+  }, [isCurrentScope, isCurrentGraphList, graphs, t, setBusy, onError, loadGraphList, setActiveSlug]);
 
   const handleRenameGraph = useCallback(async (slug: string, newName: string) => {
+    if (!isCurrentScope()) return;
     setBusy(true);
     onError(null);
     try {
       await apiGraphRenameGraph(slug, newName);
+      if (!isCurrentScope()) return;
       await loadGraphList();
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentScope()) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isCurrentScope()) setBusy(false);
     }
-  }, [setBusy, onError, loadGraphList]);
+  }, [isCurrentScope, setBusy, onError, loadGraphList]);
 
   const handleExportGraph = useCallback(async () => {
-    if (!activeSlug) return;
+    if (!isCurrentScope() || !activeSlug) return;
     setBusy(true);
     onError(null);
     try {
       const r = await apiGraphExportGraph(activeSlug);
+      if (!isCurrentScope()) return;
       const graph = graphs.find((g) => g.slug === activeSlug);
       const filename = `${graph?.display_name || activeSlug}-graph.json`;
       const blob = new Blob([JSON.stringify(r.bundle, null, 2)], { type: "application/json;charset=utf-8" });
@@ -297,13 +361,14 @@ export function GraphWorkspace({
       a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentScope()) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isCurrentScope()) setBusy(false);
     }
-  }, [activeSlug, graphs, onError, setBusy]);
+  }, [isCurrentScope, activeSlug, graphs, onError, setBusy]);
 
   const handleImportGraph = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    if (!isCurrentScope()) return;
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
@@ -311,20 +376,23 @@ export function GraphWorkspace({
     onError(null);
     try {
       const text = await file.text();
+      if (!isCurrentScope()) return;
       const bundle = JSON.parse(text) as Record<string, unknown>;
       const r = await apiGraphImportGraph({ bundle });
-      await loadGraphList();
+      if (!isCurrentScope()) return;
+      const result = await loadGraphList();
+      if (!isCurrentGraphList(result)) return;
       setActiveSlug(r.slug);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentScope()) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (isCurrentScope()) setBusy(false);
     }
-  }, [loadGraphList, onError, setActiveSlug, setBusy]);
+  }, [isCurrentScope, isCurrentGraphList, loadGraphList, onError, setActiveSlug, setBusy]);
 
   // Add orphan node
   const handleAddNode = useCallback(async () => {
-    if (!activeSlug) return;
+    if (!isCurrentGraph(activeSlug)) return;
     const name = t("newNodeDefaultName");
     const nodeId = `${activeSlug}/node-${Date.now()}`;
     const draft: GraphNodeRow = {
@@ -355,16 +423,20 @@ export function GraphWorkspace({
         },
         activeSlug,
       );
+      if (!isCurrentGraph(activeSlug)) return;
       const row = apiNodeToGraphRow(r.node as Record<string, unknown>, r.node_id);
       replaceGraphNode(nodeId, row);
       void loadGraphList();
       pushUndoFrame({
         undo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           await apiGraphDeleteNode(row.id, activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
           removeGraphNode(row.id);
           void loadGraphList();
         },
         redo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           const r2 = await apiGraphCreateNode(
             {
               canonical_name: name,
@@ -379,6 +451,7 @@ export function GraphWorkspace({
             },
             activeSlug,
           );
+          if (!isCurrentGraph(activeSlug)) return;
           const row2 = apiNodeToGraphRow(r2.node as Record<string, unknown>, r2.node_id);
           addGraphNode(row2);
           setSelectedNodeId(row2.id);
@@ -386,10 +459,13 @@ export function GraphWorkspace({
         },
       });
     } catch (e) {
-      removeGraphNode(nodeId);
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentGraph(activeSlug)) {
+        removeGraphNode(nodeId);
+        onError(e instanceof Error ? e.message : String(e));
+      }
     }
   }, [
+    isCurrentGraph,
     activeSlug,
     t,
     addGraphNode,
@@ -405,7 +481,7 @@ export function GraphWorkspace({
 
   // Add child node (mindmap Tab shortcut)
   const handleAddChildNode = useCallback(async (parentId: string) => {
-    if (!activeSlug) return;
+    if (!isCurrentGraph(activeSlug)) return;
     const parent = graphNodes.find((n) => n.id === parentId);
     if (!parent) return;
     const name = t("newNodeDefaultName");
@@ -439,6 +515,7 @@ export function GraphWorkspace({
         },
         activeSlug,
       );
+      if (!isCurrentGraph(activeSlug)) return;
       const row = apiNodeToGraphRow(r.node as Record<string, unknown>, r.node_id);
       replaceGraphNode(tempId, row);
       const rel = apiRelationToGraphRow(r.relation as Record<string, unknown> | null | undefined);
@@ -446,11 +523,14 @@ export function GraphWorkspace({
       void loadGraphList();
       pushUndoFrame({
         undo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           await apiGraphDeleteNode(row.id, activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
           removeGraphNode(row.id);
           void loadGraphList();
         },
         redo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           const r2 = await apiGraphCreateNode(
             {
               canonical_name: name,
@@ -466,6 +546,7 @@ export function GraphWorkspace({
             },
             activeSlug,
           );
+          if (!isCurrentGraph(activeSlug)) return;
           const row2 = apiNodeToGraphRow(r2.node as Record<string, unknown>, r2.node_id);
           addGraphNode(row2);
           const rel2 = apiRelationToGraphRow(r2.relation as Record<string, unknown> | null | undefined);
@@ -475,10 +556,13 @@ export function GraphWorkspace({
         },
       });
     } catch (e) {
-      removeGraphNode(tempId);
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentGraph(activeSlug)) {
+        removeGraphNode(tempId);
+        onError(e instanceof Error ? e.message : String(e));
+      }
     }
   }, [
+    isCurrentGraph,
     activeSlug,
     graphNodes,
     t,
@@ -507,6 +591,7 @@ export function GraphWorkspace({
 
   // Persist layout drag
   const handleNodeDragStop = useCallback(async (nodeId: string, x: number, y: number) => {
+    if (!isCurrentGraph(activeSlug)) return;
     const n = graphNodes.find((g) => g.id === nodeId);
     if (!n) return;
     try {
@@ -519,19 +604,20 @@ export function GraphWorkspace({
         level: n.level ?? null,
         description: n.description ?? null,
         tags: n.tags ?? [],
-        source: null,
         layout_x: x,
         layout_y: y,
         primary_parent_id: n.primary_parent_id ?? null,
       }, activeSlug);
+      if (!isCurrentGraph(activeSlug)) return;
       setGraphNodes(graphNodes.map((p) => p.id === nodeId ? { ...p, layout_x: x, layout_y: y } : p));
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentGraph(activeSlug)) onError(e instanceof Error ? e.message : String(e));
     }
-  }, [graphNodes, activeSlug, onError, setGraphNodes]);
+  }, [isCurrentGraph, graphNodes, activeSlug, onError, setGraphNodes]);
 
   // Rename node inline
   const handleRenameNode = useCallback(async (nodeId: string, newName: string) => {
+    if (!isCurrentGraph(activeSlug)) return;
     const n = graphNodes.find((g) => g.id === nodeId);
     if (!n) return;
     const prev = n.canonical_name;
@@ -542,29 +628,36 @@ export function GraphWorkspace({
         id: nodeId,
         canonical_name: newName,
       }, activeSlug);
+      if (!isCurrentGraph(activeSlug)) return;
       pushUndoFrame({
         undo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           patchGraphNode(nodeId, { canonical_name: prev });
           await apiGraphUpdateNode(nodeId, {
             ...n,
             id: nodeId,
             canonical_name: prev,
           }, activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
         },
         redo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           patchGraphNode(nodeId, { canonical_name: newName });
           await apiGraphUpdateNode(nodeId, {
             ...n,
             id: nodeId,
             canonical_name: newName,
           }, activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
         },
       });
     } catch (e) {
-      patchGraphNode(nodeId, { canonical_name: prev });
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentGraph(activeSlug)) {
+        patchGraphNode(nodeId, { canonical_name: prev });
+        onError(e instanceof Error ? e.message : String(e));
+      }
     }
-  }, [graphNodes, activeSlug, onError, patchGraphNode, pushUndoFrame]);
+  }, [isCurrentGraph, graphNodes, activeSlug, onError, patchGraphNode, pushUndoFrame]);
 
   // Connect
   const handleStartConnect = useCallback(() => {
@@ -587,7 +680,7 @@ export function GraphWorkspace({
   }, [setConnectingFromId]);
 
   const commitConnect = useCallback(async () => {
-    if (!pendingConnectSource || !pendingConnectTarget || !activeSlug) return;
+    if (!isCurrentGraph(activeSlug) || !pendingConnectSource || !pendingConnectTarget) return;
     setBusy(true);
     onError(null);
     try {
@@ -596,6 +689,7 @@ export function GraphWorkspace({
         to_node_id: pendingConnectTarget,
         relation_type: connectRelType,
       }, activeSlug);
+      if (!isCurrentGraph(activeSlug)) return;
       addGraphRelation({
         id: r.relation_id,
         from_node_id: pendingConnectSource,
@@ -607,15 +701,19 @@ export function GraphWorkspace({
       const rt = connectRelType;
       pushUndoFrame({
         undo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           await apiGraphDeleteRelation(r.relation_id, activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
           removeGraphRelations((rel) => rel.id === r.relation_id);
         },
         redo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           const r2 = await apiGraphCreateRelation({
             from_node_id: src,
             to_node_id: tgt,
             relation_type: rt,
           }, activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
           addGraphRelation({
             id: r2.relation_id,
             from_node_id: src,
@@ -625,14 +723,17 @@ export function GraphWorkspace({
         },
       });
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isCurrentGraph(activeSlug)) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
-      setShowConnectDialog(false);
-      setPendingConnectSource(null);
-      setPendingConnectTarget(null);
+      if (isCurrentGraph(activeSlug)) {
+        setBusy(false);
+        setShowConnectDialog(false);
+        setPendingConnectSource(null);
+        setPendingConnectTarget(null);
+      }
     }
   }, [
+    isCurrentGraph,
     pendingConnectSource,
     pendingConnectTarget,
     connectRelType,
@@ -645,10 +746,10 @@ export function GraphWorkspace({
   ]);
 
   const handlePanelDeleteNode = useCallback(async () => {
-    if (!activeSlug || !selectedNode) return;
+    if (!isCurrentGraph(activeSlug) || !selectedNode) return;
     const node = selectedNode;
     const ok = await confirmDialog(t("confirmDeleteNode", { name: node.canonical_name, defaultValue: 'Delete node "{{name}}"? This cannot be undone.' }));
-    if (!ok) return;
+    if (!ok || !isCurrentGraph(activeSlug)) return;
     const snapRels = relations.filter(
       (r) => r.from_node_id === node.id || r.to_node_id === node.id,
     );
@@ -656,6 +757,7 @@ export function GraphWorkspace({
     onError(null);
     try {
       const del = await apiGraphDeleteNode(node.id, activeSlug);
+      if (!isCurrentGraph(activeSlug)) return;
       void loadGraphList();
       const saved = del.deleted_node
         ? apiNodeToGraphRow(del.deleted_node as Record<string, unknown>, node.id)
@@ -665,8 +767,11 @@ export function GraphWorkspace({
         .filter((x): x is NonNullable<typeof x> => Boolean(x));
       pushUndoFrame({
         undo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           await apiGraphCreateNode(graphNodeRowToCreateBody(saved), activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
           for (const rel of savedRels) {
+            if (!isCurrentGraph(activeSlug)) return;
             try {
               await apiGraphCreateRelation(
                 {
@@ -677,25 +782,33 @@ export function GraphWorkspace({
                 activeSlug,
               );
             } catch {
+              if (!isCurrentGraph(activeSlug)) return;
               /* 幂等：可能已由创建节点写入 */
             }
+            if (!isCurrentGraph(activeSlug)) return;
           }
           await loadGraphData(activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
           void loadGraphList();
         },
         redo: async () => {
+          if (!isCurrentGraph(activeSlug)) return;
           await apiGraphDeleteNode(saved.id, activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
           removeGraphNode(saved.id);
           await loadGraphData(activeSlug);
+          if (!isCurrentGraph(activeSlug)) return;
           void loadGraphList();
         },
       });
     } catch (e) {
+      if (!isCurrentGraph(activeSlug)) return;
       addGraphNode(node);
       for (const r of snapRels) addGraphRelation(r);
       onError(e instanceof Error ? e.message : String(e));
     }
   }, [
+    isCurrentGraph,
     activeSlug,
     selectedNode,
     t,
@@ -711,8 +824,8 @@ export function GraphWorkspace({
 
   const handleMindMapDeleteSelectedNode = useCallback(async () => {
     await handlePanelDeleteNode();
-    setSelectedNodeId(null);
-  }, [handlePanelDeleteNode, setSelectedNodeId]);
+    if (isCurrentGraph(activeSlug)) setSelectedNodeId(null);
+  }, [handlePanelDeleteNode, isCurrentGraph, activeSlug, setSelectedNodeId]);
 
   const handleNodeClick = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
@@ -832,6 +945,7 @@ export function GraphWorkspace({
             />
           ) : (
             <GraphCanvas
+              graphScope={activeSlug ?? ""}
               graphNodes={graphNodes}
               relations={relations}
               selectedNodeId={selectedNodeId}

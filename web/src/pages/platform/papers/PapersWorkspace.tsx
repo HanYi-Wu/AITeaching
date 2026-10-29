@@ -23,6 +23,7 @@ import {
   listContentFolders,
   listTaggedItems,
   movePaperToFolder,
+  moveContentItemsToFolder,
   updateContentFolder,
   listTeacherClassStudents,
   listPaperSubmissions,
@@ -107,6 +108,10 @@ type AcceptedAiSuggestion = {
   fields: Array<"score" | "feedback">;
 };
 
+function paperHasPublicationHistory(paper: PlatformPaperRecord): boolean {
+  return paper.publication_count > 0 || paper.has_publication_history === true;
+}
+
 export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError, assignStudent, onAssignStudentConsumed, projectScope }: Props) {
   const [papers, setPapers] = useState<PlatformPaperRecord[]>([]);
   const [paperMeta, setPaperMeta] = useState<PageMeta>({ total: 0, page: 1, pageSize: 10, totalPages: 1 });
@@ -129,6 +134,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const [paperDetailView, setPaperDetailView] = useState<"manage" | "grading">("manage");
   const [gradingDraftState, setGradingDraftState] = useState<{ ownerKey: string; drafts: GradingDrafts }>({ ownerKey: "", drafts: {} });
   const [selectedPaperId, setSelectedPaperId] = useState("");
+  const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
+  const [movingSelectedPapers, setMovingSelectedPapers] = useState(false);
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
   const [folders, setFolders] = useState<ContentFolder[]>([]);
   const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
@@ -207,6 +214,24 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const gradingProjectId = projectScope !== undefined
     ? (projectScope.ready ? projectScope.value : null)
     : localGradingProjectId;
+  const paperFolderScopeKey = `${gradingAccountId ?? "account-unavailable"}/${gradingProjectId ?? "project-unavailable"}`;
+  const paperFolderScopeRef = useRef(paperFolderScopeKey);
+  paperFolderScopeRef.current = paperFolderScopeKey;
+
+  const movablePaperIds = useMemo(
+    () => papers.filter((paper) => paper.publication_count === 0).map((paper) => paper.paper_id),
+    [papers],
+  );
+
+  useEffect(() => {
+    setSelectedPaperIds([]);
+    setMovingSelectedPapers(false);
+  }, [paperFolderScopeKey, paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize, browserFolderId]);
+
+  useEffect(() => {
+    const visibleIds = new Set(movablePaperIds);
+    setSelectedPaperIds((current) => current.filter((id) => visibleIds.has(id)));
+  }, [movablePaperIds]);
 
   useEffect(() => {
     void listContentFolders("paper").then((result) => setFolders(result.folders)).catch(reportError);
@@ -1041,6 +1066,42 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     }
   }
 
+  const togglePaperSelection = useCallback((paperId: string) => {
+    setSelectedPaperIds((current) => current.includes(paperId)
+      ? current.filter((id) => id !== paperId)
+      : [...current, paperId]);
+  }, []);
+
+  const toggleVisiblePaperSelection = useCallback((visibleIds: string[]) => {
+    setSelectedPaperIds((current) => {
+      const visible = new Set(visibleIds);
+      const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => current.includes(id));
+      if (allVisibleSelected) return current.filter((id) => !visible.has(id));
+      return [...current.filter((id) => !visible.has(id)), ...visibleIds];
+    });
+  }, []);
+
+  const moveSelectedPapersToFolder = useCallback(async (itemIds: string[], folderId: string | null) => {
+    const requestScope = paperFolderScopeKey;
+    const ids = [...new Set(itemIds)];
+    if (!ids.length) return;
+    if (!folderId) {
+      reportError(new Error("请选择试卷文件夹"));
+      return;
+    }
+    setMovingSelectedPapers(true);
+    try {
+      await moveContentItemsToFolder("paper", ids, folderId);
+      if (paperFolderScopeRef.current !== requestScope) return;
+      setSelectedPaperIds([]);
+      await refresh(paperQueryRef.current, browserFolderIdRef.current);
+    } catch (error) {
+      if (paperFolderScopeRef.current === requestScope) reportError(error);
+    } finally {
+      if (paperFolderScopeRef.current === requestScope) setMovingSelectedPapers(false);
+    }
+  }, [paperFolderScopeKey]);
+
   function updatePaperQuery(patch: Partial<PaperQuery>) {
     setPaperQuery((current) => ({ ...current, ...patch, page: patch.page ?? 1 }));
   }
@@ -1052,6 +1113,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const submissionsBusy = selectedPaper ? busy === `submissions:${selectedPaper.paper_id}` : false;
   const selectedGradingSubmission =
     submissions.find((submission) => submission.attempt_id === selectedGradingAttemptId) ?? submissions[0] ?? null;
+  const selectedPaperHasPublicationHistory = selectedPaper ? paperHasPublicationHistory(selectedPaper) : false;
   const canPublish =
     Boolean(selectedPaper) && !publishBusy && Number(selectedPaper?.question_count || 0) > 0 && selectedClassIds.length > 0 && Boolean(publishFolderId) && (recipientScope === "class" || selectedStudentIds.length > 0);
 
@@ -1105,6 +1167,13 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           onFolderUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
           onFolderDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }}
           onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)}
+          onDropItems={moveSelectedPapersToFolder}
+          selectedPaperIds={selectedPaperIds}
+          movingSelectedPapers={movingSelectedPapers}
+          onTogglePaper={togglePaperSelection}
+          onToggleVisiblePapers={toggleVisiblePaperSelection}
+          onClearSelectedPapers={() => setSelectedPaperIds([])}
+          onMoveSelectedPapers={moveSelectedPapersToFolder}
           onError={reportError}
           onAnalyzeFolder={(folderId) => void analyzePaperFolder(folderId).then(setFolderAnalysis).catch(reportError)}
           onSearchChange={(q) => updatePaperQuery({ q })}
@@ -1123,7 +1192,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-slate-500">{selectedPaper.subject}</p>
                     <h2 className="mt-1 text-2xl font-semibold text-slate-950">{selectedPaper.title}</h2>
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><ContentTags scope="paper" itemId={selectedPaper.paper_id} onError={(error) => reportError(error)} onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))} /><label>归类 <select aria-label="试卷所在文件夹" disabled={selectedPaper.publication_count > 0} title={selectedPaper.publication_count > 0 ? "已有发布记录，请在左侧移动整个文件夹，以保留答卷和统计关系" : undefined} className="rounded border px-2 py-1" value={selectedPaper.folder_id ?? ""} onChange={(event) => void movePaperToFolder(selectedPaper.paper_id, event.target.value).then(() => refresh()).catch(reportError)}>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label></div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><ContentTags scope="paper" itemId={selectedPaper.paper_id} onError={(error) => reportError(error)} onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))} /><label>归类 <select aria-label="试卷所在文件夹" disabled={selectedPaperHasPublicationHistory} title={selectedPaperHasPublicationHistory ? "已有发布记录，请移动整个文件夹，以保留答卷和统计关系" : undefined} className="rounded border px-2 py-1" value={selectedPaper.folder_id ?? ""} onChange={(event) => void movePaperToFolder(selectedPaper.paper_id, event.target.value).then(() => refresh()).catch(reportError)}>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label></div>
                     <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-600">
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.question_count} 题</span>
                       <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.section_count} 个题组</span>

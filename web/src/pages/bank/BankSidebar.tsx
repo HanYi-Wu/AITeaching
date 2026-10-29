@@ -88,7 +88,6 @@ export const BankSidebar = memo(function BankSidebar({
               <button
                 type="button"
                 className="w-full min-w-0 pr-5 text-left text-sm"
-                title={`${it.qualified_id}\n${it.content_preview}`}
                 onClick={() => onOpenItem(it.qualified_id)}
               >
                 <div className="flex w-full min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">

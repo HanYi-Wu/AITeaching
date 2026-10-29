@@ -98,20 +98,19 @@ export function removeNodeOverlaps(
 ): Node[] {
   if (nodes.length <= 1) return nodes;
   const positions = nodes.map((n) => ({ x: n.position.x, y: n.position.y }));
-  const getBox = (i: number) => {
-    const s = sizes?.get(nodes[i].id);
-    const w = s?.w ?? width;
-    const h = s?.h ?? height;
-    return { w, h };
-  };
+  const widths = nodes.map((node) => sizes?.get(node.id)?.w ?? width);
+  const heights = nodes.map((node) => sizes?.get(node.id)?.h ?? height);
+  const radii = widths.map((w, index) => Math.min(w, heights[index]) / 2);
   for (let pass = 0; pass < maxPasses; pass++) {
     let changed = false;
     for (let i = 0; i < positions.length; i++) {
       for (let j = i + 1; j < positions.length; j++) {
         const a = positions[i];
         const b = positions[j];
-        const { w: aw, h: ah } = getBox(i);
-        const { w: bw, h: bh } = getBox(j);
+        const aw = widths[i];
+        const ah = heights[i];
+        const bw = widths[j];
+        const bh = heights[j];
         if (!rectsOverlapSized(a.x, a.y, aw, ah, b.x, b.y, bw, bh, padding)) continue;
         const cx = a.x + aw / 2;
         const cy = a.y + ah / 2;
@@ -121,8 +120,8 @@ export function removeNodeOverlaps(
         let dy = cy2 - cy;
         const dist = Math.hypot(dx, dy) || 0.001;
         /** 与圆形节点一致：两圆不相交的最小圆心距，勿用对角线式 hypot 以免推得过散 */
-        const ri = Math.min(aw, ah) / 2;
-        const rj = Math.min(bw, bh) / 2;
+        const ri = radii[i];
+        const rj = radii[j];
         const minCenterDist = ri + rj + padding;
         const need = Math.max(0, minCenterDist - dist) + OVERLAP_DEFAULT.overlapResolveBonus;
         dx = (dx / dist) * (need / 2);

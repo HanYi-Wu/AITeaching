@@ -69,8 +69,14 @@ describe("PlatformLogin", () => {
     );
     const password = field(container, 'input[autocomplete="current-password"]');
     expect(password).toHaveAttribute("type", "password");
+    expect(password).toHaveClass("platform-login-password");
+    const reveal = screen.getByRole("button", { name: "显示密码" });
+    expect(reveal).toHaveAttribute("type", "button");
     await user.click(screen.getByRole("button", { name: "显示密码" }));
     expect(password).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "隐藏密码" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "隐藏密码" }));
+    expect(password).toHaveAttribute("type", "password");
     expect(screen.getByText(/忘记密码请联系/)).toBeInTheDocument();
   });
 

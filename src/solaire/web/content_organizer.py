@@ -191,6 +191,50 @@ def assign_paper_folder(root: Path, user: dict[str, Any], paper_id: str, folder_
         con.execute("UPDATE paper_records SET folder_id=?, updated_at=? WHERE id=?", (folder_id, utc_now(), paper_id))
 
 
+def assign_content_items(
+    root: Path, user: dict[str, Any], *, scope: str, item_ids: list[str], folder_id: str | None,
+) -> int:
+    """Move one selection atomically, preserving published-paper relationships."""
+    owner = _owner(user)
+    if scope not in {"compose", "paper"} or not 1 <= len(item_ids) <= 200:
+        raise ValueError("请选择 1–200 项内容")
+    ids = list(dict.fromkeys(item.strip() for item in item_ids))
+    if any(not item or len(item) > 1024 for item in ids):
+        raise ValueError("内容标识无效")
+    if scope == "paper" and not folder_id:
+        raise ValueError("请选择试卷文件夹")
+    init_platform_db(root)
+    with closing(connect(root)) as con, con:
+        con.execute("BEGIN IMMEDIATE")
+        if folder_id:
+            _folder(con, folder_id, owner, scope)
+        if scope == "paper":
+            placeholders = ",".join("?" for _ in ids)
+            rows = con.execute(
+                f"SELECT id, owner_teacher_id FROM paper_records WHERE id IN ({placeholders})", ids,
+            ).fetchall()
+            if len(rows) != len(ids) or any(row["owner_teacher_id"] != owner for row in rows):
+                raise PermissionError("无权移动所选试卷")
+            published = con.execute(
+                f"SELECT 1 FROM exam_publications WHERE paper_id IN ({placeholders}) LIMIT 1", ids,
+            ).fetchone()
+            if published:
+                raise ValueError("所选内容含已有发布记录的试卷；请移动整个文件夹，未移动任何试卷")
+            now = utc_now()
+            con.executemany("UPDATE paper_records SET folder_id=?, updated_at=? WHERE id=?",
+                            [(folder_id, now, item) for item in ids])
+        elif folder_id:
+            con.executemany(
+                "INSERT INTO content_folder_items(owner_teacher_id, scope, item_id, folder_id) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(owner_teacher_id, scope, item_id) DO UPDATE SET folder_id=excluded.folder_id",
+                [(owner, scope, item, folder_id) for item in ids],
+            )
+        else:
+            con.executemany("DELETE FROM content_folder_items WHERE owner_teacher_id=? AND scope=? AND item_id=?",
+                            [(owner, scope, item) for item in ids])
+    return len(ids)
+
+
 def list_folder_items(root: Path, user: dict[str, Any], scope: str) -> dict[str, str]:
     owner = _owner(user)
     if scope not in {"template", "compose"}:

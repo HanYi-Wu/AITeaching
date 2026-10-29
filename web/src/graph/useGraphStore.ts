@@ -18,6 +18,7 @@ export type GraphNodeRow = {
   subject?: string | null;
   level?: string | null;
   description?: string | null;
+  source?: string | null;
   aliases?: string[];
   tags?: string[];
   layout_x?: number | null;
@@ -53,6 +54,10 @@ export type ViewMode = "mindmap" | "graph";
 export type PanelTab = "edit" | "questions" | "files" | "notes";
 
 interface GraphStore {
+  // Project/account identity for the currently retained graph workspace state.
+  projectScope: string | null;
+  bindProjectScope: (scope: string) => boolean;
+
   // Multi-graph management
   graphs: GraphInfo[];
   activeSlug: string | null;
@@ -121,6 +126,33 @@ interface GraphStore {
 }
 
 export const useGraphStore = create<GraphStore>((set) => ({
+  projectScope: null,
+  bindProjectScope: (scope) => {
+    let changed = false;
+    set((state) => {
+      if (state.projectScope === scope) return state;
+      changed = true;
+      return {
+        projectScope: scope,
+        graphs: [],
+        activeSlug: null,
+        graphNodes: [],
+        relations: [],
+        kindCounts: {},
+        subjects: [],
+        levels: [],
+        selectedNodeId: null,
+        selectedEdgeId: null,
+        layoutNonce: 0,
+        connectingFromId: null,
+        pendingNewNodeId: null,
+        busy: false,
+        error: null,
+      };
+    });
+    return changed;
+  },
+
   graphs: [],
   activeSlug: null,
   setGraphs: (graphs) => set({ graphs }),

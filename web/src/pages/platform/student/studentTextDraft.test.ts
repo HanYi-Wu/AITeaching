@@ -63,6 +63,28 @@ describe("student text draft recovery", () => {
     expect(restoreStudentTextDraft(scope, {}, ["q1"], unavailable).issue).toBe("unavailable");
   });
 
+  it("keeps failed text writes in account-scoped memory for the current tab", () => {
+    const unavailable = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("full"); }, removeItem() { throw new Error("blocked"); } };
+    expect(persistStudentTextDraft(scope, { q1: "local" }, { q1: "server" }, {}, unavailable)).toBe("unavailable");
+    expect(restoreStudentTextDraft(scope, { q1: "server" }, ["q1"], unavailable)).toMatchObject({
+      answers: { q1: "local" }, restored: true, issue: "unavailable",
+    });
+    expect(restoreStudentTextDraft({ ...scope, accountId: "student-2" }, {}, ["q1"], unavailable).answers).toEqual({});
+  });
+
+  it("prefers dirty memory over stale storage and remembers a failed clear", () => {
+    persistStudentTextDraft(scope, { q1: "old" }, {});
+    const blockedWrite = {
+      getItem: (key: string) => localStorage.getItem(key),
+      setItem() { throw new Error("quota exceeded"); },
+      removeItem() { throw new Error("storage blocked"); },
+    };
+    expect(persistStudentTextDraft(scope, { q1: "new" }, {}, {}, blockedWrite)).toBe("unavailable");
+    expect(restoreStudentTextDraft(scope, {}, ["q1"], blockedWrite).answers.q1).toBe("new");
+    expect(clearStudentTextDraft(scope, blockedWrite)).toBe("unavailable");
+    expect(restoreStudentTextDraft(scope, {}, ["q1"], blockedWrite)).toMatchObject({ answers: {}, issue: "unavailable" });
+  });
+
   it("clears only the exact confirmed submission scope", () => {
     const other = { ...scope, attemptId: "attempt-2" };
     persistStudentTextDraft(scope, { q1: "one" }, {});

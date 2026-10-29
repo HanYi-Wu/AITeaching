@@ -3,16 +3,21 @@ import { collapseGroupRowsForList } from "../../lib/groupQuestions";
 import {
   buildMetadataFilterDefinitions,
   hasActiveMetadataFilters,
-  matchesMetadataFilters,
   type MetadataFilters,
 } from "../../lib/metadataFilters";
-import { normalizeQuestionTypeForFilter } from "../../lib/questionTypes";
 import type { QuestionRow } from "../../types/compose";
 import { questionTypeMatchesSection } from "./composeHelpers";
+import { compileMetadataFilters } from "./bank-search/metadataFilterMatcher";
+import { getQuestionSearchText } from "./bank-search/questionSearchIndex";
 
 /** Keep metadata choices scoped to the subject, collection, and question type. */
 export function useComposeBankFilter({
-  questions, subject, namespaceFilter, typeFilter, metadataFilters, search,
+  questions,
+  subject,
+  namespaceFilter,
+  typeFilter,
+  metadataFilters,
+  search,
 }: {
   questions: QuestionRow[];
   subject: string;
@@ -21,10 +26,29 @@ export function useComposeBankFilter({
   metadataFilters: MetadataFilters;
   search: string;
 }) {
+  const searchTextCache = useMemo(
+    () => new WeakMap<QuestionRow, string>(),
+    [questions],
+  );
+
+  const questionsBySubject = useMemo(() => {
+    const bySubject = new Map<string, QuestionRow[]>();
+    for (const question of questions) {
+      const key = question.subject ?? "";
+      let group = bySubject.get(key);
+      if (!group) {
+        group = [];
+        bySubject.set(key, group);
+      }
+      group.push(question);
+    }
+    return bySubject;
+  }, [questions]);
+
   const questionsForSubject = useMemo(() => {
     const s = subject.trim();
-    return questions.filter((q) => (q.subject ?? "") === s);
-  }, [questions, subject]);
+    return questionsBySubject.get(s) ?? [];
+  }, [questionsBySubject, subject]);
 
   const namespaces = useMemo(() => {
     const s = new Set<string>();
@@ -41,12 +65,16 @@ export function useComposeBankFilter({
 
   const metadataScopeQuestions = useMemo(() => {
     const ns = namespaceFilter === "__all__" ? null : namespaceFilter;
+    const allTypes = typeFilter === "__all__";
+    if (!ns && allTypes) {
+      return collapsedQuestionsForSubject;
+    }
     return collapsedQuestionsForSubject.filter((q) => {
       const coll = q.collection ?? q.namespace;
       if (ns && coll !== ns) {
         return false;
       }
-      if (typeFilter !== "__all__" && !questionTypeMatchesSection(q.type, typeFilter, q.answer)) {
+      if (!allTypes && !questionTypeMatchesSection(q.type, typeFilter, q.answer)) {
         return false;
       }
       return true;
@@ -59,39 +87,31 @@ export function useComposeBankFilter({
   );
   const deferredSearch = useDeferredValue(search);
   const deferredMetadataFilters = useDeferredValue(metadataFilters);
-  const activeMetadataFilters = useMemo(
-    () => (hasActiveMetadataFilters(deferredMetadataFilters) ? deferredMetadataFilters : null),
-    [deferredMetadataFilters],
-  );
-  const metadataScopeSearchQuestions = useMemo(
+  const metadataMatcher = useMemo(
     () =>
-      metadataScopeQuestions.map((question) => ({
-        question,
-        searchText: [
-          question.id,
-          question.qualified_id,
-          question.content_preview,
-          normalizeQuestionTypeForFilter(question.type, question.answer),
-          question.group_id ?? "",
-          question.group_material ?? "",
-          JSON.stringify(question.metadata ?? {}),
-        ]
-          .join("\n")
-          .toLowerCase(),
-      })),
-    [metadataScopeQuestions],
+      hasActiveMetadataFilters(deferredMetadataFilters)
+        ? compileMetadataFilters(deferredMetadataFilters)
+        : null,
+    [deferredMetadataFilters],
   );
 
   const filteredQuestions = useMemo(() => {
     const qlow = deferredSearch.trim().toLowerCase();
-    return metadataScopeSearchQuestions
-      .filter(({ question, searchText }) => {
-        if (activeMetadataFilters && !matchesMetadataFilters(question.metadata, activeMetadataFilters)) {
-          return false;
-        }
-        return !qlow || searchText.includes(qlow);
-      })
-      .map(({ question }) => question);
-  }, [activeMetadataFilters, metadataScopeSearchQuestions, deferredSearch]);
+    const hasSearch = qlow.length > 0;
+
+    if (!metadataMatcher && !hasSearch) {
+      return metadataScopeQuestions;
+    }
+
+    return metadataScopeQuestions.filter((question) => {
+      if (metadataMatcher && !metadataMatcher(question.metadata)) {
+        return false;
+      }
+      if (hasSearch && !getQuestionSearchText(question, searchTextCache).includes(qlow)) {
+        return false;
+      }
+      return true;
+    });
+  }, [metadataMatcher, metadataScopeQuestions, deferredSearch, searchTextCache]);
   return { namespaces, metadataFilterDefinitions, filteredQuestions };
 }

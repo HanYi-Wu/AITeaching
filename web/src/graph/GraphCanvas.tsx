@@ -36,6 +36,7 @@ import {
   removeNodeOverlaps,
 } from "./layoutGraph";
 import { OVERLAP_DEFAULT } from "./layoutParams";
+import { canvasGeometry, sameCanvasGeometry, updateCanvasLabels, type CanvasGeometry } from "./canvas-layout/canvasGeometry";
 import { cn } from "../lib/utils";
 import type { GraphNodeRow, GraphRelationRow } from "./useGraphStore";
 import i18n from "../i18n/i18n";
@@ -105,6 +106,7 @@ const nodeTypes = { knowledge: KnowledgeNode };
 const edgeTypes = { circleChord: CircleChordEdge };
 
 interface Props {
+  graphScope?: string;
   graphNodes: GraphNodeRow[];
   relations: GraphRelationRow[];
   selectedNodeId: string | null;
@@ -149,6 +151,7 @@ function computeKHopNodes(
 }
 
 export function GraphCanvas({
+  graphScope = "",
   graphNodes,
   relations,
   selectedNodeId,
@@ -178,6 +181,7 @@ export function GraphCanvas({
     concept: true, skill: true, causal: true,
   });
   const nonFocusForceBootstrappedRef = useRef(false);
+  const geometryRef = useRef<CanvasGeometry | null>(null);
   const rfRef = useRef<{ fitView: (opts?: { nodes?: { id: string }[]; duration?: number; padding?: number }) => void } | null>(null);
 
   const filteredRelations = useMemo(() => {
@@ -220,7 +224,14 @@ export function GraphCanvas({
   useEffect(() => {
     const gn = filteredGraphNodes;
     const rel = filteredRelations;
-    if (!gn.length) { setNodes([]); setEdges([]); return; }
+    if (!gn.length) { setNodes([]); setEdges([]); geometryRef.current = null; return; }
+
+    const geometry = canvasGeometry(gn, rel, nodeSizes, focusForceLayout, layoutNonce, graphScope);
+    if (sameCanvasGeometry(geometryRef.current, geometry)) {
+      setNodes((current) => updateCanvasLabels(current, gn));
+      return;
+    }
+    if (geometryRef.current?.scope !== graphScope) nonFocusForceBootstrappedRef.current = false;
 
     const baseEdges: Edge[] = rel.map((r) => ({
       id: r.id,
@@ -276,8 +287,9 @@ export function GraphCanvas({
 
     setNodes(laid);
     setEdges(rfEdges);
+    geometryRef.current = geometry;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredGraphNodes, filteredRelations, savedPositions, focusForceLayout, layoutNonce, nodeSizes]);
+  }, [filteredGraphNodes, filteredRelations, savedPositions, focusForceLayout, layoutNonce, nodeSizes, graphScope]);
 
   // Reset focus bootstrap when graph changes
   useEffect(() => {

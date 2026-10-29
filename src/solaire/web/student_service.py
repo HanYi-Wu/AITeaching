@@ -26,7 +26,7 @@ from solaire.web.papers.exam_timing import (
     _ensure_attempt_can_submit,
 )
 from solaire.web.papers.student_sessions import (
-    _new_id, _student_for_user, _score_percent, _saved_answer_payloads,
+    _new_id, _student_for_user, _student_for_user_in_connection, _student_and_attempt_for_user, _score_percent, _saved_answer_payloads,
     _ensure_assigned_attempt, _attempt_for_student, _attempt_for_student_in_connection,
     _attempt_payload, list_student_papers, start_student_publication,
 )
@@ -172,8 +172,7 @@ def submit_student_attempt(
     time_spent_seconds: int | None = None,
     answers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    student = _student_for_user(root, user)
-    attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
+    student, attempt = _student_and_attempt_for_user(root, user, attempt_id)
     if str(attempt.get("status")) == "submitted":
         return {**_attempt_payload(attempt), "submitted_answers_accepted": False}
     # An expired timer blocks further answer edits, but the client must still be
@@ -195,14 +194,17 @@ def submit_student_attempt(
     submitted_rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers or [], now)
     with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
-        attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
+        locked_student = _student_for_user_in_connection(con, user)
+        if str(locked_student["id"]) != str(student["id"]):
+            raise PermissionError("No permission for this attempt")
+        attempt = _attempt_for_student_in_connection(con, attempt_id, str(locked_student["id"]))
         if str(attempt.get("status")) == "submitted":
             return {**_attempt_payload(attempt), "submitted_answers_accepted": False}
         _ensure_attempt_can_submit(attempt)
         if answers is not None:
             _write_answer_mutations(con, attempt_id, submitted_rows, cleared_question_ids)
         answer_rows = con.execute(
-            "SELECT * FROM student_answers WHERE attempt_id = ?",
+            "SELECT question_id, answer_payload FROM student_answers WHERE attempt_id = ?",
             (attempt_id,),
         ).fetchall()
         answers: dict[str, Any] = {}
@@ -219,14 +221,19 @@ def submit_student_attempt(
 
         if auto_release:
             # Unanswered choices count as zero, including an entirely blank paper.
+            missing_rows = []
             for qid in qtype_by_id:
                 if qid not in answers:
-                    con.execute('INSERT INTO student_answers (id, attempt_id, question_id, answer_payload, grading_status, responded_at) VALUES (?, ?, ?, ?, ?, ?)',
-                                (_new_id(), attempt_id, qid, '{}', 'pending', now))
+                    missing_rows.append((_new_id(), attempt_id, qid, '{}', 'pending', now))
                     answers[qid] = None
+            con.executemany(
+                'INSERT INTO student_answers (id, attempt_id, question_id, answer_payload, grading_status, responded_at) VALUES (?, ?, ?, ?, ?, ?)',
+                missing_rows,
+            )
 
         scored_any = False
         total = 0.0
+        score_updates = []
         for qid, raw_answer in answers.items():
             expected = answer_keys.get(qid)
             qtype = qtype_by_id.get(qid)
@@ -236,10 +243,11 @@ def submit_student_attempt(
             if score is not None:
                 total += score
                 scored_any = True
-            con.execute(
-                "UPDATE student_answers SET is_correct = ?, score = ?, grading_status = ? WHERE attempt_id = ? AND question_id = ?",
-                (is_correct, score, "auto_scored" if score is not None else "pending", attempt_id, qid),
-            )
+            score_updates.append((is_correct, score, "auto_scored" if score is not None else "pending", attempt_id, qid))
+        con.executemany(
+            "UPDATE student_answers SET is_correct = ?, score = ?, grading_status = ? WHERE attempt_id = ? AND question_id = ?",
+            score_updates,
+        )
         submitted_at = _parse_datetime(now) or datetime.now(UTC)
         started_at = _parse_datetime(attempt.get("started_at"))
         if started_at is None:
@@ -263,7 +271,8 @@ def submit_student_attempt(
         if auto_release:
             con.execute('UPDATE student_attempts SET grading_completed_at = ?, grading_completed_by = ? WHERE id = ?',
                         (now, None, attempt_id))
-    return {**_attempt_payload(_attempt_for_student(root, attempt_id, str(student["id"]))), "submitted_answers_accepted": True}
+        final_attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
+    return {**_attempt_payload(final_attempt), "submitted_answers_accepted": True}
 
 
 def _load_student_answers_for_attempts(

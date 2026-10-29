@@ -1,8 +1,13 @@
 """FastAPI routes for paper management and online publishing."""
 
 from __future__ import annotations
+
+import asyncio
+import anyio
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 import sqlite3
 import hashlib
+import threading
 from io import BytesIO
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -14,10 +19,99 @@ from solaire.web.content_organizer import all_item_tags, analyze_paper_folder, a
 from solaire.web.analysis_report_service import analysis_report_filename, build_paper_analysis_pdf, build_paper_analysis_workbook
 from solaire.web.adaptive_practice_service import list_practice_history, publish_reinforcement_practice, publish_wrong_question_practice
 from solaire.web.auth_api import current_platform_user, require_platform_root
-from solaire.web.paper_service import analyze_paper, get_attempt_scan_image, get_teacher_student_profile, complete_paper_attempt_grading, grade_paper_answer, ingest_offline_submission, list_paper_publications, list_paper_submissions, list_teacher_class_students, list_teacher_classes, publish_online_paper, query_papers, revoke_paper_publication, suggest_ai_grades_for_attempt, sync_paper_for_exam, update_paper_publication, update_paper_delivery_mode
+from solaire.web.paper_service import preflight_offline_submission, analyze_paper, get_attempt_scan_image, get_teacher_student_profile, complete_paper_attempt_grading, grade_paper_answer, ingest_offline_submission, list_paper_publications, list_paper_submissions, list_teacher_class_students, list_teacher_classes, publish_online_paper, query_papers, revoke_paper_publication, suggest_ai_grades_for_attempt, sync_paper_for_exam, update_paper_publication, update_paper_delivery_mode
 
 from solaire.web.papers.api_models import PaperUpdateBody, PaperFromExamBody, PaperPublishBody, PaperPublicationUpdateBody, FolderCreateBody, FolderUpdateBody, TagBody, TagLinksBody, FolderItemBody, PaperAiGradeBody, PaperAnswerGradeBody, WrongQuestionPracticeBody, ReinforcementPracticeBody
-from solaire.web.papers.api_support import OFFLINE_SCAN_EXTENSIONS, OFFLINE_SCAN_MAX_FILES, OFFLINE_SCAN_MAX_FILE_BYTES, OFFLINE_SCAN_MAX_TOTAL_BYTES, OFFLINE_UPLOADER_EXE, _normalize_offline_scan, _raise_api_error, require_content_project_root, current_organizer_teacher
+from solaire.web.papers.api_support import OFFLINE_SCAN_EXTENSIONS, OFFLINE_SCAN_MAX_FILES, OFFLINE_SCAN_MAX_FILE_BYTES, OFFLINE_SCAN_MAX_TOTAL_BYTES, OFFLINE_UPLOADER_EXE, _normalize_offline_scan, _optimize_normalized_png, _raise_api_error, require_content_project_root, current_organizer_teacher
+from solaire.web.content_organizer import assign_content_items
+from solaire.web.papers.api_models import FolderItemsMoveBody
+
+# Bound simultaneously decoded scans across requests, including their retained output.
+_scan_upload_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="offline-scan")
+
+
+async def _await_scan_upload(job: Future[dict[str, Any]], cancel_event: threading.Event | None = None) -> dict[str, Any]:
+    future = asyncio.wrap_future(job)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError as cancelled:
+        if cancel_event is not None:
+            cancel_event.set()
+        if not job.cancel():
+            # Once a worker starts, the request must retain its UploadFile handles
+            # until it finishes. Queued jobs can be cancelled without reading them.
+            with anyio.CancelScope(shield=True):
+                while not future.done():
+                    try:
+                        await asyncio.shield(future)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        break
+                if future.done() and not future.cancelled():
+                    future.exception()
+        raise cancelled
+
+
+def _read_and_normalize_offline_scans(
+    files: list[UploadFile], cancel_event: threading.Event | None = None,
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    total_raw_size = 0
+    total_size = 0
+    for upload in files:
+        if cancel_event is not None and cancel_event.is_set():
+            raise CancelledError()
+        name = Path(upload.filename or "").name
+        extension = Path(name).suffix.lower()
+        if extension not in OFFLINE_SCAN_EXTENSIONS:
+            supported = "、".join(sorted(OFFLINE_SCAN_EXTENSIONS))
+            raise HTTPException(status_code=400, detail=f"不支持文件 {name}；支持的答卷照片格式：{supported}")
+        content = upload.file.read(OFFLINE_SCAN_MAX_FILE_BYTES + 1)
+        if not content:
+            raise HTTPException(status_code=400, detail=f"文件 {name} 为空")
+        if len(content) > OFFLINE_SCAN_MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail=f"文件 {name} 超过 15MB")
+        total_raw_size += len(content)
+        if total_raw_size > OFFLINE_SCAN_MAX_TOTAL_BYTES:
+            raise HTTPException(status_code=413, detail="单份答卷原始照片总大小不能超过 100MB")
+        normalized_name, normalized_mime, normalized_content = _normalize_offline_scan(
+            name, content, max_output_bytes=OFFLINE_SCAN_MAX_FILE_BYTES,
+        )
+        if cancel_event is not None and cancel_event.is_set():
+            raise CancelledError()
+        payloads.append({"name": normalized_name, "mime_type": normalized_mime, "content": normalized_content})
+        total_size += len(normalized_content)
+        if total_size > OFFLINE_SCAN_MAX_TOTAL_BYTES:
+            # A fast PNG can be larger than the previous optimized output. Recompress
+            # already encoded pages before applying the unchanged total limit.
+            for page in payloads:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CancelledError()
+                if page["mime_type"] == "image/png":
+                    old = page["content"]
+                    page["content"] = _optimize_normalized_png(old)
+                    total_size += len(page["content"]) - len(old)
+            if total_size > OFFLINE_SCAN_MAX_TOTAL_BYTES:
+                raise HTTPException(status_code=413, detail="单份答卷照片总大小不能超过 100MB")
+    if cancel_event is not None and cancel_event.is_set():
+        raise CancelledError()
+    return payloads
+
+
+def _ingest_offline_scans(
+    files: list[UploadFile], root: Path, project_root: Path,
+    paper_id: str, class_id: str, student_id: str, user: dict[str, Any],
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
+    payloads = _read_and_normalize_offline_scans(files, cancel_event)
+    if cancel_event is not None and cancel_event.is_set():
+        raise CancelledError()
+    return ingest_offline_submission(
+        root, project_root, paper_id=paper_id, class_id=class_id,
+        student_id=student_id, files=payloads, user=user, cancel_event=cancel_event,
+    )
+
 
 router = APIRouter()
 
@@ -191,53 +285,26 @@ async def papers_offline_submission_upload(
 ) -> dict[str, Any]:
     if not files or len(files) > OFFLINE_SCAN_MAX_FILES:
         raise HTTPException(status_code=400, detail=f"每名学生需上传 1-{OFFLINE_SCAN_MAX_FILES} 张答卷照片")
-    payloads: list[dict[str, Any]] = []
-    total_raw_size = 0
-    total_size = 0
-    for upload in files:
-        name = Path(upload.filename or "").name
-        extension = Path(name).suffix.lower()
-        if extension not in OFFLINE_SCAN_EXTENSIONS:
-            supported = "、".join(sorted(OFFLINE_SCAN_EXTENSIONS))
-            raise HTTPException(status_code=400, detail=f"不支持文件 {name}；支持的答卷照片格式：{supported}")
-        content = await upload.read(OFFLINE_SCAN_MAX_FILE_BYTES + 1)
-        if not content:
-            raise HTTPException(status_code=400, detail=f"文件 {name} 为空")
-        if len(content) > OFFLINE_SCAN_MAX_FILE_BYTES:
-            raise HTTPException(status_code=413, detail=f"文件 {name} 超过 15MB")
-        total_raw_size += len(content)
-        if total_raw_size > OFFLINE_SCAN_MAX_TOTAL_BYTES:
-            raise HTTPException(status_code=413, detail="单份答卷原始照片总大小不能超过 100MB")
-        normalized_name, normalized_mime, normalized_content = await run_in_threadpool(
-            _normalize_offline_scan,
-            name,
-            content,
-        )
-        if len(normalized_content) > OFFLINE_SCAN_MAX_FILE_BYTES:
-            raise HTTPException(status_code=413, detail=f"文件 {name} 转换后超过 15MB，请降低照片分辨率")
-        total_size += len(normalized_content)
-        if total_size > OFFLINE_SCAN_MAX_TOTAL_BYTES:
-            raise HTTPException(status_code=413, detail="单份答卷照片总大小不能超过 100MB")
-        payloads.append(
-            {
-                "name": normalized_name,
-                "mime_type": normalized_mime,
-                "content": normalized_content,
-            }
-        )
     root = require_platform_root()
     project_root = require_content_project_root()
     try:
-        attempt = await run_in_threadpool(
-            ingest_offline_submission,
+        await run_in_threadpool(
+            preflight_offline_submission,
             root,
-            project_root,
             paper_id=paper_id,
             class_id=class_id,
             student_id=student_id,
-            files=payloads,
             user=user,
         )
+    except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
+        _raise_api_error(e)
+    try:
+        cancel_event = threading.Event()
+        job = _scan_upload_pool.submit(
+            _ingest_offline_scans, files, root, project_root, paper_id, class_id, student_id, user,
+            cancel_event,
+        )
+        attempt = await _await_scan_upload(job, cancel_event)
     except (ValueError, PermissionError, FileNotFoundError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"attempt": attempt}
@@ -479,6 +546,16 @@ def organizer_folder_item_update(body: FolderItemBody, user: Annotated[dict[str,
     try:
         assign_folder_item(require_platform_root(), user, **body.model_dump())
         return {"ok": True}
+    except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
+        _raise_api_error(exc)
+    raise RuntimeError("unreachable")
+
+
+@router.post("/organizer/folder-items/move")
+def organizer_items_move(body: FolderItemsMoveBody, user: Annotated[dict[str, Any], Depends(current_organizer_teacher)]) -> dict[str, Any]:
+    try:
+        count = assign_content_items(require_platform_root(), user, **body.model_dump())
+        return {"ok": True, "moved_count": count}
     except (ValueError, PermissionError, sqlite3.IntegrityError) as exc:
         _raise_api_error(exc)
     raise RuntimeError("unreachable")

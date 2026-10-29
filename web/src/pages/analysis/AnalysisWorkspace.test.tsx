@@ -1,4 +1,4 @@
-﻿import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+﻿import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 
 import { AgentProvider, useAgentContext } from "../../contexts/AgentContext";
@@ -54,6 +54,9 @@ vi.mock("../../platform/auth", () => ({
 
 function primeDefaultApi() {
   mocks.apiGet.mockImplementation(async (path: string) => {
+    if (path === "/api/analysis/folders") {
+      return { version: 1, folders: [], items: {} };
+    }
     if (path === "/api/exams/analysis-list") {
       return {
         exams: [
@@ -367,7 +370,7 @@ describe("AnalysisWorkspace", () => {
 
     expect(screen.getByRole("heading", { name: "试卷 B" })).toBeInTheDocument();
     expect(screen.getByText("9")).toBeInTheDocument();
-    expect(screen.queryByText("2")).not.toBeInTheDocument();
+    expect(screen.queryByText("2", { selector: ".text-2xl" })).not.toBeInTheDocument();
   });
 
   it("runs builtin analysis from right panel", async () => {
@@ -426,6 +429,7 @@ describe("AnalysisWorkspace", () => {
     let initialB1Resolved = false;
 
     mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/api/analysis/folders") return { version: 1, folders: [], items: {} };
       if (path === "/api/exams/analysis-list") {
         return {
           exams: [
@@ -502,7 +506,7 @@ describe("AnalysisWorkspace", () => {
     const examButton = await screen.findByRole("button", { name: /期末考试/ });
     fireEvent.click(examButton);
 
-    expect(await screen.findByText("2")).toBeInTheDocument();
+    expect(await screen.findByText("2", { selector: ".text-2xl" })).toBeInTheDocument();
 
     const b2Button = await screen.findByRole("button", { name: /5人/ });
     fireEvent.click(b2Button);
@@ -527,7 +531,7 @@ describe("AnalysisWorkspace", () => {
       });
     });
 
-    expect(await screen.findByText("2")).toBeInTheDocument();
+    expect(await screen.findByText("2", { selector: ".text-2xl" })).toBeInTheDocument();
 
     await act(async () => {
       resolveB2({
@@ -544,7 +548,7 @@ describe("AnalysisWorkspace", () => {
       });
     });
 
-    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("2", { selector: ".text-2xl" })).toBeInTheDocument();
   });
 
   it("drops a legacy exam detail response when the owner and project change", async () => {
@@ -575,5 +579,86 @@ describe("AnalysisWorkspace", () => {
 
     expect(screen.queryByRole("heading", { name: "旧项目迟到考试" })).not.toBeInTheDocument();
     expect(await screen.findByText("从左侧选择一个历史考试")).toBeInTheDocument();
+  });
+
+  it("drops stale analysis-folder metadata when the owner and project change", async () => {
+    let resolveOldFolders!: (value: { version: 1; folders: Array<{ id: string; name: string }>; items: Record<string, string> }) => void;
+    let folderRequest = 0;
+    const defaultApiGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string) => {
+      if (path !== "/api/analysis/folders") return defaultApiGet(path);
+      folderRequest += 1;
+      if (folderRequest === 1) {
+        return new Promise((resolve) => { resolveOldFolders = resolve; });
+      }
+      return Promise.resolve({
+        version: 1,
+        folders: [{ id: "new-scope-folder", name: "新项目文件夹" }],
+        items: {},
+      });
+    });
+    const view = renderWs(false, "teacher-a", "project-a");
+    await waitFor(() => expect(resolveOldFolders).toBeDefined());
+    view.rerender(wsTree(false, "teacher-b", "project-b"));
+
+    expect(await screen.findByText("新项目文件夹")).toBeInTheDocument();
+    await act(async () => resolveOldFolders({
+      version: 1,
+      folders: [{ id: "old-scope-folder", name: "旧项目文件夹" }],
+      items: {},
+    }));
+    expect(screen.queryByText("旧项目文件夹")).not.toBeInTheDocument();
+    expect(screen.getByText("新项目文件夹")).toBeInTheDocument();
+  });
+
+  it("organizes analysis history independently from opening an analysis", async () => {
+    let folderState = { version: 1, folders: [] as Array<{ id: string; name: string }>, items: {} as Record<string, string> };
+    mocks.apiPost.mockImplementation(async (path: string, body: Record<string, any>) => {
+      if (path !== "/api/analysis/folders") return {};
+      if (body.action === "create") {
+        folderState = {
+          version: 1,
+          folders: [{ id: "folder-1", name: String(body.name) }],
+          items: {},
+        };
+      } else if (body.action === "assign") {
+        const nextItems = { ...folderState.items };
+        for (const itemId of body.ids as string[]) {
+          if (body.folder_id) nextItems[itemId] = body.folder_id;
+          else delete nextItems[itemId];
+        }
+        folderState = { ...folderState, items: nextItems };
+      }
+      return folderState;
+    });
+
+    renderWs();
+    const paperCheckbox = await screen.findByRole("checkbox", { name: "选择归类 演示线上答题" });
+    fireEvent.click(paperCheckbox);
+    expect(mocks.analyzePlatformPaper).not.toHaveBeenCalled();
+    expect(screen.getByText("1 条已勾选")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("新建分析文件夹名称"), { target: { value: "重点复习" } });
+    fireEvent.click(screen.getByRole("button", { name: "新建分析文件夹" }));
+    await screen.findByText("重点复习");
+    fireEvent.click(screen.getByRole("button", { name: "将所选记录移入 重点复习" }));
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/analysis/folders", {
+      action: "assign",
+      folder_id: "folder-1",
+      ids: ["paper:online-1"],
+    }));
+    expect(screen.queryByText("1 条已勾选")).not.toBeInTheDocument();
+
+    const folderRow = screen.getByTestId("analysis-folder-folder-1");
+    fireEvent.click(within(folderRow).getByText("重点复习"));
+    expect(await screen.findByRole("button", { name: /演示线上答题/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /期末考试/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /演示线上答题/ }));
+    await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("online-1", undefined, undefined));
+
+    fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "offline" } });
+    expect(await screen.findByText("暂无考试记录")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("analysis-folder-all"));
+    expect(await screen.findByRole("button", { name: /期末考试/ })).toBeInTheDocument();
   });
 });

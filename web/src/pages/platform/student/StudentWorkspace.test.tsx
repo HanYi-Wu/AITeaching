@@ -137,7 +137,7 @@ describe("StudentWorkspace", () => {
     });
   });
 
-  it("lets a student change password and username separately", async () => {
+  it("keeps password and username changes in separate forms", async () => {
     mocks.updateStudentAccount.mockResolvedValue({
       user: { id: "s1", role: "student", username: "student_custom", display_name: "Student", status: "active" },
     });
@@ -151,10 +151,21 @@ describe("StudentWorkspace", () => {
 
     expect(await screen.findByTestId("student-page-home")).toBeInTheDocument();
     await userEvent.click(await screen.findByTestId("student-page-account"));
+    const passwordSection = screen.getByRole("heading", { name: "修改密码" }).closest("section");
+    const usernameSection = screen.getByRole("heading", { name: "修改用户名" }).closest("section");
+    const settingsSection = screen.getByRole("heading", { name: "账号设置" }).closest("section");
+    expect(passwordSection).not.toBeNull();
+    expect(usernameSection).not.toBeNull();
+    expect(settingsSection).toHaveClass("mx-auto", "max-w-5xl");
+    expect(passwordSection?.parentElement).toHaveClass("grid", "md:grid-cols-2");
+    expect(passwordSection).not.toContainElement(screen.getByTestId("student-account-username"));
+    expect(usernameSection).not.toContainElement(screen.getByTestId("student-account-current-password"));
+    expect(screen.getByLabelText("新用户名")).toBeInTheDocument();
+
     await userEvent.type(screen.getByTestId("student-account-current-password"), "initial123");
     await userEvent.type(screen.getByTestId("student-account-new-password"), "changed123");
     await userEvent.type(screen.getByTestId("student-account-confirm-password"), "changed123");
-    await userEvent.click(screen.getByTestId("student-account-save"));
+    await userEvent.click(screen.getByTestId("student-account-password-save"));
 
     await waitFor(() =>
       expect(mocks.updateStudentAccount).toHaveBeenCalledWith({
@@ -164,10 +175,9 @@ describe("StudentWorkspace", () => {
       }),
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "修改用户名" }));
     await userEvent.type(screen.getByTestId("student-account-username"), "student_custom");
-    await userEvent.type(screen.getByTestId("student-account-current-password"), "changed123");
-    await userEvent.click(screen.getByTestId("student-account-save"));
+    await userEvent.type(screen.getByTestId("student-account-username-current-password"), "changed123");
+    await userEvent.click(screen.getByTestId("student-account-username-save"));
 
     await waitFor(() =>
       expect(mocks.updateStudentAccount).toHaveBeenLastCalledWith({
@@ -176,6 +186,18 @@ describe("StudentWorkspace", () => {
         new_password: null,
       }),
     );
+  });
+
+  it("applies the student's saved density preference when the account loads", async () => {
+    render(
+      <StudentWorkspace
+        user={{ id: "s1", role: "student", username: "stu_abcd", display_name: "Student", status: "active", preferences: { density: "compact" } }}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByTestId("student-page-home")).toBeInTheDocument();
+    expect(document.documentElement).toHaveAttribute("data-eh-density", "compact");
   });
 
   it("shows a student getting-started checklist derived from real progress", async () => {
@@ -214,6 +236,45 @@ describe("StudentWorkspace", () => {
     await userEvent.click(screen.getByRole("button", { name: "只看错题" }));
     expect(screen.queryByText("回答正确。")).not.toBeInTheDocument();
     expect(screen.getByText("注意基本运算。")).toBeInTheDocument();
+  });
+
+  it("searches and filters student results without reordering or changing their displayed score", async () => {
+    const common = {
+      publication_id: "pub0", time_spent_seconds: 120, show_results: true,
+      score: 8, max_score: 10, score_percent: 80,
+      analysis: { correct_count: 1, wrong_count: 1, answered_count: 2 }, answers: [],
+    };
+    mocks.listStudentResults.mockResolvedValue({
+      results: [
+        { ...common, attempt_id: "done1", id: "done1", exam_id: "quiz/Math", title: "Old Quiz", subject: "Math", status: "submitted" },
+        { ...common, attempt_id: "done2", id: "done2", exam_id: "science/quiz", title: "Science Quiz", subject: "Science", status: "completed", score: 9, score_percent: 90 },
+        { ...common, attempt_id: "done3", id: "done3", exam_id: "algebra/practice", title: "Algebra Practice", subject: "Math", status: "submitted", score: 7, score_percent: 70 },
+      ],
+    });
+
+    render(<StudentWorkspace user={{ id: "s1", role: "student", username: "stu_abcd", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId("student-page-results"));
+
+    const articles = () => screen.queryAllByTestId(/^student-result-/).map((item) => item.getAttribute("data-testid"));
+    expect(articles()).toEqual(["student-result-done1", "student-result-done2", "student-result-done3"]);
+    expect(screen.getByText("8/10")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByTestId("student-results-search"), "science");
+    expect(articles()).toEqual(["student-result-done2"]);
+    expect(screen.getAllByText("90%").length).toBeGreaterThan(0);
+
+    await userEvent.clear(screen.getByTestId("student-results-search"));
+    await userEvent.selectOptions(screen.getByTestId("student-results-subject-filter"), "Math");
+    expect(articles()).toEqual(["student-result-done1", "student-result-done3"]);
+
+    await userEvent.selectOptions(screen.getByTestId("student-results-subject-filter"), "");
+    await userEvent.selectOptions(screen.getByTestId("student-results-status-filter"), "submitted");
+    expect(articles()).toEqual(["student-result-done1", "student-result-done2", "student-result-done3"]);
+    await userEvent.type(screen.getByTestId("student-results-search"), "no matching result");
+    expect(articles()).toEqual([]);
+    expect(screen.getByText("没有符合条件的成绩。")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("student-results-clear"));
+    expect(articles()).toEqual(["student-result-done1", "student-result-done2", "student-result-done3"]);
   });
 
   it("updates a submitted result after the teacher publishes it while the student waits on the results page", async () => {
@@ -315,7 +376,7 @@ describe("StudentWorkspace", () => {
     await userEvent.type(screen.getByTestId("student-account-current-password"), "initial123");
     await userEvent.type(screen.getByTestId("student-account-new-password"), "changed123");
     await userEvent.type(screen.getByTestId("student-account-confirm-password"), "changed123");
-    await userEvent.click(screen.getByTestId("student-account-save"));
+    await userEvent.click(screen.getByTestId("student-account-password-save"));
 
     await waitFor(() =>
       expect(mocks.updateStudentAccount).toHaveBeenCalledWith({
@@ -529,7 +590,7 @@ describe("StudentWorkspace", () => {
       await userEvent.click(screen.getByTestId("student-start-pub-img"));
       const file = new File(["fake"], "answer.png", { type: "image/png" });
       await userEvent.upload(await screen.findByTestId("student-image-math/q1"), file);
-      expect(await screen.findByText("本机图片存储暂不可用，图片只保留在当前页面；请及时保存到服务器。")).toBeInTheDocument();
+      expect(await screen.findByText(/本机图片存储暂不可用；图片按账号暂留在当前标签页内存/)).toBeInTheDocument();
       await userEvent.click(screen.getByTestId("student-submit-attempt"));
       await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
 
@@ -736,10 +797,10 @@ describe("StudentWorkspace", () => {
     await userEvent.type(await screen.findByTestId("student-answer-math/q1"), "local not submitted");
     await userEvent.click(screen.getByTestId("student-submit-attempt"));
     await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
-    expect(await screen.findByText("查看未确认的本机文本：Text Paper")).toBeInTheDocument();
+    expect((await screen.findAllByText("查看未确认的本机文本：Text Paper")).length).toBeGreaterThan(0);
     if (withScope) expect(localStorage.getItem(studentDraftKey(scope)!)).toContain("local not submitted");
-    else expect(screen.getByText("本机存储暂不可用，请在离开本页前复制以下文本。")).toBeInTheDocument();
-    expect(screen.getByText("math/q1: local not submitted")).toBeInTheDocument();
+    else expect(screen.getAllByText("本机存储暂不可用，请在离开本页前复制以下文本。").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("math/q1: local not submitted").length).toBeGreaterThan(0);
   });
 
   it("keeps text entered while post-submit image draft confirmation is waiting", async () => {
@@ -769,8 +830,8 @@ describe("StudentWorkspace", () => {
       await indexedDb.waitForWrite();
       await userEvent.type(answer, " later");
       indexedDb.release();
-      expect(await screen.findByText("查看未确认的本机文本：Text Paper")).toBeInTheDocument();
-      expect(screen.getByText("math/q1: sent later")).toBeInTheDocument();
+      expect((await screen.findAllByText("查看未确认的本机文本：Text Paper")).length).toBeGreaterThan(0);
+      expect(screen.getAllByText("math/q1: sent later").length).toBeGreaterThan(0);
     } finally {
       indexedDb.release();
       if (previous) Object.defineProperty(globalThis, "indexedDB", previous);

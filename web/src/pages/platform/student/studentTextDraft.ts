@@ -14,6 +14,19 @@ const PREFIX = "eh:student-text-draft:v1:";
 const MAX_BYTES = 1_000_000;
 const MAX_ANSWERS = 200;
 const MAX_TEXT = 100_000;
+const MAX_VOLATILE_BYTES = MAX_BYTES;
+const volatileDrafts = new Map<string, { draft: TextDraft | null; bytes: number }>();
+
+function cacheVolatileDraft(key: string, draft: TextDraft | null, bytes: number): boolean {
+  if (bytes > MAX_VOLATILE_BYTES) { volatileDrafts.delete(key); return false; }
+  let total = 0;
+  for (const [existingKey, existing] of volatileDrafts) {
+    if (existingKey !== key) total += existing.bytes;
+  }
+  if (total + bytes > MAX_VOLATILE_BYTES) { volatileDrafts.delete(key); return false; }
+  volatileDrafts.set(key, { draft, bytes });
+  return true;
+}
 
 export function studentDraftKey(scope: StudentDraftScope): string | null {
   const parts = [scope.accountId, scope.projectScope, scope.publicationId, scope.attemptId, scope.snapshotVersion];
@@ -28,9 +41,12 @@ function storageOrNull(storage?: DraftStorage): DraftStorage | null {
 function read(scope: StudentDraftScope, storage?: DraftStorage): { draft: TextDraft | null; issue: TextDraftIssue } {
   const key = studentDraftKey(scope);
   const target = storageOrNull(storage);
-  if (!key || !target) return { draft: null, issue: "unavailable" };
+  if (!key) return { draft: null, issue: "unavailable" };
+  const volatile = volatileDrafts.get(key) ?? null;
+  if (!target) return { draft: volatile?.draft ?? null, issue: "unavailable" };
   let raw: string | null;
-  try { raw = target.getItem(key); } catch { return { draft: null, issue: "unavailable" }; }
+  try { raw = target.getItem(key); } catch { return { draft: volatile?.draft ?? null, issue: "unavailable" }; }
+  if (volatile) return { draft: volatile.draft, issue: "unavailable" };
   try {
     if (!raw) return { draft: null, issue: null };
     if (new TextEncoder().encode(raw).byteLength > MAX_BYTES) return { draft: null, issue: "too_large" };
@@ -52,15 +68,31 @@ function read(scope: StudentDraftScope, storage?: DraftStorage): { draft: TextDr
 function write(scope: StudentDraftScope, entries: Record<string, TextEntry>, storage?: DraftStorage): TextDraftIssue {
   const key = studentDraftKey(scope);
   const target = storageOrNull(storage);
-  if (!key || !target) return "unavailable";
+  if (!key) return "unavailable";
+  if (!Object.keys(entries).length) {
+    try {
+      if (!target) throw new Error("localStorage unavailable");
+      target.removeItem(key);
+      volatileDrafts.delete(key);
+      return null;
+    } catch {
+      return cacheVolatileDraft(key, null, 0) ? "unavailable" : "too_large";
+    }
+  }
+  const raw = JSON.stringify({ version: 1, scope, entries } satisfies TextDraft);
+  const bytes = new TextEncoder().encode(raw).byteLength;
+  if (Object.keys(entries).length > MAX_ANSWERS || bytes > MAX_BYTES ||
+      Object.values(entries).some((entry) => entry.value.length > MAX_TEXT || entry.baseline.length > MAX_TEXT || (entry.sent?.length ?? 0) > MAX_TEXT)) {
+    volatileDrafts.delete(key);
+    return "too_large";
+  }
+  const draft = { version: 1, scope, entries } satisfies TextDraft;
+  if (!target) return cacheVolatileDraft(key, draft, bytes) ? "unavailable" : "too_large";
   try {
-    if (!Object.keys(entries).length) { target.removeItem(key); return null; }
-    const raw = JSON.stringify({ version: 1, scope, entries } satisfies TextDraft);
-    if (Object.keys(entries).length > MAX_ANSWERS || new TextEncoder().encode(raw).byteLength > MAX_BYTES ||
-        Object.values(entries).some((entry) => entry.value.length > MAX_TEXT || entry.baseline.length > MAX_TEXT || (entry.sent?.length ?? 0) > MAX_TEXT)) return "too_large";
     target.setItem(key, raw);
+    volatileDrafts.delete(key);
     return null;
-  } catch { return "unavailable"; }
+  } catch { return cacheVolatileDraft(key, draft, bytes) ? "unavailable" : "too_large"; }
 }
 
 export function persistStudentTextDraft(

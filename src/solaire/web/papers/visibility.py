@@ -75,6 +75,7 @@ def publication_stats(root: Path, paper_id: str, user: dict[str, Any]) -> dict[s
         row = con.execute(
             f"""
             SELECT
+              EXISTS(SELECT 1 FROM exam_publications history WHERE history.paper_id = ?) AS has_publication_history,
               COUNT(DISTINCT ep.id) AS publication_count,
               COUNT(DISTINCT pc.class_id) AS published_class_count,
               COUNT(DISTINCT sa.id) AS total_student_count,
@@ -91,9 +92,10 @@ def publication_stats(root: Path, paper_id: str, user: dict[str, Any]) -> dict[s
             LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
             WHERE ep.paper_id = ? AND ep.status <> 'revoked' AND {access_clause}
             """,
-            (paper_id, *access_params),
+            (paper_id, paper_id, *access_params),
         ).fetchone()
     return {
+        "has_publication_history": bool(row["has_publication_history"]),
         "publication_count": int(row["publication_count"] or 0),
         "published_class_count": int(row["published_class_count"] or 0),
         "total_student_count": int(row["total_student_count"] or 0),

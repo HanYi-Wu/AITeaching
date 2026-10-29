@@ -90,10 +90,13 @@ class StreamDispatcher:
         """Consume queue items and yield formatted SSE strings, yielding keepalives on timeout."""
         while True:
             try:
-                item = await asyncio.wait_for(self._queue.get(), timeout=self.heartbeat_seconds)
-            except TimeoutError:
-                yield format_sse_comment("keepalive")
-                continue
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                try:
+                    item = await asyncio.wait_for(self._queue.get(), timeout=self.heartbeat_seconds)
+                except TimeoutError:
+                    yield format_sse_comment("keepalive")
+                    continue
 
             if item is None:
                 break

@@ -68,6 +68,8 @@ describe("BankSidebar component", () => {
 
     // Question button click
     const itemBtn = screen.getByRole("button", { name: /数学\/default\/q1/ });
+    expect(itemBtn).not.toHaveAttribute("title");
+    expect(screen.getByLabelText("数学/default/q1 题目详情")).toBeInTheDocument();
     await userEvent.click(itemBtn);
     expect(onOpenItem).toHaveBeenCalledWith("数学/default/q1");
 

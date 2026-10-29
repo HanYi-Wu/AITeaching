@@ -12,11 +12,36 @@ const MAX_QUESTIONS = 200;
 const MAX_IMAGES_PER_ANSWER = 10;
 const MAX_IMAGE_DATA_URL_LENGTH = 5_000_000;
 const MAX_DRAFT_BYTES = 20_000_000;
+const MAX_VOLATILE_BYTES = MAX_DRAFT_BYTES;
+const volatileDrafts = new Map<string, { draft: ImageDraft | null; bytes: number }>();
 
 let writeQueue: Promise<void> = Promise.resolve();
 
-function sameImages(left: StudentAnswerImage[] | undefined, right: StudentAnswerImage[] | undefined): boolean {
-  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+function cacheVolatileDraft(key: string, draft: ImageDraft | null, bytes: number): boolean {
+  if (bytes > MAX_VOLATILE_BYTES) { volatileDrafts.delete(key); return false; }
+  let total = 0;
+  for (const [existingKey, existing] of volatileDrafts) {
+    if (existingKey !== key) total += existing.bytes;
+  }
+  if (total + bytes > MAX_VOLATILE_BYTES) { volatileDrafts.delete(key); return false; }
+  volatileDrafts.set(key, { draft, bytes });
+  return true;
+}
+
+export function sameImages(left: StudentAnswerImage[] | undefined, right: StudentAnswerImage[] | undefined): boolean {
+  if (left === right) return true;
+  const a = left ?? [];
+  const b = right ?? [];
+  if (a.length !== b.length) return false;
+  let sameReferences = true;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) { sameReferences = false; break; }
+  }
+  return sameReferences || JSON.stringify(a) === JSON.stringify(b);
+}
+
+export function sameAnswerImage(left: StudentAnswerImage, right: StudentAnswerImage): boolean {
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
 }
 
 function validImages(value: unknown): value is StudentAnswerImage[] {
@@ -54,6 +79,8 @@ function openDatabase(factory?: IDBFactory): Promise<IDBDatabase> {
 }
 
 async function readDraft(key: string, factory?: IDBFactory): Promise<{ draft: ImageDraft | null; issue: ImageDraftIssue }> {
+  const volatile = volatileDrafts.get(key);
+  if (volatile) return { draft: volatile.draft, issue: "unavailable" };
   let database: IDBDatabase | undefined;
   try {
     database = await openDatabase(factory);
@@ -83,13 +110,25 @@ async function readDraft(key: string, factory?: IDBFactory): Promise<{ draft: Im
   } finally { database?.close(); }
 }
 
-async function writeDraft(key: string, scope: StudentDraftScope, entries: Record<string, ImageEntry>, factory?: IDBFactory): Promise<ImageDraftIssue> {
-  if (Object.keys(entries).length > MAX_QUESTIONS || Object.values(entries).some((entry) => !validEntry(entry))) return "too_large";
+async function writeDraft(
+  key: string, scope: StudentDraftScope, entries: Record<string, ImageEntry>, factory?: IDBFactory,
+  shouldWrite?: () => boolean,
+): Promise<ImageDraftIssue> {
+  if (Object.keys(entries).length > MAX_QUESTIONS || Object.values(entries).some((entry) => !validEntry(entry))) {
+    volatileDrafts.delete(key);
+    return "too_large";
+  }
   const draft: ImageDraft = { version: 1, scope, entries };
-  if (new TextEncoder().encode(JSON.stringify(draft)).byteLength > MAX_DRAFT_BYTES) return "too_large";
+  const bytes = new TextEncoder().encode(JSON.stringify(draft)).byteLength;
+  if (bytes > MAX_DRAFT_BYTES) {
+    volatileDrafts.delete(key);
+    return "too_large";
+  }
+  if (shouldWrite && !shouldWrite()) return null;
   let database: IDBDatabase | undefined;
   try {
     database = await openDatabase(factory);
+    if (shouldWrite && !shouldWrite()) return null;
     await new Promise<void>((resolve, reject) => {
       const transaction = database!.transaction(STORE, "readwrite");
       const objectStore = transaction.objectStore(STORE);
@@ -99,8 +138,12 @@ async function writeDraft(key: string, scope: StudentDraftScope, entries: Record
       transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB write failed"));
       transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB write failed"));
     });
+    volatileDrafts.delete(key);
     return null;
-  } catch { return "unavailable"; }
+  } catch {
+    return cacheVolatileDraft(key, Object.keys(entries).length ? draft : null, Object.keys(entries).length ? bytes : 0)
+      ? "unavailable" : "too_large";
+  }
   finally { database?.close(); }
 }
 
@@ -115,6 +158,7 @@ export async function restoreStudentImageDraft(
   serverImages: Record<string, StudentAnswerImage[]>,
   allowedIds: string[],
   factory?: IDBFactory,
+  shouldClean?: () => boolean,
 ): Promise<{ images: Record<string, StudentAnswerImage[]>; conflicts: Record<string, StudentAnswerImage[]>; restored: boolean; issue: ImageDraftIssue }> {
   const key = studentDraftKey(scope);
   if (!key) return { images: { ...serverImages }, conflicts: {}, restored: false, issue: "unavailable" };
@@ -122,20 +166,28 @@ export async function restoreStudentImageDraft(
   const images = { ...serverImages };
   const conflicts: Record<string, StudentAnswerImage[]> = {};
   let restored = false;
-  const entries = { ...(draft?.entries ?? {}) };
+  const confirmedIds: string[] = [];
   for (const id of allowedIds) {
-    const entry = entries[id];
+    const entry = draft?.entries[id];
     if (!entry) continue;
-    if (sameImages(entry.images, serverImages[id])) { delete entries[id]; continue; }
+    if (sameImages(entry.images, serverImages[id])) { confirmedIds.push(id); continue; }
     if (sameImages(serverImages[id], entry.baseline) || (entry.sent && sameImages(serverImages[id], entry.sent))) {
       if (entry.images.length) images[id] = entry.images;
       else delete images[id];
       restored = true;
     } else conflicts[id] = entry.images;
   }
-  const confirmed = Object.keys(entries).length !== Object.keys(draft?.entries ?? {}).length;
-  const cleanupIssue = confirmed && draft
-    ? await enqueueWrite(() => writeDraft(key, scope, entries, factory))
+  const cleanupIssue = confirmedIds.length
+    ? await enqueueWrite(async () => {
+        if (shouldClean && !shouldClean()) return null;
+        const current = await readDraft(key, factory);
+        if (!current.draft || (shouldClean && !shouldClean())) return current.issue;
+        const entries = { ...current.draft.entries };
+        for (const id of confirmedIds) {
+          if (entries[id] && sameImages(entries[id].images, serverImages[id])) delete entries[id];
+        }
+        return writeDraft(key, scope, entries, factory, shouldClean);
+      })
     : null;
   return { images, conflicts, restored, issue: cleanupIssue ?? issue };
 }
@@ -209,6 +261,23 @@ export function retainUnconfirmedStudentImageDraft(
         if (actual.length) entries[id] = { images: actual, baseline: [] };
       } else entries[id] = { images: current, baseline: actual };
     }
+    return writeDraft(key, scope, entries, factory);
+  });
+}
+
+export function retainLateStudentImage(
+  scope: StudentDraftScope, questionId: string, images: StudentAnswerImage[],
+  baseline: StudentAnswerImage[], sent?: StudentAnswerImage[], factory?: IDBFactory,
+): Promise<ImageDraftIssue> {
+  const key = studentDraftKey(scope);
+  if (!key) return Promise.resolve("unavailable");
+  return enqueueWrite(async () => {
+    const { draft, issue } = await readDraft(key, factory);
+    if (issue) return issue;
+    const entries = { ...(draft?.entries ?? {}) };
+    if (!sameImages(images, baseline) || (sent !== undefined && !sameImages(images, sent))) {
+      entries[questionId] = { images, baseline, ...(sent === undefined ? {} : { sent }) };
+    } else delete entries[questionId];
     return writeDraft(key, scope, entries, factory);
   });
 }

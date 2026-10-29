@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   CheckCircle2,
@@ -35,12 +35,16 @@ type Props = {
 
 type StudentView = "home" | "papers" | "results" | "account" | "exam";
 
-type AccountMode = "password" | "username";
-
 function statusLabel(status: string): string {
   if (status === "submitted" || status === "completed") return "已提交";
   if (status === "in_progress") return "答题中";
   return "待作答";
+}
+
+function resultStatusGroup(status: string): "submitted" | "in_progress" | "pending" {
+  if (status === "submitted" || status === "completed") return "submitted";
+  if (status === "in_progress") return "in_progress";
+  return "pending";
 }
 
 function scoreText(score?: number | null, maxScore?: number | null): string {
@@ -52,12 +56,15 @@ function scoreText(score?: number | null, maxScore?: number | null): string {
 export function StudentWorkspace({ user, onLogout }: Props) {
   const [profile, setProfile] = useState(user);
   const [activeView, setActiveView] = useState<StudentView>(user.must_change_password ? "account" : "home");
-  const [accountMode, setAccountMode] = useState<AccountMode>("password");
   const [username, setUsername] = useState("");
-  const [currentPassword, setCurrentPassword] = useState("");
+  const [passwordCurrentPassword, setPasswordCurrentPassword] = useState("");
+  const [usernameCurrentPassword, setUsernameCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showAccountPasswords, setShowAccountPasswords] = useState(false);
+  const [resultSearch, setResultSearch] = useState("");
+  const [resultSubjectFilter, setResultSubjectFilter] = useState("");
+  const [resultStatusFilter, setResultStatusFilter] = useState("");
   const [theme, setTheme] = useState(profile.preferences?.theme ?? "classic");
   const [density, setDensity] = useState(profile.preferences?.density ?? "comfortable");
   const [fontScale, setFontScale] = useState(Number(profile.preferences?.font_scale ?? 1));
@@ -66,6 +73,13 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [papers, setPapers] = useState<StudentPaperRecord[]>([]);
   const [results, setResults] = useState<StudentResultRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const navigationEpochRef = useRef(0);
+  const accountIdRef = useRef(user.id);
+  const renderedAccountRef = useRef(user.id);
+  if (accountIdRef.current !== user.id) {
+    accountIdRef.current = user.id;
+    navigationEpochRef.current += 1;
+  }
 
   const pendingPapers = useMemo(
     () => papers.filter((paper) => paper.status !== "submitted" && paper.status !== "completed"),
@@ -74,27 +88,73 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const latestResult = results[0] ?? null;
   const mustChangePassword = Boolean(profile.must_change_password);
   const shouldRefreshResults = activeView === "results" && results.length > 0;
+  const resultSubjects = useMemo(
+    () => Array.from(new Set(results.map((result) => result.subject?.trim() || "未分科"))),
+    [results],
+  );
+  const filteredResults = useMemo(() => {
+    const query = resultSearch.trim().toLocaleLowerCase();
+    return results.filter((result) => {
+      const searchableText = [result.title, result.subject || "", result.exam_id].join(" ").toLocaleLowerCase();
+      return (!query || searchableText.includes(query))
+        && (!resultSubjectFilter || (result.subject?.trim() || "未分科") === resultSubjectFilter)
+        && (!resultStatusFilter || resultStatusFilter === resultStatusGroup(result.status));
+    });
+  }, [results, resultSearch, resultSubjectFilter, resultStatusFilter]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setMessage(null);
     try {
       const [paperData, resultData] = await Promise.all([listStudentPapers(), listStudentResults()]);
-      setPapers(paperData.papers);
-      setResults(resultData.results);
+      if (accountIdRef.current === user.id) {
+        setPapers(paperData.papers);
+        setResults(resultData.results);
+      }
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e));
+      if (accountIdRef.current === user.id) setMessage(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (accountIdRef.current === user.id) setLoading(false);
     }
-  }, []);
+  }, [user.id]);
 
   const onExamSubmitted = useCallback(async (submissionMessage: string) => {
+    const epoch = navigationEpochRef.current;
     await refresh();
+    if (epoch !== navigationEpochRef.current) return;
     setMessage(submissionMessage);
     setActiveView("results");
   }, [refresh]);
   const exam = useStudentExam({ user, onMessage: setMessage, onSubmitted: onExamSubmitted });
+
+  useEffect(() => {
+    if (renderedAccountRef.current === user.id) return;
+    renderedAccountRef.current = user.id;
+    setProfile(user);
+    setActiveView(user.must_change_password ? "account" : "home");
+    setPapers([]);
+    setResults([]);
+    setMessage(null);
+    setBusy(null);
+    setUsername("");
+    setPasswordCurrentPassword("");
+    setUsernameCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setResultSearch("");
+    setResultSubjectFilter("");
+    setResultStatusFilter("");
+    setTheme(user.preferences?.theme ?? "classic");
+    setDensity(user.preferences?.density ?? "comfortable");
+    setFontScale(Number(user.preferences?.font_scale ?? 1));
+  }, [user]);
+
+  useEffect(() => {
+    const preferences = profile.id === user.id ? profile.preferences : user.preferences;
+    document.documentElement.dataset.ehTheme = preferences?.theme ?? "classic";
+    document.documentElement.dataset.ehDensity = preferences?.density === "compact" ? "compact" : "comfortable";
+    document.documentElement.style.fontSize = `${Number(preferences?.font_scale ?? 1) * 100}%`;
+  }, [profile.id, profile.preferences, user.id, user.preferences]);
 
   useEffect(() => {
     void refresh();
@@ -123,13 +183,12 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   useEffect(() => {
     if (mustChangePassword) {
       setActiveView("account");
-      setAccountMode("password");
     }
   }, [mustChangePassword]);
 
-  async function submitAccount(event: FormEvent<HTMLFormElement>) {
+  async function submitPasswordChange(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (accountMode === "password" && newPassword !== confirmPassword) {
+    if (newPassword !== confirmPassword) {
       setMessage("两次输入的新密码不一致");
       return;
     }
@@ -137,19 +196,44 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     setMessage(null);
     try {
       const result = await updateStudentAccount({
-        username: accountMode === "username" ? username.trim() || null : null,
-        current_password: currentPassword,
-        new_password: accountMode === "password" ? newPassword || null : null,
+        username: null,
+        current_password: passwordCurrentPassword,
+        new_password: newPassword,
       });
       setProfile(result.user);
-      setUsername("");
-      setCurrentPassword("");
+      setPasswordCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setMessage(accountMode === "password" ? "密码已更新" : "用户名已更新");
+      setMessage("密码已更新");
       if (profile.must_change_password && !result.user.must_change_password) {
         setActiveView("home");
       }
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function submitUsernameChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextUsername = username.trim();
+    if (!nextUsername) {
+      setMessage("请输入新用户名");
+      return;
+    }
+    setBusy("account");
+    setMessage(null);
+    try {
+      const result = await updateStudentAccount({
+        username: nextUsername,
+        current_password: usernameCurrentPassword,
+        new_password: null,
+      });
+      setProfile(result.user);
+      setUsername("");
+      setUsernameCurrentPassword("");
+      setMessage("用户名已更新");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -163,9 +247,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       const result = await updateAccountProfile({ preferences: { theme, density, font_scale: fontScale } });
       setProfile((current) => ({ ...current, ...result.profile }));
       document.documentElement.dataset.ehTheme = theme;
+      document.documentElement.dataset.ehDensity = density === "compact" ? "compact" : "comfortable";
       document.documentElement.style.fontSize = `${fontScale * 100}%`;
       localStorage.setItem("eh-theme", theme);
-      localStorage.setItem("eh-density", density);
       setMessage("个性化设置已保存");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -175,19 +259,21 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   }
 
   async function startPaper(paper: StudentPaperRecord) {
+    const epoch = ++navigationEpochRef.current;
     setBusy(`start:${paper.publication_id}`);
     setMessage(null);
     try {
       const data = await startStudentPaper(paper.publication_id);
-      await exam.open(data);
-      setActiveView("exam");
+      if (epoch !== navigationEpochRef.current) return;
+      if (await exam.open(data) && epoch === navigationEpochRef.current) setActiveView("exam");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e));
+      if (epoch === navigationEpochRef.current) setMessage(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(null);
+      if (epoch === navigationEpochRef.current) setBusy(null);
     }
   }
 
+  if (renderedAccountRef.current !== user.id) return null;
   if (activeView === "exam" && exam.activeAttempt) {
     return <StudentExamPanel controller={exam} userName={profile.username} message={message} />;
   }
@@ -351,25 +437,78 @@ export function StudentWorkspace({ user, onLogout }: Props) {
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               {Object.entries(exam.unconfirmedTexts).map(([key, entry]) => <details key={key} className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
                 <summary>查看未确认的本机文本：{entry.title}</summary>
-                {entry.issue ? <p className="mt-2">本机存储暂不可用，请在离开本页前复制以下文本。</p> : null}
+                {entry.issue === "too_large" && !Object.keys(entry.answers).length ? <p className="mt-2">标签页未确认文本暂存达到上限，本条答案未能继续保留；请检查服务器答卷。</p> : null}
+                {entry.issue && !(entry.issue === "too_large" && !Object.keys(entry.answers).length) ? <p className="mt-2">本机存储暂不可用，请在离开本页前复制以下文本。</p> : null}
                 <pre className="mt-2 whitespace-pre-wrap break-words">{Object.entries(entry.answers).map(([id, value]) => `${id}: ${value || "（空答案）"}`).join("\n")}</pre>
               </details>)}
               {Object.entries(exam.unconfirmedImages).map(([key, entry]) => <details key={key} className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
                 <summary>查看未确认的本机图片：{entry.title}</summary>
-                {entry.issue ? <p className="mt-2">本机图片存储结果未能确认或提交未确认，请检查下面保留的图片。</p> : null}
+                {entry.issue === "too_large" && !Object.keys(entry.images).length ? <p className="mt-2">标签页未确认图片暂存达到上限，本条图片未能继续保留；请检查服务器答卷或重新选择图片。</p> : null}
+                {entry.issue && !(entry.issue === "too_large" && !Object.keys(entry.images).length) ? <p className="mt-2">本机图片存储结果未能确认或提交未确认，请检查下面保留的图片。</p> : null}
                 <div className="mt-2 space-y-3">
-                  {Object.entries(entry.images).flatMap(([id, images]) => images.map((image, index) => (
+                  {Object.entries(entry.images).flatMap(([id, images]) => images.length ? images.map((image, index) => (
                     <div key={`${id}:${index}`}><p>{id} · {image.name}</p><img src={image.data_url} alt={`${id} 未确认的答题图片`} className="mt-1 max-h-48 max-w-full rounded border border-amber-200 object-contain" /></div>
-                  )))}
+                  )) : [<p key={id}>{id} · 图片已移除，尚未确认</p>])}
                 </div>
               </details>)}
               <div className="mb-3 flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-slate-600" />
                 <h2 className="font-semibold text-slate-950">成绩与分析</h2>
               </div>
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] xl:items-end">
+                <label className="block text-sm text-slate-700" htmlFor="student-results-search">
+                  搜索成绩
+                  <input
+                    id="student-results-search"
+                    data-testid="student-results-search"
+                    type="search"
+                    value={resultSearch}
+                    onChange={(event) => setResultSearch(event.target.value)}
+                    placeholder="按考试名称、科目或编号搜索"
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block text-sm text-slate-700" htmlFor="student-results-subject-filter">
+                  科目
+                  <select
+                    id="student-results-subject-filter"
+                    data-testid="student-results-subject-filter"
+                    value={resultSubjectFilter}
+                    onChange={(event) => setResultSubjectFilter(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">全部科目</option>
+                    {resultSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                  </select>
+                </label>
+                <label className="block text-sm text-slate-700" htmlFor="student-results-status-filter">
+                  状态
+                  <select
+                    id="student-results-status-filter"
+                    data-testid="student-results-status-filter"
+                    value={resultStatusFilter}
+                    onChange={(event) => setResultStatusFilter(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">全部状态</option>
+                    <option value="submitted">已提交</option>
+                    <option value="in_progress">答题中</option>
+                    <option value="pending">待作答</option>
+                  </select>
+                </label>
+                <button
+                  data-testid="student-results-clear"
+                  type="button"
+                  onClick={() => { setResultSearch(""); setResultSubjectFilter(""); setResultStatusFilter(""); }}
+                  disabled={!resultSearch && !resultSubjectFilter && !resultStatusFilter}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  清空筛选
+                </button>
+              </div>
               <div className="space-y-3">
-                {results.map((result) => (
-                  <article key={result.attempt_id} className="rounded-md border border-slate-200 p-3">
+                {filteredResults.map((result) => (
+                  <article key={result.attempt_id} data-testid={`student-result-${result.attempt_id}`} className="rounded-md border border-slate-200 p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="break-words text-sm font-medium text-slate-950">{result.title}</p>
@@ -404,6 +543,12 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                   </article>
                 ))}
                 {!loading && results.length === 0 ? <p className="text-sm text-slate-500">暂无历史成绩</p> : null}
+                {!loading && results.length > 0 && filteredResults.length === 0 ? (
+                  <p className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                    <span>没有符合条件的成绩。</span>
+                    <button type="button" onClick={() => { setResultSearch(""); setResultSubjectFilter(""); setResultStatusFilter(""); }} className="font-medium text-slate-800 underline underline-offset-2">清空筛选</button>
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -422,78 +567,90 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         ) : null}
 
         {activeView === "account" ? (
-          <section className="max-w-2xl rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <h2 className="mb-3 text-base font-semibold text-slate-950">账号设置</h2>
+          <section className="mx-auto w-full max-w-5xl rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <h2 className="mb-4 text-center text-base font-semibold text-slate-950">账号设置</h2>
             {mustChangePassword ? (
-              <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <p className="mx-auto mb-4 max-w-xl rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                 首次登录必须先修改密码，完成后才能进入答题和成绩页面。
               </p>
-            ) : (
-              <div className="mb-4 grid grid-cols-2 gap-2 rounded-md bg-slate-100 p-1">
-                <button
-                  type="button"
-                  onClick={() => setAccountMode("password")}
-                  className={`rounded px-3 py-2 text-sm font-medium ${accountMode === "password" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600"}`}
-                >
-                  修改密码
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAccountMode("username")}
-                  className={`rounded px-3 py-2 text-sm font-medium ${accountMode === "username" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600"}`}
-                >
-                  修改用户名
-                </button>
-              </div>
-            )}
-            <form onSubmit={(event) => void submitAccount(event)} className="space-y-3">
-              {accountMode === "username" && !mustChangePassword ? (
-                <input
-                  data-testid="student-account-username"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  placeholder="新用户名"
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  required
-                />
-              ) : null}
-              <label className="block text-sm text-slate-700">当前密码
-              <input
-                data-testid="student-account-current-password"
-                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                type={showAccountPasswords ? "text" : "password"}
-                value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
-                required
-              />
-              </label>
-              {accountMode === "password" ? (
-                <>
+            ) : null}
+            <div className="grid gap-4 md:grid-cols-2">
+              <section className={`rounded-md border border-slate-200 p-4 ${mustChangePassword ? "mx-auto w-full md:col-span-2 md:max-w-xl" : ""}`}>
+                <h3 className="mb-3 text-sm font-semibold text-slate-900">修改密码</h3>
+                <form onSubmit={(event) => void submitPasswordChange(event)} className="space-y-3">
+                  <label className="block text-sm text-slate-700">当前密码
+                    <input
+                      data-testid="student-account-current-password"
+                      autoComplete="current-password"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      type={showAccountPasswords ? "text" : "password"}
+                      value={passwordCurrentPassword}
+                      onChange={(event) => setPasswordCurrentPassword(event.target.value)}
+                      required
+                    />
+                  </label>
                   <label className="block text-sm text-slate-700">新密码
-                    <input data-testid="student-account-new-password" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" type={showAccountPasswords ? "text" : "password"} minLength={6} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+                    <input data-testid="student-account-new-password" autoComplete="new-password" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" type={showAccountPasswords ? "text" : "password"} minLength={6} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
                   </label>
                   <label className="block text-sm text-slate-700">确认新密码
-                    <input data-testid="student-account-confirm-password" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" type={showAccountPasswords ? "text" : "password"} minLength={6} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+                    <input data-testid="student-account-confirm-password" autoComplete="new-password" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" type={showAccountPasswords ? "text" : "password"} minLength={6} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
                   </label>
                   <p className="text-xs text-slate-500">密码至少 6 位，建议同时包含字母和数字，且不要与其他网站共用。</p>
                   <button type="button" onClick={() => setShowAccountPasswords((value) => !value)} className="inline-flex items-center gap-2 text-xs font-medium text-slate-600">
                     {showAccountPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{showAccountPasswords ? "隐藏密码" : "显示密码"}
                   </button>
-                </>
+                  <button
+                    data-testid="student-account-password-save"
+                    type="submit"
+                    disabled={busy === "account"}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    <Save className="h-4 w-4" />保存密码
+                  </button>
+                </form>
+              </section>
+              {!mustChangePassword ? (
+                <section className="rounded-md border border-slate-200 p-4">
+                  <h3 className="mb-1 text-sm font-semibold text-slate-900">修改用户名</h3>
+                  <p className="mb-3 text-xs text-slate-500">当前用户名：{profile.username}</p>
+                  <form onSubmit={(event) => void submitUsernameChange(event)} className="space-y-3">
+                    <label className="block text-sm text-slate-700" htmlFor="student-account-username">新用户名
+                      <input
+                        id="student-account-username"
+                        data-testid="student-account-username"
+                        autoComplete="username"
+                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                        required
+                      />
+                    </label>
+                    <label className="block text-sm text-slate-700">当前密码
+                      <input
+                        data-testid="student-account-username-current-password"
+                        autoComplete="current-password"
+                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        type="password"
+                        value={usernameCurrentPassword}
+                        onChange={(event) => setUsernameCurrentPassword(event.target.value)}
+                        required
+                      />
+                    </label>
+                    <button
+                      data-testid="student-account-username-save"
+                      type="submit"
+                      disabled={busy === "account"}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    >
+                      <Save className="h-4 w-4" />保存用户名
+                    </button>
+                  </form>
+                </section>
               ) : null}
-              <button
-                data-testid="student-account-save"
-                type="submit"
-                disabled={busy === "account"}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-              >
-                <Save className="h-4 w-4" />
-                {accountMode === "password" ? "保存密码" : "保存用户名"}
-              </button>
-            </form>
+            </div>
             {!mustChangePassword ? (
-              <div className="mt-6 border-t border-slate-200 pt-5">
-                <h3 className="text-sm font-semibold text-slate-900">界面个性化</h3>
+              <div className="mx-auto mt-6 max-w-3xl border-t border-slate-200 pt-5">
+                <h3 className="text-center text-sm font-semibold text-slate-900">界面个性化</h3>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <label className="text-sm text-slate-700">皮肤<select value={theme} onChange={(event) => setTheme(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"><option value="classic">经典明亮</option><option value="ocean">海洋蓝</option><option value="forest">森林绿</option><option value="warm">暖阳橙</option><option value="night">深色夜间</option></select></label>
                   <label className="text-sm text-slate-700">界面密度<select value={density} onChange={(event) => setDensity(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"><option value="comfortable">舒适</option><option value="compact">紧凑</option></select></label>

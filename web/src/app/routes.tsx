@@ -130,12 +130,14 @@ export function TemplateRoute({
 
 export function GraphRoute({
   info,
+  accountId,
   onRefreshInfo,
   onError,
   focusNodeId,
   onFocusConsumed,
 }: {
   info: ProjectInfo | null;
+  accountId?: string | null;
   onRefreshInfo: () => Promise<void>;
   onError: (s: string | null) => void;
   focusNodeId?: string | null;
@@ -158,8 +160,11 @@ export function GraphRoute({
       </div>
     );
   }
+  const scope = JSON.stringify([accountId ?? null, info.root || info.project_id || "unbound"]);
   return (
     <GraphWorkspace
+      key={scope}
+      scope={scope}
       onError={onError}
       focusNodeId={focusNodeId ?? null}
       onFocusConsumed={onFocusConsumed}

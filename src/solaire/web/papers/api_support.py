@@ -28,7 +28,26 @@ OFFLINE_SCAN_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 
 OFFLINE_UPLOADER_EXE = Path(__file__).resolve().parents[1] / "assets" / "tools" / "EducationHelper-Offline-Answer-Uploader.exe"
 
-def _normalize_offline_scan(name: str, content: bytes) -> tuple[str, str, bytes]:
+class _ScanOutputTooLarge(Exception):
+    pass
+
+
+class _BoundedScanBuffer(BytesIO):
+    def __init__(self, limit: int):
+        super().__init__()
+        self.limit = limit
+
+    def write(self, data: bytes) -> int:
+        if self.tell() + len(data) > self.limit:
+            raise _ScanOutputTooLarge
+        return super().write(data)
+
+
+def _scan_buffer(limit: int | None) -> BytesIO:
+    return BytesIO() if limit is None else _BoundedScanBuffer(limit)
+
+
+def _normalize_offline_scan(name: str, content: bytes, *, max_output_bytes: int | None = None) -> tuple[str, str, bytes]:
     extension = Path(name).suffix.lower()
     try:
         if extension in {".heic", ".heif"}:
@@ -40,18 +59,38 @@ def _normalize_offline_scan(name: str, content: bytes) -> tuple[str, str, bytes]
                 raise ValueError("图片像素超过 5000 万")
             opened.load()
             image = ImageOps.exif_transpose(opened)
-            output = BytesIO()
             if extension in {".jpg", ".jpeg"}:
                 if image.mode not in {"RGB", "L"}:
                     image = image.convert("RGB")
+                output = _scan_buffer(max_output_bytes)
                 image.save(output, format="JPEG", quality=92, optimize=True)
                 return f"{Path(name).stem}.jpg", "image/jpeg", output.getvalue()
             if image.mode not in {"RGB", "RGBA", "L"}:
                 image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
-            image.save(output, format="PNG", optimize=True)
+            output = _scan_buffer(max_output_bytes)
+            try:
+                image.save(output, format="PNG", compress_level=3)
+            except _ScanOutputTooLarge:
+                # Keep the existing size policy: an image fitting with the original
+                # compression must still be accepted when the faster pass is larger.
+                output = _scan_buffer(max_output_bytes)
+                image.save(output, format="PNG", optimize=True)
             return f"{Path(name).stem}.png", "image/png", output.getvalue()
+    except _ScanOutputTooLarge as exc:
+        raise HTTPException(status_code=413, detail=f"文件 {name} 转换后超过 15MB，请降低照片分辨率") from exc
     except (ImportError, OSError, UnidentifiedImageError, Image.DecompressionBombError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"文件 {name} 不是可读取的答卷图片：{exc}") from exc
+
+
+def _optimize_normalized_png(content: bytes) -> bytes:
+    with Image.open(BytesIO(content)) as image:
+        output = _scan_buffer(OFFLINE_SCAN_MAX_FILE_BYTES)
+        try:
+            image.save(output, format="PNG", optimize=True)
+        except _ScanOutputTooLarge:
+            return content
+        result = output.getvalue()
+    return result if len(result) < len(content) else content
 
 def _raise_api_error(exc: Exception) -> None:
     if isinstance(exc, GradingVersionConflict):

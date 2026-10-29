@@ -214,31 +214,93 @@ export function createTableWidget(source: string): HTMLDivElement {
 
 /* ═══════════════════ buildEditorDom ═══════════════════ */
 
-export function buildEditorDom(root: HTMLElement, value: string): void {
-  root.innerHTML = "";
-  const tokens = tokenize(value);
-  for (const token of tokens) {
-    if (token.type === "text") {
-      const lines = token.content.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        if (i > 0) root.appendChild(document.createElement("br"));
-        if (lines[i]) root.appendChild(document.createTextNode(lines[i]));
-      }
-    } else if (token.type === "inlineMath") {
-      root.appendChild(createMathWidget(token.latex));
-    } else if (token.type === "displayMath") {
-      root.appendChild(createDisplayMathWidget(token.latex));
-    } else if (token.type === "mermaid") {
-      root.appendChild(createMermaidWidget(token.source));
-    } else if (token.type === "image") {
-      root.appendChild(createImageWidget(token.kind, token.path));
-    } else if (token.type === "table") {
-      root.appendChild(createTableWidget(token.source));
+type EditorNodeSpec =
+  | { type: "textNode"; content: string }
+  | { type: "lineBreak" }
+  | Exclude<Token, { type: "text" }>;
+
+function editorNodeSpecs(value: string): EditorNodeSpec[] {
+  const specs: EditorNodeSpec[] = [];
+  for (const token of tokenize(value)) {
+    if (token.type !== "text") {
+      specs.push(token);
+      continue;
+    }
+    const lines = token.content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) specs.push({ type: "lineBreak" });
+      if (lines[i]) specs.push({ type: "textNode", content: lines[i] });
     }
   }
-  if (root.childNodes.length === 0) {
-    root.appendChild(document.createTextNode(""));
+  if (specs.length === 0) specs.push({ type: "textNode", content: "" });
+  return specs;
+}
+
+function createEditorNode(spec: EditorNodeSpec): Node {
+  switch (spec.type) {
+    case "textNode": return document.createTextNode(spec.content);
+    case "lineBreak": return document.createElement("br");
+    case "inlineMath": return createMathWidget(spec.latex);
+    case "displayMath": return createDisplayMathWidget(spec.latex);
+    case "mermaid": return createMermaidWidget(spec.source);
+    case "image": return createImageWidget(spec.kind, spec.path);
+    case "table": return createTableWidget(spec.source);
   }
+}
+
+function editorNodeMatches(node: Node, spec: EditorNodeSpec): boolean {
+  if (spec.type === "textNode") {
+    return node.nodeType === Node.TEXT_NODE && node.textContent === spec.content;
+  }
+  if (!(node instanceof HTMLElement)) return false;
+  if (spec.type === "lineBreak") return node.tagName === "BR" && !isWidget(node);
+  // Match in serialization order, so a node with multiple widget classes cannot
+  // be mistaken for a different kind of widget.
+  if (node.classList.contains(MATH_WIDGET_CLASS)) {
+    return spec.type === "inlineMath" && node.dataset.latex === spec.latex;
+  }
+  if (node.classList.contains(DISPLAY_MATH_WIDGET_CLASS)) {
+    return spec.type === "displayMath" && node.dataset.latex === spec.latex;
+  }
+  if (node.classList.contains(MERMAID_WIDGET_CLASS)) {
+    return spec.type === "mermaid" && node.dataset.mermaidSource === spec.source;
+  }
+  if (node.classList.contains(IMAGE_WIDGET_CLASS)) {
+    return spec.type === "image" && node.dataset.imageKind === spec.kind && node.dataset.imagePath === spec.path;
+  }
+  if (node.classList.contains(TABLE_WIDGET_CLASS)) {
+    return spec.type === "table" && node.dataset.tableSource === spec.source;
+  }
+  return false;
+}
+
+export function buildEditorDom(root: HTMLElement, value: string, reuse = true): void {
+  const specs = editorNodeSpecs(value);
+  const oldNodes = Array.from(root.childNodes);
+  let prefix = 0;
+  let oldEnd = oldNodes.length;
+  let newEnd = specs.length;
+  if (reuse) {
+    while (prefix < oldEnd && prefix < newEnd && editorNodeMatches(oldNodes[prefix], specs[prefix])) prefix++;
+    while (oldEnd > prefix && newEnd > prefix && editorNodeMatches(oldNodes[oldEnd - 1], specs[newEnd - 1])) {
+      oldEnd--;
+      newEnd--;
+    }
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i];
+    const oldNode = i < prefix ? oldNodes[i] : i >= newEnd ? oldNodes[oldEnd + i - newEnd] : undefined;
+    // Editable nodes must be replaced so native undo cannot reach a previous
+    // question. Resources and asynchronous diagrams also need fresh nodes.
+    if (oldNode && (spec.type === "inlineMath" || spec.type === "displayMath" || spec.type === "table")) {
+      fragment.appendChild(oldNode);
+    } else {
+      fragment.appendChild(createEditorNode(spec));
+    }
+  }
+  root.replaceChildren(fragment);
 }
 
 /* ═══════════════════ Serializer ═══════════════════ */

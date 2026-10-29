@@ -47,7 +47,13 @@ function memoryIndexedDb(options: { failRead?: boolean; failWrite?: boolean } = 
           });
         },
         delete: (key: string) => {
-          queueMicrotask(() => { rows.delete(key); tx.oncomplete?.(new Event("complete")); });
+          queueMicrotask(() => {
+            if (options.failWrite) {
+              tx.error = new DOMException("write failed");
+              tx.onerror?.(new Event("error"));
+              tx.onabort?.(new Event("abort"));
+            } else { rows.delete(key); tx.oncomplete?.(new Event("complete")); }
+          });
         },
       };
       return tx as unknown as IDBTransaction;
@@ -100,5 +106,30 @@ describe("student image draft recovery", () => {
     expect(await persistStudentImageDraft(scope, { q1: [image("x")] }, {}, {}, [], db)).toBe("unavailable");
     expect((await restoreStudentImageDraft(scope, {}, ["q1"], memoryIndexedDb({ failRead: true }))).issue).toBe("unavailable");
     expect(localStorage.length).toBe(0);
+  });
+
+  it("keeps failed image writes in account-scoped memory for the current tab", async () => {
+    const db = memoryIndexedDb({ failWrite: true, failRead: true });
+    const current = { q1: [image("private-local")] };
+    expect(await persistStudentImageDraft(scope, current, { q1: [image("server")] }, {}, [], db)).toBe("unavailable");
+    expect(await restoreStudentImageDraft(scope, { q1: [image("server")] }, ["q1"], db)).toMatchObject({
+      images: current, restored: true, issue: "unavailable",
+    });
+    expect(await restoreStudentImageDraft({ ...scope, accountId: "student-2" }, {}, ["q1"], db)).toMatchObject({
+      images: {}, restored: false,
+    });
+  });
+
+  it("prefers dirty memory over a stale IndexedDB row and remembers a failed clear", async () => {
+    const behavior = { failWrite: false, failRead: false };
+    const db = memoryIndexedDb(behavior);
+    const old = { q1: [image("old")] };
+    const latest = { q1: [image("new")] };
+    expect(await persistStudentImageDraft(scope, old, {}, {}, [], db)).toBeNull();
+    behavior.failWrite = true;
+    expect(await persistStudentImageDraft(scope, latest, {}, {}, [], db)).toBe("unavailable");
+    expect(await restoreStudentImageDraft(scope, {}, ["q1"], db)).toMatchObject({ images: latest, restored: true, issue: "unavailable" });
+    expect(await persistStudentImageDraft(scope, {}, {}, {}, [], db)).toBe("unavailable");
+    expect(await restoreStudentImageDraft(scope, {}, ["q1"], db)).toMatchObject({ images: {}, restored: false, issue: "unavailable" });
   });
 });

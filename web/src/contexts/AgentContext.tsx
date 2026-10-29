@@ -47,6 +47,7 @@ export type AgentContextValue = {
   setPageContext: (p: AgentPageContextPayload | null) => void;
   prefillRequest: AgentPrefillRequest | null;
   requestAgentPrefill: (message: string, opts?: { newChat?: boolean }) => void;
+  resetAgentContext?: () => void;
   notifyAgentBackground: (message: string, variant?: AgentToast["variant"]) => void;
 };
 
@@ -139,6 +140,12 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const resetAgentContext = useCallback(() => {
+    setPageContext(null);
+    setPrefillRequest(null);
+    setToasts([]);
+  }, []);
+
   const value = useMemo(
     () => ({
       sidebarOpen,
@@ -148,9 +155,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       setPageContext,
       prefillRequest,
       requestAgentPrefill,
+      resetAgentContext,
       notifyAgentBackground,
     }),
-    [sidebarOpen, toggleSidebar, pageContext, prefillRequest, requestAgentPrefill, notifyAgentBackground],
+    [sidebarOpen, toggleSidebar, pageContext, prefillRequest, requestAgentPrefill, resetAgentContext, notifyAgentBackground],
   );
 
   return (

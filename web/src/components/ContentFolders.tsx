@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderPlus, Trash2 } from "lucide-react";
 import { createContentFolder, deleteContentFolder, updateContentFolder, type ContentFolder, type FolderDeleteResult } from "../platform/auth";
+import { CONTENT_ITEMS_MIME, CONTENT_ITEM_MIME, parseContentItemsDragData } from "../lib/contentSelection";
 
 type Props = {
   scope: ContentFolder["scope"];
@@ -11,6 +12,8 @@ type Props = {
   onUpdated?: (folder: ContentFolder) => void;
   onDeleted: (result: FolderDeleteResult) => void;
   onDropItem?: (itemId: string, folderId: string) => void;
+  onDropItems?: (itemIds: string[], folderId: string) => void | Promise<void>;
+  dropItemsBusy?: boolean;
   onError: (message: string) => void;
   allowPaperFolder?: boolean;
 };
@@ -27,7 +30,7 @@ export function ContentFolderHelp({ paper = false }: { paper?: boolean }) {
   </details>;
 }
 
-export function ContentFolders({ scope, folders, selectedId, onSelect, onCreated, onUpdated, onDeleted, onDropItem, onError, allowPaperFolder = false }: Props) {
+export function ContentFolders({ scope, folders, selectedId, onSelect, onCreated, onUpdated, onDeleted, onDropItem, onDropItems, dropItemsBusy = false, onError, allowPaperFolder = false }: Props) {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -91,13 +94,24 @@ export function ContentFolders({ scope, folders, selectedId, onSelect, onCreated
       const children = folders.some((candidate) => candidate.parent_id === folder.id);
       const open = expanded.includes(folder.id);
       return <div key={folder.id}>
-        <div draggable={!busy}
+        <div draggable={!busy && !dropItemsBusy}
           onDragStart={(event) => event.dataTransfer.setData("application/x-or-folder", folder.id)}
-          onDragOver={(event) => { if ((event.dataTransfer.types.includes("application/x-or-folder") && folder.kind === "category") || event.dataTransfer.types.includes("application/x-or-content-item")) event.preventDefault(); }}
+          onDragOver={(event) => { if (!busy && !dropItemsBusy && ((event.dataTransfer.types.includes("application/x-or-folder") && folder.kind === "category") || event.dataTransfer.types.includes(CONTENT_ITEM_MIME) || event.dataTransfer.types.includes(CONTENT_ITEMS_MIME))) event.preventDefault(); }}
           onDrop={(event) => {
             event.preventDefault();
-            if (busy) return;
-            const rawItem = event.dataTransfer.getData("application/x-or-content-item");
+            if (busy || dropItemsBusy) return;
+            const rawItems = event.dataTransfer.getData(CONTENT_ITEMS_MIME);
+            if (rawItems) {
+              try {
+                if (scope !== "compose" && scope !== "paper") throw new Error("无法识别拖动的内容");
+                const ids = parseContentItemsDragData(rawItems, scope);
+                if (onDropItems) void Promise.resolve(onDropItems(ids, folder.id)).catch(reportError);
+                else if (ids.length === 1) onDropItem?.(ids[0], folder.id);
+                else onError("此处不支持批量移动内容");
+              } catch (error) { reportError(error); }
+              return;
+            }
+            const rawItem = event.dataTransfer.getData(CONTENT_ITEM_MIME);
             if (rawItem) {
               try { const item = JSON.parse(rawItem) as { scope: string; id: string }; if (item.scope === scope) onDropItem?.(item.id, folder.id); }
               catch { onError("无法识别拖动的内容"); }

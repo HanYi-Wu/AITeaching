@@ -23,24 +23,40 @@ from solaire.web.papers.snapshots import _load_attempt_question_payloads, public
 def _new_id() -> str:
     return uuid.uuid4().hex
 
+def _student_for_user_in_connection(con: Any, user: dict[str, Any]) -> dict[str, Any]:
+    if user.get("role") != "student":
+        raise PermissionError("Student role required")
+    row = con.execute(
+        """
+        SELECT s.*, u.username AS account_username
+        FROM students s
+        JOIN users u ON u.id = s.user_id
+        WHERE s.user_id = ? AND s.status = 'active' AND u.status = 'active'
+        """,
+        (str(user["id"]),),
+    ).fetchone()
+    student = row_to_dict(row)
+    if student is None:
+        raise PermissionError("Active student profile required")
+    return student
+
+
 def _student_for_user(root: Path, user: dict[str, Any]) -> dict[str, Any]:
     if user.get("role") != "student":
         raise PermissionError("Student role required")
     init_platform_db(root)
     with closing(connect(root)) as con, con:
-        row = con.execute(
-            """
-            SELECT s.*, u.username AS account_username
-            FROM students s
-            JOIN users u ON u.id = s.user_id
-            WHERE s.user_id = ? AND s.status = 'active' AND u.status = 'active'
-            """,
-            (str(user["id"]),),
-        ).fetchone()
-    student = row_to_dict(row)
-    if student is None:
-        raise PermissionError("Active student profile required")
-    return student
+        return _student_for_user_in_connection(con, user)
+
+
+def _student_and_attempt_for_user(root: Path, user: dict[str, Any], attempt_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    if user.get("role") != "student":
+        raise PermissionError("Student role required")
+    init_platform_db(root)
+    with closing(connect(root)) as con, con:
+        student = _student_for_user_in_connection(con, user)
+        attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
+    return student, attempt
 
 def _score_percent(score: object, max_score: object) -> float | None:
     return score_percent(score, max_score, legacy_zero_max=True)

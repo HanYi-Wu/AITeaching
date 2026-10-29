@@ -1,7 +1,33 @@
+import { memo } from "react";
+import type { StudentAnswerImage, StudentQuestionRecord } from "../../../platform/auth";
 import { AlertTriangle, Clock, Save, Send } from "lucide-react";
 import { PlatformShell } from "../PlatformShell";
 import { QuestionAnswer } from "./StudentPanels";
 import { formatCountdown, type StudentExamController } from "./useStudentExam";
+
+const EMPTY_IMAGES: StudentAnswerImage[] = [];
+
+const ExamQuestion = memo(function ExamQuestion({
+  question, anchorId, value, imageMode, images, setAnswer, setQuestionImages, onFileDialogOpen, onFileDialogClose,
+}: {
+  question: StudentQuestionRecord;
+  anchorId: string;
+  value: string;
+  imageMode: boolean;
+  images: StudentAnswerImage[];
+  setAnswer: (questionId: string, value: string) => void;
+  setQuestionImages: (questionId: string, files: FileList | null) => Promise<void>;
+  onFileDialogOpen: () => void;
+  onFileDialogClose: () => void;
+}) {
+  return <QuestionAnswer
+    question={question} anchorId={anchorId} value={value}
+    onChange={(value) => setAnswer(question.question_id, value)}
+    imageMode={imageMode} images={images}
+    onImagesChange={(files) => void setQuestionImages(question.question_id, files)}
+    onFileDialogOpen={onFileDialogOpen} onFileDialogClose={onFileDialogClose}
+  />;
+});
 
 export function StudentExamPanel({
   controller,
@@ -52,12 +78,14 @@ export function StudentExamPanel({
           服务器答案已有其他更新，本机文本草稿仍保留。
           <button type="button" onClick={exam.recoverConflictingText} className="ml-2 underline">恢复本机文本草稿</button>
         </div> : null}
-        {textDraftIssue ? <p className="mb-3 text-sm text-amber-800" role="status">本机文本草稿暂不可用，请及时保存到服务器。</p> : null}
+        {textDraftIssue === "unavailable" ? <p className="mb-3 text-sm text-amber-800" role="status">本机文本存储不可用；草稿暂留在当前标签页内存，刷新或关闭可能丢失，请先保存到服务器。</p> : null}
+        {textDraftIssue === "too_large" ? <p className="mb-3 text-sm text-amber-800" role="status">本机文本草稿超过暂存限额，请先保存到服务器。</p> : null}
+        {textDraftIssue === "corrupt" ? <p className="mb-3 text-sm text-amber-800" role="status">本机文本草稿损坏，未自动恢复；请检查答案并保存到服务器。</p> : null}
         {Object.keys(imageConflicts).length ? <div className="mb-3 text-sm text-amber-800" role="status">
           服务器图片答案已有其他更新，本机图片草稿仍保留。
           <button type="button" onClick={exam.recoverConflictingImages} className="ml-2 underline">恢复本机图片草稿</button>
         </div> : null}
-        {imageDraftIssue === "unavailable" ? <p className="mb-3 text-sm text-amber-800" role="status">本机图片存储暂不可用，图片只保留在当前页面；请及时保存到服务器。</p> : null}
+        {imageDraftIssue === "unavailable" ? <p className="mb-3 text-sm text-amber-800" role="status">本机图片存储暂不可用；图片按账号暂留在当前标签页内存，刷新或关闭可能丢失，请先保存到服务器。</p> : null}
         {imageDraftIssue === "too_large" ? <p className="mb-3 text-sm text-amber-800" role="status">本机图片草稿超过 20 MB 限额，未能暂存；请及时保存到服务器。</p> : null}
         {imageDraftIssue === "corrupt" ? <p className="mb-3 text-sm text-amber-800" role="status">本机图片草稿损坏，未自动恢复；请检查图片后保存到服务器。</p> : null}
         {imageDraftStored && !imageDraftIssue ? <p className="mb-3 text-sm text-slate-600" role="status">图片已暂存在本机，尚未确认保存到服务器。</p> : null}
@@ -71,15 +99,15 @@ export function StudentExamPanel({
         </nav>
         <div className="space-y-4">
           {questions.map((question, index) => (
-            <QuestionAnswer
+            <ExamQuestion
               key={question.question_id}
               anchorId={`student-question-${index + 1}`}
               question={question}
               value={answers[question.question_id] ?? ""}
-              onChange={(value) => exam.setAnswer(question.question_id, value)}
+              setAnswer={exam.setAnswer}
               imageMode={activeAttempt.submission_mode === "image_manual" || activeAttempt.submission_mode === "image_ai"}
-              images={imageAnswers[question.question_id] ?? []}
-              onImagesChange={(files) => void exam.setQuestionImages(question.question_id, files)}
+              images={imageAnswers[question.question_id] ?? EMPTY_IMAGES}
+              setQuestionImages={exam.setQuestionImages}
               onFileDialogOpen={exam.onFileDialogOpen}
               onFileDialogClose={exam.onFileDialogClose}
             />

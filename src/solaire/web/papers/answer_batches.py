@@ -13,7 +13,7 @@ from solaire.web.platform_db import connect
 from solaire.web.papers.exam_timing import _ensure_attempt_can_collect
 from solaire.web.papers.snapshots import _load_attempt_question_payloads
 from solaire.web.papers.student_sessions import (
-    _new_id, _student_for_user, _attempt_for_student, _attempt_for_student_in_connection,
+    _new_id, _student_for_user_in_connection, _student_and_attempt_for_user, _attempt_for_student_in_connection,
 )
 
 
@@ -32,15 +32,17 @@ def save_student_answers(
     user: dict[str, Any],
     answers: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    student = _student_for_user(root, user)
-    initial_attempt = _attempt_for_student(root, attempt_id, str(student["id"]))
+    student, initial_attempt = _student_and_attempt_for_user(root, user, attempt_id)
     questions, _answer_keys = _load_attempt_question_payloads(project_root, initial_attempt, root=root)
     _validate_answer_batch(answers, {str(item.get("question_id")) for item in questions})
     now = utc_now()
     rows, cleared_question_ids = _prepare_answer_mutations(attempt_id, answers, now)
     with closing(connect(root)) as con, con:
         con.execute("BEGIN IMMEDIATE")
-        attempt = _attempt_for_student_in_connection(con, attempt_id, str(student["id"]))
+        locked_student = _student_for_user_in_connection(con, user)
+        if str(locked_student["id"]) != str(student["id"]):
+            raise PermissionError("No permission for this attempt")
+        attempt = _attempt_for_student_in_connection(con, attempt_id, str(locked_student["id"]))
         if str(attempt.get("status")) == "submitted":
             raise ValueError("Attempt already submitted")
         _ensure_attempt_can_collect(attempt)

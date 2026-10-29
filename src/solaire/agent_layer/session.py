@@ -7,6 +7,8 @@ import re
 import uuid
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from solaire.agent_layer.models import SessionState
 from solaire.common.atomic_files import write_text_atomic
 
@@ -38,17 +40,28 @@ def session_path(project_root: Path, session_id: str) -> Path:
     return path
 
 
+def _read_session(path: Path) -> SessionState:
+    raw = path.read_bytes()
+    # Large message strings parse faster with the standard decoder, while the
+    # direct model decoder avoids an intermediate object tree for short records.
+    if len(raw) > 65_536:
+        return SessionState.model_validate(json.loads(raw.decode("utf-8")))
+    try:
+        return SessionState.model_validate_json(raw)
+    except ValidationError:
+        return SessionState.model_validate(json.loads(raw.decode("utf-8")))
+
+
 def load_session(project_root: Path, session_id: str) -> SessionState | None:
     p = session_path(project_root, session_id)
     if not p.is_file():
         return None
-    raw = json.loads(p.read_text(encoding="utf-8"))
-    return SessionState.model_validate(raw)
+    return _read_session(p)
 
 
 def save_session(project_root: Path, session: SessionState) -> None:
     p = session_path(project_root, session.session_id)
-    write_text_atomic(p, session.model_dump_json(indent=2))
+    write_text_atomic(p, session.model_dump_json())
 
 
 def create_session(project_root: Path, *, owner_user_id: str | None = None) -> SessionState:
@@ -63,7 +76,7 @@ def list_sessions(project_root: Path, *, limit: int = 50, owner_user_id: str | N
     d = sessions_dir(project_root)
     for p in sorted(d.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
         try:
-            s = SessionState.model_validate(json.loads(p.read_text(encoding="utf-8")))
+            s = _read_session(p)
             if owner_user_id is not None and s.owner_user_id != owner_user_id:
                 continue
             title = ""

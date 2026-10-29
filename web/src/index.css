@@ -53,5 +53,15 @@ html[data-eh-theme="night"] .text-slate-800 { color: #f8fafc !important; }
 html[data-eh-theme="night"] .text-slate-700,
 html[data-eh-theme="night"] .text-slate-600,
 html[data-eh-theme="night"] .text-slate-500 { color: #cbd5e1 !important; }
+
+/* Compact density reduces workspace spacing while preserving control sizes. */
+html[data-eh-density="compact"] main .gap-4 { gap: 0.75rem; }
+html[data-eh-density="compact"] main .gap-3 { gap: 0.5rem; }
+html[data-eh-density="compact"] main .space-y-4 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.75rem; }
+html[data-eh-density="compact"] main .space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.5rem; }
+html[data-eh-density="compact"] main .mt-4 { margin-top: 0.75rem; }
+html[data-eh-density="compact"] main .mt-3 { margin-top: 0.5rem; }
+html[data-eh-density="compact"] main .p-4 { padding: 0.75rem; }
+html[data-eh-density="compact"] main :is(td, th) { padding-block: 0.375rem; }
 @keyframes folder-open { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

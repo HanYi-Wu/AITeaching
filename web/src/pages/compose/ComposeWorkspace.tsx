@@ -26,6 +26,7 @@ import {
   listFolderItems,
   listTaggedItems,
   assignFolderItem,
+  moveContentItemsToFolder,
   type ContentFolder,
   type ContentTag,
 } from "../../platform/auth";
@@ -136,6 +137,8 @@ export function ComposeWorkspace({
   const [composeFolderItems, setComposeFolderItems] = useState<Record<string, string>>({});
   const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
   const [selectedComposeFolderId, setSelectedComposeFolderId] = useState<string | null>(null);
+  const [selectedComposeItemIds, setSelectedComposeItemIds] = useState<string[]>([]);
+  const [movingComposeItems, setMovingComposeItems] = useState(false);
   const [conflictTargetId, setConflictTargetId] = useState<string | null>(null);
   const [conflictExportKind, setConflictExportKind] = useState<"pdf" | "word" | null>(null);
   const [exportPreflightFailure, setExportPreflightFailure] = useState<{ format: ComposeExportTaskFormat; reason: string } | null>(null);
@@ -571,6 +574,58 @@ export function ComposeWorkspace({
     () => examSummaries.filter((e) => e.status === "exported" && (!selectedComposeFolderId || composeFolderItems[e.exam_id] === selectedComposeFolderId)),
     [examSummaries, selectedComposeFolderId, composeFolderItems],
   );
+  const visibleComposeItemIds = useMemo(
+    () => [...draftExamRows, ...exportedExamRows].map((exam) => exam.exam_id),
+    [draftExamRows, exportedExamRows],
+  );
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleComposeItemIds);
+    setSelectedComposeItemIds((current) => current.filter((id) => visibleIds.has(id)));
+  }, [visibleComposeItemIds]);
+
+  useEffect(() => {
+    setSelectedComposeItemIds([]);
+    setMovingComposeItems(false);
+  }, [draftScope.ownerKey]);
+
+  const toggleComposeItem = useCallback((itemId: string) => {
+    setSelectedComposeItemIds((current) => current.includes(itemId)
+      ? current.filter((id) => id !== itemId)
+      : [...current, itemId]);
+  }, []);
+  const toggleVisibleComposeItems = useCallback((visibleIds: string[]) => {
+    setSelectedComposeItemIds((current) => {
+      const visible = new Set(visibleIds);
+      const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => current.includes(id));
+      if (allVisibleSelected) return current.filter((id) => !visible.has(id));
+      return [...current.filter((id) => !visible.has(id)), ...visibleIds];
+    });
+  }, []);
+  const clearComposeItems = useCallback(() => setSelectedComposeItemIds([]), []);
+  const moveComposeItemsToFolder = useCallback(async (itemIds: string[], folderId: string | null) => {
+    const isCurrent = captureOwnerRequest();
+    const ids = [...new Set(itemIds)];
+    if (ids.length === 0) return;
+    setMovingComposeItems(true);
+    try {
+      await moveContentItemsToFolder("compose", ids, folderId);
+      if (!isCurrent()) return;
+      setComposeFolderItems((current) => {
+        const next = { ...current };
+        for (const id of ids) {
+          if (folderId) next[id] = folderId;
+          else delete next[id];
+        }
+        return next;
+      });
+      setSelectedComposeItemIds([]);
+    } catch (error) {
+      if (isCurrent()) onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (isCurrent()) setMovingComposeItems(false);
+    }
+  }, [captureOwnerRequest, onError]);
 
   const buildSelectedItemsForApi = useCallback(() => {
     return buildSelectedItemsFromModel(selectedTpl, paperStateRef.current);
@@ -1269,6 +1324,12 @@ export function ComposeWorkspace({
           onFolderUpdated={(folder) => setComposeFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
           onFolderDeleted={(result) => { setComposeFolders(result.folders); setComposeFolderItems(result.items); }}
           onDropItemToFolder={(itemId, folderId) => { void assignFolderItem("compose", itemId, folderId).then(() => setComposeFolderItems((items) => { const next = { ...items }; if (folderId) next[itemId] = folderId; else delete next[itemId]; return next; })).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}
+          selectedComposeItemIds={selectedComposeItemIds}
+          movingComposeItems={movingComposeItems}
+          onToggleComposeItem={toggleComposeItem}
+          onToggleVisibleComposeItems={toggleVisibleComposeItems}
+          onClearComposeItems={clearComposeItems}
+          onMoveComposeItemsToFolder={moveComposeItemsToFolder}
           draftExamRows={draftExamRows}
           exportedExamRows={exportedExamRows}
           taggedItems={taggedItems}

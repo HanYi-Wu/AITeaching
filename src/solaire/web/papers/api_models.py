@@ -61,6 +61,11 @@ class FolderItemBody(BaseModel):
     item_id: str = Field(..., min_length=1)
     folder_id: str | None = None
 
+class FolderItemsMoveBody(BaseModel):
+    scope: Literal["compose", "paper"]
+    item_ids: list[str] = Field(..., min_length=1, max_length=200)
+    folder_id: str | None = None
+
 class PaperAiGradeBody(BaseModel):
     question_ids: list[str] | None = None
 

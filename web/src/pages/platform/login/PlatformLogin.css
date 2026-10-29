@@ -1,0 +1,4 @@
+.platform-login-password::-ms-reveal,
+.platform-login-password::-ms-clear {
+  display: none;
+}

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ContentFolders } from "./ContentFolders";
+import { CONTENT_ITEMS_MIME, CONTENT_ITEM_MIME } from "../lib/contentSelection";
 
 const mocks = vi.hoisted(() => ({ deleteFolder: vi.fn() }));
 vi.mock("../platform/auth", async (importOriginal) => ({ ...await importOriginal<typeof import("../platform/auth")>(), deleteContentFolder: mocks.deleteFolder }));
@@ -29,5 +30,33 @@ describe("folder deletion", () => {
     await waitFor(() => expect(onDeleted).toHaveBeenCalledWith(result));
     expect(onSelect).toHaveBeenCalledWith(null);
     expect(mocks.deleteFolder).toHaveBeenCalledWith(folder.id);
+  });
+});
+
+describe("content drops", () => {
+  it("forwards a same-scope bulk payload as one drop operation", () => {
+    const onDropItems = vi.fn();
+    const dataTransfer = {
+      types: [CONTENT_ITEMS_MIME],
+      getData: (type: string) => type === CONTENT_ITEMS_MIME ? JSON.stringify({ scope: "compose", ids: ["exam-1", "exam-2"] }) : "",
+    };
+    render(<ContentFolders scope="compose" folders={[folder]} selectedId={folder.id} onSelect={vi.fn()} onCreated={vi.fn()} onDeleted={vi.fn()} onDropItems={onDropItems} onError={vi.fn()} />);
+
+    fireEvent.drop(screen.getByTitle("验证目录 · 归类文件夹"), { dataTransfer });
+
+    expect(onDropItems).toHaveBeenCalledWith(["exam-1", "exam-2"], folder.id);
+  });
+
+  it("continues to accept the legacy single-item drag payload", () => {
+    const onDropItem = vi.fn();
+    const dataTransfer = {
+      types: [CONTENT_ITEM_MIME],
+      getData: (type: string) => type === CONTENT_ITEM_MIME ? JSON.stringify({ scope: "compose", id: "exam-1" }) : "",
+    };
+    render(<ContentFolders scope="compose" folders={[folder]} selectedId={folder.id} onSelect={vi.fn()} onCreated={vi.fn()} onDeleted={vi.fn()} onDropItem={onDropItem} onError={vi.fn()} />);
+
+    fireEvent.drop(screen.getByTitle("验证目录 · 归类文件夹"), { dataTransfer });
+
+    expect(onDropItem).toHaveBeenCalledWith("exam-1", folder.id);
   });
 });

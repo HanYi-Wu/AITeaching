@@ -10,14 +10,15 @@ import type { TemplateRow } from "../../types/compose";
 import { ApiError } from "../../api/client";
 import { buildComposeDraftStorageKey } from "./composeDraftStorage";
 
-const mocks = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), download: vi.fn(), sync: vi.fn(), onError: vi.fn(), setPageContext: vi.fn() }));
+const mocks = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), download: vi.fn(), sync: vi.fn(), onError: vi.fn(), setPageContext: vi.fn(), listContentFolders: vi.fn(), moveContentItemsToFolder: vi.fn() }));
 vi.mock("../../api/client", async (importOriginal) => ({ ...await importOriginal<typeof import("../../api/client")>(), apiGet: mocks.apiGet, apiPost: mocks.apiPost }));
 vi.mock("../../contexts/AgentContext", () => ({ useAgentContext: () => ({ setPageContext: mocks.setPageContext }) }));
 vi.mock("../../components/PdfPreview", () => ({ PdfPreview: () => null }));
 vi.mock("./composeHelpers", async (original) => ({ ...await original<typeof import("./composeHelpers")>(), downloadExportedBundle: mocks.download }));
 vi.mock("../../platform/auth", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../platform/auth")>(),
-  listContentFolders: async () => ({ folders: [] }), listFolderItems: async () => ({ items: {} }), listTaggedItems: async () => ({ items: {} }),
+  listContentFolders: mocks.listContentFolders, listFolderItems: async () => ({ items: {} }), listTaggedItems: async () => ({ items: {} }),
+  moveContentItemsToFolder: mocks.moveContentItemsToFolder,
   syncPlatformPaperFromExam: mocks.sync,
 }));
 
@@ -118,6 +119,7 @@ describe("export result integration", () => {
   beforeAll(async () => { await setupTestI18n("zh"); });
   beforeEach(() => {
     vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); mocks.download.mockResolvedValue(undefined); mocks.sync.mockResolvedValue({});
+    mocks.listContentFolders.mockResolvedValue({ folders: [] });
     mocks.apiGet.mockImplementation(async (path: string) => {
       if (path === "/api/templates") return { templates: [template("original")] };
       if (path === "/api/questions") return { questions: [{ id: "q1", qualified_id: "math/q1", namespace: "math", subject: "数学", type: "single_choice", answer: "A", content_preview: "Question", content: "Question", analysis: "" }] };
@@ -194,6 +196,70 @@ describe("export result integration", () => {
     expect(getQuestionButton("数学/main/q2")).toHaveClass("border-slate-900");
     expect(getQuestionButton("数学/main/q3")).toHaveClass("border-slate-900");
     expect(getQuestionButton("数学/main/q1")).not.toHaveClass("border-slate-900");
+  });
+
+  it("selects compose history items, drags the selected group, and applies a successful batch move", async () => {
+    const summaries = [
+      { exam_id: "Draft/Math", name: "Draft math", status: "draft" },
+      { exam_id: "Quiz/Science", name: "Science quiz", status: "exported" },
+    ];
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/api/templates") return { templates };
+      if (path === "/api/questions") return { questions: [] };
+      if (path === "/api/bank/subjects") return { subjects: ["数学"] };
+      if (path === "/api/exams") return { exams: summaries };
+      return {};
+    });
+    mocks.listContentFolders.mockResolvedValue({ folders: [{ id: "compose-folder", owner_teacher_id: "teacher-a", scope: "compose", parent_id: null, kind: "category", name: "已归档" }] });
+    mocks.moveContentItemsToFolder.mockResolvedValue({ ok: true, moved_count: 2 });
+    renderWorkspace({ accountId: "teacher-a", projectRoot: "C:/project-a" });
+
+    const draftCheckbox = await screen.findByRole("checkbox", { name: "选择草稿 Draft math" });
+    const exportedCheckbox = await screen.findByRole("checkbox", { name: "选择试卷 Science quiz" });
+    await userEvent.click(screen.getByRole("checkbox", { name: "全选当前可见" }));
+    expect(draftCheckbox).toBeChecked();
+    expect(exportedCheckbox).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "清空选择" }));
+    expect(draftCheckbox).not.toBeChecked();
+    expect(exportedCheckbox).not.toBeChecked();
+    await userEvent.click(draftCheckbox);
+    await userEvent.click(exportedCheckbox);
+
+    const setData = vi.fn();
+    fireEvent.dragStart(screen.getByRole("button", { name: /Draft math/ }), { dataTransfer: { setData } as unknown as DataTransfer });
+    expect(setData).toHaveBeenCalledWith("application/x-or-content-items", JSON.stringify({ scope: "compose", ids: ["Draft/Math", "Quiz/Science"] }));
+    expect(setData).toHaveBeenCalledWith("application/x-or-content-item", JSON.stringify({ scope: "compose", id: "Draft/Math" }));
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "批量移动到文件夹" }), "compose-folder");
+    await userEvent.click(screen.getByRole("button", { name: "移动所选" }));
+    await waitFor(() => expect(mocks.moveContentItemsToFolder).toHaveBeenCalledWith("compose", ["Draft/Math", "Quiz/Science"], "compose-folder"));
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "选择草稿 Draft math" })).not.toBeChecked());
+    await userEvent.click(screen.getByTitle("已归档 · 归类文件夹"));
+    expect(await screen.findByRole("checkbox", { name: "选择草稿 Draft math" })).not.toBeChecked();
+  });
+
+  it("keeps compose selection after a failed batch move", async () => {
+    const summaries = [{ exam_id: "Draft/Math", name: "Draft math", status: "draft" }];
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/api/templates") return { templates };
+      if (path === "/api/questions") return { questions: [] };
+      if (path === "/api/bank/subjects") return { subjects: ["数学"] };
+      if (path === "/api/exams") return { exams: summaries };
+      return {};
+    });
+    mocks.listContentFolders.mockResolvedValue({ folders: [{ id: "compose-folder", owner_teacher_id: "teacher-a", scope: "compose", parent_id: null, kind: "category", name: "已归档" }] });
+    mocks.moveContentItemsToFolder.mockRejectedValue(new Error("move rejected"));
+    renderWorkspace({ accountId: "teacher-a", projectRoot: "C:/project-a" });
+
+    const checkbox = await screen.findByRole("checkbox", { name: "选择草稿 Draft math" });
+    await userEvent.click(checkbox);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "批量移动到文件夹" }), "compose-folder");
+    await userEvent.click(screen.getByRole("button", { name: "移动所选" }));
+
+    await waitFor(() => expect(mocks.onError).toHaveBeenCalledWith("move rejected"));
+    expect(screen.getByRole("checkbox", { name: "选择草稿 Draft math" })).toBeChecked();
+    await userEvent.click(screen.getByTitle("已归档 · 归类文件夹"));
+    expect(screen.queryByRole("checkbox", { name: "选择草稿 Draft math" })).not.toBeInTheDocument();
   });
 
   async function loadedWorkspace() {

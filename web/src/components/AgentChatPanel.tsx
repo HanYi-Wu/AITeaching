@@ -47,6 +47,7 @@ import {
   AgentMessageItem,
   AgentSessionHistoryMenu,
   useAgentChatStream,
+  type ChatLine,
   type FileAttachment,
 } from "./agent-chat";
 
@@ -92,6 +93,8 @@ export function AgentChatPanel({
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
   const historyShellRef = useRef<HTMLDivElement>(null);
+  const fallbackLineKeysRef = useRef(new WeakMap<ChatLine, string>());
+  const fallbackLineSerialRef = useRef(0);
 
   const refreshSessionList = useCallback(async () => {
     try {
@@ -114,7 +117,9 @@ export function AgentChatPanel({
 
   const {
     sessionId,
+    setSessionId,
     sessionIdRef,
+    conversationEpochRef,
     lines,
     setLines,
     busy,
@@ -145,7 +150,7 @@ export function AgentChatPanel({
   // Auto-scroll when user is at bottom; preserve position if user manually departed
   useEffect(() => {
     if (isAtBottomRef.current) {
-      bottomRef.current?.scrollIntoView?.({ behavior: "smooth" });
+      bottomRef.current?.scrollIntoView?.({ behavior: busy ? "auto" : "smooth" });
     }
   }, [lines, busy, thinkingText]);
 
@@ -209,13 +214,40 @@ export function AgentChatPanel({
   }, [memoryOpen, refreshMemoryIndex, refreshTopicList]);
 
   const ensureSession = useCallback(async () => {
-    if (sessionId) return sessionId;
+    if (sessionIdRef.current) return sessionIdRef.current;
+    const epoch = conversationEpochRef.current;
     const { session_id } = await apiAgentCreateSession();
+    if (epoch !== conversationEpochRef.current) throw new DOMException("Conversation replaced", "AbortError");
     sessionIdRef.current = session_id;
-    stream.setSessionId(session_id);
+    setSessionId(session_id);
     void refreshSessionList();
     return session_id;
-  }, [sessionId, refreshSessionList, sessionIdRef, stream]);
+  }, [refreshSessionList, sessionIdRef, setSessionId, conversationEpochRef]);
+
+  const startNewChat = useCallback(() => {
+    sendGateRef.current = createAgentSubmissionGate();
+    newChat();
+  }, [newChat]);
+
+  const handleConfirm = useCallback(
+    (actionId: string, accepted: boolean) => confirm(actionId, accepted, ensureSession),
+    [confirm, ensureSession],
+  );
+  const handlePlanAction = useCallback(
+    (action: "execute" | "modify" | "cancel", planPath: string) => planAction(action, planPath, ensureSession),
+    [planAction, ensureSession],
+  );
+
+  function lineKey(line: ChatLine): string {
+    if (line.key) return line.key;
+    const keys = fallbackLineKeysRef.current;
+    let key = keys.get(line);
+    if (!key) {
+      key = `chat-local-${++fallbackLineSerialRef.current}`;
+      keys.set(line, key);
+    }
+    return key;
+  }
 
   const send = useCallback(async () => {
     if (!assistantEnabled) return;
@@ -224,6 +256,8 @@ export function AgentChatPanel({
     const msgText = agentSendMessage(typedInput, filesToUpload.length, t("fileOnlyPrompt"));
     const gate = sendGateRef.current;
     if (!msgText || busy || !gate?.tryAcquire()) return;
+    const epoch = conversationEpochRef.current;
+    const isCurrent = () => conversationEpochRef.current === epoch && sendGateRef.current === gate;
     setBusy(true);
     setInput("");
     setPendingFiles([]);
@@ -232,6 +266,7 @@ export function AgentChatPanel({
 
     try {
       const sid = await ensureSession();
+      if (!isCurrent()) return;
       const attachments: FileAttachment[] = [];
       const failedFiles: File[] = [];
       for (const f of filesToUpload) {
@@ -245,12 +280,14 @@ export function AgentChatPanel({
             mime_type: string | null;
             original_name: string;
           }>("/api/agent/upload", fd);
+          if (!isCurrent()) return;
           attachments.push({
             path: res.path,
             mime_type: res.mime_type,
             original_name: res.original_name,
           });
         } catch (e) {
+          if (!isCurrent()) return;
           failedFiles.push(f);
           setLines((prev) => [
             ...prev,
@@ -276,6 +313,7 @@ export function AgentChatPanel({
         ...(attachments.length > 0 ? { file_attachments: attachments } : {}),
       } as Parameters<typeof apiAgentChatStream>[0]);
     } catch (e) {
+      if (!isCurrent()) return;
       setPendingFiles((prev) => [...filesToUpload, ...prev]);
       setLines((prev) => [
         ...prev,
@@ -283,12 +321,13 @@ export function AgentChatPanel({
       ]);
     } finally {
       gate.release();
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }, [
     assistantEnabled,
     busy,
     ensureSession,
+    conversationEpochRef,
     input,
     pendingFiles,
     runStream,
@@ -300,10 +339,10 @@ export function AgentChatPanel({
   useEffect(() => {
     if (!prefillRequest) return;
     if (prefillRequest.newChat ?? true) {
-      newChat();
+      startNewChat();
     }
     setInput(prefillRequest.message);
-  }, [newChat, prefillRequest]);
+  }, [startNewChat, prefillRequest]);
 
   const pickSkill = useCallback((s: AgentSkillInfo) => {
     setActiveSkillId(s.id);
@@ -317,7 +356,7 @@ export function AgentChatPanel({
         await apiAgentSessionDelete(id);
         await refreshSessionList();
         if (sessionId === id) {
-          newChat();
+          startNewChat();
         }
       } catch (e) {
         window.alert(
@@ -325,7 +364,7 @@ export function AgentChatPanel({
         );
       }
     },
-    [t, refreshSessionList, sessionId, newChat],
+    [t, refreshSessionList, sessionId, startNewChat],
   );
 
   return (
@@ -422,7 +461,7 @@ export function AgentChatPanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void newChat()}
+                  onClick={startNewChat}
                   className="shrink-0 rounded px-2 py-0.5 text-[11px] text-slate-500 hover:bg-slate-100"
                 >
                   {t("newChat")}
@@ -525,15 +564,13 @@ export function AgentChatPanel({
         {lines.length === 0 && (
           <p className="text-xs text-slate-500">{t("freeformHint")}</p>
         )}
-        {lines.map((ln, i) => (
-          <div key={ln.kind === "tool_pending" ? ln.key : i}>
+        {lines.map((ln) => (
+          <div key={lineKey(ln)}>
             <AgentMessageItem
               line={ln}
               busy={busy}
-              onConfirm={(actionId, accepted) => confirm(actionId, accepted, ensureSession)}
-              onPlanAction={(action, planPath) =>
-                planAction(action, planPath, ensureSession)
-              }
+              onConfirm={handleConfirm}
+              onPlanAction={handlePlanAction}
             />
           </div>
         ))}

@@ -2,13 +2,28 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
-from jinja2 import ChoiceLoader, Environment, FileSystemLoader, select_autoescape
+from jinja2 import (
+    ChoiceLoader,
+    Environment,
+    FileSystemLoader,
+    Template,
+    select_autoescape,
+)
 
-from solaire.exam_compiler.choice_layout import choice_option_pairs, resolve_choice_layout
+from solaire.exam_compiler.choice_layout import (
+    choice_option_pairs,
+    resolve_choice_layout,
+)
 from solaire.exam_compiler.latex_jinja_paths import latex_jinja_loader_dirs
-from solaire.exam_compiler.latex_util import build_graphicspath_command, latex_escape_text, latex_safe_label
+from solaire.exam_compiler.latex_util import (
+    build_graphicspath_command,
+    latex_escape_text,
+    latex_safe_label,
+)
 from solaire.exam_compiler.loaders.questions import LoadedQuestions
 from solaire.exam_compiler.models import is_choice_type
 from solaire.exam_compiler.pipeline.hydrate import HydratedExam, HydratedQuestion
@@ -19,7 +34,9 @@ def _jinja_env(loader_dirs: list[Path]) -> Environment:
     loaders = [FileSystemLoader(str(d.resolve())) for d in loader_dirs if d.is_dir()]
     env = Environment(
         loader=ChoiceLoader(loaders),
-        autoescape=select_autoescape(enabled_extensions=()),  # no HTML autoescape on .tex
+        autoescape=select_autoescape(
+            enabled_extensions=()
+        ),  # no HTML autoescape on .tex
         block_start_string="[%",
         block_end_string="%]",
         variable_start_string="[[",
@@ -177,6 +194,16 @@ def render_tex(
     *,
     show_answers: bool,
 ) -> str:
+    prepared = _prepare_tex_render(hydrated, template_yaml_dir, latex_base)
+    return _render_prepared_tex(prepared, show_answers=show_answers)
+
+
+def _prepare_tex_render(
+    hydrated: HydratedExam,
+    template_yaml_dir: Path,
+    latex_base: str,
+) -> tuple[Template, dict[str, Any], str, str, list[dict[str, Any]]]:
+    """Prepare template and template-facing data once for one or more renders."""
     dirs = latex_jinja_loader_dirs(template_yaml_dir, latex_base)
     env = _jinja_env(dirs)
     tpl = env.get_template(latex_base)
@@ -192,7 +219,7 @@ def render_tex(
                 graphic_paths.append(p)
     graphicspath_cmd = build_graphicspath_command(graphic_paths)
 
-    sections_data = []
+    sections_data: list[dict[str, Any]] = []
     for sec in hydrated.sections:
         qs = _build_section_questions(sec.questions, meta)
         render_type = "text" if sec.type != "text" and not qs else sec.type
@@ -207,11 +234,22 @@ def render_tex(
             }
         )
 
+    return tpl, meta, hydrated.exam_id, graphicspath_cmd, sections_data
+
+
+def _render_prepared_tex(
+    prepared: tuple[Template, dict[str, Any], str, str, list[dict[str, Any]]],
+    *,
+    show_answers: bool,
+) -> str:
+    tpl, meta, exam_id, graphicspath_cmd, sections_data = prepared
     return tpl.render(
         metadata=meta,
-        exam_id=hydrated.exam_id,
+        exam_id=exam_id,
         graphicspath_command=graphicspath_cmd,
-        sections=sections_data,
+        # Custom templates can mutate dictionaries/lists with pop()/update().
+        # Keep a fresh, deeply independent tree for the student and teacher paper.
+        sections=deepcopy(sections_data),
         show_answers=show_answers,
         latex_escape=latex_escape_text,
     )
@@ -226,14 +264,15 @@ def write_student_teacher_tex(
 ) -> tuple[Path, Path]:
     work_dir.mkdir(parents=True, exist_ok=True)
     expand_hydrated_for_latex(hydrated, loaded)
+    prepared = _prepare_tex_render(hydrated, template_yaml_dir, latex_base)
     student_tex = work_dir / "student_paper.tex"
     teacher_tex = work_dir / "teacher_paper.tex"
     student_tex.write_text(
-        render_tex(hydrated, template_yaml_dir, latex_base, show_answers=False),
+        _render_prepared_tex(prepared, show_answers=False),
         encoding="utf-8",
     )
     teacher_tex.write_text(
-        render_tex(hydrated, template_yaml_dir, latex_base, show_answers=True),
+        _render_prepared_tex(prepared, show_answers=True),
         encoding="utf-8",
     )
     return student_tex, teacher_tex

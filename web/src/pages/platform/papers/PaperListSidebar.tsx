@@ -1,9 +1,11 @@
 import { Search } from "lucide-react";
 import { ContentFolders } from "../../../components/ContentFolders";
+import { ContentSelectionControls } from "../../../components/ContentSelectionControls";
 import { TagChips } from "../../../components/ContentTags";
 import type { ContentFolder, ContentTag, PlatformPaperRecord } from "../../../platform/auth";
 import { deliveryLabel } from "./paperHelpers";
 import type { PageMeta, PaperQuery } from "./paperHelpers";
+import { setContentItemDragData } from "../../../lib/contentSelection";
 
 type Props = {
   papers: PlatformPaperRecord[];
@@ -19,6 +21,13 @@ type Props = {
   onFolderUpdated: (folder: ContentFolder) => void;
   onFolderDeleted: (result: { folders: ContentFolder[] }) => void;
   onDropItem: (id: string, folderId: string) => void;
+  onDropItems: (ids: string[], folderId: string) => void | Promise<void>;
+  selectedPaperIds: string[];
+  movingSelectedPapers: boolean;
+  onTogglePaper: (paperId: string) => void;
+  onToggleVisiblePapers: (visibleIds: string[]) => void;
+  onClearSelectedPapers: () => void;
+  onMoveSelectedPapers: (ids: string[], folderId: string | null) => void | Promise<void>;
   onError: (error: unknown) => void;
   onAnalyzeFolder: (folderId: string) => void;
   onSearchChange: (value: string) => void;
@@ -28,6 +37,10 @@ type Props = {
   onPage: (page: number) => void;
   onPageSize: (pageSize: number) => void;
 };
+
+function paperHasPublicationHistory(paper: PlatformPaperRecord): boolean {
+  return paper.publication_count > 0 || paper.has_publication_history === true;
+}
 
 export function PaperListSidebar({
   papers,
@@ -43,6 +56,13 @@ export function PaperListSidebar({
   onFolderUpdated,
   onFolderDeleted,
   onDropItem,
+  onDropItems,
+  selectedPaperIds,
+  movingSelectedPapers,
+  onTogglePaper,
+  onToggleVisiblePapers,
+  onClearSelectedPapers,
+  onMoveSelectedPapers,
   onError,
   onAnalyzeFolder,
   onSearchChange,
@@ -52,6 +72,7 @@ export function PaperListSidebar({
   onPage,
   onPageSize,
 }: Props) {
+  const movablePaperIds = papers.filter((paper) => !paperHasPublicationHistory(paper)).map((paper) => paper.paper_id);
   return (
     <aside className="flex min-h-0 flex-col overflow-hidden border-r border-slate-200 bg-white p-3">
       <ContentFolders
@@ -63,10 +84,25 @@ export function PaperListSidebar({
         onUpdated={onFolderUpdated}
         onDeleted={onFolderDeleted}
         onDropItem={onDropItem}
+        onDropItems={onDropItems}
+        dropItemsBusy={movingSelectedPapers}
         onError={onError}
         allowPaperFolder
       />
       {selectedFolderId ? <div className="my-2 flex gap-2 text-xs"><button type="button" onClick={() => onAnalyzeFolder(selectedFolderId)} className="rounded border px-2 py-1 hover:bg-slate-50">分析此文件夹</button></div> : null}
+      <div className="mb-3 shrink-0">
+        <ContentSelectionControls
+          scope="paper"
+          folders={folders}
+          visibleItemIds={movablePaperIds}
+          selectedItemIds={selectedPaperIds}
+          busy={loading || movingSelectedPapers}
+          allLabel="全选当前可移动试卷"
+          onSelectVisible={() => onToggleVisiblePapers(movablePaperIds)}
+          onClearSelection={onClearSelectedPapers}
+          onMoveSelected={onMoveSelectedPapers}
+        />
+      </div>
       <div className="mb-3 shrink-0 space-y-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
@@ -99,14 +135,20 @@ export function PaperListSidebar({
         </div>
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-auto">
-        {papers.map((paper) => (
+        {papers.map((paper) => {
+          const isPublished = paperHasPublicationHistory(paper);
+          return <div key={paper.paper_id} className="flex min-w-0 items-stretch gap-1.5">
+          <label className="flex w-6 shrink-0 items-start justify-center pt-4" title={isPublished ? "已有发布记录的试卷不能单独移动；请移动整个文件夹" : "选择这份试卷"}>
+            <input type="checkbox" aria-label={`选择试卷 ${paper.title}`} checked={selectedPaperIds.includes(paper.paper_id)} disabled={isPublished || loading || movingSelectedPapers} onChange={() => onTogglePaper(paper.paper_id)} />
+          </label>
           <button
-            key={paper.paper_id}
             type="button"
-            draggable
-            onDragStart={(event) => event.dataTransfer.setData("application/x-or-content-item", JSON.stringify({ scope: "paper", id: paper.paper_id }))}
+            data-testid={`paper-list-item-${paper.paper_id}`}
+            draggable={!isPublished && !loading && !movingSelectedPapers}
+            title={isPublished ? "已有发布记录的试卷不能单独移动；请移动整个文件夹" : undefined}
+            onDragStart={(event) => setContentItemDragData(event.dataTransfer, "paper", paper.paper_id, selectedPaperIds)}
             onClick={() => onSelectPaper(paper)}
-            className={`w-full rounded-lg border p-3 text-left transition ${
+            className={`min-w-0 flex-1 rounded-lg border p-3 text-left transition ${
               selectedPaper?.paper_id === paper.paper_id
                 ? "border-slate-900 bg-slate-50"
                 : "border-slate-200 bg-white hover:border-slate-300"
@@ -137,7 +179,8 @@ export function PaperListSidebar({
               <span>{paper.publication_count} 次发布</span>
             </div>
           </button>
-        ))}
+          </div>;
+        })}
         {!loading && papers.length === 0 ? (
           <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">
             暂无已导出的试卷

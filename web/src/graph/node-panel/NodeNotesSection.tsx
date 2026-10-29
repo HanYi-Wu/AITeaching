@@ -56,6 +56,7 @@ export function NodeNotesSection({
             </p>
           ) : null}
           <LatexRichTextField
+            key={`graph-node-note-${selectedNode.id}-${noteEditingId ?? "new"}`}
             textAreaRef={noteTextAreaRef}
             syncTextAreaId={`graph-node-note-${selectedNode.id}-${noteEditingId ?? "new"}`}
             minRows={4}

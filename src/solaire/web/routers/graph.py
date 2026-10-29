@@ -182,7 +182,13 @@ def graph_nodes_update(
     root = _require_root()
     try:
         existing = get_concept_node(root, node_id, graph=graph)
-        incoming = _graph_node_payload(body)
+        incoming = body.model_dump(exclude_unset=True)
+        incoming.pop("parent_node_id", None)
+        # Omitted collections must not erase aliases/tags during a notes update.
+        # Explicit nulls clear nullable fields such as the primary parent.
+        for name in ("node_kind", "notes"):
+            if incoming.get(name) is None:
+                incoming.pop(name, None)
         merged = {**existing, **incoming, "id": node_id}
         update_concept_node(root, node_id, merged, graph=graph)
         return {"ok": True}

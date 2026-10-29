@@ -8,6 +8,7 @@ import uuid
 import json
 import asyncio
 import base64
+from concurrent.futures import CancelledError
 import re
 import sqlite3
 import threading
@@ -1227,6 +1228,73 @@ def publish_online_paper(
         source_batch_id=source_batch_id,
     )
 
+def _offline_upload_context(
+    con: sqlite3.Connection, *, paper_id: str, class_id: str, student_id: str, user: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], sqlite3.Row | None, sqlite3.Row | None]:
+    if user.get("role") not in {"admin", "teacher"}:
+        raise PermissionError("仅教师或管理员可以上传线下答卷")
+    paper = row_to_dict(con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone())
+    if paper is None:
+        raise ValueError("paper not found")
+    _ensure_paper_access(paper, user)
+    if paper.get("delivery_mode") != "offline":
+        raise ValueError("该试卷当前为在线模式；如需采集线下照片，请先在试卷管理中设为线下")
+    publication_service._validate_publish_classes_with_connection(con, user, [class_id])
+    clean_student_id = str(student_id or "").strip()
+    if not clean_student_id:
+        raise ValueError("请提供 student_id，或学生学号、账号、姓名")
+    student = row_to_dict(con.execute(
+        """
+        SELECT s.id, s.student_no, s.display_name, s.email, s.status, u.username AS account_username
+        FROM class_students cs JOIN students s ON s.id = cs.student_id
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE cs.class_id = ? AND s.id = ?
+        """,
+        (class_id, clean_student_id),
+    ).fetchone())
+    if student is None:
+        raise ValueError("该学生不在所选班级中")
+    publication = con.execute(
+        """
+        SELECT ep.id, ep.submission_mode
+        FROM exam_publications ep JOIN publication_classes pc ON pc.publication_id = ep.id
+        WHERE ep.paper_id = ? AND pc.class_id = ? AND ep.status <> 'revoked'
+        ORDER BY ep.created_at DESC LIMIT 1
+        """, (paper_id, class_id),
+    ).fetchone()
+    existing = None
+    if publication is not None:
+        if str(publication["submission_mode"] or "") != "offline_scan":
+            raise ValueError("该班级已有在线发布记录；为避免覆盖学生在线答卷，请先撤回原发布后再上传线下照片")
+        existing = con.execute(
+            "SELECT id FROM student_attempts WHERE publication_id = ? AND student_id = ?",
+            (str(publication["id"]), clean_student_id),
+        ).fetchone()
+    if existing is not None:
+        protected = con.execute(
+            """
+            SELECT 1 FROM student_answers WHERE attempt_id = ? AND (
+                COALESCE(grading_status, 'pending') <> 'pending' OR score IS NOT NULL
+                OR feedback IS NOT NULL OR ai_suggested_score IS NOT NULL OR ai_feedback IS NOT NULL
+                OR graded_at IS NOT NULL
+            ) LIMIT 1
+            """, (str(existing["id"]),),
+        ).fetchone()
+        if protected is not None:
+            raise ValueError("该学生的答卷已进入批改流程，不能用新照片覆盖；请保留现有答卷或先完成复核")
+    return paper, student, publication, existing
+
+
+def preflight_offline_submission(
+    root: Path, *, paper_id: str, class_id: str, student_id: str, user: dict[str, Any],
+) -> None:
+    if user.get("role") not in {"admin", "teacher"}:
+        raise PermissionError("仅教师或管理员可以上传线下答卷")
+    init_platform_db(root)
+    with closing(connect(root)) as con:
+        _offline_upload_context(con, paper_id=paper_id, class_id=class_id, student_id=student_id, user=user)
+
+
 def ingest_offline_submission(
     root: Path,
     project_root: Path,
@@ -1236,35 +1304,44 @@ def ingest_offline_submission(
     student_id: str,
     files: list[dict[str, Any]],
     user: dict[str, Any],
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Create or replace one student's submitted offline scan attempt."""
-    init_platform_db(root)
     if user.get("role") not in {"admin", "teacher"}:
         raise PermissionError("仅教师或管理员可以上传线下答卷")
-    paper = get_paper(root, paper_id)
-    _ensure_paper_access(paper, user)
-    if paper.get("delivery_mode") != "offline":
-        raise ValueError("该试卷当前为在线模式；如需采集线下照片，请先在试卷管理中设为线下")
-    _validate_publish_classes(root, user, [class_id])
-    student = resolve_teacher_class_student(root, class_id=class_id, user=user, student_id=student_id)
+    init_platform_db(root)
     if not files:
         raise ValueError("请至少上传一张答卷照片")
+    with closing(connect(root)) as con:
+        paper, _student, _publication, _existing = _offline_upload_context(
+            con, paper_id=paper_id, class_id=class_id, student_id=student_id, user=user,
+        )
     questions, answer_keys = _paper_exam_question_payloads(project_root, paper)
     if not questions:
         raise ValueError("试卷没有可批改题目，请先完成组卷")
+    question_json = json.dumps(questions, ensure_ascii=False)
+    answer_json = json.dumps(answer_keys, ensure_ascii=False)
     now = utc_now()
     with closing(connect(root)) as con, con:
-        publication = con.execute(
-            """
-            SELECT ep.id, ep.submission_mode
-            FROM exam_publications ep
-            JOIN publication_classes pc ON pc.publication_id = ep.id
-            WHERE ep.paper_id = ? AND pc.class_id = ? AND ep.status <> 'revoked'
-            ORDER BY ep.created_at DESC
-            LIMIT 1
-            """,
-            (paper_id, class_id),
-        ).fetchone()
+        if cancel_event is not None and cancel_event.is_set():
+            raise CancelledError()
+        con.execute("BEGIN IMMEDIATE")
+        if cancel_event is not None and cancel_event.is_set():
+            raise CancelledError()
+        current_paper, student, publication, existing = _offline_upload_context(
+            con, paper_id=paper_id, class_id=class_id, student_id=student_id, user=user,
+        )
+        if cancel_event is not None and cancel_event.is_set():
+            raise CancelledError()
+        if current_paper.get("exam_id") != paper.get("exam_id"):
+            questions, answer_keys = _paper_exam_question_payloads(project_root, current_paper)
+            if not questions:
+                raise ValueError("试卷没有可批改题目，请先完成组卷")
+            question_json = json.dumps(questions, ensure_ascii=False)
+            answer_json = json.dumps(answer_keys, ensure_ascii=False)
+            if cancel_event is not None and cancel_event.is_set():
+                raise CancelledError()
+        paper = current_paper
         if publication is None:
             publication_id = _new_id()
             con.execute(
@@ -1280,36 +1357,8 @@ def ingest_offline_submission(
                 (publication_id, class_id),
             )
         else:
-            if str(publication["submission_mode"] or "") != "offline_scan":
-                raise ValueError("该班级已有在线发布记录；为避免覆盖学生在线答卷，请先撤回原发布后再上传线下照片")
             publication_id = str(publication["id"])
-        existing = con.execute(
-            "SELECT id FROM student_attempts WHERE publication_id = ? AND student_id = ?",
-            (publication_id, student_id),
-        ).fetchone()
         attempt_id = str(existing["id"]) if existing is not None else _new_id()
-        if existing is not None:
-            protected_answer = con.execute(
-                """
-                SELECT 1
-                FROM student_answers
-                WHERE attempt_id = ?
-                  AND (
-                    COALESCE(grading_status, 'pending') <> 'pending'
-                    OR score IS NOT NULL
-                    OR feedback IS NOT NULL
-                    OR ai_suggested_score IS NOT NULL
-                    OR ai_feedback IS NOT NULL
-                    OR graded_at IS NOT NULL
-                  )
-                LIMIT 1
-                """,
-                (attempt_id,),
-            ).fetchone()
-            if protected_answer is not None:
-                raise ValueError("该学生的答卷已进入批改流程，不能用新照片覆盖；请保留现有答卷或先完成复核")
-        question_json = json.dumps(questions, ensure_ascii=False)
-        answer_json = json.dumps(answer_keys, ensure_ascii=False)
         if existing is None:
             con.execute(
                 """
@@ -1318,7 +1367,7 @@ def ingest_offline_submission(
                   question_payload_json, answer_key_json, question_payload_version
                 ) VALUES (?, ?, ?, 'submitted', ?, ?, ?, ?, 3)
                 """,
-                (attempt_id, publication_id, student_id, now, now, question_json, answer_json),
+                (attempt_id, publication_id, str(student["id"]), now, now, question_json, answer_json),
             )
             freeze_attempt_class_memberships(con, [attempt_id], captured_at=now)
         else:
@@ -1442,10 +1491,13 @@ def get_attempt_scan_image(
     page_index: int,
     user: dict[str, Any],
 ) -> dict[str, Any]:
-    paper = get_paper(root, paper_id)
-    _ensure_paper_access(paper, user)
-    _paper_attempt_row(root, paper_id=paper_id, attempt_id=attempt_id, user=user)
+    init_platform_db(root)
     with closing(connect(root)) as con, con:
+        paper = row_to_dict(con.execute("SELECT * FROM paper_records WHERE id = ?", (paper_id,)).fetchone())
+        if paper is None:
+            raise ValueError("paper not found")
+        _ensure_paper_access(paper, user)
+        paper_attempt_row_in_connection(con, paper_id=paper_id, attempt_id=attempt_id, user=user)
         row = con.execute(
             """
             SELECT file_name, mime_type, file_size, content

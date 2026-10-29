@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { BookOpenCheck, Eye, EyeOff, KeyRound, LogIn, UserPlus } from "lucide-react";
+import "./PlatformLogin.css";
 import {
   bootstrapAdmin,
   loginPlatform,
@@ -155,7 +156,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
                 setPassword(event.target.value);
                 clearError();
               }}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 pr-11 text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
+              className="platform-login-password w-full rounded-lg border border-slate-300 px-3 py-2.5 pr-11 text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
               type={showPassword ? "text" : "password"}
               autoComplete={isBootstrap ? "new-password" : "current-password"}
               minLength={6}

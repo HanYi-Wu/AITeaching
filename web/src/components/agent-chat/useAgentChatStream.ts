@@ -1,14 +1,12 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import i18n from "../../i18n/i18n";
 import {
-  apiAgentChatStream,
-  apiAgentSessionCancel,
-  apiAgentSessionContextMeter,
-  apiAgentSessionGet,
+  apiAgentChatStream, apiAgentSessionCancel, apiAgentSessionContextMeter, apiAgentSessionGet,
 } from "../../api/client";
 import type { AgentPageContextPayload } from "../../contexts/AgentContext";
 import { notifyAgentContentChanged } from "../../lib/contentEvents";
 import { formatToolLineLabel, mapSessionMessagesToLines } from "./formatTool";
+import { appendAssistantText, createTextDeltaBuffer, finishToolLine, startToolLine } from "./streamUpdates";
 import type { ChatLine, TaskStep } from "./types";
 
 export interface UseAgentChatStreamOptions {
@@ -21,426 +19,336 @@ export interface UseAgentChatStreamOptions {
   onErrorMsg?: (msg: string | null) => void;
 }
 
-export function useAgentChatStream({
-  sidebarOpen,
-  activeSkillId,
-  setActiveSkillId,
-  pageContext,
-  notifyAgentBackground,
-  refreshSessionList,
-  onErrorMsg,
-}: UseAgentChatStreamOptions) {
+type ChatBody = Parameters<typeof apiAgentChatStream>[0];
+type StreamRun = {
+  controller: AbortController;
+  text: ReturnType<typeof createTextDeltaBuffer>;
+  segmentClosed: boolean;
+};
+
+export function useAgentChatStream(options: UseAgentChatStreamOptions) {
+  const latest = useRef(options);
+  latest.current = options;
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [lines, setLines] = useState<ChatLine[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [busy, updateBusy] = useState(false);
+  const busyRef = useRef(false);
   const [taskSteps, setTaskSteps] = useState<TaskStep[] | null>(null);
   const [thinkingText, setThinkingText] = useState<string | null>(null);
   const [contextTokensEst, setContextTokensEst] = useState<number | null>(null);
   const [contextLimit, setContextLimit] = useState<number | null>(null);
   const [contextMeterRefreshing, setContextMeterRefreshing] = useState(false);
   const [currentFocus, setCurrentFocus] = useState<string | null>(null);
-
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
-  const assistantSegmentClosedRef = useRef(false);
-  const streamAbortRef = useRef<AbortController | null>(null);
+  const activeRun = useRef<StreamRun | null>(null);
+  const generation = useRef(0);
+  const conversationEpochRef = useRef(0);
+  const meterRequest = useRef(0);
+  const lineSerial = useRef(0);
+  const nextKey = () => `chat-line-${++lineSerial.current}`;
+
+  const setBusy = useCallback((value: boolean) => {
+    busyRef.current = value;
+    updateBusy(value);
+  }, []);
 
   const refreshContextMeter = useCallback(async (sid: string) => {
     if (!sid.trim()) return;
+    const request = ++meterRequest.current;
+    const epoch = generation.current;
     setContextMeterRefreshing(true);
     try {
-      const r = await apiAgentSessionContextMeter(sid);
-      if (typeof r.context_tokens_est === "number" && Number.isFinite(r.context_tokens_est)) {
-        setContextTokensEst(Math.round(r.context_tokens_est));
+      const result = await apiAgentSessionContextMeter(sid);
+      if (request !== meterRequest.current || epoch !== generation.current || sessionIdRef.current !== sid) return;
+      if (typeof result.context_tokens_est === "number" && Number.isFinite(result.context_tokens_est)) {
+        setContextTokensEst(Math.round(result.context_tokens_est));
       }
-      if (typeof r.context_limit === "number" && Number.isFinite(r.context_limit)) {
-        setContextLimit(Math.round(r.context_limit));
-      } else {
-        setContextLimit(null);
-      }
+      setContextLimit(typeof result.context_limit === "number" && Number.isFinite(result.context_limit)
+        ? Math.round(result.context_limit) : null);
     } catch {
-      /* retain estimation */
+      /* Retain the last known estimate when the request fails. */
     } finally {
-      setContextMeterRefreshing(false);
+      if (request === meterRequest.current && epoch === generation.current) setContextMeterRefreshing(false);
     }
   }, []);
 
-  const buildChatBody = useCallback(
-    (body: Parameters<typeof apiAgentChatStream>[0]): Parameters<typeof apiAgentChatStream>[0] => {
-      let next = { ...body };
-      if (activeSkillId) {
-        next = { ...next, skill_id: activeSkillId };
-      }
-      if (!pageContext) return next;
-      return {
-        ...next,
-        page_context: {
-          current_page: pageContext.current_page,
-          ...(pageContext.selected_resource_type != null
-            ? { selected_resource_type: pageContext.selected_resource_type }
-            : {}),
-          ...(pageContext.selected_resource_id != null
-            ? { selected_resource_id: pageContext.selected_resource_id }
-            : {}),
-          ...(pageContext.summary ? { summary: pageContext.summary } : {}),
-        },
+  const runStream = useCallback(async (body: ChatBody) => {
+    if (activeRun.current) return;
+    const epoch = ++generation.current;
+    ++meterRequest.current;
+    setContextMeterRefreshing(false);
+    const current = () => activeRun.current === run && generation.current === epoch;
+    const run: StreamRun = {
+      controller: new AbortController(),
+      segmentClosed: false,
+      text: createTextDeltaBuffer((text) => {
+        if (!current()) return;
+        const closed = run.segmentClosed;
+        run.segmentClosed = false;
+        const key = nextKey();
+        setLines((previous) => appendAssistantText(previous, text, closed, key));
+      }),
+    };
+    activeRun.current = run;
+    setBusy(true);
+    setThinkingText(null);
+    const context = latest.current;
+    const payload: ChatBody = { ...body };
+    if (context.activeSkillId) payload.skill_id = context.activeSkillId;
+    if (context.pageContext) {
+      const page = context.pageContext;
+      payload.page_context = {
+        current_page: page.current_page,
+        ...(page.selected_resource_type != null ? { selected_resource_type: page.selected_resource_type } : {}),
+        ...(page.selected_resource_id != null ? { selected_resource_id: page.selected_resource_id } : {}),
+        ...(page.summary ? { summary: page.summary } : {}),
       };
-    },
-    [pageContext, activeSkillId],
-  );
-
-  const runStream = useCallback(
-    async (body: Parameters<typeof apiAgentChatStream>[0]) => {
-      setBusy(true);
-      setThinkingText(null);
-      const ac = new AbortController();
-      streamAbortRef.current = ac;
-      const payload = buildChatBody(body);
-      try {
-        await apiAgentChatStream(
-          payload,
-          (ev, data) => {
-            if (ev === "session" && typeof data.session_id === "string") {
+    }
+    const append = (line: ChatLine) => {
+      const keyed = { ...line, key: nextKey() };
+      setLines((previous) => [...previous, keyed]);
+    };
+    const notify = (message: string, type?: "info" | "warning" | "success") => {
+      if (!latest.current.sidebarOpen) latest.current.notifyAgentBackground(message, type);
+    };
+    const updateMetrics = (data: Record<string, unknown>, useUsage = false) => {
+      const usage = data.usage as { total_tokens?: unknown } | undefined;
+      const estimate = data.context_tokens_est ?? (useUsage ? usage?.total_tokens : undefined);
+      if (typeof estimate === "number" && Number.isFinite(estimate)) setContextTokensEst(Math.round(estimate));
+      if (typeof data.context_limit === "number" && Number.isFinite(data.context_limit)) setContextLimit(Math.round(data.context_limit));
+    };
+    try {
+      await apiAgentChatStream(payload, (event, data) => {
+        if (!current()) return;
+        if (event === "text_delta" && typeof data.text === "string") {
+          setThinkingText(null);
+          run.text.push(data.text);
+          return;
+        }
+        // A control event must observe every preceding text chunk in arrival order.
+        run.text.flush();
+        switch (event) {
+          case "session":
+            if (typeof data.session_id === "string") {
               sessionIdRef.current = data.session_id;
               setSessionId(data.session_id);
             }
-            if (ev === "thinking" && typeof data.message === "string") {
-              setThinkingText(data.message);
-            }
-            if (ev === "text_delta" && typeof data.text === "string") {
-              const chunk = data.text;
-              setThinkingText(null);
-              setLines((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                if (last?.kind === "assistant" && !assistantSegmentClosedRef.current) {
-                  next[next.length - 1] = { kind: "assistant", text: last.text + chunk };
-                } else {
-                  assistantSegmentClosedRef.current = false;
-                  next.push({ kind: "assistant", text: chunk });
-                }
-                return next;
-              });
-            }
-            if (ev === "tool_start") {
-              assistantSegmentClosedRef.current = true;
-              setThinkingText(null);
-              const tool_name = String(data.tool_name ?? "");
-              const tool_call_id = typeof data.tool_call_id === "string" ? data.tool_call_id : undefined;
-              const label =
-                typeof data.label === "string" ? data.label : formatToolLineLabel(tool_name);
-              const key = `${tool_name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-              setLines((prev) => {
-                // Prevent duplicate pending tool cards for the same active tool
-                if (tool_call_id && prev.some((l) => (l.kind === "tool_pending" || l.kind === "tool") && l.tool_call_id === tool_call_id)) {
-                  return prev;
-                }
-                return [...prev, { kind: "tool_pending", tool_name, tool_call_id, label, key }];
-              });
-            }
-            if (ev === "tool_result") {
-              assistantSegmentClosedRef.current = true;
-              setThinkingText(null);
-              const tool_name = String(data.tool_name ?? "");
-              const tool_call_id = typeof data.tool_call_id === "string" ? data.tool_call_id : undefined;
-              notifyAgentContentChanged(tool_name, String(data.status ?? ""));
-              const summary = String(data.summary ?? data.status ?? "");
-              const subagent = Boolean(data.subagent);
-              const download_url =
-                typeof data.download_url === "string" ? data.download_url : undefined;
-              const filename = typeof data.filename === "string" ? data.filename : undefined;
-
-              setLines((prev) => {
-                if (tool_call_id && prev.some((l) => l.kind === "tool" && l.tool_call_id === tool_call_id)) return prev;
-                const next = [...prev];
-                const idx = next.findIndex(
-                  (l) => l.kind === "tool_pending" && (tool_call_id ? l.tool_call_id === tool_call_id : l.tool_name === tool_name),
-                );
-                if (idx >= 0) {
-                  next.splice(idx, 1);
-                }
-                next.push({
-                  kind: "tool",
-                  tool_name,
-                  tool_call_id,
-                  summary,
-                  subagent,
-                  download_url,
-                  filename,
-                });
-                return next;
-              });
-            }
-            if (ev === "task_update") {
-              const raw = data.steps;
-              if (Array.isArray(raw)) {
-                setTaskSteps(
-                  raw.map((s) => ({
-                    title: String((s as { title?: string }).title ?? ""),
-                    status: String((s as { status?: string }).status ?? ""),
-                  })),
-                );
-              }
-            }
-            if (ev === "context_metrics") {
-              const rawEst = (data as { context_tokens_est?: unknown }).context_tokens_est;
-              const rawLim = (data as { context_limit?: unknown }).context_limit;
-              if (typeof rawEst === "number" && Number.isFinite(rawEst)) {
-                setContextTokensEst(Math.round(rawEst));
-              }
-              if (typeof rawLim === "number" && Number.isFinite(rawLim)) {
-                setContextLimit(Math.round(rawLim));
-              }
-            }
-            if (ev === "memory_updated") {
-              setLines((prev) => [
-                ...prev,
-                { kind: "system", text: i18n.t("agent:memoryUpdatedRound") },
-              ]);
-              if (!sidebarOpen) {
-                notifyAgentBackground(i18n.t("agent:memoryUpdatedSidebar"), "success");
-              }
-            }
-            if (ev === "memory_update_failed") {
-              const msg = String(data.message ?? i18n.t("agent:memoryUpdateFail"));
-              setLines((prev) => [...prev, { kind: "system", text: msg }]);
-              if (!sidebarOpen) {
-                notifyAgentBackground(
-                  i18n.t("agent:memoryWriteWarn", { msg: msg.slice(0, 80) }),
-                  "warning",
-                );
-              }
-            }
-            if (ev === "confirm_needed") {
-              const action_id = String(data.action_id ?? "");
-              const tool_name = String(data.tool_name ?? "");
-              const description = String(data.description ?? "");
-              setLines((prev) => {
-                // Prevent duplicate confirm card for the same action_id
-                if (prev.some((l) => l.kind === "confirm" && l.action_id === action_id)) {
-                  return prev;
-                }
-                return [...prev, { kind: "confirm", action_id, tool_name, description }];
-              });
-              if (!sidebarOpen) {
-                notifyAgentBackground(i18n.t("agent:confirmOpenSidebar"), "warning");
-              }
-            }
-            if (ev === "error") {
-              const msg = String(data.message ?? i18n.t("agent:unknownErr"));
-              setLines((prev) => [...prev, { kind: "system", text: msg }]);
-              if (!sidebarOpen) {
-                notifyAgentBackground(
-                  i18n.t("agent:assistantHint", { msg: msg.slice(0, 100) }),
-                  "warning",
-                );
-              }
-            }
-            if (ev === "done") {
-              setThinkingText(null);
-              const rawEst = (data as { context_tokens_est?: unknown }).context_tokens_est;
-              const rawLim = (data as { context_limit?: unknown }).context_limit;
-              const usage = (data as { usage?: { total_tokens?: unknown } }).usage;
-              if (typeof rawEst === "number" && Number.isFinite(rawEst)) {
-                setContextTokensEst(Math.round(rawEst));
-              } else if (
-                usage &&
-                typeof usage.total_tokens === "number" &&
-                Number.isFinite(usage.total_tokens)
-              ) {
-                setContextTokensEst(Math.round(usage.total_tokens));
-              }
-              if (typeof rawLim === "number" && Number.isFinite(rawLim)) {
-                setContextLimit(Math.round(rawLim));
-              }
-              void refreshSessionList();
-              const sidRefresh = sessionIdRef.current;
-              if (sidRefresh) void refreshContextMeter(sidRefresh);
-              if (!sidebarOpen) {
-                notifyAgentBackground(i18n.t("agent:roundEnd"));
-              }
-            }
-            if (ev === "focus_changed") {
-              const focus = String(data.focus ?? "general");
-              setCurrentFocus(focus);
-              const label = i18n.t(`agent:focusLabels.${focus}`, { defaultValue: focus });
-              setLines((prev) => [
-                ...prev,
-                { kind: "system", text: i18n.t("agent:switchedFocus", { label }) },
-              ]);
-            }
-            if (ev === "plan_ready") {
-              assistantSegmentClosedRef.current = true;
-              const plan_file_path = String(data.plan_file_path ?? "");
-              const content = String(data.content ?? "");
-              setLines((prev) => {
-                const index = prev.findIndex((l) => l.kind === "plan_ready" && l.plan_file_path === plan_file_path && !l.resolved);
-                if (index >= 0) return prev.map((l, i) => i === index ? { kind: "plan_ready", plan_file_path, content } : l);
-                return [...prev, { kind: "plan_ready", plan_file_path, content }];
-              });
-              if (!sidebarOpen) {
-                notifyAgentBackground(i18n.t("agent:planReady"), "warning");
-              }
-            }
-            if (ev === "subagent_start" || ev === "subagent_done") {
-              const line =
-                ev === "subagent_start"
-                  ? i18n.t("agent:subtaskStart", {
-                      text: `${String(data.task_description ?? "").slice(0, 120)}…`,
-                    })
-                  : i18n.t("agent:subtaskDone", {
-                      text: `${String(data.summary ?? "").slice(0, 200)}…`,
-                    });
-              setLines((prev) => [...prev, { kind: "system", text: line }]);
-            }
-          },
-          { signal: ac.signal },
-        );
-      } catch (e) {
-        const aborted = e instanceof Error && e.name === "AbortError";
-        if (aborted) {
-          setLines((prev) => [...prev, { kind: "system", text: i18n.t("agent:stopped") }]);
-        } else {
-          const msg = e instanceof Error ? e.message : String(e);
-          setLines((prev) => [...prev, { kind: "system", text: msg }]);
+            break;
+          case "thinking":
+            if (typeof data.message === "string") setThinkingText(data.message);
+            break;
+          case "tool_start": {
+            run.segmentClosed = true;
+            setThinkingText(null);
+            const tool_name = String(data.tool_name ?? "");
+            const pending: Extract<ChatLine, { kind: "tool_pending" }> = {
+              kind: "tool_pending", key: nextKey(), tool_name,
+              tool_call_id: typeof data.tool_call_id === "string" ? data.tool_call_id : undefined,
+              label: typeof data.label === "string" ? data.label : formatToolLineLabel(tool_name),
+            };
+            setLines((previous) => startToolLine(previous, pending));
+            break;
+          }
+          case "tool_result": {
+            run.segmentClosed = true;
+            setThinkingText(null);
+            const tool_name = String(data.tool_name ?? "");
+            notifyAgentContentChanged(tool_name, String(data.status ?? ""));
+            const result: Extract<ChatLine, { kind: "tool" }> = {
+              kind: "tool", key: nextKey(), tool_name,
+              tool_call_id: typeof data.tool_call_id === "string" ? data.tool_call_id : undefined,
+              summary: String(data.summary ?? data.status ?? ""), subagent: Boolean(data.subagent),
+              download_url: typeof data.download_url === "string" ? data.download_url : undefined,
+              filename: typeof data.filename === "string" ? data.filename : undefined,
+            };
+            setLines((previous) => finishToolLine(previous, result));
+            break;
+          }
+          case "task_update":
+            if (Array.isArray(data.steps)) setTaskSteps(data.steps.map((step) => ({
+              title: String((step as { title?: string }).title ?? ""),
+              status: String((step as { status?: string }).status ?? ""),
+            })));
+            break;
+          case "context_metrics":
+            updateMetrics(data);
+            break;
+          case "memory_updated":
+            append({ kind: "system", text: i18n.t("agent:memoryUpdatedRound") });
+            notify(i18n.t("agent:memoryUpdatedSidebar"), "success");
+            break;
+          case "memory_update_failed": {
+            const message = String(data.message ?? i18n.t("agent:memoryUpdateFail"));
+            append({ kind: "system", text: message });
+            notify(i18n.t("agent:memoryWriteWarn", { msg: message.slice(0, 80) }), "warning");
+            break;
+          }
+          case "confirm_needed": {
+            const action_id = String(data.action_id ?? "");
+            const line: ChatLine = { kind: "confirm", key: nextKey(), action_id,
+              tool_name: String(data.tool_name ?? ""), description: String(data.description ?? "") };
+            setLines((previous) => previous.some((item) => item.kind === "confirm" && item.action_id === action_id)
+              ? previous : [...previous, line]);
+            notify(i18n.t("agent:confirmOpenSidebar"), "warning");
+            break;
+          }
+          case "error": {
+            const message = String(data.message ?? i18n.t("agent:unknownErr"));
+            append({ kind: "system", text: message });
+            notify(i18n.t("agent:assistantHint", { msg: message.slice(0, 100) }), "warning");
+            break;
+          }
+          case "done":
+            setThinkingText(null);
+            updateMetrics(data, true);
+            void latest.current.refreshSessionList();
+            if (sessionIdRef.current) void refreshContextMeter(sessionIdRef.current);
+            notify(i18n.t("agent:roundEnd"));
+            break;
+          case "focus_changed": {
+            const focus = String(data.focus ?? "general");
+            setCurrentFocus(focus);
+            const label = i18n.t(`agent:focusLabels.${focus}`, { defaultValue: focus });
+            append({ kind: "system", text: i18n.t("agent:switchedFocus", { label }) });
+            break;
+          }
+          case "plan_ready": {
+            run.segmentClosed = true;
+            const path = String(data.plan_file_path ?? "");
+            const line: Extract<ChatLine, { kind: "plan_ready" }> = {
+              kind: "plan_ready", key: nextKey(), plan_file_path: path, content: String(data.content ?? ""),
+            };
+            setLines((previous) => {
+              const index = previous.findIndex((item) => item.kind === "plan_ready" && item.plan_file_path === path && !item.resolved);
+              if (index < 0) return [...previous, line];
+              const next = previous.slice();
+              next[index] = { ...line, key: previous[index].key ?? line.key };
+              return next;
+            });
+            notify(i18n.t("agent:planReady"), "warning");
+            break;
+          }
+          case "subagent_start":
+          case "subagent_done":
+            append({ kind: "system", text: event === "subagent_start"
+              ? i18n.t("agent:subtaskStart", { text: `${String(data.task_description ?? "").slice(0, 120)}…` })
+              : i18n.t("agent:subtaskDone", { text: `${String(data.summary ?? "").slice(0, 200)}…` }) });
+            break;
         }
-      } finally {
-        streamAbortRef.current = null;
+      }, { signal: run.controller.signal });
+    } catch (error) {
+      if (current()) {
+        run.text.flush();
+        append({ kind: "system", text: error instanceof Error && error.name === "AbortError"
+          ? i18n.t("agent:stopped") : error instanceof Error ? error.message : String(error) });
+      }
+    } finally {
+      if (current()) {
+        run.text.flush();
+        activeRun.current = null;
         setBusy(false);
         setThinkingText(null);
-      }
-    },
-    [buildChatBody, notifyAgentBackground, refreshContextMeter, refreshSessionList, sidebarOpen],
-  );
+      } else run.text.discard();
+    }
+  }, [refreshContextMeter, setBusy]);
 
-  const confirm = useCallback(
-    async (action_id: string, accepted: boolean, ensureSession: () => Promise<string>) => {
-      if (busy) return;
-      setLines((prev) =>
-        prev.map((ln) =>
-          ln.kind === "confirm" && ln.action_id === action_id
-            ? { ...ln, resolved: accepted ? "accepted" : "rejected" }
-            : ln,
-        ),
-      );
-      const sid = await ensureSession();
-      await runStream({
-        session_id: sid,
-        message: "",
-        confirm_action_id: action_id,
-        confirm_accepted: accepted,
-      });
-    },
-    [busy, runStream],
-  );
+  const confirm = useCallback(async (action_id: string, accepted: boolean, ensureSession: () => Promise<string>) => {
+    if (busyRef.current) return;
+    setLines((previous) => previous.map((line) => line.kind === "confirm" && line.action_id === action_id
+      ? { ...line, resolved: accepted ? "accepted" : "rejected" } : line));
+    const epoch = generation.current;
+    let sid: string;
+    try { sid = await ensureSession(); }
+    catch (error) { if (epoch !== generation.current) return; throw error; }
+    if (epoch === generation.current) await runStream({ session_id: sid, message: "", confirm_action_id: action_id, confirm_accepted: accepted });
+  }, [runStream]);
 
-  const planAction = useCallback(
-    async (
-      action: "execute" | "modify" | "cancel",
-      planPath: string,
-      ensureSession: () => Promise<string>,
-    ) => {
-      if (busy) return;
-      setLines((prev) =>
-        prev.map((ln) =>
-          ln.kind === "plan_ready" && ln.plan_file_path === planPath
-            ? { ...ln, resolved: action }
-            : ln,
-        ),
-      );
-      const sid = await ensureSession();
-      if (action === "execute") {
-        await runStream({
-          session_id: sid,
-          message: i18n.t("agent:executePlanMsg", { path: planPath }),
-          mode: "execute",
-          execution_plan_path: planPath,
-        });
-      } else if (action === "modify") {
-        const feedback = window.prompt(i18n.t("agent:modifyPrompt"));
-        if (feedback?.trim()) {
-          await runStream({
-            session_id: sid,
-            message: i18n.t("agent:modifyPlanMsg", { feedback }),
-            mode: "execute",
-          });
-        }
-      } else if (action === "cancel") {
-        await runStream({
-          session_id: sid,
-          message: i18n.t("agent:planCancelMsg"),
-          mode: "execute",
-          clear_pending_plan_path: planPath,
-        });
-      }
-    },
-    [busy, runStream],
-  );
+  const planAction = useCallback(async (
+    action: "execute" | "modify" | "cancel", planPath: string, ensureSession: () => Promise<string>,
+  ) => {
+    if (busyRef.current) return;
+    setLines((previous) => previous.map((line) => line.kind === "plan_ready" && line.plan_file_path === planPath
+      ? { ...line, resolved: action } : line));
+    const epoch = generation.current;
+    let sid: string;
+    try { sid = await ensureSession(); }
+    catch (error) { if (epoch !== generation.current) return; throw error; }
+    if (epoch !== generation.current) return;
+    if (action === "execute") {
+      await runStream({ session_id: sid, message: i18n.t("agent:executePlanMsg", { path: planPath }), mode: "execute", execution_plan_path: planPath });
+    } else if (action === "modify") {
+      const feedback = window.prompt(i18n.t("agent:modifyPrompt"));
+      if (feedback?.trim()) await runStream({ session_id: sid, message: i18n.t("agent:modifyPlanMsg", { feedback }), mode: "execute" });
+    } else {
+      await runStream({ session_id: sid, message: i18n.t("agent:planCancelMsg"), mode: "execute", clear_pending_plan_path: planPath });
+    }
+  }, [runStream]);
 
   const newChat = useCallback(() => {
-    streamAbortRef.current?.abort();
+    ++conversationEpochRef.current;
+    ++generation.current;
+    ++meterRequest.current;
+    activeRun.current?.text.discard();
+    activeRun.current?.controller.abort();
+    activeRun.current = null;
     sessionIdRef.current = null;
     setSessionId(null);
     setLines([]);
     setTaskSteps(null);
-    setActiveSkillId(null);
+    setThinkingText(null);
+    setCurrentFocus(null);
+    setBusy(false);
+    latest.current.setActiveSkillId(null);
     setContextTokensEst(null);
     setContextLimit(null);
     setContextMeterRefreshing(false);
-  }, [setActiveSkillId]);
+  }, [setBusy]);
 
   const stopStream = useCallback(async () => {
-    const sid = sessionId;
-    streamAbortRef.current?.abort();
+    const sid = sessionIdRef.current;
+    activeRun.current?.text.flush();
+    activeRun.current?.controller.abort();
     if (sid) {
-      try {
-        await apiAgentSessionCancel(sid);
-      } catch {
-        /* ignore */
-      }
+      try { await apiAgentSessionCancel(sid); } catch { /* Best effort cancellation. */ }
     }
-  }, [sessionId]);
+  }, []);
 
-  const loadHistorySession = useCallback(
-    async (id: string, onDone?: () => void) => {
-      if (busy) return;
-      onDone?.();
-      try {
-        const snap = await apiAgentSessionGet(id);
-        const msgs = snap.session?.messages ?? [];
-        sessionIdRef.current = id;
-        setSessionId(id);
-        setLines(mapSessionMessagesToLines(msgs));
-        setTaskSteps(null);
-        void refreshContextMeter(id);
-      } catch (e) {
-        onErrorMsg?.(e instanceof Error ? e.message : i18n.t("agent:sessionLoadErr"));
-      }
-    },
-    [busy, refreshContextMeter, onErrorMsg],
-  );
+  const loadHistorySession = useCallback(async (id: string, onDone?: () => void) => {
+    if (busyRef.current) return;
+    ++conversationEpochRef.current;
+    const epoch = ++generation.current;
+    ++meterRequest.current;
+    setContextMeterRefreshing(false);
+    onDone?.();
+    try {
+      const snapshot = await apiAgentSessionGet(id);
+      if (epoch !== generation.current) return;
+      sessionIdRef.current = id;
+      setSessionId(id);
+      setLines(mapSessionMessagesToLines(snapshot.session?.messages ?? []).map((line) => ({ ...line, key: nextKey() })));
+      setTaskSteps(null);
+      setThinkingText(null);
+      setCurrentFocus(null);
+      setContextTokensEst(null);
+      setContextLimit(null);
+      void refreshContextMeter(id);
+    } catch (error) {
+      if (epoch === generation.current) latest.current.onErrorMsg?.(error instanceof Error ? error.message : i18n.t("agent:sessionLoadErr"));
+    }
+  }, [refreshContextMeter]);
+
+  useEffect(() => () => {
+    ++conversationEpochRef.current;
+    ++generation.current;
+    activeRun.current?.text.discard();
+    activeRun.current?.controller.abort();
+    activeRun.current = null;
+  }, []);
 
   return {
-    sessionId,
-    setSessionId,
-    sessionIdRef,
-    lines,
-    setLines,
-    busy,
-    setBusy,
-    taskSteps,
-    setTaskSteps,
-    thinkingText,
-    contextTokensEst,
-    contextLimit,
-    contextMeterRefreshing,
-    currentFocus,
-    runStream,
-    confirm,
-    planAction,
-    newChat,
-    stopStream,
-    loadHistorySession,
-    refreshContextMeter,
+    sessionId, setSessionId, sessionIdRef, conversationEpochRef, lines, setLines, busy, setBusy, taskSteps, setTaskSteps,
+    thinkingText, contextTokensEst, contextLimit, contextMeterRefreshing, currentFocus,
+    runStream, confirm, planAction, newChat, stopStream, loadHistorySession, refreshContextMeter,
   };
 }
