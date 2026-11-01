@@ -49,7 +49,7 @@ export function ComposeRoute({
   }, [info?.bound, setPageContext, t]);
   if (!info?.bound) {
     return (
-      <div className="h-full overflow-auto p-6">
+      <div className="h-full overflow-auto p-3.5 sm:p-6">
         <ProjectPanel onDone={onRefreshInfo} onError={onError} />
       </div>
     );
@@ -91,7 +91,7 @@ export function BankRoute({
   }, [info?.bound, setPageContext, t]);
   if (!info?.bound) {
     return (
-      <div className="h-full overflow-auto p-6">
+      <div className="h-full overflow-auto p-3.5 sm:p-6">
         <ProjectPanel onDone={onRefreshInfo} onError={onError} />
       </div>
     );
@@ -120,7 +120,7 @@ export function TemplateRoute({
   }, [info?.bound, setPageContext, t]);
   if (!info?.bound) {
     return (
-      <div className="h-full overflow-auto p-6">
+      <div className="h-full overflow-auto p-3.5 sm:p-6">
         <ProjectPanel onDone={onRefreshInfo} onError={onError} />
       </div>
     );
@@ -155,7 +155,7 @@ export function GraphRoute({
   }, [info?.bound, setPageContext, t]);
   if (!info?.bound) {
     return (
-      <div className="h-full overflow-auto p-6">
+      <div className="h-full overflow-auto p-3.5 sm:p-6">
         <ProjectPanel onDone={onRefreshInfo} onError={onError} />
       </div>
     );

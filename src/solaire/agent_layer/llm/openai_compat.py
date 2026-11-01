@@ -78,13 +78,29 @@ def _prepare_compat_request_payload(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
-    """所有 OpenAI 兼容网关均转换工具名（'.' → '_'），满足 ^[a-zA-Z0-9_-]+$ 约束。"""
-    m2 = copy.deepcopy(messages)
-    t2 = copy.deepcopy(tools) if tools else None
-    if t2:
-        _apply_tool_names_wire_outbound_tools(t2)
-    _apply_tool_names_wire_outbound_messages(m2)
-    return m2, t2
+    """转换工具名；只复制会被出站准备修改的容器，保留输入历史。"""
+    def project_function(item: dict[str, Any]) -> dict[str, Any]:
+        projected = dict(item)
+        function = item.get("function")
+        if isinstance(function, dict):
+            name = function.get("name")
+            if isinstance(name, str) and "." in name:
+                projected["function"] = {**function, "name": _tool_name_wire_outbound(name)}
+        return projected
+
+    projected_messages: list[dict[str, Any]] = []
+    for message in messages:
+        projected = dict(message)
+        role = message.get("role")
+        if role == "tool":
+            name = message.get("name")
+            if isinstance(name, str) and "." in name:
+                projected["name"] = _tool_name_wire_outbound(name)
+        elif role == "assistant" and message.get("tool_calls"):
+            projected["tool_calls"] = [project_function(call) for call in message["tool_calls"]]
+        projected_messages.append(projected)
+    projected_tools = [project_function(tool) for tool in tools] if tools else None
+    return projected_messages, projected_tools
 
 
 from solaire.agent_layer.llm.message_utils import ensure_assistant_tool_calls_have_reasoning as _ensure_assistant_tool_calls_have_reasoning  # noqa: E501

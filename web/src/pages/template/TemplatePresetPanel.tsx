@@ -18,18 +18,11 @@ export function TemplatePresetPanel({
   onApplyPreset,
 }: TemplatePresetPanelProps) {
   return (
-    <details className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <summary className="cursor-pointer text-sm font-semibold text-slate-800">
-        快速套用版式{" "}
-        <span
-          title="会调整页面和题型结构；不会清除已选题目或分值。应用后仍需保存。"
-          className="ml-1 cursor-help rounded-full border border-slate-300 px-1.5 text-[10px] text-slate-500"
-        >
-          ?
-        </span>
+    <details className="rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-4 shadow-xs" open>
+      <summary className="cursor-pointer text-base font-semibold text-[var(--or-text)] select-none">
+        快速套用版式
       </summary>
-      <p className="mt-2 text-xs text-slate-600">选一个起点，再修改下面的设置。应用后记得保存。</p>
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-3.5 flex flex-wrap gap-2.5">
         {PRESET_BUTTONS.map(([id, label]) => (
           <button
             key={id}
@@ -50,7 +43,7 @@ export function TemplatePresetPanel({
                 `已应用「${label}」：${colText}，${margin}cm 边距，${fontSize}pt 字号；${totalQuestions} 题。请保存模板。`,
               );
             }}
-            className="rounded-md border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50"
+            className="or-g49-btn or-g49-btn-tonal"
           >
             {label}
           </button>
@@ -69,7 +62,7 @@ export function TemplateYamlEditor({
 }) {
   return (
     <textarea
-      className="h-[min(70vh,800px)] w-full rounded-lg border border-slate-300 bg-slate-50 p-3 font-mono text-sm"
+      className="h-[min(70vh,800px)] w-full rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] p-4 font-mono text-sm leading-relaxed"
       value={value}
       onChange={(e) => onChange(e.target.value)}
     />

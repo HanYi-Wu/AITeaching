@@ -10,6 +10,7 @@ import {
   removeSectionItem,
   addSectionItem,
 } from "./templateModel";
+import { Select as AppSelect } from "../../components/ui/select";
 
 export type TemplateSectionsEditorProps = {
   sections: TemplateSectionRow[];
@@ -40,51 +41,51 @@ export function TemplateSectionsEditor({
   };
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-800">{t("structureTitle")}</h2>
-        <button
-          type="button"
-          className="rounded-md border px-2 py-1 text-sm"
-          onClick={() => {
-            if (
-              sections.length &&
-              !window.confirm("替换当前模板结构为100分常用模板？未保存的结构将被替换。")
-            ) {
-              return;
-            }
-            onChangeSections(standardSections());
-          }}
-        >
-          一键100分模板
-        </button>
-        <select
-          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-          defaultValue=""
-          onChange={(e) => {
-            const v = e.target.value;
-            e.target.value = "";
-            if (v) {
-              addSection(v);
-            }
-          }}
-        >
-          <option value="">{t("addSection")}</option>
-          {SECTION_KIND_VALUES.map((kind) => (
-            <option key={kind} value={kind}>
-              {t(`sectionKind.${kind}`)}
-            </option>
-          ))}
-        </select>
+    <section className="rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-5 shadow-xs">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--or-outline)] pb-4">
+        <h2 className="text-base font-semibold text-[var(--or-text)]">{t("structureTitle")}</h2>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            className="or-g49-btn or-g49-btn-tonal text-sm py-1.5 px-3"
+            onClick={() => {
+              if (
+                sections.length &&
+                !window.confirm("替换当前模板结构为100分常用模板？未保存的结构将被替换。")
+              ) {
+                return;
+              }
+              onChangeSections(standardSections());
+            }}
+          >
+            一键100分模板
+          </button>
+          <AppSelect
+            className="or-g49-input py-1 text-sm font-medium"
+            value=""
+            onValueChange={(value) => {
+              if (value) {
+                addSection(value);
+              }
+            }}
+          >
+            <option value="">{t("addSection")}</option>
+            {SECTION_KIND_VALUES.map((kind) => (
+              <option key={kind} value={kind}>
+                {t(`sectionKind.${kind}`)}
+              </option>
+            ))}
+          </AppSelect>
+        </div>
       </div>
-      <ul className="mt-4 space-y-3">
+      <ul className="mt-4 space-y-3.5">
         {sections.map((s, i) => (
-          <li key={i} className="rounded-lg border border-slate-200 bg-slate-50/80 p-3">
-            <div className="flex flex-wrap items-start gap-2">
-              <div className="flex flex-col gap-0.5">
+          <li key={i} className="rounded-xl border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-4 transition-all">
+            <div className="flex flex-wrap items-start gap-3">
+              <div className="flex flex-col gap-1 pt-1">
                 <button
                   type="button"
-                  className="rounded border border-slate-300 bg-white p-0.5"
+                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] p-0.5 text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
                   title={t("moveUp")}
                   onClick={() => moveSection(i, -1)}
                 >
@@ -92,26 +93,26 @@ export function TemplateSectionsEditor({
                 </button>
                 <button
                   type="button"
-                  className="rounded border border-slate-300 bg-white p-0.5"
+                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] p-0.5 text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
                   title={t("moveDown")}
                   onClick={() => moveSection(i, 1)}
                 >
                   <ChevronDown className="h-4 w-4" />
                 </button>
               </div>
-              <div className="min-w-0 flex-1 space-y-2">
+              <div className="min-w-0 flex-1 space-y-3">
                 <input
-                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm font-medium"
+                  className="or-g49-input w-full font-semibold text-[var(--or-text)] text-sm"
                   value={s.section_id}
                   onChange={(e) => updateSection(i, { section_id: e.target.value })}
                   placeholder={t("sectionTitlePh")}
                 />
-                <div className="flex flex-wrap gap-2">
-                  <select
-                    className="rounded border border-slate-300 px-2 py-1 text-sm"
+                <div className="flex flex-wrap items-center gap-3">
+                  <AppSelect
+                    className="or-g49-input py-1 text-sm font-medium"
                     value={s.type}
-                    onChange={(e) => {
-                      const type = e.target.value;
+                    onValueChange={(value) => {
+                      const type = value;
                       updateSection(i, {
                         type,
                         required_count: type === "text" ? 0 : Math.max(1, s.required_count),
@@ -130,28 +131,28 @@ export function TemplateSectionsEditor({
                         {t(`sectionKind.${kind}`)}
                       </option>
                     ))}
-                  </select>
+                  </AppSelect>
                   {s.type !== "text" && (
                     <>
-                      <label className="flex items-center gap-1 text-xs text-slate-600">
+                      <label className="flex items-center gap-1.5 text-sm font-medium text-[var(--or-muted)]">
                         {t("questionCount")}
                         <input
                           type="number"
                           min={0}
-                          className="w-16 rounded border border-slate-300 px-1 py-0.5 text-sm"
+                          className="or-g49-input w-20 py-1 tabular-nums text-sm"
                           value={s.required_count}
                           onChange={(e) =>
                             updateSection(i, { required_count: Number(e.target.value) })
                           }
                         />
                       </label>
-                      <label className="flex items-center gap-1 text-xs text-slate-600">
+                      <label className="flex items-center gap-1.5 text-sm font-medium text-[var(--or-muted)]">
                         {t("scoreEach")}
                         <input
                           type="number"
                           min={0}
                           step={0.5}
-                          className="w-16 rounded border border-slate-300 px-1 py-0.5 text-sm"
+                          className="or-g49-input w-20 py-1 tabular-nums text-sm"
                           value={s.score_per_item}
                           onChange={(e) =>
                             updateSection(i, { score_per_item: Number(e.target.value) })
@@ -161,13 +162,13 @@ export function TemplateSectionsEditor({
                     </>
                   )}
                   {s.type === "text" && (
-                    <span className="text-xs text-slate-500">{t("textNoCount")}</span>
+                    <span className="text-sm font-medium text-[var(--or-muted)]">{t("textNoCount")}</span>
                   )}
                 </div>
-                <label className="block text-xs text-slate-600">
+                <label className="block text-sm font-medium text-[var(--or-muted)]">
                   {t("describeOptional")}
                   <textarea
-                    className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                    className="or-g49-input mt-1 w-full block"
                     rows={3}
                     value={s.describe ?? ""}
                     onChange={(e) => updateSection(i, { describe: e.target.value })}
@@ -176,7 +177,7 @@ export function TemplateSectionsEditor({
               </div>
               <button
                 type="button"
-                className="rounded-md border border-red-200 p-1.5 text-red-700 hover:bg-red-50"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--or-error)] bg-[var(--or-card)] text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] transition-colors self-start"
                 title={t("deleteSection")}
                 onClick={() => removeSection(i)}
               >

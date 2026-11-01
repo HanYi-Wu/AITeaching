@@ -216,35 +216,54 @@ def find_paper_submissions_query(
         )
         params.append(clean_grading)
     params.append(clean_limit)
+
     with closing(connect(root)) as con, con:
+        # CTE locates the top bounded attempts first, avoiding wide full-table joins over answers
         rows = con.execute(
             f"""
+            WITH matched_attempts AS (
+              SELECT
+                sa.id AS attempt_id,
+                sa.publication_id,
+                ep.paper_id,
+                sa.student_id,
+                s.student_no,
+                s.display_name AS student_name,
+                u.username AS account_username,
+                sa.status,
+                ep.submission_mode,
+                sa.score,
+                sa.max_score,
+                sa.submitted_at
+              FROM student_attempts sa
+              JOIN exam_publications ep ON ep.id = sa.publication_id
+              JOIN students s ON s.id = sa.student_id
+              LEFT JOIN users u ON u.id = s.user_id
+              WHERE {' AND '.join(clauses)}
+              ORDER BY sa.submitted_at DESC, s.display_name, s.student_no, sa.id
+              LIMIT ?
+            )
             SELECT
-              sa.id AS attempt_id,
-              sa.publication_id,
-              ep.paper_id,
-              sa.student_id,
-              s.student_no,
-              s.display_name AS student_name,
-              u.username AS account_username,
-              sa.status,
-              ep.submission_mode,
-              sa.score,
-              sa.max_score,
-              sa.submitted_at,
+              ma.attempt_id,
+              ma.publication_id,
+              ma.paper_id,
+              ma.student_id,
+              ma.student_no,
+              ma.student_name,
+              ma.account_username,
+              ma.status,
+              ma.submission_mode,
+              ma.score,
+              ma.max_score,
+              ma.submitted_at,
               COUNT(ans.id) AS answer_count,
               SUM(CASE WHEN ans.id IS NOT NULL AND COALESCE(ans.grading_status, 'pending') = 'pending' THEN 1 ELSE 0 END) AS pending_answer_count,
               SUM(CASE WHEN ans.id IS NOT NULL AND ans.ai_suggested_score IS NOT NULL THEN 1 ELSE 0 END) AS ai_suggested_count,
               SUM(CASE WHEN ans.id IS NOT NULL AND ans.grading_status = 'reviewed' THEN 1 ELSE 0 END) AS reviewed_answer_count
-            FROM student_attempts sa
-            JOIN exam_publications ep ON ep.id = sa.publication_id
-            JOIN students s ON s.id = sa.student_id
-            LEFT JOIN users u ON u.id = s.user_id
-            LEFT JOIN student_answers ans ON ans.attempt_id = sa.id
-            WHERE {' AND '.join(clauses)}
-            GROUP BY sa.id
-            ORDER BY sa.submitted_at DESC, s.display_name, s.student_no, sa.id
-            LIMIT ?
+            FROM matched_attempts ma
+            LEFT JOIN student_answers ans ON ans.attempt_id = ma.attempt_id
+            GROUP BY ma.attempt_id
+            ORDER BY ma.submitted_at DESC, ma.student_name, ma.student_no, ma.attempt_id
             """,
             tuple(params),
         ).fetchall()

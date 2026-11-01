@@ -26,7 +26,7 @@ export function TabPanel({ tabs, activeId, onSelect, onClose, onCloseOthers, cla
   return (
     <div
       className={cn(
-        "flex min-h-9 shrink-0 items-stretch gap-0 overflow-x-auto border-b border-slate-200 bg-white",
+        "flex min-h-10 shrink-0 items-stretch gap-0.5 overflow-x-auto border-b border-[var(--or-outline)] bg-[var(--or-card)] px-1",
         className,
       )}
       role="tablist"
@@ -39,8 +39,10 @@ export function TabPanel({ tabs, activeId, onSelect, onClose, onCloseOthers, cla
             role="tab"
             aria-selected={active}
             className={cn(
-              "group flex min-w-0 max-w-[14rem] items-center border-b-2 border-transparent px-2 py-1.5 text-left text-xs font-medium transition-colors",
-              active ? "border-slate-900 bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50",
+              "group relative flex min-w-0 max-w-[15rem] items-center border-b-2 px-3 py-1.5 text-left text-sm font-medium transition-colors select-none",
+              active
+                ? "border-[var(--or-primary)] bg-[var(--or-primary-container)]/30 text-[var(--or-text)]"
+                : "border-transparent text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-text)]",
             )}
           >
             <button
@@ -49,13 +51,13 @@ export function TabPanel({ tabs, activeId, onSelect, onClose, onCloseOthers, cla
               onClick={() => onSelect(tab.id)}
               title={tab.label}
             >
-              {tab.dirty ? <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" aria-hidden /> : null}
+              {tab.dirty ? <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-amber-500 align-middle" aria-hidden /> : null}
               <span className="align-middle">{tab.label}</span>
             </button>
             {tab.closable !== false && onClose ? (
               <button
                 type="button"
-                className="ml-0.5 shrink-0 rounded p-0.5 text-slate-400 opacity-0 hover:bg-slate-200 hover:text-slate-700 group-hover:opacity-100"
+                className="ml-1 shrink-0 rounded p-0.5 text-[var(--or-muted)] opacity-100 md:opacity-0 hover:bg-[var(--or-block)] hover:text-[var(--or-text)] md:group-hover:opacity-100 transition-opacity"
                 aria-label={t("close")}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -71,7 +73,7 @@ export function TabPanel({ tabs, activeId, onSelect, onClose, onCloseOthers, cla
       {onCloseOthers && tabs.length > 1 ? (
         <button
           type="button"
-          className="ml-auto shrink-0 px-2 text-[10px] text-slate-500 hover:text-slate-800"
+          className="ml-auto shrink-0 px-3 text-xs font-medium text-[var(--or-muted)] hover:text-[var(--or-text)] transition-colors"
           onClick={onCloseOthers}
         >
           {t("closeOtherTabs")}

@@ -24,9 +24,10 @@ import {
 
 export interface UseBankListOptions {
   onError: (msg: string | null) => void;
+  ignoreContentChangeSource?: object;
 }
 
-export function useBankList({ onError }: UseBankListOptions) {
+export function useBankList({ onError, ignoreContentChangeSource }: UseBankListOptions) {
   const { t } = useTranslation(["bank", "lib", "common"]);
   const [items, setItems] = useState<BankListItem[]>([]);
   const [diagnostics, setDiagnostics] = useState<BankReadDiagnostic[]>([]);
@@ -115,7 +116,7 @@ export function useBankList({ onError }: UseBankListOptions) {
     if (kind === "question") {
       void loadList();
     }
-  });
+  }, ignoreContentChangeSource);
 
   const commitSearch = useCallback((value: string) => {
     setSearch(value);

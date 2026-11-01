@@ -80,7 +80,7 @@ export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverla
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="math-insert-title"
@@ -94,32 +94,32 @@ export function MathInsertOverlay({ open, onClose, onConfirm }: MathInsertOverla
       }}
     >
       <div
-        className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-4 shadow-lg"
+        className="or-dialog or-g48-dialog w-full max-w-lg rounded-3xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-5 shadow-2xl ring-1 ring-black/5"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 id="math-insert-title" className="text-sm font-semibold text-slate-800">
+        <h3 id="math-insert-title" className="text-base font-semibold text-[var(--or-text)]">
           插入公式
         </h3>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-[13px] text-[var(--or-muted)]">
           在下方编辑，确认后将作为行内公式（$...$）插入到光标处。
         </p>
         <div ref={hostRef} className="mt-3 min-h-[52px]" />
         {!bridgeReady ? (
-          <p className="mt-1 text-[11px] text-slate-500" role={loadFailed ? "alert" : "status"}>
+          <p className="mt-1 text-[13px] text-[var(--or-muted)]" role={loadFailed ? "alert" : "status"}>
             {loadFailed ? "公式编辑器加载失败，请关闭后重试。" : "正在加载公式编辑器…"}
           </p>
         ) : null}
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="mt-5 flex justify-end gap-2.5">
           <button
             type="button"
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            className="inline-flex h-9 items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-4 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
             onClick={onClose}
           >
             取消
           </button>
           <button
             type="button"
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-40"
+            className="inline-flex h-9 items-center justify-center rounded-full bg-[var(--or-primary)] px-4 text-sm font-medium text-[var(--or-on-primary)] shadow-sm hover:bg-[var(--or-primary)] active:bg-slate-950 transition-colors disabled:opacity-40"
             disabled={!bridgeReady}
             onClick={tryConfirm}
           >

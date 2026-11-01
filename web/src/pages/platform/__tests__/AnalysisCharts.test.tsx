@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { PlatformPaperAnalysisCharts } from "../AnalysisCharts";
@@ -21,10 +21,17 @@ const analysis = {
 } as const;
 
 describe("PlatformPaperAnalysisCharts", () => {
-  it("uses Chinese radar labels, usage guidance, and a shrink-safe radar layout", () => {
+  it("uses Chinese radar labels and charts while omitting the removed guidance copy", () => {
     render(<PlatformPaperAnalysisCharts analysis={analysis as never} />);
 
-    expect(screen.getByText("查看未开始、答题中和已完成人数，及时提醒未完成学生。")).toBeInTheDocument();
+    expect(screen.queryByText("查看未开始、答题中和已完成人数，及时提醒未完成学生。")).not.toBeInTheDocument();
+    const statusChart = screen.getByTestId("paper-analysis-chart-status");
+    expect(within(statusChart).getByText("答题进度分布")).toBeInTheDocument();
+    expect(within(statusChart).getByText("已完成")).toBeInTheDocument();
+    expect(within(statusChart).getByText("答题中")).toBeInTheDocument();
+    expect(within(statusChart).getByText("未开始")).toBeInTheDocument();
+    expect(within(statusChart).getAllByText("1 人 · 50%")).toHaveLength(2);
+    expect(within(statusChart).getByText("0 人 · 0%")).toBeInTheDocument();
     expect(screen.queryByText(/PublicQ/)).not.toBeInTheDocument();
     expect(screen.getAllByText("时间效率").length).toBeGreaterThan(0);
     expect(screen.getAllByText("考试行为稳定度").length).toBeGreaterThan(0);

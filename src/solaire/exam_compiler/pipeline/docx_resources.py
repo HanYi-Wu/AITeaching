@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+import sys
 from pathlib import Path
 
 from solaire.exam_compiler.loaders.questions import LoadedQuestions
@@ -198,6 +199,8 @@ def _materialize_visuals(
 ) -> str:
     if not text:
         return ""
+    if "```primebrush" not in text and "```mermaid" not in text and ":::EMBED_IMG:" not in text:
+        return text
     ctx = _library_context(hq, loaded)
     if ctx is None:
         return text
@@ -282,21 +285,37 @@ def _materialize_visuals(
     return _EMBED_RE.sub(repl_embed, out)
 
 
+_RE_UNDERLINE = re.compile(r"\\underline\{\\hspace\{[^{}]*\}\}")
+_RE_HSPACE = re.compile(r"\\hspace\{[^{}]*\}")
+_RE_VSPACE = re.compile(r"\\vspace\{[^{}]*\}")
+_RE_BREAKS = re.compile(r"\\(?:par|smallskip|medskip|bigskip)\b")
+_RE_NOINDENT = re.compile(r"\\noindent\b")
+_RE_NEWLINE = re.compile(r"\\\\")
+_RE_TEXTBF = re.compile(r"\\textbf\{([^{}]*)\}")
+_RE_EMPH = re.compile(r"\\emph\{([^{}]*)\}")
+_RE_CENTER = re.compile(r"\\begin\{center\}|\\end\{center\}")
+_RE_TRAILING_SPACE = re.compile(r"[ \t]+\n")
+_RE_MULTI_NEWLINE = re.compile(r"\n{3,}")
+_RENDERED_TEXT_CACHE_MAX_BYTES = 4 * 1024 * 1024
+_RENDERED_TEXT_CACHE_MAX_ENTRIES = 4096
+
+
 def _clean_latex_for_markdown(text: str) -> str:
     if not text:
         return ""
     out = text.replace("\r\n", "\n")
-    out = re.sub(r"\\underline\{\\hspace\{[^{}]*\}\}", "________", out)
-    out = re.sub(r"\\hspace\{[^{}]*\}", "____", out)
-    out = re.sub(r"\\vspace\{[^{}]*\}", "\n\n", out)
-    out = re.sub(r"\\(?:par|smallskip|medskip|bigskip)\b", "\n\n", out)
-    out = re.sub(r"\\noindent\b", "", out)
-    out = re.sub(r"\\\\", "\n", out)
-    out = re.sub(r"\\textbf\{([^{}]*)\}", r"**\1**", out)
-    out = re.sub(r"\\emph\{([^{}]*)\}", r"*\1*", out)
-    out = re.sub(r"\\begin\{center\}|\\end\{center\}", "\n", out)
-    out = re.sub(r"[ \t]+\n", "\n", out)
-    out = re.sub(r"\n{3,}", "\n\n", out)
+    if "\\" in out:
+        out = _RE_UNDERLINE.sub("________", out)
+        out = _RE_HSPACE.sub("____", out)
+        out = _RE_VSPACE.sub("\n\n", out)
+        out = _RE_BREAKS.sub("\n\n", out)
+        out = _RE_NOINDENT.sub("", out)
+        out = _RE_NEWLINE.sub("\n", out)
+        out = _RE_TEXTBF.sub(r"**\1**", out)
+        out = _RE_EMPH.sub(r"*\1*", out)
+        out = _RE_CENTER.sub("\n", out)
+    out = _RE_TRAILING_SPACE.sub("\n", out)
+    out = _RE_MULTI_NEWLINE.sub("\n\n", out)
     return out.strip()
 
 
@@ -312,7 +331,7 @@ def _expand_common_math_macros(math: str) -> str:
 
 
 def _normalize_docx_math_macros(text: str) -> str:
-    if "$" not in text:
+    if "$" not in text or "\\" not in text:
         return text
     parts: list[str] = []
     i = 0
@@ -348,10 +367,64 @@ def _render_text(
     *,
     context: DocxResourceContext | None = None,
 ) -> str:
-    return separate_markdown_tables(_normalize_docx_math_macros(
+    if not text:
+        return ""
+    key = None
+    media_dir_key = ""
+    library_root_key = ""
+    # Resource materialization must recheck missing/removed files on every call.
+    # Cache only conversions that depend entirely on the field text.
+    cacheable_text = ":::EMBED_IMG:" not in text and _FENCE_RE.search(text) is None
+    if context is not None and cacheable_text:
+        namespace = namespace_of_qualified(hq.qualified_id)
+        library_root = loaded.library_roots.get(namespace)
+        media_dir_key = str(media_dir.resolve())
+        library_root_key = str(library_root) if library_root is not None else ""
+        key = (
+            hq.qualified_id,
+            text,
+            media_dir_key,
+            library_root_key,
+        )
+        cache = getattr(context, "_rendered_text_cache", None)
+        if cache is None:
+            cache = {}
+            try:
+                setattr(context, "_rendered_text_cache", cache)
+                setattr(context, "_rendered_text_cache_bytes", 0)
+            except Exception:
+                pass
+        else:
+            cached = cache.get(key)
+            if cached is not None:
+                return cached
+
+    result = separate_markdown_tables(_normalize_docx_math_macros(
         _clean_latex_for_markdown(
             expand_tables_for_docx_markdown(
                 _materialize_visuals(text, hq, loaded, media_dir, context=context)
             )
         )
     ))
+
+    if context is not None and key is not None:
+        cache = getattr(context, "_rendered_text_cache", None)
+        if cache is not None:
+            cache_bytes = getattr(context, "_rendered_text_cache_bytes", 0)
+            entry_bytes = (
+                sys.getsizeof(key)
+                + sys.getsizeof(hq.qualified_id)
+                + sys.getsizeof(text)
+                + sys.getsizeof(media_dir_key)
+                + sys.getsizeof(library_root_key)
+                + sys.getsizeof(result)
+                + 128
+            )
+            if (
+                len(cache) < _RENDERED_TEXT_CACHE_MAX_ENTRIES
+                and cache_bytes + entry_bytes <= _RENDERED_TEXT_CACHE_MAX_BYTES
+            ):
+                cache[key] = result
+                setattr(context, "_rendered_text_cache_bytes", cache_bytes + entry_bytes)
+
+    return result

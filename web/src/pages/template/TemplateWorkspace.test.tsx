@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { ToolBarProvider, useToolBar } from "../../contexts/ToolBarContext";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
 import { TemplateWorkspace } from "./TemplateWorkspace";
+import { selectOption } from "../../test/selectOption";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -161,7 +162,7 @@ describe("TemplateWorkspace async coordination", () => {
     renderWorkspace();
     await screen.findByDisplayValue("tpl_a");
     await userEvent.click(screen.getByRole("button", { name: "高级版式" }));
-    fireEvent.change(screen.getByRole("combobox", { name: /版式模板/ }), { target: { value: "alternate.tex.j2" } });
+    await selectOption(screen.getByRole("combobox", { name: /版式模板/ }), "alternate.tex.j2");
     expect(await screen.findByLabelText("当前版式字段")).toBeInTheDocument();
     await act(async () => { oldFields.resolve({ fields: [{ key: "old", label: "旧版式字段", kind: "text" }], source: null }); });
     expect(screen.getByLabelText("当前版式字段")).toBeInTheDocument();
@@ -324,22 +325,22 @@ describe("TemplateWorkspace async coordination", () => {
     await screen.findByDisplayValue("tpl_a");
 
     // Add a single choice section using "+ 添加小节" select
-    const addSelect = screen.getByDisplayValue("+ 添加小节");
-    fireEvent.change(addSelect, { target: { value: "single_choice" } });
+    const addSelect = screen.getAllByRole("combobox").find((trigger) => trigger.textContent?.includes("+ 添加小节"))!;
+    await selectOption(addSelect, "single_choice");
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("单选题 1")).toBeInTheDocument();
     });
 
     // Add a second single choice section - ordinal increments
-    fireEvent.change(addSelect, { target: { value: "single_choice" } });
+    await selectOption(addSelect, "single_choice");
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("单选题 2")).toBeInTheDocument();
     });
 
     // Add text section - verify count is 0
-    fireEvent.change(addSelect, { target: { value: "text" } });
+    await selectOption(addSelect, "text");
 
     await waitFor(() => {
       expect(screen.getByText("本小节不出题，无需题数")).toBeInTheDocument();

@@ -28,6 +28,8 @@ export function toggleSingleSelection(currentSelection: readonly string[], id: s
   return [...currentSelection, id];
 }
 
+export { rangeSelection } from "../../lib/rangeSelection";
+
 /**
  * 针对当前可见或目标集合进行全选/反选：
  * - 若 targetIds 全部已在当前选择中：从选择集中剔除 targetIds（保留其余已选项，支持跨目录/跨筛选累积）
@@ -46,30 +48,6 @@ export function toggleFolderOrFilteredSelection(
   }
   const added = targetIds.filter((id) => !currentSet.has(id));
   return [...currentSelection, ...added];
-}
-
-/**
- * Shift 范围多选：
- * - 在 visibleIds 中根据 anchorId 和 targetId 提取闭区间 [min(from, to), max(from, to)]
- * - 汇合并保留已选项目，顺序去重
- * - 若 anchorId 不存在或无效，回退到仅选中 targetId
- */
-export function rangeSelection(
-  currentSelection: readonly string[],
-  visibleIds: readonly string[],
-  anchorId: string | null | undefined,
-  targetId: string,
-): string[] {
-  if (!targetId) return [...currentSelection];
-  const from = anchorId ? visibleIds.indexOf(anchorId) : -1;
-  const to = visibleIds.indexOf(targetId);
-  if (from >= 0 && to >= 0) {
-    const start = Math.min(from, to);
-    const end = Math.max(from, to);
-    const slice = visibleIds.slice(start, end + 1);
-    return dedupeSelection([...currentSelection, ...slice]);
-  }
-  return [targetId];
 }
 
 /**

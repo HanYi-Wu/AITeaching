@@ -82,29 +82,31 @@ export function MathSymbolsDropdown({
       <button
         ref={btnRef}
         type="button"
-        className="rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-white hover:shadow-sm disabled:opacity-40"
+        className="or-button or-pill or-g48-pill-dropdown rounded-full border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] shadow-xs hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         title="常用符号"
       >
-        α β π ▾
+        <span aria-hidden="true" className="h-4 w-4 shrink-0" />
+        <span className="text-center">α β π</span>
+        <span aria-hidden="true" className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-[13px] leading-none text-[var(--or-muted)]">▾</span>
       </button>
       {open && (
         <div
           id="lrt-symbols-dropdown"
-          className="absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-2 shadow-xl"
+          className="or-dialog fixed inset-x-3 top-auto z-40 mt-1.5 w-auto max-w-[calc(100vw-1.5rem)] rounded-2xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3 shadow-xl ring-1 ring-black/5 sm:absolute sm:inset-x-auto sm:left-0 sm:top-full sm:w-64"
         >
           {SYMBOL_GROUPS.map((group) => (
-            <div key={group.label} className="mb-1.5 last:mb-0">
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <div key={group.label} className="mb-2.5 last:mb-0">
+              <p className="mb-1 text-[13px] font-semibold tracking-wider text-[var(--or-muted)]">
                 {group.label}
               </p>
-              <div className="flex flex-wrap gap-0.5">
+              <div className="flex flex-wrap gap-1">
                 {group.symbols.map((sym) => (
                   <button
                     key={sym.latex}
                     type="button"
-                    className="rounded px-1.5 py-0.5 text-sm hover:bg-blue-50 hover:text-blue-700"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-sm text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-text)] active:bg-[var(--or-inset)] transition-colors"
                     title={sym.latex}
                     onClick={() => {
                       onSelectSymbol(sym.latex);

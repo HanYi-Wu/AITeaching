@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StudentWorkspace } from "./StudentWorkspace";
 import { studentDraftKey } from "./studentTextDraft";
+import { selectOption } from "../../../test/selectOption";
 
 const mocks = vi.hoisted(() => ({
+  updateAccountProfile: vi.fn(),
   updateStudentAccount: vi.fn(),
   listStudentPapers: vi.fn(),
   startStudentPaper: vi.fn(),
@@ -79,6 +81,7 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../platform/auth")>();
   return {
     ...actual,
+    updateAccountProfile: mocks.updateAccountProfile,
     updateStudentAccount: mocks.updateStudentAccount,
     listStudentPapers: mocks.listStudentPapers,
     startStudentPaper: mocks.startStudentPaper,
@@ -200,6 +203,136 @@ describe("StudentWorkspace", () => {
     expect(document.documentElement).toHaveAttribute("data-eh-density", "compact");
   });
 
+  it("remembers the student's saved accent for the anonymous login", async () => {
+    mocks.updateAccountProfile.mockResolvedValue({
+      profile: { id: "s1", preferences: { theme: "classic" } },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <StudentWorkspace
+        user={{ id: "s1", role: "student", username: "stu_abcd", display_name: "Student", status: "active" }}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByTestId("student-page-account"));
+    await user.click(await screen.findByRole("radio", { name: "黑色" }));
+    await user.click(screen.getByRole("button", { name: "保存个性化设置" }));
+
+    await waitFor(() => expect(mocks.updateAccountProfile).toHaveBeenCalledWith(expect.objectContaining({
+      preferences: expect.objectContaining({ theme: "classic" }),
+    })));
+    expect(JSON.parse(localStorage.getItem("or-appearance:s1") || "null")).toEqual({ mode: "system", accent: "black" });
+    expect(JSON.parse(localStorage.getItem("or-login-appearance") || "null")).toEqual({ mode: "system", accent: "black" });
+  });
+
+  it("serializes autosaves so a stale profile response cannot overwrite the latest appearance", async () => {
+    let resolveFirst!: (value: { profile: { id: string; preferences: { theme: string; density: string; font_scale: number } } }) => void;
+    let resolveSecond!: (value: { profile: { id: string; preferences: { theme: string; density: string; font_scale: number } } }) => void;
+    const firstSave = new Promise<{ profile: { id: string; preferences: { theme: string; density: string; font_scale: number } } }>((resolve) => { resolveFirst = resolve; });
+    const secondSave = new Promise<{ profile: { id: string; preferences: { theme: string; density: string; font_scale: number } } }>((resolve) => { resolveSecond = resolve; });
+    mocks.updateAccountProfile.mockReturnValueOnce(firstSave).mockReturnValueOnce(secondSave);
+    const user = userEvent.setup();
+
+    render(
+      <StudentWorkspace
+        user={{ id: "s-race", role: "student", username: "stu_abcd", display_name: "Student", status: "active" }}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByTestId("student-page-account"));
+    await user.click(screen.getByRole("radio", { name: "黑色" }));
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 500)); });
+    expect(mocks.updateAccountProfile).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("radio", { name: "深色" }));
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 500)); });
+    expect(mocks.updateAccountProfile).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst({ profile: { id: "s-race", preferences: { theme: "classic", density: "comfortable", font_scale: 1 } } });
+      await firstSave;
+    });
+    await waitFor(() => expect(mocks.updateAccountProfile).toHaveBeenCalledTimes(2));
+    expect(mocks.updateAccountProfile).toHaveBeenLastCalledWith({
+      preferences: { theme: "night", density: "comfortable", font_scale: 1 },
+    });
+
+    await act(async () => {
+      resolveSecond({ profile: { id: "s-race", preferences: { theme: "night", density: "comfortable", font_scale: 1 } } });
+      await secondSave;
+    });
+    expect(document.documentElement.dataset.ehTheme).toBe("night");
+  });
+
+  it("drops an in-flight autosave when the active account and session change", async () => {
+    let resolveSave!: (value: { profile: { id: string; display_name: string; preferences: { theme: string; density: string; font_scale: number } } }) => void;
+    const pendingSave = new Promise<{ profile: { id: string; display_name: string; preferences: { theme: string; density: string; font_scale: number } } }>((resolve) => { resolveSave = resolve; });
+    mocks.updateAccountProfile.mockReturnValueOnce(pendingSave);
+    const user = userEvent.setup();
+    const view = render(
+      <StudentWorkspace
+        user={{ id: "student-a", role: "student", username: "stu_a", display_name: "Student A", status: "active" }}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByTestId("student-page-account"));
+    await user.click(screen.getByRole("radio", { name: "深色" }));
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 500)); });
+    expect(mocks.updateAccountProfile).toHaveBeenCalledTimes(1);
+
+    localStorage.setItem("solaire.platform.session", "student-b-token");
+    view.rerender(
+      <StudentWorkspace
+        user={{ id: "student-b", role: "student", username: "stu_b", display_name: "Student B", status: "active" }}
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: "Student B" })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSave({ profile: { id: "student-a", display_name: "Stale Student A", preferences: { theme: "night", density: "comfortable", font_scale: 1 } } });
+      await pendingSave;
+    });
+
+    expect(await screen.findByRole("heading", { name: "Student B" })).toBeInTheDocument();
+    expect(mocks.updateAccountProfile).toHaveBeenCalledTimes(1);
+    expect(document.documentElement.dataset.ehTheme).toBe("classic");
+  });
+
+  it("retries a failed in-flight autosave once after unmount, then stops", async () => {
+    let rejectFirst!: (reason: Error) => void;
+    const firstSave = new Promise<{ profile: { id: string; preferences: { theme: string; density: string; font_scale: number } } }>((_resolve, reject) => { rejectFirst = reject; });
+    mocks.updateAccountProfile.mockReturnValueOnce(firstSave).mockRejectedValueOnce(new Error("still offline"));
+    const user = userEvent.setup();
+    const view = render(
+      <StudentWorkspace
+        user={{ id: "student-unmount", role: "student", username: "stu_unmount", display_name: "Student", status: "active" }}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByTestId("student-page-account"));
+    await user.click(screen.getByRole("radio", { name: "深色" }));
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 500)); });
+    expect(mocks.updateAccountProfile).toHaveBeenCalledTimes(1);
+    const savedPayload = mocks.updateAccountProfile.mock.calls[0][0];
+
+    view.unmount();
+    await act(async () => {
+      rejectFirst(new Error("offline"));
+      await firstSave.catch(() => undefined);
+    });
+    await waitFor(() => expect(mocks.updateAccountProfile).toHaveBeenCalledTimes(2));
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 25)); });
+
+    expect(mocks.updateAccountProfile).toHaveBeenLastCalledWith(savedPayload);
+    expect(mocks.updateAccountProfile).toHaveBeenCalledTimes(2);
+  });
+
   it("shows a student getting-started checklist derived from real progress", async () => {
     render(
       <StudentWorkspace
@@ -264,11 +397,11 @@ describe("StudentWorkspace", () => {
     expect(screen.getAllByText("90%").length).toBeGreaterThan(0);
 
     await userEvent.clear(screen.getByTestId("student-results-search"));
-    await userEvent.selectOptions(screen.getByTestId("student-results-subject-filter"), "Math");
+    await selectOption(screen.getByTestId("student-results-subject-filter"), "Math");
     expect(articles()).toEqual(["student-result-done1", "student-result-done3"]);
 
-    await userEvent.selectOptions(screen.getByTestId("student-results-subject-filter"), "");
-    await userEvent.selectOptions(screen.getByTestId("student-results-status-filter"), "submitted");
+    await selectOption(screen.getByTestId("student-results-subject-filter"), "");
+    await selectOption(screen.getByTestId("student-results-status-filter"), "submitted");
     expect(articles()).toEqual(["student-result-done1", "student-result-done2", "student-result-done3"]);
     await userEvent.type(screen.getByTestId("student-results-search"), "no matching result");
     expect(articles()).toEqual([]);

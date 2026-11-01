@@ -1,0 +1,51 @@
+.login-loading-dots {
+  display: none;
+  width: 80px;
+  height: 28px;
+  flex: 0 0 80px;
+  align-items: center;
+  justify-content: center;
+  color: #aeaeb2;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.login-loading-dots.is-active {
+  display: inline-flex;
+  animation: login-loading-dots-in 120ms ease-out both;
+}
+
+.login-loading-dots__svg {
+  display: block;
+  width: 80px;
+  height: 28px;
+  overflow: visible;
+}
+
+.login-loading-dots__shapes {
+  color: #aeaeb2;
+}
+
+.login-loading-dots__static-satellite {
+  display: none;
+}
+
+.login-loading-dots.is-reduced-motion .login-loading-dots__animated-satellite,
+.login-loading-dots.is-reduced-motion .login-loading-dots__shapes > path {
+  display: none;
+}
+
+.login-loading-dots.is-reduced-motion .login-loading-dots__static-satellite {
+  display: initial;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-loading-dots.is-active {
+    animation: none;
+  }
+}
+
+@keyframes login-loading-dots-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

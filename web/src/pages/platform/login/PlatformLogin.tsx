@@ -1,5 +1,7 @@
-import { FormEvent, useState } from "react";
-import { BookOpenCheck, Eye, EyeOff, KeyRound, LogIn, UserPlus } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Eye, EyeOff } from "lucide-react";
+import { LoginLoadingDots } from "./LoginLoadingDots";
+import { DesktopLoginBackdrop } from "./DesktopLoginBackdrop";
 import "./PlatformLogin.css";
 import {
   bootstrapAdmin,
@@ -8,6 +10,7 @@ import {
   type PlatformAuthResponse,
   type PlatformUser,
 } from "../../../platform/auth";
+import { useLoginMotion } from "./useLoginMotion";
 
 type Props = {
   mode: "bootstrap" | "login";
@@ -18,11 +21,22 @@ type Props = {
 export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
   const [username, setUsername] = useState(mode === "bootstrap" ? "admin" : "");
   const [password, setPassword] = useState("");
-  const [displayName, setDisplayName] = useState(mode === "bootstrap" ? "Administrator" : "");
+  const [displayName, setDisplayName] = useState(mode === "bootstrap" ? "管理员" : "");
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
   const isBootstrap = mode === "bootstrap";
+  const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  const { phase, sceneRef, mobilePathRef, desktopSvgRef, sceneHeight, beginSubmitting, cancelSubmitting, finish } = useLoginMotion();
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   function showError(message: string) {
     setFormError(message);
@@ -38,6 +52,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (inFlightRef.current) return;
     const cleanUsername = username.trim();
     const cleanDisplayName = displayName.trim();
 
@@ -54,6 +69,8 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
       return;
     }
 
+    inFlightRef.current = true;
+    const submittedAt = beginSubmitting();
     setBusy(true);
     setFormError(null);
     onError(null);
@@ -65,8 +82,10 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
         result = await loginPlatform({ username: cleanUsername, password });
       }
       saveSessionToken(result.token);
-      onAuthenticated(result.user);
+      await finish(submittedAt);
+      if (mountedRef.current) onAuthenticated(result.user);
     } catch (e) {
+      cancelSubmitting();
       const message = e instanceof Error ? e.message : String(e);
       showError(
         /Invalid username or password/i.test(message)
@@ -78,117 +97,213 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
               : message,
       );
     } finally {
-      setBusy(false);
+      inFlightRef.current = false;
+      if (mountedRef.current) setBusy(false);
     }
   }
 
   return (
-    <div className="flex min-h-dvh w-full flex-1 items-start justify-center bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:py-12">
-      <div className="mx-auto my-auto grid w-full max-w-5xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 lg:min-h-[620px] lg:grid-cols-[1.05fr_1fr]">
-        <section className="relative overflow-hidden bg-slate-950 p-6 text-white sm:p-12 lg:flex lg:flex-col lg:justify-between">
-          <div className="absolute -right-24 -top-28 h-80 w-80 rounded-full bg-indigo-500/20 blur-3xl" aria-hidden="true" />
-          <div className="relative flex items-center gap-3">
-            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500"><BookOpenCheck className="h-6 w-6" /></span>
-            <div><p className="text-xl font-semibold">源远教学平台</p><p className="text-xs font-medium tracking-[0.22em] text-indigo-200">ORIGINREACH · OR</p></div>
-          </div>
-          <div className="relative mt-8 sm:mt-14 lg:mt-0">
-            <h1 className="text-2xl font-semibold leading-tight sm:text-4xl">统一登录</h1>
-            <p className="mt-5 text-sm leading-7 text-slate-300">教师管理教学内容，学生在此答题。</p>
-          </div>
-          <p className="relative mt-12 hidden text-xs text-slate-400 sm:block">教师、学生、学校和平台账号共用此入口。</p>
-        </section>
-        <div className="flex items-center justify-center p-5 sm:p-10 lg:p-14">
-      <form
-        noValidate
-        onSubmit={(event) => void submit(event)}
-        className="w-full max-w-sm"
-      >
-        <div className="mb-5 flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700">
-            {isBootstrap ? <UserPlus className="h-5 w-5" /> : <KeyRound className="h-5 w-5" />}
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-slate-950">
-              {isBootstrap ? "创建管理员账户" : "登录平台"}
-            </h2>
-            <p className="text-sm text-slate-500">
-              {isBootstrap ? "首次使用平台时需要初始化管理员。" : "使用管理员、学校、教师或学生账户进入。"}
-            </p>
-          </div>
+    <div
+      className="or-login"
+      data-phase={phase}
+      data-mode={mode}
+    >
+      <div ref={sceneRef} className="or-login-scene">
+        <svg
+          className="or-login-mobile-canopy"
+          viewBox={`0 0 390 ${sceneHeight}`}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path ref={mobilePathRef} d="M0 0 L390 0 L390 66 Q185 330 0 176 Z" />
+        </svg>
+        <DesktopLoginBackdrop svgRef={desktopSvgRef} />
+
+        <div className="or-login-corner-logo" aria-hidden="true">
+          <img src="/splash-logo.png" alt="" width="128" height="128" draggable="false" />
         </div>
 
-        <label className="mb-3 block">
-          <span className="mb-1 block text-sm font-medium text-slate-700">用户名</span>
-          <input
-            value={username}
-            placeholder={isBootstrap ? "设置管理员用户名" : "用户名 / 学号（不重号时可用）"}
-            onChange={(event) => {
-              setUsername(event.target.value);
-              clearError();
-            }}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
-            autoComplete="username"
-            required
-          />
-        </label>
+        <section className="or-login-brand" aria-hidden="true">
+          <div className="or-login-brand-heading">
+            <span className="or-login-brand-mark">
+              <img src="/splash-logo.png" alt="" width="128" height="128" draggable="false" />
+            </span>
+            <span className="or-login-brand-name">源远教学平台</span>
+          </div>
+        </section>
 
-        {isBootstrap && (
-          <label className="mb-3 block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">显示名称</span>
-            <input
-              value={displayName}
-              onChange={(event) => {
-                setDisplayName(event.target.value);
-                clearError();
-              }}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
-              required
-            />
-          </label>
-        )}
-
-        <label className="mb-3 block">
-          <span className="mb-1 block text-sm font-medium text-slate-700">密码</span>
-          <span className="relative block">
-            <input
-              value={password}
-              onChange={(event) => {
-                setPassword(event.target.value);
-                clearError();
-              }}
-              className="platform-login-password w-full rounded-lg border border-slate-300 px-3 py-2.5 pr-11 text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
-              type={showPassword ? "text" : "password"}
-              autoComplete={isBootstrap ? "new-password" : "current-password"}
-              minLength={6}
-              required
-            />
-            <button type="button" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword((value) => !value)} className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-500">
-              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
+        <div className="or-login-splash" aria-hidden="true">
+          <span className="or-login-splash-logo">
+            <img src="/splash-logo.png" alt="" width="56" height="56" draggable="false" />
           </span>
-        </label>
+          <span>源远教学平台</span>
+        </div>
 
-        {!isBootstrap ? <p className="mb-5 text-xs leading-5 text-slate-500">账号由学校或平台管理员创建。忘记密码请联系学校管理员；平台管理员请联系系统维护人员重置。</p> : null}
-
-        {formError && (
-          <div
-            className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-            role="alert"
+        <div className="or-login-form-pane">
+          <form
+            className={`or-login-form or-login-desktop-card${busy ? " is-submitting" : ""}`}
+            noValidate
+            aria-busy={busy}
+            onSubmit={(submitEvent) => void submit(submitEvent)}
           >
+          <div className="or-login-heading-wrap" data-or-stagger="1">
+            <span className="or-login-heading-mark" aria-hidden="true">源 远</span>
+            <div>
+              <h1 className="or-login-heading">
+                {isBootstrap ? "管理员初始化" : (
+                  <>
+                    <span className="or-login-mobile-only">统一登录</span>
+                    <span className="or-login-desktop-only">登录源远教学平台</span>
+                  </>
+                )}
+              </h1>
+              {isBootstrap ? (
+                <p className="or-login-heading-note">仅用于尚未初始化的平台，请先确认当前环境。</p>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="or-login-field" data-or-stagger="2">
+            <label className="or-login-label" htmlFor="platform-login-username">
+              {isBootstrap ? "用户名" : (
+                <>
+                  <span className="or-login-mobile-only">用户名</span>
+                  <span className="or-login-desktop-only">账号</span>
+                </>
+              )}
+            </label>
+            <div className="or-login-input-wrap">
+              <input
+                id="platform-login-username"
+                className="or-login-input"
+                value={username}
+                placeholder={isBootstrap ? "设置管理员用户名" : "用户名 / 学工号"}
+                onChange={(changeEvent) => {
+                  setUsername(changeEvent.target.value);
+                  clearError();
+                }}
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                disabled={busy}
+                required
+              />
+            </div>
+          </div>
+
+          {isBootstrap ? (
+            <div className="or-login-field" data-or-stagger="3">
+              <label className="or-login-label" htmlFor="platform-login-display-name">显示名称</label>
+              <div className="or-login-input-wrap">
+                <input
+                  id="platform-login-display-name"
+                  className="or-login-input"
+                  value={displayName}
+                  onChange={(changeEvent) => {
+                    setDisplayName(changeEvent.target.value);
+                    clearError();
+                  }}
+                  disabled={busy}
+                  required
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <div className="or-login-field" data-or-stagger="3">
+            <label className="or-login-label" htmlFor="platform-login-password">密码</label>
+            <div className="or-login-input-wrap">
+              <input
+                id="platform-login-password"
+                className="or-login-input platform-login-password"
+                value={password}
+                placeholder="请输入至少 6 位密码"
+                onChange={(changeEvent) => {
+                  setPassword(changeEvent.target.value);
+                  clearError();
+                }}
+                type={showPassword ? "text" : "password"}
+                autoComplete={isBootstrap ? "new-password" : "current-password"}
+                minLength={6}
+                disabled={busy}
+                required
+              />
+              <button
+                className="or-login-eye"
+                type="button"
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                onClick={() => setShowPassword((value) => !value)}
+                disabled={busy}
+              >
+                <span className="or-login-mobile-only">
+                  {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </span>
+                <span className="or-login-desktop-only">
+                  {showPassword ? <Eye aria-hidden="true" /> : (
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                    </svg>
+                  )}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {!isBootstrap ? (
+            <div className="or-login-recovery" data-or-stagger="3">
+              <button
+                className="or-login-recovery-toggle"
+                type="button"
+                aria-label="忘记密码"
+                aria-expanded={recoveryOpen}
+                aria-controls="platform-login-recovery"
+                onClick={() => setRecoveryOpen((value) => !value)}
+                disabled={busy}
+              >
+                <span className="or-login-mobile-only">忘记密码</span>
+                <span className="or-login-desktop-only">忘记密码？</span>
+              </button>
+              <p
+                id="platform-login-recovery"
+                className={`or-login-recovery-content${recoveryOpen ? " is-open" : ""}`}
+                hidden={!recoveryOpen}
+              >
+                忘记密码请联系学校管理员；平台管理员请联系系统维护人员。
+              </p>
+            </div>
+          ) : null}
+
+          <div className="or-login-button-track" data-or-stagger="4">
+            <button
+              className="or-login-submit"
+              type="submit"
+              disabled={busy}
+              aria-busy={busy}
+              aria-label={busy ? (isBootstrap ? "正在创建" : "正在登录") : isBootstrap ? "创建并进入" : "登录"}
+            >
+              <span className="or-login-submit-label">
+                {busy ? (isBootstrap ? "正在创建" : "正在登录") : isBootstrap ? "创建并进入" : (
+                  <>
+                    <span className="or-login-mobile-only">登录</span>
+                    <span className="or-login-desktop-only">登 录</span>
+                  </>
+                )}
+              </span>
+              <LoginLoadingDots active={busy} />
+            </button>
+          </div>
+
+          </form>
+        </div>
+      </div>
+      <div className="or-login-error-slot" aria-hidden={formError ? undefined : true}>
+        {formError ? (
+          <div className="or-login-error" role="alert">
             {formError}
           </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={busy}
-          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60"
-        >
-          {isBootstrap ? <UserPlus className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}
-          {busy ? "处理中" : isBootstrap ? "创建并进入" : "登录"}
-        </button>
-      </form>
-        </div>
+        ) : null}
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { dispatchExamsChanged } from "../../lib/examEvents";
 import {
-  listTeacherAssignedClasses, listTeacherClassStudents, listClassPracticeHistory,
+  getAccountProfile, listTeacherAssignedClasses, listTeacherClassStudents, listClassPracticeHistory,
   publishPlatformPaper, publishReinforcementPractice, publishWrongQuestionPractice,
   syncPlatformPaperFromExam, listContentFolders, createContentFolder, updateContentFolder,
   type ContentFolder, type PracticeHistoryRecord, type PracticePublishMode,
@@ -13,15 +13,18 @@ import { useComposeRequestScope } from "./useComposeRequestScope";
 
 export function useComposePublishing(params: {
   open: boolean; setOpen: (open: boolean) => void; ownerKey: string; exportLabel: string; countsOk: boolean;
+  composeSubject: string;
   persistDraftForPublish: () => Promise<ExamDoc | null>; onError: (message: string | null) => void;
   setMsg: (message: string | null) => void;
 }) {
-  const { open: publishDialogOpen, setOpen: setPublishDialogOpen, ownerKey, exportLabel, countsOk, persistDraftForPublish, onError, setMsg } = params;
+  const { open: publishDialogOpen, setOpen: setPublishDialogOpen, ownerKey, exportLabel, countsOk, composeSubject, persistDraftForPublish, onError, setMsg } = params;
   const capture = useComposeRequestScope(ownerKey);
   const [publishClasses, setPublishClasses] = useState<TeacherClassRecord[]>([]);
   const [publishClassIds, setPublishClassIds] = useState<string[]>([]);
   const [publishFolders, setPublishFolders] = useState<ContentFolder[]>([]);
   const [publishFolderId, setPublishFolderId] = useState("");
+  const [publishSubjects, setPublishSubjects] = useState<string[]>([]);
+  const [publishSubject, setPublishSubject] = useState("");
   const [publishRecipientScope, setPublishRecipientScope] = useState<"class" | "student">("class");
   const [publishStudents, setPublishStudents] = useState<TeacherClassStudentRecord[]>([]);
   const [publishStudentIds, setPublishStudentIds] = useState<string[]>([]);
@@ -43,7 +46,7 @@ export function useComposePublishing(params: {
     if (previousOwner.current === ownerKey) return;
     previousOwner.current = ownerKey;
     setPublishDialogOpen(false); setPublishBusy(false); setPublishClassIds([]);
-    setPublishClasses([]); setPublishFolders([]); setPublishStudents([]);
+    setPublishClasses([]); setPublishFolders([]); setPublishSubjects([]); setPublishSubject(""); setPublishStudents([]);
     setPublishStudentIds([]); setPracticeHistory([]); setPracticeSourceIds([]);
   }, [ownerKey, setPublishDialogOpen]);
   async function openPublishDialog() {
@@ -51,10 +54,24 @@ export function useComposePublishing(params: {
     setPublishBusy(true);
     onError(null);
     try {
-      const [data, folderData] = await Promise.all([listTeacherAssignedClasses(), listContentFolders("paper")]);
+      const [data, folderData, profileData] = await Promise.all([
+        listTeacherAssignedClasses(),
+        listContentFolders("paper"),
+        getAccountProfile(),
+      ]);
       if (!isCurrent()) return;
+      const subjects = profileData.profile.subjects ?? [];
+      const currentSubject = composeSubject.trim();
       setPublishClasses(data.classes);
       setPublishFolders(folderData.folders);
+      setPublishSubjects(subjects);
+      setPublishSubject(
+        subjects.includes(currentSubject)
+          ? currentSubject
+          : subjects.length === 1
+            ? subjects[0]
+            : "",
+      );
       setPublishFolderId("");
       setPublishRecipientScope("class");
       setPublishStudentIds([]);
@@ -64,7 +81,7 @@ export function useComposePublishing(params: {
       setPublishStartAt("");
       setPublishEndAt("");
       setPublishTimeLimitMinutes(0);
-      setPublishMode("current");
+      setPublishMode(countsOk ? "current" : "wrong_questions");
       setPracticeHistory([]);
       setPracticeSourceIds([]);
       setPracticeMaxQuestionsPerStudent(20);
@@ -117,6 +134,10 @@ export function useComposePublishing(params: {
   async function publishCurrentPaperOnline() {
     if (publishClassIds.length === 0) {
       onError("请先选择要发布的班级");
+      return;
+    }
+    if (publishMode === "current" && publishSubjects.length > 1 && !publishSubject) {
+      onError("请先选择发布学科");
       return;
     }
     if (!publishFolderId) { onError("发布前请选择试卷文件夹或归类文件夹"); return; }
@@ -182,6 +203,7 @@ export function useComposePublishing(params: {
         student_ids: publishRecipientScope === "student" ? publishStudentIds : [],
         folder_id: publishFolderId,
         title: exportLabel.trim() || synced.paper.title,
+        subject: publishSubject || publishSubjects[0] || synced.paper.subject,
         start_at: publishStartAt || null,
         end_at: publishEndAt || null,
         submission_mode: publishSubmissionMode,
@@ -216,6 +238,7 @@ export function useComposePublishing(params: {
       void createContentFolder({ scope: "paper", name: publishNewFolderName.trim(), kind: publishRecipientScope === "student" ? "paper" : "category", parent_id: parent?.id ?? null }).then(({ folder }) => { if (!isCurrent()) return; setPublishFolders((current) => [...current, folder]); setPublishFolderId(folder.id); setPublishNewFolderName(""); }).catch((error) => { if (isCurrent()) onError(error instanceof Error ? error.message : String(error)); });
     },
     classes: publishClasses, selectedClassIds: publishClassIds, onToggleClass: togglePublishClass,
+    teacherSubjects: publishSubjects, selectedSubject: publishSubject, onSubjectChange: setPublishSubject,
     students: publishStudents, selectedStudentIds: publishStudentIds,
     onToggleStudent: (id) => setPublishStudentIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]),
     studentSearch: publishStudentSearch, onStudentSearchChange: setPublishStudentSearch,

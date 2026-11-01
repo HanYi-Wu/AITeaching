@@ -30,6 +30,7 @@ from typing import Any
 
 import yaml
 
+from solaire.common.yaml_utils import safe_load_yaml
 from solaire.primebrush.common.models import PrimeBrushDoc
 from solaire.primebrush.registry import get_plugin_for_doc, get_plugin_for_type
 
@@ -52,7 +53,11 @@ def _load_yaml_dict(raw: str | bytes | Path) -> dict[str, Any]:
         text = raw.read_text(encoding="utf-8")
     else:
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-    data = yaml.safe_load(text)
+    try:
+        data = safe_load_yaml(text)
+    except yaml.YAMLError:
+        # Preserve the existing parser diagnostics for malformed documents.
+        data = yaml.safe_load(text)
     if not isinstance(data, dict):
         raise ValueError("YAML root must be a mapping")
     return data

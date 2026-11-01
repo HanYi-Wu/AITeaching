@@ -45,7 +45,6 @@ const DELIMITERS: Delimiter[] = [
 interface MathPart {
   type: "text" | "math";
   data: string;
-  rawData?: string;
   display?: boolean;
 }
 
@@ -53,10 +52,9 @@ interface MathPart {
 function findEndOfMath(delimiter: string, text: string, startIndex: number): number {
   let index = startIndex;
   let braceLevel = 0;
-  const delimLen = delimiter.length;
   while (index < text.length) {
     const ch = text[index];
-    if (braceLevel <= 0 && text.slice(index, index + delimLen) === delimiter) {
+    if (braceLevel <= 0 && text.startsWith(delimiter, index)) {
       return index;
     } else if (ch === "\\") {
       index++;
@@ -76,38 +74,42 @@ function escapeRegex(s: string): string {
 
 const AMS_RE = /^\\begin\{/;
 
-function splitAtDelimiters(text: string, delimiters: Delimiter[]): MathPart[] {
-  const data: MathPart[] = [];
-  const regexLeft = new RegExp(
-    "(" + delimiters.map((d) => escapeRegex(d.left)).join("|") + ")",
-  );
-  let remaining = text;
+const LEFT_DELIMITER_RE = new RegExp(
+  "(" + DELIMITERS.map((d) => escapeRegex(d.left)).join("|") + ")",
+  "g",
+);
+const DELIMITER_BY_LEFT = new Map(DELIMITERS.map((d) => [d.left, d]));
 
-  while (true) {
-    const idx = remaining.search(regexLeft);
-    if (idx === -1) break;
-
-    if (idx > 0) {
-      data.push({ type: "text", data: remaining.slice(0, idx) });
-      remaining = remaining.slice(idx);
+function splitAtDelimiters(text: string): MathPart[] {
+  const parts: MathPart[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    LEFT_DELIMITER_RE.lastIndex = cursor;
+    const match = LEFT_DELIMITER_RE.exec(text);
+    if (!match) {
+      parts.push({ type: "text", data: text.slice(cursor) });
+      break;
     }
-
-    const delimIdx = delimiters.findIndex((d) => remaining.startsWith(d.left));
-    const endIdx = findEndOfMath(delimiters[delimIdx].right, remaining, delimiters[delimIdx].left.length);
-    if (endIdx === -1) break;
-
-    const rawData = remaining.slice(0, endIdx + delimiters[delimIdx].right.length);
-    const math = AMS_RE.test(rawData)
-      ? rawData
-      : remaining.slice(delimiters[delimIdx].left.length, endIdx);
-    data.push({ type: "math", data: math, rawData, display: delimiters[delimIdx].display });
-    remaining = remaining.slice(endIdx + delimiters[delimIdx].right.length);
+    const start = match.index;
+    if (start > cursor) {
+      parts.push({ type: "text", data: text.slice(cursor, start) });
+    }
+    const delimiter = DELIMITER_BY_LEFT.get(match[0])!;
+    const mathStart = start + delimiter.left.length;
+    const end = findEndOfMath(delimiter.right, text, mathStart);
+    if (end === -1) {
+      parts.push({ type: "text", data: text.slice(start) });
+      break;
+    }
+    cursor = end + delimiter.right.length;
+    const rawData = text.slice(start, cursor);
+    parts.push({
+      type: "math",
+      data: AMS_RE.test(rawData) ? rawData : text.slice(mathStart, end),
+      display: delimiter.display,
+    });
   }
-
-  if (remaining !== "") {
-    data.push({ type: "text", data: remaining });
-  }
-  return data;
+  return parts;
 }
 
 /* ── Mermaid / 图片占位符提取 ── */
@@ -157,7 +159,7 @@ export function tokenizeContent(value: string): ContentToken[] {
     },
   );
 
-  const parts = splitAtDelimiters(processed, DELIMITERS);
+  const parts = splitAtDelimiters(processed);
 
   const tokens: ContentToken[] = [];
   const sentinelRe = new RegExp(

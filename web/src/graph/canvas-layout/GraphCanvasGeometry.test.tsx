@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
 import type { GraphNodeRow, GraphRelationRow } from "../useGraphStore";
+import { selectOption } from "../../test/selectOption";
 
 type MockNode = {
   id: string;
@@ -223,7 +224,7 @@ describe("GraphCanvas geometry invalidation", () => {
     fireEvent.click(screen.getAllByRole("checkbox")[3]);
     await waitFor(() => expect(dagre).toHaveBeenCalledTimes(5));
 
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "1" } });
+    await selectOption(screen.getByRole("combobox"), "1");
     await waitFor(() => expect(dagre).toHaveBeenCalledTimes(6));
 
     const graphNodesWithThird = [

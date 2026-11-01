@@ -4,7 +4,7 @@
     "close": "关闭",
     "save": "保存",
     "tabForm": "字段编辑",
-    "tabYaml": "文件原文",
+    "tabYaml": "源文件",
     "groupHint": "题组保存在单个文件中，保存后写回原文件。编号 {{id}} 仅用于右侧预览占位。",
     "groupRootId": "题组根编号",
     "unified": "小题模式（混编或同型）",

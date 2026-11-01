@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Network, Plus, Edit2, Trash2, X } from "lucide-react";
 import type { GraphInfo } from "../api/client";
 import { cn } from "../lib/utils";
 import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../lib/ime";
@@ -12,6 +13,8 @@ interface Props {
   onDeleteGraph: (slug: string) => Promise<void>;
   onRenameGraph: (slug: string, newName: string) => Promise<void>;
   busy?: boolean;
+  className?: string;
+  onClose?: () => void;
 }
 
 export function GraphSubjectSidebar({
@@ -22,6 +25,8 @@ export function GraphSubjectSidebar({
   onDeleteGraph,
   onRenameGraph,
   busy,
+  className,
+  onClose,
 }: Props) {
   const { t } = useTranslation("graph");
   const [creating, setCreating] = useState(false);
@@ -51,94 +56,119 @@ export function GraphSubjectSidebar({
   };
 
   return (
-    <aside className="flex w-[min(100%,200px)] shrink-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
-      <div className="border-b border-slate-100 px-3 py-2.5">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          {t("graphsTitle")}
-        </h2>
+    <aside className={cn("or-g50-sidebar flex h-full w-full flex-col", className)}>
+      <div className="flex items-center justify-between border-b border-[var(--or-outline)]  px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Network className="h-4 w-4 text-[var(--or-muted)] " />
+          <h2 className="text-sm font-semibold text-[var(--or-text)] ">
+            {t("graphsTitle")}
+          </h2>
+        </div>
+        {onClose && (
+          <button
+            type="button"
+            className="md:hidden or-g50-btn or-g50-btn-ghost !h-7 !w-7 !p-0"
+            onClick={onClose}
+            title={t("collapse")}
+          >
+            <X className="h-4 w-4 text-[var(--or-muted)]" />
+          </button>
+        )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto">
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {graphs.length === 0 ? (
-          <p className="px-3 py-3 text-xs text-slate-400">{t("noGraphsHint")}</p>
+          <p className="px-3 py-4 text-center text-sm text-[var(--or-muted)] ">
+            {t("noGraphsHint")}
+          </p>
         ) : (
-          <ul className="space-y-px p-1.5">
-            {graphs.map((g) => (
-              <li key={g.slug}>
-                {renamingSlug === g.slug ? (
-                  <div className="flex items-center gap-1 px-1 py-0.5">
-                    <input
-                      className="min-w-0 flex-1 rounded border border-slate-300 px-1.5 py-1 text-xs"
-                      value={renameValue}
-                      autoFocus
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (isImeComposingKeyboardEvent(e)) return;
-                        if (e.key === "Enter") void commitRename();
-                        if (e.key === "Escape") setRenamingSlug(null);
-                      }}
-                      onBlur={() => { if (!isImeCompositionActive()) void commitRename(); }}
-                    />
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className={cn(
-                      "group flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs transition-colors",
-                      activeSlug === g.slug
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-700 hover:bg-slate-100",
-                    )}
-                    onClick={() => onSelect(g.slug)}
-                  >
-                    <span className="min-w-0 flex-1 truncate font-medium">{g.display_name}</span>
-                    <span
-                      className={cn(
-                        "ml-1 shrink-0 rounded px-1 text-[10px]",
-                        activeSlug === g.slug
-                          ? "bg-white/20 text-white"
-                          : "bg-slate-100 text-slate-500",
-                      )}
-                    >
-                      {g.node_count}
-                    </span>
-                    <span
-                      className={cn(
-                        "ml-1 hidden shrink-0 rounded px-1 text-[10px] group-hover:inline",
-                        activeSlug === g.slug ? "text-white/70 hover:text-white" : "text-slate-400 hover:text-slate-700",
-                      )}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startRename(g);
-                      }}
-                    >
-                      ✎
-                    </span>
-                    {graphs.length > 1 ? (
-                      <span
-                        className={cn(
-                          "ml-0.5 hidden shrink-0 rounded px-1 text-[10px] group-hover:inline",
-                          activeSlug === g.slug ? "text-white/70 hover:text-white" : "text-slate-400 hover:text-red-600",
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void onDeleteGraph(g.slug);
+          <ul className="space-y-1">
+            {graphs.map((g) => {
+              const isActive = activeSlug === g.slug;
+              const isRenaming = renamingSlug === g.slug;
+
+              return (
+                <li key={g.slug}>
+                  {isRenaming ? (
+                    <div className="flex items-center gap-1.5 p-1">
+                      <input
+                        className="or-g50-input w-full !h-8 !text-sm"
+                        value={renameValue}
+                        autoFocus
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (isImeComposingKeyboardEvent(e)) return;
+                          if (e.key === "Enter") void commitRename();
+                          if (e.key === "Escape") setRenamingSlug(null);
                         }}
+                        onBlur={() => {
+                          if (!isImeCompositionActive()) void commitRename();
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex min-w-0 items-center gap-1">
+                      <button
+                        type="button"
+                        className={cn(
+                          "flex min-w-0 flex-1 items-center justify-between rounded-xl px-3 py-2 text-left text-sm font-medium transition-colors",
+                          isActive
+                            ? "bg-[var(--or-primary)] text-[var(--or-on-primary)] shadow-sm "
+                            : "text-[var(--or-muted)] hover:bg-[var(--or-block)]  dark:hover:bg-[color-mix(in_srgb,var(--or-primary)_60%,transparent)]",
+                        )}
+                        onClick={() => onSelect(g.slug)}
                       >
-                        ✕
-                      </span>
-                    ) : null}
-                  </button>
-                )}
-              </li>
-            ))}
+                        <span className="min-w-0 flex-1 truncate">{g.display_name}</span>
+
+                        <span
+                          className={cn(
+                            "ml-2 inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-semibold leading-none shrink-0",
+                            isActive
+                              ? "bg-[color-mix(in_srgb,var(--or-card)_20%,transparent)] text-white"
+                              : "bg-[var(--or-block)] text-[var(--or-muted)]  ",
+                          )}
+                        >
+                          <span className="inline-block transform translate-y-[0.5px]">
+                            {g.node_count}
+                          </span>
+                        </span>
+                      </button>
+
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-on-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--or-focus)]  dark:hover:bg-[var(--or-primary)] dark:hover:text-[var(--or-on-primary)]"
+                          title={`${t("rename")} ${g.display_name}`}
+                          aria-label={`${t("rename")} ${g.display_name}`}
+                          onClick={() => startRename(g)}
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] hover:text-[var(--or-on-error)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-950/40"
+                          title={`${t("delete")} ${g.display_name}`}
+                          aria-label={`${t("delete")} ${g.display_name}`}
+                          onClick={() => void onDeleteGraph(g.slug)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
-      <div className="border-t border-slate-100 p-2">
+
+      {/* Creation bottom section */}
+      <div className="border-t border-[var(--or-outline)]  p-3">
         {creating ? (
-          <div className="flex flex-col gap-1.5">
+          <div className="space-y-2">
             <input
-              className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs"
+              className="or-g50-input w-full !h-8 !text-sm"
               placeholder={t("newGraphNamePh")}
               value={newName}
               autoFocus
@@ -146,34 +176,42 @@ export function GraphSubjectSidebar({
               onKeyDown={(e) => {
                 if (isImeComposingKeyboardEvent(e)) return;
                 if (e.key === "Enter") void handleCreate();
-                if (e.key === "Escape") { setCreating(false); setNewName(""); }
+                if (e.key === "Escape") {
+                  setCreating(false);
+                  setNewName("");
+                }
               }}
             />
-            <div className="flex gap-1">
+            <div className="flex gap-2">
               <button
                 type="button"
-                className="flex-1 rounded bg-slate-900 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                className="or-g50-btn or-g50-btn-primary flex-1 !h-8 !text-xs font-medium"
                 disabled={busy || !newName.trim()}
                 onClick={() => void handleCreate()}
               >
-                {t("create")}
+                <span>{t("confirm")}</span>
               </button>
               <button
                 type="button"
-                className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600"
-                onClick={() => { setCreating(false); setNewName(""); }}
+                className="or-g50-btn or-g50-btn-secondary !h-8 !text-xs font-medium"
+                onClick={() => {
+                  setCreating(false);
+                  setNewName("");
+                }}
               >
-                {t("cancel")}
+                <span>{t("cancel")}</span>
               </button>
             </div>
           </div>
         ) : (
           <button
             type="button"
-            className="w-full rounded border border-dashed border-slate-300 px-2 py-1.5 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-700"
+            className="or-g50-btn or-g50-btn-secondary w-full !h-8 !text-xs font-medium"
+            disabled={busy}
             onClick={() => setCreating(true)}
           >
-            + {t("newGraph")}
+            <Plus className="h-3.5 w-3.5" />
+            <span>{t("newGraph")}</span>
           </button>
         )}
       </div>

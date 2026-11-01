@@ -5,6 +5,8 @@ import type {
   PendingSchoolAiImport,
   SchoolAiMessage,
 } from "../hooks/useSchoolWorkspaceData";
+import "../../../../ui-redesign/g53/g53.css";
+import { Select as AppSelect } from "../../../../components/ui/select";
 
 type SchoolAiPanelProps = {
   aiSettings: SchoolAiSettings | null;
@@ -54,56 +56,56 @@ export function SchoolAiPanel({
   return (
     <section
       data-testid="school-ai-panel"
-      className="grid h-[calc(100vh-9rem)] min-h-[34rem] max-h-[52rem] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm xl:grid-cols-[minmax(0,1fr)_340px]"
+      className="or-g53-card grid h-[calc(100vh-9rem)] min-h-[34rem] max-h-[52rem] overflow-hidden grid-rows-[minmax(0,1.2fr)_minmax(0,1fr)] xl:grid-rows-none xl:grid-cols-[minmax(0,1fr)_340px]"
     >
       <div className="flex min-h-0 flex-col">
-        <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
-            <Sparkles className="h-5 w-5" />
+        <div className="flex items-start gap-3 border-b border-or-outline bg-or-block/50 px-4 py-3 sm:px-6 sm:py-4">
+          <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-xl bg-or-primary text-or-on-primary shadow-sm">
+            <Sparkles className="h-4 w-4 sm:h-5 sm:w-5" />
           </div>
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-slate-950">学校 AI 助手</h2>
-            <p className="mt-1 text-sm leading-6 text-slate-500">
-              直接读取本校教师、学生、班级和分配数据，也可以审核导入 JSON/Excel 文件。
+            <h2 className="text-sm font-semibold text-or-text sm:text-base">学校 AI 助手</h2>
+            <p className="mt-0.5 text-xs sm:text-sm leading-5 sm:leading-6 text-or-muted">
+              直接读取本校教师、学生、班级和分配数据，亦可协助审核导入文件。
             </p>
           </div>
         </div>
-        <div data-testid="school-ai-messages" className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
+        <div data-testid="school-ai-messages" className="min-h-0 flex-1 space-y-3 sm:space-y-3.5 overflow-y-auto bg-or-block p-3.5 sm:p-5">
           {schoolAiMessages.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-sm leading-6 text-slate-500">
-              可以直接问“有哪些教师名字”“哪些班级没有老师”“导入学生模板字段是什么”。AI 会基于当前学校数据回答。
+            <div className="rounded-2xl border border-dashed border-or-outline bg-or-card p-4 sm:p-6 text-xs sm:text-sm leading-5 sm:leading-6 text-or-muted">
+              可以直接提问：“有哪些教师名字”、“哪些班级没有老师”、“导入学生模板字段是什么”。AI 将基于当前学校数据为您解答。
             </div>
           ) : (
             schoolAiMessages.map((item, index) => (
               <div
                 key={`${item.role}:${index}`}
-                className={`flex gap-3 ${item.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex gap-2.5 sm:gap-3 ${item.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 {item.role !== "user" ? (
-                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
-                    <Bot className="h-4 w-4" />
+                  <div className="mt-1 flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-xl bg-or-primary text-or-on-primary shadow-sm">
+                    <Bot className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </div>
                 ) : null}
                 <div
-                  className={`max-w-[82%] whitespace-pre-wrap rounded-lg px-4 py-3 text-sm leading-6 shadow-sm ${
+                  className={`max-w-[88%] sm:max-w-[82%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm leading-5 sm:leading-6 shadow-sm ${
                     item.role === "user"
-                      ? "bg-slate-900 text-white"
+                      ? "bg-or-primary text-or-on-primary"
                       : item.role === "system"
-                        ? "border border-amber-200 bg-amber-50 text-amber-900"
-                        : "border border-slate-200 bg-white text-slate-700"
+                        ? "or-g53-warning-surface"
+                        : "border border-or-outline/90 bg-or-card text-or-text"
                   }`}
                 >
                   {item.content}
-                  {item.source ? <div className="mt-2 text-xs opacity-60">source: {item.source}</div> : null}
+                  {item.source ? <div className="mt-1.5 text-[11px] font-mono opacity-60">source: {item.source}</div> : null}
                 </div>
               </div>
             ))
           )}
         </div>
-        <form onSubmit={(event) => void submitSchoolAi(event)} className="border-t border-slate-200 bg-white p-4">
-          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <form onSubmit={(event) => void submitSchoolAi(event)} className="border-t border-or-outline bg-or-card p-3 sm:p-4">
+          <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_auto]">
             <textarea
-              className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="or-g53-input min-h-[4.25rem] sm:min-h-20 text-xs sm:text-sm"
               placeholder="询问教师导入、学生账号、班级管理或教师分配"
               value={schoolAiInput}
               onChange={(event) => setSchoolAiInput(event.target.value)}
@@ -112,20 +114,20 @@ export function SchoolAiPanel({
             <button
               type="submit"
               disabled={!schoolAiInput.trim() || !aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              className="or-g53-btn-primary w-full sm:w-auto self-end px-4 py-2 sm:px-5 sm:py-2.5 text-xs sm:text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Send className="h-4 w-4" />
+              <Send className="h-4 w-4 shrink-0" />
               发送
             </button>
           </div>
         </form>
       </div>
-      <aside className="space-y-4 border-t border-slate-200 bg-white p-4 xl:border-l xl:border-t-0">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <aside className="space-y-3.5 sm:space-y-4 border-t border-or-outline bg-or-card p-3.5 sm:p-5 overflow-y-auto xl:border-l xl:border-t-0">
+        <div className="rounded-2xl border border-or-outline bg-or-block/80 p-3.5 sm:p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold text-slate-950">AI 开关</h3>
-              <p className="mt-1 text-xs leading-5 text-slate-500">
+              <h3 className="text-xs sm:text-sm font-semibold text-or-text">AI 开关</h3>
+              <p className="mt-0.5 text-xs leading-5 text-or-muted">
                 {!aiSettings
                   ? "正在读取状态"
                   : !aiSettings.ai_available
@@ -138,7 +140,7 @@ export function SchoolAiPanel({
             <input
               data-testid="school-ai-toggle"
               type="checkbox"
-              className="h-4 w-4"
+              className="h-4 w-4 rounded accent-or-primary focus:ring-or-focus"
               checked={Boolean(aiSettings?.ai_enabled)}
               disabled={busy || !aiSettings || (!aiSettings.ai_available && !aiSettings.ai_enabled)}
               onChange={(event) => void setSchoolAiEnabled(event.target.checked)}
@@ -146,18 +148,18 @@ export function SchoolAiPanel({
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <FileUp className="h-4 w-4 text-slate-600" />
-            <h3 className="text-sm font-semibold text-slate-950">AI 文件导入审核</h3>
+        <div className="rounded-2xl border border-or-outline p-3.5 sm:p-4">
+          <div className="mb-3 sm:mb-3.5 flex items-center gap-2">
+            <FileUp className="h-4 w-4 text-or-muted" />
+            <h3 className="text-xs sm:text-sm font-semibold text-or-text">AI 文件导入审核</h3>
           </div>
-          <div className="space-y-3">
-            <select
+          <div className="space-y-2.5 sm:space-y-3">
+            <AppSelect
               data-testid="school-ai-import-kind"
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+              className="or-g53-select w-full text-xs sm:text-sm"
               value={schoolAiImportKind}
-              onChange={(event) => {
-                setSchoolAiImportKind(event.target.value as SchoolImportKind);
+              onValueChange={(value) => {
+                setSchoolAiImportKind(value as SchoolImportKind);
                 setPendingSchoolAiImport(null);
               }}
             >
@@ -166,12 +168,12 @@ export function SchoolAiPanel({
               <option value="teachers">导入教师</option>
               <option value="classes">导入班级</option>
               <option value="assignments">导入教师班级分配</option>
-            </select>
+            </AppSelect>
             {schoolAiImportKind === "students" ? (
-              <select
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+              <AppSelect
+                className="or-g53-select w-full text-xs sm:text-sm"
                 value={studentClassId}
-                onChange={(event) => setStudentClassId(event.target.value)}
+                onValueChange={(value) => setStudentClassId(value)}
               >
                 <option value="">不指定班级</option>
                 {classChoices.map((klass) => (
@@ -179,11 +181,11 @@ export function SchoolAiPanel({
                     {klass.name}
                   </option>
                 ))}
-              </select>
+              </AppSelect>
             ) : null}
-            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-3 text-sm font-medium text-slate-600 hover:bg-slate-50">
-              <Upload className="h-4 w-4" />
-              {schoolAiImportFile ? schoolAiImportFile.name : "选择 JSON / Excel"}
+            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-or-outline bg-or-card px-3 py-2.5 sm:py-3 text-xs sm:text-sm font-medium text-or-text transition hover:border-or-outline hover:bg-or-block">
+              <Upload className="h-4 w-4 shrink-0 text-or-muted" />
+              <span className="truncate">{schoolAiImportFile ? schoolAiImportFile.name : "选择 JSON / Excel"}</span>
               <input
                 data-testid="school-ai-import-file"
                 className="sr-only"
@@ -195,7 +197,7 @@ export function SchoolAiPanel({
                 }}
               />
             </label>
-            <div className="rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-500">
+            <div className="rounded-xl bg-or-block/80 p-2.5 sm:p-3 text-xs leading-5 text-or-muted">
               {schoolAiImportKind === "all"
                 ? "完整模板包含 classes、teachers、students、assignments 四个工作表；AI 审核后一次确认即可全部导入。"
                 : "上传后会按对应模板字段审核，确认后写入当前学校数据。"}
@@ -204,33 +206,33 @@ export function SchoolAiPanel({
               type="button"
               disabled={busy}
               onClick={() => void downloadTemplate(schoolAiImportKind)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              className="or-g53-btn-tonal w-full py-2 text-xs font-semibold"
             >
-              <Download className="h-4 w-4" />
+              <Download className="h-4 w-4 shrink-0" />
               下载当前导入模板
             </button>
             {pendingSchoolAiImport ? (
               <div
                 data-testid="school-ai-import-confirm-card"
-                className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+                className="or-g53-warning-surface rounded-2xl p-3 sm:p-3.5 text-xs sm:text-sm"
               >
-                <div className="flex items-start gap-2">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="flex items-start gap-2.5">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-or-success" />
                   <div className="min-w-0">
-                    <p className="font-semibold">AI import review</p>
-                    <p className="mt-1 whitespace-pre-wrap text-xs leading-5">{pendingSchoolAiImport.review.review}</p>
-                    <p className="mt-2 text-xs text-amber-800">
+                    <p className="font-semibold text-or-text">AI import review</p>
+                    <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-or-text">{pendingSchoolAiImport.review.review}</p>
+                    <p className="mt-2 text-xs font-medium text-or-muted">
                       {pendingSchoolAiImport.file.name} / {pendingSchoolAiImport.review.row_count} rows
                     </p>
                   </div>
                 </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-2.5">
                   <button
                     type="button"
                     data-testid="school-ai-import-cancel"
                     disabled={schoolAiBusy}
                     onClick={() => void confirmSchoolAiImport(false)}
-                    className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                    className="or-g53-btn-tonal py-1.5 text-xs font-semibold"
                   >
                     取消
                   </button>
@@ -239,7 +241,7 @@ export function SchoolAiPanel({
                     data-testid="school-ai-import-confirm"
                     disabled={schoolAiBusy}
                     onClick={() => void confirmSchoolAiImport(true)}
-                    className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                    className="or-g53-btn-primary py-1.5 text-xs font-semibold"
                   >
                     确认导入
                   </button>
@@ -251,9 +253,9 @@ export function SchoolAiPanel({
               data-testid="school-ai-import-run"
               disabled={!schoolAiImportFile || schoolAiBusy}
               onClick={() => void runSchoolAiImport()}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              className="or-g53-btn-primary w-full py-2 sm:py-2.5 text-xs sm:text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <CheckCircle2 className="h-4 w-4" />
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
               审核并导入
             </button>
           </div>

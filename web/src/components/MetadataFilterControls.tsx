@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import type { MetadataFilterDefinition, MetadataFilterState, MetadataFilters } from "../lib/metadataFilters";
+import { Select as AppSelect } from "./ui/select";
 
 const LABEL_TITLE = "\u6807\u7b7e\u7b5b\u9009";
 const LABEL_CLEAR = "\u6e05\u7a7a";
@@ -136,48 +137,52 @@ function MetadataFilterControlsInner({ definitions, filters, onChange }: Metadat
   };
 
   return (
-    <div className="border-t border-slate-200 pt-2">
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold text-slate-700">{LABEL_TITLE}</p>
+    <div className="border-t border-[var(--or-outline)] pt-2.5">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-[var(--or-muted)]">{LABEL_TITLE}</p>
         {rowCount > 0 ? (
-          <button type="button" className="text-[10px] font-medium text-slate-500 hover:text-slate-900" onClick={clearAll}>
+          <button
+            type="button"
+            className="text-xs font-medium text-[var(--or-muted)] hover:text-[var(--or-text)] transition-colors"
+            onClick={clearAll}
+          >
             {LABEL_CLEAR}
           </button>
         ) : null}
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         {activeDefinitions.map((definition) => {
           const current = localFilters[definition.key];
           return (
-            <div key={definition.key} className="rounded-md border border-slate-200 bg-white p-2">
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
-                <label className="block min-w-0 text-[11px] font-medium text-slate-600">
+            <div key={definition.key} className="rounded-[12px] border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 shadow-sm">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                <label className="block min-w-0 text-xs font-medium text-[var(--or-muted)]">
                   {LABEL_FIELD}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+                  <AppSelect
+                    className="or-select mt-1 w-full rounded-[8px] border border-[var(--or-outline)] bg-[var(--or-block)] px-2.5 py-1.5 text-xs sm:text-[13px] text-[var(--or-text)]"
                     value={definition.key}
-                    onChange={(event) => changeConditionKey(definition.key, event.target.value)}
+                    onValueChange={(value) => changeConditionKey(definition.key, value)}
                   >
                     {definitions.map((option) => (
                       <option key={option.key} value={option.key} disabled={option.key !== definition.key && Boolean(localFilters[option.key])}>
                         {option.key}
                       </option>
                     ))}
-                  </select>
+                  </AppSelect>
                 </label>
                 <button
                   type="button"
-                  className="mt-4 rounded-md px-2 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                  className="mt-5 rounded-[6px] px-2 py-1 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-text)] transition-colors"
                   onClick={() => removeCondition(definition.key)}
                 >
                   {LABEL_REMOVE}
                 </button>
               </div>
               {definition.kind === "enum" ? (
-                <select
-                  className="mt-1.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+                <AppSelect
+                  className="or-select mt-2 w-full rounded-[8px] border border-[var(--or-outline)] bg-[var(--or-block)] px-2.5 py-1.5 text-xs sm:text-[13px] text-[var(--or-text)]"
                   value={current?.kind === "enum" ? (current.includeMissing ? MISSING_VALUE : current.selected[0] ?? "") : ""}
-                  onChange={(event) => setEnumFilter(definition.key, event.target.value)}
+                  onValueChange={(value) => setEnumFilter(definition.key, value)}
                 >
                   <option value="">{LABEL_ALL}</option>
                   {definition.values.map((option) => (
@@ -186,14 +191,14 @@ function MetadataFilterControlsInner({ definitions, filters, onChange }: Metadat
                     </option>
                   ))}
                   <option value={MISSING_VALUE}>{LABEL_MISSING}</option>
-                </select>
+                </AppSelect>
               ) : (
-                <div className="mt-1.5 space-y-1.5">
-                  <div className="grid grid-cols-2 gap-1.5">
+                <div className="mt-2 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <input
                       type="number"
                       inputMode="decimal"
-                      className="min-w-0 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 disabled:opacity-60"
+                      className="or-input min-w-0 rounded-[8px] border border-[var(--or-outline)] bg-[var(--or-block)] px-2.5 py-1.5 text-xs sm:text-[13px] text-[var(--or-text)] placeholder:text-[var(--or-muted)] disabled:opacity-60"
                       value={current?.kind === "number" ? current.min ?? "" : ""}
                       placeholder={">= " + definition.min}
                       disabled={current?.kind === "number" && current.includeMissing === true}
@@ -202,17 +207,17 @@ function MetadataFilterControlsInner({ definitions, filters, onChange }: Metadat
                     <input
                       type="number"
                       inputMode="decimal"
-                      className="min-w-0 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 disabled:opacity-60"
+                      className="or-input min-w-0 rounded-[8px] border border-[var(--or-outline)] bg-[var(--or-block)] px-2.5 py-1.5 text-xs sm:text-[13px] text-[var(--or-text)] placeholder:text-[var(--or-muted)] disabled:opacity-60"
                       value={current?.kind === "number" ? current.max ?? "" : ""}
                       placeholder={"<= " + definition.max}
                       disabled={current?.kind === "number" && current.includeMissing === true}
                       onChange={(event) => setNumberFilter(definition.key, "max", event.target.value)}
                     />
                   </div>
-                  <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600">
+                  <label className="flex items-center gap-2 text-xs font-medium text-[var(--or-muted)] cursor-pointer">
                     <input
                       type="checkbox"
-                      className="h-3.5 w-3.5 rounded border-slate-300"
+                      className="h-3.5 w-3.5 rounded border-[var(--or-outline)] accent-[var(--or-primary)]"
                       checked={current?.kind === "number" && current.includeMissing === true}
                       onChange={(event) => setNumberMissing(definition.key, event.target.checked)}
                     />
@@ -224,14 +229,14 @@ function MetadataFilterControlsInner({ definitions, filters, onChange }: Metadat
           );
         })}
         {Array.from({ length: pendingRows }).map((_, index) => (
-          <div key={"pending-" + index} className="rounded-md border border-slate-200 bg-white p-2">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
-              <label className="block min-w-0 text-[11px] font-medium text-slate-600">
+          <div key={"pending-" + index} className="rounded-[12px] border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 shadow-sm">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <label className="block min-w-0 text-xs font-medium text-[var(--or-muted)]">
                 {LABEL_FIELD}
-                <select
-                  className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+                <AppSelect
+                  className="or-select mt-1 w-full rounded-[8px] border border-[var(--or-outline)] bg-[var(--or-block)] px-2.5 py-1.5 text-xs sm:text-[13px] text-[var(--or-text)]"
                   value=""
-                  onChange={(event) => choosePendingCondition(event.target.value)}
+                  onValueChange={(value) => choosePendingCondition(value)}
                 >
                   <option value="">{LABEL_SELECT_FIELD}</option>
                   {availableDefinitions.map((option) => (
@@ -239,11 +244,11 @@ function MetadataFilterControlsInner({ definitions, filters, onChange }: Metadat
                       {option.key}
                     </option>
                   ))}
-                </select>
+                </AppSelect>
               </label>
               <button
                 type="button"
-                className="mt-4 rounded-md px-2 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                className="mt-5 rounded-[6px] px-2 py-1 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-text)] transition-colors"
                 onClick={removePendingCondition}
               >
                 {LABEL_REMOVE}
@@ -254,7 +259,7 @@ function MetadataFilterControlsInner({ definitions, filters, onChange }: Metadat
         {availableDefinitions.length > pendingRows ? (
           <button
             type="button"
-            className="w-full rounded-md border border-dashed border-slate-300 bg-slate-50 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+            className="w-full rounded-[10px] border border-dashed border-[var(--or-outline)] bg-[var(--or-block)] px-3 py-2 text-xs sm:text-[13px] font-medium text-[var(--or-text)] hover:bg-[var(--or-card)] transition-colors"
             onClick={addCondition}
           >
             {LABEL_ADD}

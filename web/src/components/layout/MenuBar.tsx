@@ -79,9 +79,9 @@ function MenuDropdown({
         className={cn(
           "[-webkit-app-region:no-drag] [app-region:no-drag] transition-colors duration-150",
           variant === "titlebar"
-            ? "flex items-center gap-0.5 rounded px-2 py-0.5 text-xs font-medium text-slate-200 hover:bg-slate-800/60"
-            : "flex items-center gap-0.5 rounded px-2 py-1 text-sm text-slate-700 hover:bg-slate-100/90",
-          open && (variant === "titlebar" ? "bg-slate-800 text-slate-100" : "bg-slate-100"),
+            ? "flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-[var(--or-text)] hover:bg-[color-mix(in_srgb,var(--or-primary)_80%,transparent)]"
+            : "flex items-center gap-1 rounded-md px-2.5 py-1 text-sm font-medium text-[var(--or-text)] hover:bg-[var(--or-block)]",
+          open && (variant === "titlebar" ? "bg-[var(--or-primary)] text-[var(--or-on-primary)]" : "bg-[var(--or-block)]"),
         )}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -100,7 +100,7 @@ function MenuDropdown({
           <div
             role="menu"
             className={cn(
-              "absolute top-full z-[100] mt-0.5 min-w-[12rem] rounded-md border border-slate-200 bg-white py-1 shadow-lg",
+              "absolute top-full z-[100] mt-1 min-w-[13rem] rounded-[14px] border border-[var(--or-outline)] bg-[var(--or-card)] p-1.5 shadow-xl text-[var(--or-text)]",
               align === "right" ? "right-0" : "left-0",
             )}
           >
@@ -127,7 +127,7 @@ function MenuItem({
       type="button"
       role="menuitem"
       disabled={disabled}
-      className="block w-full px-3 py-1.5 text-left text-sm text-slate-800 hover:bg-slate-100 disabled:opacity-40"
+      className="block w-full rounded-md px-3 py-1.5 text-left text-sm font-medium text-[var(--or-text)] transition-colors hover:bg-[var(--or-block)] disabled:opacity-40 disabled:hover:bg-transparent"
       onClick={() => {
         onClick();
         closeDropdown?.();
@@ -176,54 +176,58 @@ export function MenuBar({
   };
 
   const nav = (
-    <nav className={cn("flex items-center gap-0.5", variant === "titlebar" ? "h-full px-0" : "flex-1 px-1")}>
-        <MenuDropdown label={t("menu.file")} variant={variant}>
-          <MenuItem onClick={onNewProject}>{t("menu.fileNew")}</MenuItem>
-          <MenuItem onClick={onOpenProject}>{t("menu.fileOpen")}</MenuItem>
-          <div className="my-1 border-t border-slate-100" role="separator" />
-          <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">{t("menu.fileRecent")}</div>
-          {recent.length === 0 ? (
-            <div className="px-3 py-1.5 text-xs text-slate-400">{t("menu.fileRecentEmpty")}</div>
-          ) : (
-            recent.map((r) => (
-              <MenuItem key={r.path} onClick={() => void openRecent(r.path)}>
-                <span className="block truncate font-medium">{r.name}</span>
-                <span className="block truncate text-[10px] text-slate-500">{r.path}</span>
-              </MenuItem>
-            ))
-          )}
-          <div className="my-1 border-t border-slate-100" role="separator" />
-          <MenuItem onClick={onFileSave} disabled={!projectRoot}>
-            {t("menu.fileSave")}
-          </MenuItem>
-          <MenuItem onClick={onPreferences}>{t("menu.filePreferences")}</MenuItem>
-          <MenuItem onClick={onCloseProject} disabled={!projectRoot}>
-            {t("menu.fileCloseProject")}
-          </MenuItem>
-          <MenuItem onClick={onGoWelcome}>{t("menu.fileWelcome")}</MenuItem>
-        </MenuDropdown>
-        <MenuDropdown label={t("menu.view")} variant={variant}>
-          <MenuItem onClick={() => setPage("graph")}>{t("nav.graph")}</MenuItem>
-          <MenuItem onClick={() => setPage("bank")}>{t("nav.bank")}</MenuItem>
-          <MenuItem onClick={() => setPage("template")}>{t("nav.template")}</MenuItem>
-          <MenuItem onClick={() => setPage("compose")}>{t("nav.compose")}</MenuItem>
-          <MenuItem onClick={() => setPage("analysis")}>{t("nav.analysis")}</MenuItem>
-          <div className="my-1 border-t border-slate-100" role="separator" />
-          <MenuItem onClick={() => setPage("help")}>{t("nav.help")}</MenuItem>
-          <MenuItem onClick={() => setPage("log")}>{t("nav.log")}</MenuItem>
-          <div className="my-1 border-t border-slate-100" role="separator" />
-          <MenuItem onClick={toggleAssistant}>{t("menu.viewAssistant")}</MenuItem>
-        </MenuDropdown>
+    <nav className={cn("flex items-center gap-1", variant === "titlebar" ? "h-full px-0" : "flex-1 px-1")}>
+      <MenuDropdown label={t("menu.file")} variant={variant}>
+        <MenuItem onClick={onNewProject}>{t("menu.fileNew")}</MenuItem>
+        <MenuItem onClick={onOpenProject}>{t("menu.fileOpen")}</MenuItem>
+        <div className="my-1 border-t border-[var(--or-outline)]" role="separator" />
+        <div className="px-3 py-1 text-xs font-semibold uppercase tracking-wider text-[var(--or-muted)]">{t("menu.fileRecent")}</div>
+        {recent.length === 0 ? (
+          <div className="px-3 py-1.5 text-xs text-[var(--or-muted)]">{t("menu.fileRecentEmpty")}</div>
+        ) : (
+          recent.map((r) => (
+            <MenuItem key={r.path} onClick={() => void openRecent(r.path)}>
+              <span className="block truncate font-medium">{r.name}</span>
+              <span className="block truncate text-xs text-[var(--or-muted)]">{r.path}</span>
+            </MenuItem>
+          ))
+        )}
+        <div className="my-1 border-t border-[var(--or-outline)]" role="separator" />
+        <MenuItem onClick={onFileSave} disabled={!projectRoot}>
+          {t("menu.fileSave")}
+        </MenuItem>
+        <MenuItem onClick={onPreferences}>{t("menu.filePreferences")}</MenuItem>
+        <MenuItem onClick={onCloseProject} disabled={!projectRoot}>
+          {t("menu.fileCloseProject")}
+        </MenuItem>
+        <MenuItem onClick={onGoWelcome}>{t("menu.fileWelcome")}</MenuItem>
+      </MenuDropdown>
+      <MenuDropdown label={t("menu.view")} variant={variant}>
+        <MenuItem onClick={() => setPage("graph")}>{t("nav.graph")}</MenuItem>
+        <MenuItem onClick={() => setPage("bank")}>{t("nav.bank")}</MenuItem>
+        <MenuItem onClick={() => setPage("template")}>{t("nav.template")}</MenuItem>
+        <MenuItem onClick={() => setPage("compose")}>{t("nav.compose")}</MenuItem>
+        <MenuItem onClick={() => setPage("analysis")}>{t("nav.analysis")}</MenuItem>
+        <div className="my-1 border-t border-[var(--or-outline)]" role="separator" />
+        <MenuItem onClick={() => setPage("help")}>{t("nav.help")}</MenuItem>
+        <MenuItem onClick={() => setPage("log")}>{t("nav.log")}</MenuItem>
+        <div className="my-1 border-t border-[var(--or-outline)]" role="separator" />
+        <MenuItem onClick={toggleAssistant}>{t("menu.viewAssistant")}</MenuItem>
+      </MenuDropdown>
     </nav>
   );
 
   if (variant === "titlebar") {
     return (
-      <div className="flex h-full min-h-0 shrink-0 items-center gap-1 border-0 bg-transparent text-slate-200">
+      <div className="flex h-full min-h-0 shrink-0 items-center gap-1 border-0 bg-transparent text-[var(--or-text)]">
         {nav}
       </div>
     );
   }
 
-  return <header className="flex shrink-0 items-center gap-1 border-b border-slate-200 bg-white px-2 py-1">{nav}</header>;
+  return (
+    <header className="flex shrink-0 items-center gap-1 border-b border-[var(--or-outline)] bg-[var(--or-card)] px-2 py-1">
+      {nav}
+    </header>
+  );
 }

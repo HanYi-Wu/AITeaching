@@ -7,17 +7,17 @@ export function FlowchartFlowNode({ data }: NodeProps) {
   const label = String((data as { label?: string }).label ?? "");
 
   return (
-    <div className="min-w-[4rem] max-w-[12rem] rounded border border-slate-400 bg-white px-2 py-1.5 text-center text-xs shadow-sm">
+    <div className="min-w-[4.5rem] max-w-[14rem] rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-center text-sm shadow-xs hover:border-[var(--or-outline)] transition-colors">
       <Handle
         type="target"
         position={isLR ? Position.Left : Position.Top}
-        className="!h-2 !w-2 !border border-slate-400 !bg-slate-200"
+        className="!h-2.5 !w-2.5 !rounded-full !border !border-[var(--or-outline)] !bg-[var(--or-inset)] hover:!bg-slate-400 transition-colors"
       />
-      <div className="break-words text-slate-800">{label}</div>
+      <div className="break-words font-medium text-[var(--or-text)]">{label}</div>
       <Handle
         type="source"
         position={isLR ? Position.Right : Position.Bottom}
-        className="!h-2 !w-2 !border border-slate-400 !bg-slate-200"
+        className="!h-2.5 !w-2.5 !rounded-full !border !border-[var(--or-outline)] !bg-[var(--or-inset)] hover:!bg-slate-400 transition-colors"
       />
     </div>
   );

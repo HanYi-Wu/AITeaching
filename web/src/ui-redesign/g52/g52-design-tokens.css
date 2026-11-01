@@ -1,0 +1,311 @@
+/* ==========================================================================
+   G52 UI Redesign - FlClash-Aligned Design Tokens & Components
+   Scoped with .or-g52-* namespace and standard fallback custom properties.
+   Supports Desktop, Tablet, and Mobile Responsive Adaptations.
+   ========================================================================== */
+
+/* Base Surfaces */
+.or-g52-surface-card {
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 16px;
+  color: var(--or-text, #0f172a);
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+}
+
+/* Static Cards - STRICTLY NO hover lift, NO cursor pointer */
+.or-g52-stat-card {
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 16px;
+  padding: 16px 20px;
+  cursor: default !important;
+  user-select: text;
+  transition: border-color 220ms ease-in-out;
+}
+
+
+
+/* Capsules & Pills - Strictly Centered */
+.or-g52-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  vertical-align: middle;
+  border-radius: 9999px;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 500;
+  padding: 4px 10px;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.or-g52-pill-primary {
+  background-color: var(--or-primary-container, #eff6ff);
+  color: var(--or-on-container, #1d4ed8);
+  border: 1px solid transparent;
+}
+
+.or-g52-pill-success {
+  background-color: var(--or-success-container, #ecfdf5);
+  color: var(--or-on-success, #047857);
+  border: 1px solid transparent;
+}
+
+.or-g52-pill-warning {
+  background-color: var(--or-warning-container, #fffbeb);
+  color: var(--or-on-warning, #b45309);
+  border: 1px solid transparent;
+}
+
+.or-g52-pill-error {
+  background-color: var(--or-error-container, #fef2f2);
+  color: var(--or-on-error, #b91c1c);
+  border: 1px solid transparent;
+}
+
+.or-g52-pill-neutral {
+  background-color: var(--or-block, #f1f5f9);
+  color: var(--or-muted, #64748b);
+  border: 1px solid var(--or-outline, #e2e8f0);
+}
+
+/* Segmented Controls / Batch Pills */
+.or-g52-batch-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 9999px;
+  padding: 6px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  transition: all 220ms ease-in-out;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.or-g52-batch-pill-active {
+  background-color: var(--or-primary, #007aff);
+  color: var(--or-on-primary, #ffffff);
+  box-shadow: 0 1px 2px 0 color-mix(in srgb, var(--or-primary) 25%, transparent);
+}
+
+.or-g52-batch-pill-inactive {
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-muted, #64748b);
+  border: 1px solid var(--or-outline, #e2e8f0);
+}
+
+.or-g52-batch-pill-inactive:hover {
+  background-color: var(--or-block, #f8fafc);
+  color: var(--or-text, #0f172a);
+}
+
+/* Tab Navigation */
+.or-g52-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--or-outline, #e2e8f0);
+  padding-bottom: 2px;
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.or-g52-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.or-g52-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px 8px 0 0;
+  color: var(--or-muted, #64748b);
+  border-bottom: 2px solid transparent;
+  transition: all 220ms ease-in-out;
+  cursor: pointer;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.or-g52-tab:hover {
+  color: var(--or-text, #0f172a);
+}
+
+.or-g52-tab-active {
+  color: var(--or-primary, #007aff) !important;
+  border-bottom-color: var(--or-primary, #007aff) !important;
+  font-weight: 600;
+}
+
+/* Mobile Segmented View Switcher */
+.or-g52-mobile-segmented {
+  display: flex;
+  align-items: center;
+  background-color: var(--or-block, #f1f5f9);
+  padding: 3px;
+  border-radius: 20px;
+  gap: 2px;
+}
+
+.or-g52-mobile-segmented-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 16px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--or-muted, #64748b);
+  transition: all 220ms ease-in-out;
+  cursor: pointer;
+}
+
+.or-g52-mobile-segmented-btn-active {
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #0f172a);
+  font-weight: 600;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+}
+
+.or-g52-mobile-segmented-indicator > .or-g52-mobile-segmented-btn {
+  position: relative;
+  z-index: 1;
+}
+
+.or-g52-mobile-segmented-indicator > .or-g52-mobile-segmented-btn-active {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+/* Table styles */
+.or-g52-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+  text-align: left;
+}
+
+.or-g52-table th {
+  background-color: var(--or-block, #f8fafc);
+  color: var(--or-muted, #64748b);
+  font-weight: 600;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--or-outline, #e2e8f0);
+  white-space: nowrap;
+}
+
+.or-g52-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--or-outline, #f1f5f9);
+  color: var(--or-text, #0f172a);
+  vertical-align: middle;
+}
+
+.or-g52-table tr:last-child td {
+  border-bottom: none;
+}
+
+.or-g52-table tr:hover td {
+  background-color: color-mix(in srgb, var(--or-block) 80%, transparent);
+}
+
+/* Clean Button Styles */
+.or-g52-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.25;
+  transition: all 220ms ease-in-out;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.or-g52-btn-primary {
+  background-color: var(--or-primary, #007aff);
+  color: var(--or-on-primary, #ffffff);
+}
+
+.or-g52-btn-primary:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+.or-g52-btn-tonal {
+  background-color: var(--or-primary-container, #eff6ff);
+  color: var(--or-on-container, #1d4ed8);
+  border-color: color-mix(in srgb, var(--or-primary) 24%, transparent);
+}
+
+.or-g52-btn-tonal:hover:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+.or-g52-btn-subtle {
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #0f172a);
+  border: 1px solid var(--or-outline, #e2e8f0);
+}
+
+.or-g52-btn-subtle:hover:not(:disabled) {
+  background-color: var(--or-block, #f8fafc);
+  border-color: var(--or-outline);
+}
+
+.or-g52-btn-danger {
+  background-color: var(--or-error-container, #fef2f2);
+  color: var(--or-on-error, #b91c1c);
+  border: 1px solid color-mix(in srgb, var(--or-error) 24%, transparent);
+}
+
+.or-g52-btn-danger:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--or-error) 14%, var(--or-error-container));
+}
+
+.or-g52-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Mobile Touch Targets */
+@media (max-width: 640px) {
+  .or-g52-stat-card {
+    padding: 12px 14px;
+  }
+
+  .or-g52-table th,
+  .or-g52-table td {
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .or-g52-surface-card,
+  .or-g52-batch-pill,
+  .or-g52-tab,
+  .or-g52-btn,
+  .or-g52-mobile-segmented-btn,
+  .or-g52-table tr:hover td {
+    transition: none !important;
+    animation: none !important;
+  }
+}

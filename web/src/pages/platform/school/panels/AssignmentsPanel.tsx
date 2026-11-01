@@ -16,6 +16,8 @@ import {
   type PageMeta,
   type PageQuery,
 } from "../SchoolControls";
+import "../../../../ui-redesign/g53/g53.css";
+import { Select as AppSelect } from "../../../../components/ui/select";
 
 type AssignmentsMainProps = {
   assignments: TeacherClassAssignmentRecord[];
@@ -45,30 +47,30 @@ export function AssignmentsMainPanel({
         />
       }
     >
-      <div className="overflow-x-auto">
+      <div className="or-g53-table-container">
         <table className="min-w-[680px] w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+          <thead className="border-b border-or-outline bg-or-block text-xs font-semibold text-or-muted">
             <tr>
-              <th className="px-3 py-2">教师</th>
-              <th className="px-3 py-2">班级</th>
-              <th className="px-3 py-2">状态</th>
-              <th className="px-3 py-2 text-right">操作</th>
+              <th className="px-3.5 py-2.5">教师</th>
+              <th className="px-3.5 py-2.5">班级</th>
+              <th className="px-3.5 py-2.5">状态</th>
+              <th className="px-3.5 py-2.5 text-right">操作</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-[var(--or-outline)]">
             {assignments.map((assignment) => (
-              <tr key={`${assignment.teacher_id}:${assignment.class_id}:${assignment.subject || ""}`} className="border-t border-slate-100">
-                <td className="px-3 py-2">
-                  <span className="font-medium">{assignment.teacher_name || assignment.teacher_username}</span>
-                  <span className="ml-2 font-mono text-xs text-slate-500">{assignment.teacher_username}</span>
+              <tr key={`${assignment.teacher_id}:${assignment.class_id}:${assignment.subject || ""}`} className="transition-colors hover:bg-or-block/50 align-middle">
+                <td className="px-3.5 py-2.5">
+                  <span className="font-semibold text-or-text">{assignment.teacher_name || assignment.teacher_username}</span>
+                  <span className="ml-2 font-mono text-xs font-medium text-or-muted">{assignment.teacher_username}</span>
                 </td>
-                <td className="px-3 py-2 text-slate-700">
+                <td className="px-3.5 py-2.5 font-medium text-or-text">
                   {[assignment.class_grade, assignment.class_name].filter(Boolean).join(" · ")}
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-3.5 py-2.5">
                   <StatusBadge status={assignment.teacher_status} />
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td className="px-3.5 py-2.5 text-right">
                   <IconButton
                     label="移除分配"
                     disabled={busy}
@@ -121,14 +123,14 @@ export function AssignmentsAsidePanel({
 }: AssignmentsAsideProps) {
   return (
     <aside className="min-w-0 space-y-6">
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-base font-semibold text-slate-950">分配任课教师</h2>
-        <p className="mt-1 text-sm text-slate-500">将教师绑定到对应班级，绑定后教师可查看班级学生并发布作业。</p>
+      <section className="or-g53-card p-4 sm:p-5">
+        <h2 className="text-base font-semibold text-or-text">分配任课教师</h2>
+        <p className="mt-1 text-sm text-or-muted">将教师绑定至班级，绑定后教师可发布试卷与查看学生答卷。</p>
         <form className="mt-4 space-y-3" onSubmit={submitAssignment}>
-          <select
-            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          <AppSelect
+            className="or-g53-select w-full text-sm"
             value={assignTeacherId}
-            onChange={(e) => setAssignTeacherId(e.target.value)}
+            onValueChange={(value) => setAssignTeacherId(value)}
             required
           >
             <option value="">选择教师</option>
@@ -137,11 +139,11 @@ export function AssignmentsAsidePanel({
                 {teacher.display_name || teacher.username}
               </option>
             ))}
-          </select>
-          <select
-            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          </AppSelect>
+          <AppSelect
+            className="or-g53-select w-full text-sm"
             value={assignClassId}
-            onChange={(e) => setAssignClassId(e.target.value)}
+            onValueChange={(value) => setAssignClassId(value)}
             required
           >
             <option value="">选择班级</option>
@@ -150,14 +152,14 @@ export function AssignmentsAsidePanel({
                 {klass.name}
               </option>
             ))}
-          </select>
+          </AppSelect>
           <button
             type="submit"
             disabled={busy || !assignTeacherId || !assignClassId}
             data-testid="assign-teacher-class"
-            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            className="or-g53-btn-primary w-full py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Link2 className="h-4 w-4" />
+            <Link2 className="h-4 w-4 shrink-0" />
             分配班级
           </button>
         </form>

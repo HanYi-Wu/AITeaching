@@ -172,7 +172,7 @@ describe("GraphNodePanel request and snapshot lifecycle", () => {
     expect(screen.getByLabelText("标准名称")).toHaveValue("本地未保存名称");
     expect(screen.getByLabelText("标签（逗号分隔）")).toHaveValue("本地标签");
     expect(screen.getByLabelText("别名（逗号分隔）")).toHaveValue("本地别名");
-    expect(screen.getByLabelText("节点类型")).toHaveValue("skill");
+    expect(screen.getByLabelText("节点类型")).toHaveTextContent("技能");
     expect(screen.getByRole("button", { name: "保存修改" })).toBeDisabled();
 
     view.rerender(panel({ selectedNode: refreshedNode, tab: "notes", onSaved }));

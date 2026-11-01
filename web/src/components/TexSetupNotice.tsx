@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, ExternalLink, RefreshCw } from "lucide-react";
+import { AlertCircle, ChevronDown, ExternalLink, RefreshCw } from "lucide-react";
 import { apiGet, apiPost, ensureApiBase } from "../api/client";
 import { openExternalUrl } from "../lib/openExternalUrl";
 
@@ -24,6 +24,7 @@ export function TexSetupNotice({ onError }: Props) {
   const [loading, setLoading] = useState(true);
   const [installMsg, setInstallMsg] = useState<string | null>(null);
   const [installBusy, setInstallBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -45,6 +46,7 @@ export function TexSetupNotice({ onError }: Props) {
   }, [load]);
 
   const handleInstall = async () => {
+    setExpanded(true);
     setInstallBusy(true);
     setInstallMsg(null);
     onError(null);
@@ -75,43 +77,65 @@ export function TexSetupNotice({ onError }: Props) {
   const showOneClick = status.platform === "win32" && status.winget_on_path;
 
   return (
-    <div className="flex shrink-0 flex-col gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-      <div className="flex items-start gap-2">
-        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-        <div className="min-w-0 flex-1">
-          <p className="font-medium">{t("compose:texNoticeTitle")}</p>
-          <p className="mt-1 text-xs leading-relaxed text-amber-900/90">{t("compose:texNoticeBody")}</p>
-          {installMsg ? <p className="mt-2 text-xs text-amber-900">{installMsg}</p> : null}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 pl-6">
+    <div className="or-g49-tex-notice">
+      <div className="or-g49-tex-notice-row">
+        <AlertCircle className="h-4 w-4 shrink-0 text-[var(--or-on-warning)]" aria-hidden />
+        <p className="min-w-0 flex-1 truncate font-semibold text-[var(--or-on-warning)]">
+          {t("compose:texNoticeTitle")}
+        </p>
         <button
           type="button"
-          onClick={() => void openExternalUrl(MIKTEX_DOWNLOAD)}
-          className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100"
+          className="or-g49-tex-notice-toggle"
+          aria-expanded={expanded}
+          aria-controls="compose-tex-setup-actions"
+          onClick={() => setExpanded((value) => !value)}
         >
-          <ExternalLink className="h-3.5 w-3.5" />
-          {t("compose:texNoticeOpenGuide")}
+          {expanded ? t("compose:texNoticeCollapse") : t("compose:texNoticeActions")}
+          <ChevronDown className={`h-3.5 w-3.5 transition-transform${expanded ? " rotate-180" : ""}`} aria-hidden />
         </button>
-        {showOneClick ? (
+      </div>
+      <div
+        id="compose-tex-setup-actions"
+        className="or-g49-tex-notice-details"
+        hidden={!expanded}
+      >
+        <p className="text-sm leading-relaxed text-[color-mix(in_srgb,var(--or-on-warning)_90%,transparent)]">
+          {t("compose:texNoticeBody")}
+        </p>
+        {installMsg ? (
+          <p role="status" className="text-sm font-medium text-[var(--or-on-warning)]">
+            {installMsg}
+          </p>
+        ) : null}
+        <div className="or-g49-tex-notice-actions">
           <button
             type="button"
-            disabled={installBusy}
-            onClick={() => void handleInstall()}
-            className="rounded-md border border-amber-400 bg-amber-100 px-2.5 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-200 disabled:opacity-50"
+            onClick={() => void openExternalUrl(MIKTEX_DOWNLOAD)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-[var(--or-card)] px-3 py-1.5 text-sm font-semibold text-[var(--or-on-warning)] hover:bg-[color-mix(in_srgb,var(--or-warning-container)_70%,transparent)] transition-colors"
           >
-            {installBusy ? t("common:loading") : t("compose:texNoticeOneClick")}
+            <ExternalLink className="h-3.5 w-3.5 text-[var(--or-on-warning)]" />
+            {t("compose:texNoticeOpenGuide")}
           </button>
-        ) : null}
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void load()}
-          className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100 disabled:opacity-50"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          {t("compose:texNoticeRecheck")}
-        </button>
+          {showOneClick ? (
+            <button
+              type="button"
+              disabled={installBusy}
+              onClick={() => void handleInstall()}
+              className="rounded-lg border border-amber-400 bg-[color-mix(in_srgb,var(--or-warning-container)_60%,transparent)] px-3 py-1.5 text-sm font-semibold text-[var(--or-on-warning)] hover:bg-[var(--or-warning-container)] transition-colors disabled:opacity-50"
+            >
+              {installBusy ? t("common:loading") : t("compose:texNoticeOneClick")}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => void load()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-[var(--or-card)] px-3 py-1.5 text-sm font-semibold text-[var(--or-on-warning)] hover:bg-[color-mix(in_srgb,var(--or-warning-container)_70%,transparent)] transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className="h-3.5 w-3.5 text-[var(--or-on-warning)]" />
+            {t("compose:texNoticeRecheck")}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { test, expect, vi } from 'vitest';
 import { BankFolderExplorer } from './BankFolderExplorer';
 import { apiPost } from '../api/client';
+import { selectOption } from '../test/selectOption';
 vi.mock('../api/client', () => ({ apiPost: vi.fn() }));
 
 test('renders nested folders and questions, and moves the selected batch', async () => {
@@ -12,7 +13,7 @@ test('renders nested folders and questions, and moves the selected batch', async
     renderItem={item => <li key={item.qualified_id}><button>{item.qualified_id}</button></li>} />);
   expect(screen.getByText('函数')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'q1' })).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText('移动到目录'), { target: { value: '数学/函数' } });
+  await selectOption(screen.getByRole('combobox', { name: '移动到目录' }), '数学/函数');
   fireEvent.click(screen.getByRole('button', { name: '移动已选 1 题' }));
   expect(apiPost).toHaveBeenCalledWith('/api/bank/folders/actions', { action: 'move', path: '数学/函数', qualified_ids: ['q1'] });
 });
@@ -118,7 +119,7 @@ test('prunes stale questions and warns user before moving', async () => {
       renderItem={(item) => <div>{item.qualified_id}</div>}
     />
   );
-  fireEvent.change(screen.getByLabelText('移动到目录'), { target: { value: '数学' } });
+  await selectOption(screen.getByRole('combobox', { name: '移动到目录' }), '数学');
   fireEvent.click(screen.getByRole('button', { name: '移动已选 2 题' }));
 
   expect(onError).toHaveBeenCalledWith(expect.stringContaining('仅移动尚有效的题目'));
@@ -145,7 +146,7 @@ test('supports moving questions that were selected before search filter using al
       renderItem={(item) => <div>{item.qualified_id}</div>}
     />
   );
-  fireEvent.change(screen.getByLabelText('移动到目录'), { target: { value: '数学' } });
+  await selectOption(screen.getByRole('combobox', { name: '移动到目录' }), '数学');
   fireEvent.click(screen.getByRole('button', { name: '移动已选 1 题' }));
 
   expect(onError).toHaveBeenCalledWith(null);

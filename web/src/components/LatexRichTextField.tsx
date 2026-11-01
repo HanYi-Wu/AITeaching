@@ -11,7 +11,11 @@ import {
 } from "react";
 import { MathSymbolsDropdown } from "./latexField/MathSymbolsPanel";
 import { MathEditPopup } from "./latexField/MathEditPopup";
-import { getFieldSelection } from "./latexField/asyncCallbackBridge";
+import {
+  focusVisualEditorAtSerializedOffset,
+  getFieldSelection,
+  registerAsyncFieldBridge,
+} from "./latexField/asyncCallbackBridge";
 import { Shapes, Table2 } from "lucide-react";
 
 import { resourceApiUrl } from "../api/client";
@@ -103,6 +107,14 @@ export function LatexRichTextField({
   const composingRef = useRef(false);
   const compositionFrameRef = useRef<number | null>(null);
   const compositionFrameVersionRef = useRef(0);
+  const compositionCommitCallbackRef = useRef<(() => void) | null>(null);
+  const compositionPendingAtUnmountRef = useRef(false);
+  const compositionBaseValueRef = useRef(value);
+  const compositionCommitTextRef = useRef<string | null>(null);
+  const compositionSourceTextRef = useRef<string | null>(null);
+  const compositionWaitersRef = useRef<Set<(committed: boolean) => void>>(new Set());
+  const valueRef = useRef(value);
+  valueRef.current = value;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -139,20 +151,68 @@ export function LatexRichTextField({
       window.cancelAnimationFrame(compositionFrameRef.current);
     }
     const version = ++compositionFrameVersionRef.current;
+    compositionCommitCallbackRef.current = commit;
     compositionFrameRef.current = window.requestAnimationFrame(() => {
       if (version !== compositionFrameVersionRef.current) return;
       compositionFrameRef.current = null;
-      commit();
+      const pendingCommit = compositionCommitCallbackRef.current;
+      compositionCommitCallbackRef.current = null;
+      pendingCommit?.();
     });
   }, []);
 
-  useLayoutEffect(() => () => {
+  const cancelScheduledCompositionCommit = useCallback(() => {
     compositionFrameVersionRef.current++;
     if (compositionFrameRef.current !== null) {
       window.cancelAnimationFrame(compositionFrameRef.current);
       compositionFrameRef.current = null;
     }
+    compositionCommitCallbackRef.current = null;
   }, []);
+
+  const flushScheduledCompositionCommit = useCallback(() => {
+    const pendingCommit = compositionCommitCallbackRef.current;
+    if (!pendingCommit) return;
+    cancelScheduledCompositionCommit();
+    pendingCommit();
+  }, [cancelScheduledCompositionCommit]);
+
+  const resolveCompositionWaiters = useCallback((committed: boolean) => {
+    const waiters = Array.from(compositionWaitersRef.current);
+    compositionWaitersRef.current.clear();
+    for (const resolve of waiters) resolve(committed);
+  }, []);
+
+  const acknowledgeCompositionValue = useCallback((committedValue: string) => {
+    if (compositionCommitTextRef.current !== committedValue) return;
+    compositionCommitTextRef.current = null;
+    compositionBaseValueRef.current = committedValue;
+    resolveCompositionWaiters(true);
+  }, [resolveCompositionWaiters]);
+
+  const waitForCompositionCommit = useCallback((): Promise<boolean> => {
+    if (
+      !composingRef.current &&
+      compositionFrameRef.current === null &&
+      compositionCommitTextRef.current === null
+    ) {
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => compositionWaitersRef.current.add(resolve));
+  }, []);
+
+  useLayoutEffect(() => () => {
+    compositionPendingAtUnmountRef.current = (
+      composingRef.current ||
+      compositionFrameRef.current !== null ||
+      compositionCommitCallbackRef.current !== null ||
+      compositionCommitTextRef.current !== null
+    );
+    cancelScheduledCompositionCommit();
+    compositionCommitTextRef.current = null;
+    compositionSourceTextRef.current = null;
+    resolveCompositionWaiters(false);
+  }, [cancelScheduledCompositionCommit, resolveCompositionWaiters]);
 
   /* ─── Lint ─── */
   const lintResults = useMemo<MathLintResult[]>(() => lintMathContent(value), [value]);
@@ -169,6 +229,38 @@ export function LatexRichTextField({
     );
   }, [mode, textAreaRef]);
 
+  const focusAtSerializedOffset = useCallback((offset: number): boolean => {
+    if (mode === "source") {
+      const textarea = sourceTextareaRef.current;
+      if (!textarea) return false;
+      textarea.focus();
+      textarea.setSelectionRange(offset, offset);
+      syncHiddenSelection();
+      return true;
+    }
+    const root = editorRef.current;
+    if (!root) return false;
+    focusVisualEditorAtSerializedOffset(root, offset);
+    syncHiddenSelection();
+    return true;
+  }, [mode, syncHiddenSelection]);
+
+  useLayoutEffect(() => {
+    const syncTextarea = textAreaRef.current;
+    if (!syncTextarea) return;
+    return registerAsyncFieldBridge(syncTextarea, {
+      waitForCompositionCommit,
+      focusAt: focusAtSerializedOffset,
+      hasPendingComposition: () => (
+        compositionPendingAtUnmountRef.current ||
+        composingRef.current ||
+        compositionFrameRef.current !== null ||
+        compositionCommitCallbackRef.current !== null ||
+        compositionCommitTextRef.current !== null
+      ),
+    });
+  }, [textAreaRef, waitForCompositionCommit, focusAtSerializedOffset]);
+
   /* ─── Emit changes ─── */
 
   const emitFromEditor = useCallback(() => {
@@ -178,6 +270,24 @@ export function LatexRichTextField({
     lastEmittedRef.current = next;
     onChangeRef.current(next);
   }, []);
+
+  const emitCompositionFromEditor = useCallback((root: HTMLElement | null) => {
+    if (!root) return;
+    const next = serializeEditor(root);
+    lastEmittedRef.current = next;
+    compositionCommitTextRef.current = next;
+    onChangeRef.current(next);
+    syncHiddenSelection();
+    if (valueRef.current === next) acknowledgeCompositionValue(next);
+  }, [syncHiddenSelection, acknowledgeCompositionValue]);
+
+  const emitCompositionFromSource = useCallback((next: string) => {
+    lastEmittedRef.current = next;
+    compositionCommitTextRef.current = next;
+    onChangeRef.current(next);
+    syncHiddenSelection();
+    if (valueRef.current === next) acknowledgeCompositionValue(next);
+  }, [syncHiddenSelection, acknowledgeCompositionValue]);
 
   const deleteWidgetWithUndo = useCallback(
     (widget: HTMLElement) => {
@@ -214,17 +324,41 @@ export function LatexRichTextField({
   /* ─── Rebuild editor from prop ─── */
 
   useLayoutEffect(() => {
-    if (mode !== "visual") return;
-    const root = editorRef.current;
-    if (!root) return;
-    if (composingRef.current) return;
-    const isFocused = document.activeElement === root;
-    if (isFocused && value === lastEmittedRef.current) return;
-    // A popup keeps a reference to its widget. Replacing the whole tree while
-    // it is open prevents a stale popup from editing a newly supplied value.
-    buildEditorDom(root, value, !anyPopupOpen);
-    lastEmittedRef.current = value;
-  }, [value, mode]);
+    const compositionPending = (
+      composingRef.current ||
+      compositionFrameRef.current !== null ||
+      compositionCommitTextRef.current !== null
+    );
+    const expectedCompositionValue = compositionCommitTextRef.current ?? compositionBaseValueRef.current;
+    if (compositionPending && value !== expectedCompositionValue) {
+      if (!composingRef.current && value === lastEmittedRef.current) {
+        // A browser may dispatch the final non-composing input after compositionend.
+        // Treat the latest value emitted by this field as the commit and discard the
+        // older deferred snapshot so it cannot overwrite input typed immediately after.
+        cancelScheduledCompositionCommit();
+        compositionCommitTextRef.current = value;
+        compositionSourceTextRef.current = null;
+      } else {
+        composingRef.current = false;
+        cancelScheduledCompositionCommit();
+        compositionCommitTextRef.current = null;
+        compositionSourceTextRef.current = null;
+        resolveCompositionWaiters(false);
+      }
+    }
+    if (mode === "visual") {
+      const root = editorRef.current;
+      if (!root || composingRef.current) return;
+      const isFocused = document.activeElement === root;
+      if (!(isFocused && value === lastEmittedRef.current)) {
+        // A popup keeps a reference to its widget. Replacing the whole tree while
+        // it is open prevents a stale popup from editing a newly supplied value.
+        buildEditorDom(root, value, !anyPopupOpen);
+        lastEmittedRef.current = value;
+      }
+    }
+    if (!composingRef.current) acknowledgeCompositionValue(value);
+  }, [value, mode, acknowledgeCompositionValue, cancelScheduledCompositionCommit, resolveCompositionWaiters]);
 
   /* ─── Selection tracking ─── */
 
@@ -246,7 +380,8 @@ export function LatexRichTextField({
   const openMathPopup = useCallback((widget: HTMLElement, latex: string, isNew: boolean) => {
     const rect = widget.getBoundingClientRect();
     const vw = window.innerWidth;
-    setMathPopupPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, vw - 340)) });
+    const popupW = Math.min(344, vw - 16);
+    setMathPopupPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, vw - popupW - 8)) });
     setMathPopup({ widget, latex, isNew });
   }, []);
 
@@ -297,7 +432,7 @@ export function LatexRichTextField({
       const preview = popup.widget.querySelector(".mt-1\\.5") as HTMLElement | null;
       if (preview) {
         preview.textContent = "渲染中…";
-        preview.classList.remove("text-amber-600");
+        preview.classList.remove("text-[var(--or-on-warning)]");
         void renderMermaidToElement(src, preview);
       }
     }
@@ -315,7 +450,7 @@ export function LatexRichTextField({
     if (!mermaidPopup || !mermaidPreviewRef.current) return;
     const el = mermaidPreviewRef.current;
     el.textContent = "渲染中…";
-    el.classList.remove("text-amber-600");
+    el.classList.remove("text-[var(--or-on-warning)]");
     const seq = ++mermaidRenderSeqRef.current;
     el.dataset.renderSeq = String(seq);
     const timer = setTimeout(() => void renderMermaidToElement(mermaidDraft, el, seq), 400);
@@ -327,7 +462,8 @@ export function LatexRichTextField({
   const openImagePopup = useCallback((widget: HTMLElement, kind: string, path: string) => {
     const rect = widget.getBoundingClientRect();
     const vw = window.innerWidth;
-    setImagePopupPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, vw - 340)) });
+    const popupW = Math.min(328, vw - 16);
+    setImagePopupPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, vw - popupW - 8)) });
     setImagePopup({ widget, kind, path });
   }, []);
 
@@ -613,10 +749,14 @@ export function LatexRichTextField({
   /* ─── Mode switching ─── */
 
   const switchToVisual = useCallback(() => {
+    flushScheduledCompositionCommit();
     lastEmittedRef.current = null;
     setMode("visual");
-  }, []);
-  const switchToSource = useCallback(() => setMode("source"), []);
+  }, [flushScheduledCompositionCommit]);
+  const switchToSource = useCallback(() => {
+    flushScheduledCompositionCommit();
+    setMode("source");
+  }, [flushScheduledCompositionCommit]);
 
   
 
@@ -637,43 +777,44 @@ export function LatexRichTextField({
       />
 
       {/* ── Toolbar ── */}
-      {!hideToolbar ? <div className="flex flex-wrap items-center gap-0.5 rounded-t-md border border-slate-300 bg-gradient-to-b from-slate-50 to-slate-100/80 px-1.5 py-1">
+      {!hideToolbar ?
+        <div className="flex flex-wrap items-center gap-1.5 rounded-t-2xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_90%,transparent)] px-2.5 py-1.5">
         {/* mode toggle */}
-        <span className="mr-0.5 inline-flex overflow-hidden rounded border border-slate-200 bg-white text-[11px]">
+        <span className="or-tabs mr-1 inline-flex items-center rounded-full bg-[color-mix(in_srgb,var(--or-inset)_80%,transparent)] p-0.5 text-sm">
           <button
             type="button"
-            className={`px-2 py-0.5 font-medium transition-colors ${mode === "visual" ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+            className={`or-tab rounded-full px-3 py-1 text-sm font-medium transition-all ${mode === "visual" ? "bg-[var(--or-card)] text-[var(--or-text)] shadow-sm" : "text-[var(--or-muted)] hover:text-[var(--or-text)]"}`}
             onClick={switchToVisual}
           >
             可视化
           </button>
           <button
             type="button"
-            className={`px-2 py-0.5 font-medium transition-colors ${mode === "source" ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+            className={`or-tab rounded-full px-3 py-1 text-sm font-medium transition-all ${mode === "source" ? "bg-[var(--or-card)] text-[var(--or-text)] shadow-sm" : "text-[var(--or-muted)] hover:text-[var(--or-text)]"}`}
             onClick={switchToSource}
           >
             源码
           </button>
         </span>
 
-        <div className="mx-1 h-4 w-px bg-slate-300" />
+        <div className="mx-0.5 h-4 w-px bg-[var(--or-inset)]" />
 
         {/* insert math */}
         <button
           type="button"
-          className="rounded px-1.5 py-0.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-blue-700 hover:shadow-sm disabled:opacity-40"
+          className="or-button or-pill inline-flex items-center justify-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
           disabled={mode !== "visual"}
           onClick={insertMathAtCursor}
           title="插入行内公式（快捷键：$ 或 Ctrl+M）"
         >
-          <span className="font-serif italic">Σ</span>
-          <span className="ml-0.5 text-[10px]">公式</span>
+          <span className="font-serif italic text-sm">Σ</span>
+          <span>公式</span>
         </button>
 
         {/* quick math templates */}
         <button
           type="button"
-          className="rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-white hover:shadow-sm disabled:opacity-40"
+          className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
           disabled={mode !== "visual"}
           onClick={() => insertMathTemplate("\\frac{}{}")}
           title="分数"
@@ -682,7 +823,7 @@ export function LatexRichTextField({
         </button>
         <button
           type="button"
-          className="rounded px-1.5 py-0.5 text-[12px] text-slate-600 hover:bg-white hover:shadow-sm disabled:opacity-40"
+          className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
           disabled={mode !== "visual"}
           onClick={() => insertMathTemplate("\\sqrt{}")}
           title="平方根"
@@ -691,7 +832,7 @@ export function LatexRichTextField({
         </button>
         <button
           type="button"
-          className="rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-white hover:shadow-sm disabled:opacity-40"
+          className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
           disabled={mode !== "visual"}
           onClick={() => insertMathTemplate("x^{}")}
           title="上标"
@@ -700,7 +841,7 @@ export function LatexRichTextField({
         </button>
         <button
           type="button"
-          className="rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-white hover:shadow-sm disabled:opacity-40"
+          className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
           disabled={mode !== "visual"}
           onClick={() => insertMathTemplate("x_{}")}
           title="下标"
@@ -714,18 +855,18 @@ export function LatexRichTextField({
           onSelectSymbol={insertMathTemplate}
         />
 
-        <div className="mx-1 h-4 w-px bg-slate-300" />
+        <div className="mx-0.5 h-4 w-px bg-[var(--or-inset)]" />
 
         {/* insert primebrush */}
         {onRequestPrimeBrush && (
           <button
             type="button"
-            className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-sky-700 hover:shadow-sm disabled:opacity-40"
+            className="or-button or-pill inline-flex items-center justify-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] hover:text-[var(--or-on-container)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
             disabled={mode !== "visual" || busy}
             onClick={handleRequestPrimeBrush}
             title="插入教育绘图 / PrimeBrush"
           >
-            <Shapes className="h-3.5 w-3.5" aria-hidden />
+            <Shapes className="h-4 w-4 shrink-0" aria-hidden />
             <span>绘图</span>
           </button>
         )}
@@ -733,23 +874,24 @@ export function LatexRichTextField({
         {onRequestMermaid && (
           <button
             type="button"
-            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-emerald-700 hover:shadow-sm disabled:opacity-40"
+            className="or-button or-pill inline-flex items-center justify-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] hover:text-[var(--or-on-success)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
             disabled={mode !== "visual" || busy}
             onClick={handleRequestMermaid}
             title="插入流程图 / Mermaid 图表"
           >
-            <span className="mr-0.5">📊</span>图表
+            <span>📊</span>
+            <span>图表</span>
           </button>
         )}
 
         <button
           type="button"
-          className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-cyan-700 hover:shadow-sm disabled:opacity-40"
+          className="or-button or-pill inline-flex items-center justify-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] hover:text-cyan-700 active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
           disabled={mode !== "visual" || busy}
           onClick={insertTableAtCursor}
           title="插入表格"
         >
-          <Table2 className="h-3.5 w-3.5" aria-hidden />
+          <Table2 className="h-4 w-4 shrink-0" aria-hidden />
           <span>表格</span>
         </button>
 
@@ -757,17 +899,19 @@ export function LatexRichTextField({
         {onRequestImage && (
           <button
             type="button"
-            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-violet-700 hover:shadow-sm disabled:opacity-40"
+            className="or-button or-pill inline-flex items-center justify-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] hover:text-violet-700 active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
             disabled={mode !== "visual" || busy}
             onClick={handleRequestImage}
             title="插入图片"
           >
-            <span className="mr-0.5">🖼️</span>图片
+            <span>🖼️</span>
+            <span>图片</span>
           </button>
         )}
 
-        <div className="ml-auto text-[10px] text-slate-400">
-          <kbd className="rounded border border-slate-200 bg-slate-50 px-1">$</kbd> 公式
+        <div className="ml-auto flex items-center gap-1 text-[13px] text-[var(--or-muted)]">
+          <kbd className="rounded-md border border-[var(--or-outline)] bg-[var(--or-card)] px-1.5 py-0.5 font-mono text-[13px] text-[var(--or-muted)] shadow-2xs">$</kbd>
+          <span>公式</span>
         </div>
       </div> : null}
 
@@ -775,7 +919,7 @@ export function LatexRichTextField({
       {mode === "visual" ? (
         <div
           ref={editorRef}
-          className={`w-full border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 focus-visible:ring-offset-0 ${hideToolbar ? "rounded-md" : "rounded-b-md border-t-0"}`}
+          className={`w-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2.5 text-sm leading-relaxed text-[var(--or-text)] outline-none focus-visible:border-[var(--or-primary)] focus-visible:ring-1 focus-visible:ring-[var(--or-focus)] ${hideToolbar ? "rounded-2xl" : "rounded-b-2xl border-t-0"}`}
           style={{ minHeight: minH }}
           contentEditable
           suppressContentEditableWarning
@@ -788,13 +932,17 @@ export function LatexRichTextField({
           onClick={handleClick}
           onPaste={handlePaste}
           onCompositionStart={() => {
+            cancelScheduledCompositionCommit();
+            compositionBaseValueRef.current = valueRef.current;
+            lastEmittedRef.current = null;
+            compositionSourceTextRef.current = null;
             composingRef.current = true;
           }}
-          onCompositionEnd={() => {
+          onCompositionEnd={(e) => {
             composingRef.current = false;
+            const target = e.currentTarget;
             scheduleCompositionCommit(() => {
-              emitFromEditor();
-              syncHiddenSelection();
+              emitCompositionFromEditor(target);
             });
           }}
           onKeyUp={syncHiddenSelection}
@@ -805,23 +953,33 @@ export function LatexRichTextField({
           ref={sourceTextareaRef}
           onKeyUp={syncHiddenSelection}
           onMouseUp={syncHiddenSelection}
-          className={`w-full border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-relaxed text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 ${hideToolbar ? "rounded-md" : "rounded-b-md border-t-0"}`}
+          className={`w-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2.5 font-mono text-sm leading-relaxed text-[var(--or-text)] outline-none focus-visible:border-[var(--or-primary)] focus-visible:ring-1 focus-visible:ring-[var(--or-focus)] ${hideToolbar ? "rounded-2xl" : "rounded-b-2xl border-t-0"}`}
           style={{ minHeight: minH }}
           value={value}
           onChange={(e) => {
-            if (composingRef.current) return;
+            if (composingRef.current) {
+              compositionSourceTextRef.current = e.target.value;
+              return;
+            }
             lastEmittedRef.current = e.target.value;
             onChange(e.target.value);
           }}
           onCompositionStart={() => {
+            cancelScheduledCompositionCommit();
+            compositionBaseValueRef.current = valueRef.current;
+            lastEmittedRef.current = null;
+            compositionSourceTextRef.current = null;
             composingRef.current = true;
           }}
           onCompositionEnd={(e) => {
             composingRef.current = false;
-            const target = e.currentTarget;
+            const targetValue = e.currentTarget.value;
+            const next = targetValue !== compositionBaseValueRef.current
+              ? targetValue
+              : compositionSourceTextRef.current ?? targetValue;
+            compositionSourceTextRef.current = null;
             scheduleCompositionCommit(() => {
-              lastEmittedRef.current = target.value;
-              onChangeRef.current(target.value);
+              emitCompositionFromSource(next);
             });
           }}
           placeholder={placeholder}
@@ -831,14 +989,14 @@ export function LatexRichTextField({
 
       {/* ── Lint 提示条 ── */}
       {lintResults.length > 0 && (
-        <div className="mt-0.5 space-y-0.5">
+        <div className="mt-1 space-y-1">
           {lintResults.map((r, i) => (
             <div
               key={`${r.code}-${i}`}
-              className={`flex items-start gap-1.5 rounded px-2 py-1 text-[11px] leading-snug ${
+              className={`flex items-start gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] leading-snug ${
                 r.severity === "error"
-                  ? "bg-red-50 text-red-700"
-                  : "bg-amber-50 text-amber-700"
+                  ? "bg-[var(--or-error-container)] text-[var(--or-on-error)]"
+                  : "bg-[var(--or-warning-container)] text-[var(--or-on-warning)]"
               }`}
               role="alert"
             >
@@ -868,16 +1026,15 @@ export function LatexRichTextField({
           className="fixed z-50"
           style={{ top: mermaidPopupPos.top, left: mermaidPopupPos.left }}
         >
-          <div className="w-[480px] max-w-[95vw] rounded-lg border border-slate-200 bg-white p-3 shadow-2xl ring-1 ring-black/5">
+          <div className="or-dialog w-[490px] max-w-[calc(100vw-1rem)] rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-3.5 shadow-2xl ring-1 ring-black/5 sm:p-4">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-semibold text-emerald-700">编辑 Mermaid 图表</span>
-              <span className="text-[10px] text-slate-400">编辑源码，实时预览</span>
+              <span className="text-sm font-semibold text-[var(--or-on-success)]">编辑 Mermaid 图表</span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
-                <p className="mb-1 text-[10px] font-medium text-slate-500">源码</p>
+                <p className="mb-1 text-[13px] font-medium text-[var(--or-muted)]">源码</p>
                 <textarea
-                  className="h-48 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 font-mono text-xs leading-relaxed text-slate-800 outline-none focus:ring-2 focus:ring-emerald-400"
+                  className="or-input h-48 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-2.5 py-2 font-mono text-sm leading-relaxed text-[var(--or-text)] outline-none focus:ring-2 focus:ring-emerald-400"
                   value={mermaidDraft}
                   onChange={(e) => setMermaidDraft(e.target.value)}
                   spellCheck={false}
@@ -885,17 +1042,17 @@ export function LatexRichTextField({
                 />
               </div>
               <div>
-                <p className="mb-1 text-[10px] font-medium text-slate-500">预览</p>
+                <p className="mb-1 text-[13px] font-medium text-[var(--or-muted)]">预览</p>
                 <div
                   ref={mermaidPreviewRef}
-                  className="flex h-48 items-center justify-center overflow-auto rounded-md border border-slate-200 bg-white p-1 text-xs text-slate-400"
+                  className="flex h-48 items-center justify-center overflow-auto rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-2 text-[13px] text-[var(--or-muted)]"
                 />
               </div>
             </div>
-            <div className="mt-2.5 flex items-center justify-between">
+            <div className="mt-3 flex items-center justify-between">
               <button
                 type="button"
-                className="rounded-md px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                className="or-button or-button-danger or-pill inline-flex items-center justify-center rounded-full px-3.5 py-1.5 text-sm font-medium text-[var(--or-on-error)] hover:bg-[var(--or-error-container)]"
                 onClick={removeMermaidWidget}
               >
                 删除图表
@@ -903,14 +1060,14 @@ export function LatexRichTextField({
               <div className="flex gap-2">
                 <button
                   type="button"
-                  className="rounded-md px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                  className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-1.5 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)]"
                   onClick={() => closeMermaidPopup(false)}
                 >
                   取消
                 </button>
                 <button
                   type="button"
-                  className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+                  className="or-button or-button-primary or-pill inline-flex items-center justify-center rounded-full bg-[var(--or-primary)] px-3.5 py-1.5 text-sm font-medium text-[var(--or-on-primary)] hover:bg-[var(--or-primary)]"
                   onClick={() => closeMermaidPopup(true)}
                 >
                   确认
@@ -928,29 +1085,29 @@ export function LatexRichTextField({
           className="fixed z-50"
           style={{ top: imagePopupPos.top, left: imagePopupPos.left }}
         >
-          <div className="w-80 max-w-[95vw] rounded-lg border border-slate-200 bg-white p-3 shadow-2xl ring-1 ring-black/5">
+          <div className="or-dialog w-80 max-w-[95vw] rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-4 shadow-2xl ring-1 ring-black/5">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-semibold text-violet-700">图片</span>
-              <span className="truncate text-[10px] text-slate-400">
+              <span className="text-sm font-semibold text-violet-700">图片</span>
+              <span className="truncate text-[13px] text-[var(--or-muted)]">
                 {imagePopup.path.trim().split("/").pop()}
               </span>
             </div>
             <img
               src={resourceApiUrl(imagePopup.path.trim())}
               alt=""
-              className="max-h-64 w-full rounded-md border border-slate-200 object-contain"
+              className="max-h-64 w-full rounded-xl border border-[var(--or-outline)] object-contain"
             />
-            <div className="mt-2.5 flex items-center justify-between">
+            <div className="mt-3 flex items-center justify-between">
               <button
                 type="button"
-                className="rounded-md px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                className="or-button or-button-danger or-pill inline-flex items-center justify-center rounded-full px-3.5 py-1.5 text-sm font-medium text-[var(--or-on-error)] hover:bg-[var(--or-error-container)]"
                 onClick={removeImageWidget}
               >
                 删除图片
               </button>
               <button
                 type="button"
-                className="rounded-md px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-1.5 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)]"
                 onClick={closeImagePopup}
               >
                 关闭

@@ -1,0 +1,375 @@
+/* FlClash Design System styling for G54 Student Workspace */
+
+/* Base FlClash Surfaces */
+.or-g54-page {
+  background-color: var(--or-page, #f8fafc);
+  color: var(--or-text, #0f172a);
+}
+
+.or-g54-card {
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 16px;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+/* Static card rule: NEVER hover lift or pointer */
+.or-g54-card-static {
+  cursor: default !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Interactive card rule: ONLY for real clickable elements */
+.or-g54-card-interactive {
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+.or-g54-card-interactive:hover {
+  border-color: var(--or-outline);
+  background-color: var(--or-block);
+}
+.or-g54-card-interactive:active {
+  transform: scale(0.995);
+}
+
+/* Strictly Centered Pills */
+.or-g54-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1;
+  border-radius: 9999px;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem; /* 14px */
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Navigation Dock Tabs (FlClash segment pill style) */
+.or-g54-nav-dock {
+  background-color: var(--or-block, #f1f5f9);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 20px;
+  padding: 0.375rem;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.375rem;
+}
+
+.or-g54-nav-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 14px;
+  padding: 0.625rem 1rem;
+  font-size: 0.9375rem; /* 15px */
+  font-weight: 500;
+  color: var(--or-muted, #64748b);
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+}
+.or-g54-nav-item:hover:not(:disabled) {
+  color: var(--or-text, #0f172a);
+  background-color: var(--or-block);
+}
+.or-g54-nav-item[data-selected="true"] {
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #0f172a);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border-color: var(--or-outline);
+}
+.or-g54-nav-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Countdown & Proctoring status chips */
+.or-g54-timer-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: var(--or-primary, #0f172a);
+  color: var(--or-on-primary, #ffffff);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9375rem; /* 15px */
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.or-g54-proctor-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: var(--or-warning-container);
+  border: 1px solid color-mix(in srgb, var(--or-warning) 28%, transparent);
+  color: var(--or-on-warning);
+  font-size: 0.875rem; /* 14px */
+  font-weight: 500;
+  padding: 0.5rem 0.875rem;
+  border-radius: 14px;
+  line-height: 1.4;
+}
+
+.or-g54-status-success,
+.or-g54-status-warning,
+.or-g54-status-error {
+  border: 1px solid transparent;
+}
+
+.or-g54-status-success {
+  border-color: color-mix(in srgb, var(--or-success) 28%, transparent);
+  background-color: var(--or-success-container);
+  color: var(--or-on-success);
+}
+
+.or-g54-status-warning {
+  border-color: color-mix(in srgb, var(--or-warning) 28%, transparent);
+  background-color: var(--or-warning-container);
+  color: var(--or-on-warning);
+}
+
+.or-g54-status-error {
+  border-color: color-mix(in srgb, var(--or-error) 28%, transparent);
+  background-color: var(--or-error-container);
+  color: var(--or-on-error);
+}
+
+.or-g54-student-nav[data-indicator-ready="true"] > .or-g54-student-nav-item[aria-pressed="true"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Question Navigator buttons */
+.or-g54-qnav-scroll {
+  scroll-padding-inline: 0.5rem;
+}
+
+.or-g54-qnav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 2.25rem;
+  height: 2.25rem;
+  padding-inline: 0.625rem;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  border: 1px solid var(--or-outline, #cbd5e1);
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #334155);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.or-g54-qnav-btn:hover {
+  border-color: var(--or-outline);
+  background-color: var(--or-block);
+}
+.or-g54-qnav-btn[data-answered="true"] {
+  border-color: color-mix(in srgb, var(--or-success) 42%, transparent);
+  background-color: var(--or-success-container);
+  color: var(--or-on-success);
+}
+
+/* Exam Question Card */
+.or-g54-question-card {
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 16px;
+  padding: 1.25rem;
+  scroll-margin-top: 1.5rem;
+}
+
+/* Options */
+.or-g54-option-label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 12px;
+  background-color: var(--or-card, #ffffff);
+  cursor: pointer;
+  font-size: 0.9375rem; /* 15px */
+  transition: all 0.15s ease;
+  min-height: 48px;
+}
+.or-g54-option-label:hover {
+  background-color: var(--or-block);
+  border-color: var(--or-outline);
+}
+.or-g54-option-label[data-checked="true"] {
+  border-color: var(--or-primary);
+  background-color: var(--or-primary-container);
+  color: var(--or-on-container);
+  font-weight: 500;
+}
+
+/* Buttons */
+.or-g54-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 12px;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.9375rem; /* 15px */
+  font-weight: 600;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+  min-height: 44px;
+}
+.or-g54-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.or-g54-btn-primary {
+  background-color: var(--or-primary, #0f172a);
+  color: var(--or-on-primary, #ffffff);
+}
+.or-g54-btn-primary:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.or-g54-btn-tonal {
+  background-color: var(--or-block, #f1f5f9);
+  color: var(--or-text, #0f172a);
+  border-color: var(--or-outline, #e2e8f0);
+}
+.or-g54-btn-tonal:hover:not(:disabled) {
+  background-color: var(--or-inset);
+}
+
+/* Inputs and Selects */
+.or-g54-input {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--or-outline, #cbd5e1);
+  background-color: var(--or-card, #ffffff);
+  padding: 0.625rem 0.875rem;
+  font-size: 0.9375rem; /* 15px */
+  color: var(--or-text, #0f172a);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  min-height: 44px;
+}
+/* Modals */
+.or-g54-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background-color: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(4px);
+  animation: or-g54-fade-in 0.2s ease-out;
+}
+
+.or-g54-dialog {
+  position: fixed;
+  z-index: 51;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  max-width: 32rem;
+  max-height: min(90dvh, 44rem);
+  overflow-y: auto;
+  background-color: var(--or-card, #ffffff);
+  border-radius: 24px;
+  padding: 1.75rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  animation: or-g54-scale-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes or-g54-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes or-g54-scale-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* ==========================================================================
+   Mobile & Responsive Adaptations (Screen width < 640px)
+   ========================================================================== */
+@media (max-width: 639px) {
+  /* Prevent iOS auto-zoom on inputs */
+  input, select, textarea, .or-g54-input {
+    font-size: 16px !important;
+  }
+
+  /* Compact padding for cards on mobile */
+  .or-g54-question-card {
+    padding: 1rem;
+    border-radius: 14px;
+  }
+
+  /* Touch-friendly navigation dock */
+  .or-g54-nav-item {
+    min-height: 48px;
+    padding: 0.5rem 0.25rem;
+    font-size: 0.875rem;
+    gap: 0.25rem;
+  }
+
+  /* Option labels on mobile */
+  .or-g54-option-label {
+    min-height: 48px;
+    padding: 0.75rem 0.875rem;
+    font-size: 0.9375rem;
+  }
+
+  /* Action buttons full-width touch targets */
+  .or-g54-btn {
+    width: 100%;
+    min-height: 46px;
+  }
+
+  /* Dialog adjustments on small screens */
+  .or-g54-dialog {
+    width: calc(100vw - 2rem);
+    padding: 1.25rem;
+    border-radius: 20px;
+    max-height: min(92dvh, 44rem);
+  }
+
+  /* Proctoring notice chip on mobile */
+  .or-g54-proctor-pill {
+    font-size: 0.875rem;
+    padding: 0.375rem 0.625rem;
+  }
+
+  /* Timer pill on mobile */
+  .or-g54-timer-pill {
+    font-size: 0.875rem;
+    padding: 0.375rem 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .or-g54-dialog-backdrop,
+  .or-g54-dialog,
+  .or-g54-card-interactive,
+  .or-g54-nav-item {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .or-g54-card-interactive:active {
+    transform: none !important;
+  }
+}

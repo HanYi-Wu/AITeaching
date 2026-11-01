@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
+import { Select as AppSelect } from "../../components/ui/select";
 
 const LazyPdfPreview = lazy(() =>
   import("../../components/PdfPreview").then(({ PdfPreview }) => ({ default: PdfPreview })),
@@ -39,23 +40,27 @@ export function ComposePdfPreviewAside({
   const { t } = useTranslation(["compose", "common"]);
 
   return (
-    <aside className="hidden min-h-0 w-full flex-col border-slate-200 bg-white shadow-xl xl:relative xl:z-auto xl:flex xl:translate-x-0 xl:shadow-none xl:static xl:h-auto xl:w-auto xl:min-w-0 xl:flex-1 xl:basis-0">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
-        <span className="text-xs font-medium text-slate-600">{t("compose:pdfVariantLabel")}</span>
-        <select
-          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+    <aside
+      className="or-g49-compose-pdf-aside"
+      aria-label="PDF 预览"
+      data-has-pdf={composeRightPdfPath ? "true" : "false"}
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] px-4 py-2.5">
+        <span className="text-sm font-medium text-[var(--or-muted)]">{t("compose:pdfVariantLabel")}</span>
+        <AppSelect
+          className="or-g49-input py-1 text-sm font-medium"
           value={pdfVariant}
-          onChange={(e) =>
-            onPdfVariantChange(e.target.value === "teacher" ? "teacher" : "student")
+          onValueChange={(value) =>
+            onPdfVariantChange(value === "teacher" ? "teacher" : "student")
           }
         >
           <option value="student">{t("compose:pdfVariantStudent")}</option>
           <option value="teacher">{t("compose:pdfVariantTeacher")}</option>
-        </select>
+        </AppSelect>
         {pdfExamId && !previewPdfId ? (
           <button
             type="button"
-            className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800"
+            className="or-g49-btn or-g49-btn-tonal text-xs py-1"
             onClick={() => onDownloadPdfBundle(pdfExamId)}
           >
             下载正式 PDF
@@ -64,7 +69,7 @@ export function ComposePdfPreviewAside({
         {pdfExamId && !previewPdfId ? (
           <button
             type="button"
-            className="ml-auto rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-800 disabled:opacity-50"
+            className="ml-auto or-g49-btn or-g49-btn-secondary text-xs py-1 disabled:opacity-50"
             disabled={busy || viewPdfBusy}
             onClick={onOpenPdfExternally}
           >
@@ -74,7 +79,7 @@ export function ComposePdfPreviewAside({
         {wordOpenExamId && !previewPdfId ? (
           <button
             type="button"
-            className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800"
+            className="or-g49-btn or-g49-btn-tonal text-xs py-1"
             onClick={() => onDownloadWordBundle(wordOpenExamId)}
           >
             下载正式 Word
@@ -83,7 +88,7 @@ export function ComposePdfPreviewAside({
         {wordOpenExamId && !previewPdfId ? (
           <button
             type="button"
-            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-800 disabled:opacity-50"
+            className="or-g49-btn or-g49-btn-secondary text-xs py-1 disabled:opacity-50"
             disabled={busy || viewWordBusy}
             onClick={onOpenWordExternally}
           >
@@ -91,13 +96,15 @@ export function ComposePdfPreviewAside({
           </button>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="min-h-0 flex-1 overflow-auto p-3.5">
         {composeRightPdfPath ? (
-          <Suspense fallback={<p className="text-xs text-slate-500" role="status">正在加载 PDF 预览…</p>}>
+          <Suspense fallback={<p className="p-4 text-sm font-medium text-[var(--or-muted)]" role="status">正在加载 PDF 预览…</p>}>
             <LazyPdfPreview apiPath={composeRightPdfPath} className="min-h-[min(70vh,560px)]" />
           </Suspense>
         ) : (
-          <p className="text-xs text-slate-500">{t("compose:previewPdfEmptyHint")}</p>
+          <div className="flex h-64 items-center justify-center p-6 text-center">
+            <p className="text-sm text-[var(--or-muted)]">{t("compose:previewPdfEmptyHint")}</p>
+          </div>
         )}
       </div>
     </aside>

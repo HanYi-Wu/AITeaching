@@ -4,6 +4,7 @@ import { Clock, FolderOpen, FolderPlus, Trash2 } from "lucide-react";
 import { NewProjectDialog } from "../../components/NewProjectDialog";
 import { apiGet, apiPost, ensureApiBase } from "../../api/client";
 import { cn } from "../../lib/utils";
+import "../../ui-redesign/g55/g55.css";
 
 type RecentItem = { name: string; path: string; last_opened: string };
 
@@ -101,54 +102,54 @@ export function ProjectPane({ onProjectReady, onError }: Props) {
         }}
         onError={onError}
       />
-      <div className="mb-10 flex flex-wrap gap-3">
+      <div className="mb-6 md:mb-8 flex flex-col sm:flex-row gap-3">
         <button
           type="button"
           disabled={loading}
           onClick={() => setNewProjectOpen(true)}
           className={cn(
-            "inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-900/40 transition hover:bg-indigo-500",
+            "inline-flex h-11 w-full sm:w-auto items-center justify-center gap-2.5 rounded-lg bg-or-primary px-5 text-[15px] font-semibold text-or-on-primary shadow-sm transition hover:brightness-95",
             loading && "cursor-not-allowed opacity-60",
           )}
         >
           <FolderPlus className="h-4 w-4" />
-          {t("welcome:newProject")}
+          <span>{t("welcome:newProject")}</span>
         </button>
         <button
           type="button"
           disabled={loading}
           onClick={() => void handleOpenFolder()}
           className={cn(
-            "inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800/80 px-5 py-2.5 text-sm font-medium text-slate-100 transition hover:bg-slate-700",
+            "inline-flex h-11 w-full sm:w-auto items-center justify-center gap-2.5 rounded-lg border border-[var(--or-primary)] bg-[color-mix(in_srgb,var(--or-primary)_80%,transparent)] px-5 text-[15px] font-medium text-[var(--or-text)] transition hover:bg-slate-700",
             loading && "cursor-not-allowed opacity-60",
           )}
         >
-          <FolderOpen className="h-4 w-4" />
-          {t("welcome:openProject")}
+          <FolderOpen className="h-4 w-4 text-[var(--or-muted)]" />
+          <span>{t("welcome:openProject")}</span>
         </button>
       </div>
 
       <div>
-        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-300">
-          <Clock className="h-4 w-4 text-slate-500" />
-          {t("welcome:recent")}
+        <div className="mb-3.5 flex items-center gap-2 text-sm font-semibold text-[var(--or-muted)]">
+          <Clock className="h-4 w-4 text-[var(--or-muted)]" />
+          <span>{t("welcome:recent")}</span>
         </div>
         {recent.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-slate-700 bg-slate-900/50 px-4 py-8 text-center text-sm text-slate-500">
+          <div className="rounded-xl border border-dashed border-[var(--or-primary)] bg-slate-950/40 px-4 py-8 text-center text-sm text-[var(--or-muted)]">
             {t("welcome:recentEmpty")}
-          </p>
+          </div>
         ) : (
           <ul className="min-w-0 space-y-2">
             {recent.map((item) => (
-              <li key={item.path} className="group flex min-w-0 items-stretch gap-1">
+              <li key={item.path} className="group flex min-w-0 items-stretch gap-1.5">
                 <button
                   type="button"
                   disabled={loading}
                   onClick={() => void openByPath(item.path)}
-                  className="flex min-w-0 flex-1 flex-col items-start rounded-lg border border-slate-700/80 bg-slate-900/60 px-4 py-3 text-left transition hover:border-indigo-500/50 hover:bg-slate-800/80"
+                  className="flex min-w-0 flex-1 flex-col items-start rounded-xl border border-[var(--or-primary)] bg-slate-950/60 px-4 py-3 text-left transition hover:border-or-primary/50 hover:bg-[color-mix(in_srgb,var(--or-primary)_70%,transparent)]"
                 >
-                  <span className="font-medium text-slate-100">{item.name}</span>
-                  <span className="mt-0.5 break-all text-xs text-slate-500" title={item.path}>
+                  <span className="text-[15px] font-medium text-[var(--or-text)]">{item.name}</span>
+                  <span className="mt-1 break-all text-xs text-[var(--or-muted)]" title={item.path}>
                     {item.path}
                   </span>
                 </button>
@@ -162,10 +163,10 @@ export function ProjectPane({ onProjectReady, onError }: Props) {
                     void removeFromRecent(item.path);
                   }}
                   className={cn(
-                    "flex shrink-0 items-center justify-center self-stretch rounded-lg border border-transparent px-2.5 text-slate-500 transition",
-                    "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
-                    "hover:border-red-500/40 hover:bg-red-950/50 hover:text-red-200",
-                    "focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-500/40",
+                    "flex shrink-0 items-center justify-center self-stretch rounded-xl border border-transparent px-3 text-[var(--or-muted)] transition",
+                    "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100",
+                    "hover:border-or-error/30 hover:bg-[var(--or-error-container)] hover:text-or-error",
+                    "focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-or-focus",
                     loading && "pointer-events-none",
                   )}
                 >

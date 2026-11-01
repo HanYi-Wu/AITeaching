@@ -26,6 +26,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { Plus, Link as LinkIcon, RefreshCw, X } from "lucide-react";
 import { CircleChordEdge } from "./CircleChordEdge";
 import {
   assignStraightEdges,
@@ -40,6 +41,7 @@ import { canvasGeometry, sameCanvasGeometry, updateCanvasLabels, type CanvasGeom
 import { cn } from "../lib/utils";
 import type { GraphNodeRow, GraphRelationRow } from "./useGraphStore";
 import i18n from "../i18n/i18n";
+import { Select as AppSelect } from "../components/ui/select";
 
 const REL_KEYS = ["prerequisite", "part_of", "related", "causal"] as const;
 const REL_COLOR: Record<string, string> = {
@@ -56,45 +58,78 @@ function KnowledgeNode({ data, selected }: NodeProps) {
     typeof (data as { sizePx?: number }).sizePx === "number"
       ? (data as { sizePx: number }).sizePx
       : 140;
-  const pad = Math.max(8, Math.round(sizePx * 0.06));
+  const pad = Math.max(10, Math.round(sizePx * 0.08));
   const kindCls =
     kind === "skill"
-      ? "border-violet-300 bg-violet-50"
+      ? "border-violet-300 bg-violet-50/90 dark:border-violet-700 dark:bg-violet-950/60"
       : kind === "causal"
-        ? "border-amber-300 bg-amber-50"
-        : "border-slate-200 bg-white";
+        ? "border-amber-300 bg-[color-mix(in_srgb,var(--or-warning-container)_90%,transparent)] dark:border-amber-700 dark:bg-amber-950/60"
+        : "border-[var(--or-outline)] bg-[var(--or-card)]  ";
   const kindFill =
-    kind === "skill" ? "bg-violet-50" : kind === "causal" ? "bg-amber-50" : "bg-white";
+    kind === "skill"
+      ? "bg-violet-50/90 dark:bg-violet-950/60"
+      : kind === "causal"
+        ? "bg-[color-mix(in_srgb,var(--or-warning-container)_90%,transparent)] dark:bg-amber-950/60"
+        : "bg-[var(--or-card)] ";
   const handleCls =
-    "!z-0 !h-3 !w-3 !border-2 !border-slate-400 !bg-white";
+    "!z-0 !h-3 !w-3 !border-2 !border-[var(--or-outline)] !bg-[var(--or-card)] dark:!border-[var(--or-outline)] dark:!bg-[var(--or-primary)]";
+
   return (
     <div
       className={cn(
-        "relative flex shrink-0 flex-col items-center justify-center gap-1 rounded-full border text-center shadow-sm transition-opacity",
+        "relative flex shrink-0 flex-col items-center justify-center gap-1.5 rounded-full border text-center shadow-sm transition-opacity or-g50-static-card",
         kindCls,
-        selected ? "ring-2 ring-slate-900 ring-offset-1" : "",
+        selected ? "ring-2 ring-[var(--or-focus)] ring-offset-2  " : "",
         dim ? "opacity-[0.2]" : "opacity-100",
       )}
-      style={{ width: sizePx, height: sizePx, minWidth: sizePx, minHeight: sizePx, maxWidth: sizePx, maxHeight: sizePx, padding: `${pad}px` }}
+      style={{
+        width: sizePx,
+        height: sizePx,
+        minWidth: sizePx,
+        minHeight: sizePx,
+        maxWidth: sizePx,
+        maxHeight: sizePx,
+        padding: `${pad}px`,
+      }}
     >
-      <Handle type="target" id="t" position={Position.Top} isConnectable={true} className={handleCls} style={{ left: "50%", top: "50%", transform: "translate(-50%, -50%)" }} />
-      <Handle type="source" id="s" position={Position.Bottom} isConnectable={true} className={handleCls} style={{ left: "50%", top: "50%", transform: "translate(-50%, -50%)" }} />
+      <Handle
+        type="target"
+        id="t"
+        position={Position.Top}
+        isConnectable={true}
+        className={handleCls}
+        style={{ left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}
+      />
+      <Handle
+        type="source"
+        id="s"
+        position={Position.Bottom}
+        isConnectable={true}
+        className={handleCls}
+        style={{ left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}
+      />
       <div
         className={cn(
-          "absolute inset-0 z-[1] flex flex-col items-center justify-center gap-1 rounded-full",
+          "absolute inset-0 z-[1] flex flex-col items-center justify-center gap-1.5 rounded-full",
           kindFill,
         )}
         style={{ padding: `${pad}px` }}
       >
         <span
           className={cn(
-            "rounded-full px-2 py-0.5 text-[10px] font-medium leading-none",
-            kind === "skill" ? "bg-violet-200 text-violet-900" : kind === "causal" ? "bg-amber-200 text-amber-900" : "bg-slate-200 text-slate-800",
+            "inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-semibold leading-none shrink-0",
+            kind === "skill"
+              ? "bg-violet-200 text-violet-900 dark:bg-violet-900 dark:text-violet-200"
+              : kind === "causal"
+                ? "bg-[var(--or-warning-container)] text-[var(--or-on-warning)] dark:bg-amber-900 dark:text-amber-200"
+                : "bg-[var(--or-block)] text-[var(--or-text)]  ",
           )}
         >
-          {i18n.t(`nodeKind.${kind}`, { ns: "graph", defaultValue: kind })}
+          <span className="inline-block transform translate-y-[0.5px]">
+            {i18n.t(`nodeKind.${kind}`, { ns: "graph", defaultValue: kind })}
+          </span>
         </span>
-        <div className="line-clamp-3 w-full max-w-[min(92%,11rem)] text-xs font-semibold leading-snug text-slate-900">
+        <div className="line-clamp-3 w-full max-w-[min(92%,11rem)] text-sm font-semibold leading-snug text-[var(--or-text)] ">
           {String(data.label ?? "")}
         </div>
       </div>
@@ -350,53 +385,58 @@ export function GraphCanvas({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Canvas toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
+      {/* Canvas toolbar with mobile horizontal scroll */}
+      <div className="flex items-center gap-2 border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_95%,transparent)] px-3 py-2 backdrop-blur-sm   overflow-x-auto scrollbar-none touch-pan-x sm:flex-wrap">
         {/* Action buttons */}
         <button
           type="button"
-          className="rounded border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-50"
+          className="or-g50-btn or-g50-btn-secondary !h-8 !text-xs font-medium shrink-0 whitespace-nowrap"
           onClick={onAddNode}
         >
-          + {t("addNode")}
+          <Plus className="h-3.5 w-3.5 shrink-0" />
+          <span>{t("addNode")}</span>
         </button>
 
         {connectingFromId ? (
           <button
             type="button"
-            className="rounded border border-amber-400 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-900"
+            className="or-g50-btn or-g50-btn-tonal !h-8 !text-xs font-medium !bg-[var(--or-warning-container)] !text-[var(--or-on-warning)] hover:!bg-[var(--or-warning-container)] dark:!bg-amber-950/70 dark:!text-amber-200 shrink-0 whitespace-nowrap"
             onClick={onCancelConnect}
           >
-            {t("cancelConnect")} ✕
+            <X className="h-3.5 w-3.5 shrink-0" />
+            <span>{t("cancelConnect")}</span>
           </button>
         ) : (
           <button
             type="button"
-            className="rounded border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-50"
+            className="or-g50-btn or-g50-btn-secondary !h-8 !text-xs font-medium shrink-0 whitespace-nowrap"
             onClick={onStartConnect}
             disabled={!selectedNodeId}
           >
-            {t("addRelation")}
+            <LinkIcon className="h-3.5 w-3.5 shrink-0" />
+            <span>{t("addRelation")}</span>
           </button>
         )}
 
         <button
           type="button"
-          className="rounded border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-50"
+          className="or-g50-btn or-g50-btn-secondary !h-8 !text-xs font-medium shrink-0 whitespace-nowrap"
           onClick={onRelayout}
         >
-          {t("relayout")}
+          <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+          <span>{t("relayout")}</span>
         </button>
 
-        <span className="hidden h-4 w-px bg-slate-200 sm:inline" aria-hidden />
+        <span className="hidden h-4 w-px bg-[var(--or-inset)]  sm:inline shrink-0" aria-hidden />
 
         {/* Relation type filters */}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-          <span className="text-slate-500">{t("relTypeCanvas")}</span>
+        <div className="flex items-center gap-x-2.5 gap-y-1 text-xs shrink-0 whitespace-nowrap">
+          <span className="text-[var(--or-muted)]  font-medium">{t("relTypeCanvas")}</span>
           {REL_KEYS.map((k) => (
-            <label key={k} className="inline-flex cursor-pointer items-center gap-1">
+            <label key={k} className="inline-flex cursor-pointer items-center gap-1.5 font-medium shrink-0">
               <input
                 type="checkbox"
+                className="rounded border-[var(--or-outline)] text-[var(--or-on-container)] focus:ring-[var(--or-focus)]  "
                 checked={relTypeFilter[k] !== false}
                 onChange={(e) => setRelTypeFilter((prev) => ({ ...prev, [k]: e.target.checked }))}
               />
@@ -405,16 +445,16 @@ export function GraphCanvas({
           ))}
         </div>
 
-        <span className="hidden h-4 w-px bg-slate-200 sm:inline" aria-hidden />
+        <span className="hidden h-4 w-px bg-[var(--or-inset)]  sm:inline shrink-0" aria-hidden />
 
         {/* Neighborhood focus */}
-        <label className="inline-flex items-center gap-1 text-[11px]">
-          <span className="text-slate-500">{t("focusNeighborhood")}</span>
-          <select
-            className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px]"
+        <label className="inline-flex items-center gap-1.5 text-xs font-medium shrink-0 whitespace-nowrap">
+          <span className="text-[var(--or-muted)] ">{t("focusNeighborhood")}</span>
+          <AppSelect
+            className="or-g50-input !h-8 !text-xs !py-0"
             value={focusHops}
-            onChange={(e) => {
-              const v = Number(e.target.value) as 0 | 1 | 2;
+            onValueChange={(value) => {
+              const v = Number(value) as 0 | 1 | 2;
               setFocusHops(v);
               if (v === 0) setFocusCenterId(null);
               else if (selectedNodeId) setFocusCenterId(selectedNodeId);
@@ -423,14 +463,17 @@ export function GraphCanvas({
             <option value={0}>{t("focusOff")}</option>
             <option value={1}>{t("focus1")}</option>
             <option value={2}>{t("focus2")}</option>
-          </select>
+          </AppSelect>
         </label>
       </div>
 
       {/* Connection mode banner */}
       {connectingFromId ? (
-        <div className="bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800 border-b border-amber-200">
-          {t("connectModeHint")} {graphNodes.find((n) => n.id === connectingFromId)?.canonical_name ?? connectingFromId}
+        <div className="flex items-center gap-2 border-b border-[var(--or-warning)] bg-[var(--or-warning-container)] px-4 py-2 text-xs font-medium text-[var(--or-on-warning)] dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+          <LinkIcon className="h-4 w-4 shrink-0 text-[var(--or-on-warning)]" />
+          <span>
+            {t("connectModeHint")} {graphNodes.find((n) => n.id === connectingFromId)?.canonical_name ?? connectingFromId}
+          </span>
         </div>
       ) : null}
 

@@ -1,0 +1,6 @@
+:root,
+:root[data-or-login-accent] {
+  --or-login-accent-color: #000000;
+  --or-login-accent-ink: #ffffff;
+  --or-login-loading-color: #aeaeb2;
+}

@@ -67,6 +67,8 @@ from solaire.web.result_service import list_exam_results
 from solaire.web.student_service import _load_attempt_question_payloads, _load_exam_question_payloads
 from solaire.web.student_service import _publication_datetime
 
+from solaire.web.papers.teacher_read_model.publication_queries import batch_publication_stats
+
 MAX_PAGE_SIZE = 100
 
 
@@ -164,7 +166,8 @@ def _paper_summary(
 def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
     init_platform_db(platform_root)
     exams = list_exam_results(project_root)
-    papers: list[dict[str, Any]] = []
+
+    candidate_exams: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for exam in exams:
         try:
             record = _paper_record_for_exam(platform_root, exam, user)
@@ -172,19 +175,41 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
             continue
         if not _paper_visible_to_user(record, user):
             continue
-        stats = _publication_stats(platform_root, str(record["id"]), user)
-        papers.append(_paper_summary(record, stats, exam=exam))
+        candidate_exams.append((record, exam))
+
     adaptive_records = list_adaptive_paper_records(platform_root)
-    existing_ids = {str(item["paper_id"]) for item in papers}
+    existing_ids = {str(rec["id"]) for rec, _ in candidate_exams}
+    candidate_adaptives: list[dict[str, Any]] = []
     for record in adaptive_records:
         paper_id = str(record.get("id") or "")
         if not paper_id or paper_id in existing_ids or not _paper_visible_to_user(record, user):
             continue
+        candidate_adaptives.append(record)
+
+    all_paper_ids = [str(rec["id"]) for rec, _ in candidate_exams] + [
+        str(rec.get("id")) for rec in candidate_adaptives
+    ]
+    stats_by_paper_id = batch_publication_stats(
+        platform_root,
+        all_paper_ids,
+        user,
+        _publication_access_clause,
+    )
+
+    papers: list[dict[str, Any]] = []
+    for record, exam in candidate_exams:
+        paper_id = str(record["id"])
+        stats = stats_by_paper_id.get(paper_id, {})
+        papers.append(_paper_summary(record, stats, exam=exam))
+
+    for record in candidate_adaptives:
+        paper_id = str(record.get("id") or "")
         question_count, has_score = _adaptive_paper_summary(platform_root, paper_id, user)
+        stats = stats_by_paper_id.get(paper_id, {})
         papers.append(
             _paper_summary(
                 record,
-                _publication_stats(platform_root, paper_id, user),
+                stats,
                 question_count=question_count,
                 section_count=1 if question_count else 0,
                 has_score=has_score,
@@ -292,32 +317,61 @@ def list_paper_publications(root: Path, *, paper_id: str, user: dict[str, Any]) 
     paper = get_paper(root, paper_id)
     _ensure_paper_access(paper, user)
     access_clause, access_params = _publication_access_clause(user)
+
     with closing(connect(root)) as con, con:
+        # Scalar subqueries eliminate Cartesian product between publication classes,
+        # student attempts, and proctor events, avoiding multiplication of independent child rows.
         rows = con.execute(
             f"""
             SELECT
               ep.*,
               u.display_name AS teacher_name,
               u.username AS teacher_username,
-              GROUP_CONCAT(DISTINCT c.id) AS class_ids,
-              GROUP_CONCAT(DISTINCT c.name) AS class_names,
-              GROUP_CONCAT(DISTINCT CASE WHEN ep.recipient_scope='student' THEN s.display_name END) AS student_names,
-              COUNT(DISTINCT sa.id) AS attempt_count,
-              COUNT(DISTINCT CASE WHEN sa.status IN ('submitted', 'completed') OR sa.submitted_at IS NOT NULL THEN sa.id END) AS submitted_count,
-              COUNT(DISTINCT pe.id) AS proctor_event_count
+              (
+                SELECT GROUP_CONCAT(DISTINCT c.id)
+                FROM publication_classes pc
+                JOIN classes c ON c.id = pc.class_id
+                WHERE pc.publication_id = ep.id
+              ) AS class_ids,
+              (
+                SELECT GROUP_CONCAT(DISTINCT c.name)
+                FROM publication_classes pc
+                JOIN classes c ON c.id = pc.class_id
+                WHERE pc.publication_id = ep.id
+              ) AS class_names,
+              CASE
+                WHEN ep.recipient_scope = 'student' THEN (
+                  SELECT GROUP_CONCAT(DISTINCT s.display_name)
+                  FROM student_attempts sa
+                  JOIN students s ON s.id = sa.student_id
+                  WHERE sa.publication_id = ep.id
+                )
+                ELSE NULL
+              END AS student_names,
+              (
+                SELECT COUNT(*)
+                FROM student_attempts sa
+                WHERE sa.publication_id = ep.id
+              ) AS attempt_count,
+              (
+                SELECT COUNT(*)
+                FROM student_attempts sa
+                WHERE sa.publication_id = ep.id
+                  AND (sa.status IN ('submitted', 'completed') OR sa.submitted_at IS NOT NULL)
+              ) AS submitted_count,
+              (
+                SELECT COUNT(*)
+                FROM proctor_events pe
+                WHERE pe.publication_id = ep.id
+              ) AS proctor_event_count
             FROM exam_publications ep
             LEFT JOIN users u ON u.id = ep.teacher_id
-            LEFT JOIN publication_classes pc ON pc.publication_id = ep.id
-            LEFT JOIN classes c ON c.id = pc.class_id
-            LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
-            LEFT JOIN students s ON s.id = sa.student_id
-            LEFT JOIN proctor_events pe ON pe.publication_id = ep.id
             WHERE ep.paper_id = ? AND {access_clause}
-            GROUP BY ep.id
             ORDER BY ep.created_at DESC
             """,
             (paper_id, *access_params),
         ).fetchall()
+
     publications: list[dict[str, Any]] = []
     for row in rows:
         item = row_to_dict(row) or {}

@@ -9,6 +9,7 @@ import {
   Rows3,
   Split,
   Trash2,
+  X,
 } from "lucide-react";
 
 import {
@@ -106,7 +107,7 @@ function IconButton({
       title={title}
       aria-label={title}
       disabled={disabled}
-      className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-muted)] shadow-2xs hover:bg-[var(--or-page)] active:bg-[var(--or-block)] disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
       onClick={onClick}
     >
       {children}
@@ -238,94 +239,69 @@ export function TableEditorModal({ open, initialSource, onClose, onConfirm }: Ta
 
   function docWithCommittedEditing(): SolaireTableDoc {
     if (!editingCell) return doc;
-    return patchCell(doc, editingCell.row, editingCell.col, (cell) => ({
-      ...cell,
-      text: editingCell.value,
-    }));
+    try {
+      return patchCell(doc, editingCell.row, editingCell.col, (cell) => ({
+        ...cell,
+        text: editingCell.value,
+      }));
+    } catch {
+      return doc;
+    }
+  }
+
+  function addRow() {
+    const committed = docWithCommittedEditing();
+    const exp = expandSolaireTable(committed);
+    setDoc({
+      ...committed,
+      rows: [...committed.rows, Array.from({ length: exp.width }, () => ({ text: "" }))],
+    });
+  }
+
+  function addColumn() {
+    const committed = docWithCommittedEditing();
+    setDoc({
+      ...committed,
+      rows: committed.rows.map((row) => [...row, { text: "" }]),
+    });
+  }
+
+  function deleteLastRow() {
+    const committed = docWithCommittedEditing();
+    if (committed.rows.length <= 1) return;
+    setDoc({
+      ...committed,
+      rows: committed.rows.slice(0, -1),
+    });
+  }
+
+  function deleteLastColumn() {
+    const committed = docWithCommittedEditing();
+    const exp = expandSolaireTable(committed);
+    if (exp.width <= 1) return;
+    setDoc({
+      ...committed,
+      rows: committed.rows.map((row) => row.slice(0, -1)),
+    });
+  }
+
+  function beginEditing(row: number, col: number, text: string) {
+    setEditingCell({ row, col, value: text });
   }
 
   function commitEditing() {
     if (!editingCell) return;
-    try {
-      setDoc(docWithCommittedEditing());
-      setEditingCell(null);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
+    setDoc(docWithCommittedEditing());
+    setEditingCell(null);
   }
 
   function cancelEditing() {
     setEditingCell(null);
   }
 
-  function beginEditing(row: number, col: number, value: string) {
-    setDragging(false);
-    setSelection({ r1: row, c1: col, r2: row, c2: col });
-    setEditingCell({ row, col, value });
-  }
-
-  function addRow() {
-    applyAnchors((anchors, height, width) => ({
-      anchors: [
-        ...anchors,
-        ...Array.from({ length: width }, (_x, c) => ({ row: height, col: c, cell: { text: "" } })),
-      ],
-      height: height + 1,
-      selection: { r1: height, c1: 0, r2: height, c2: 0 },
-    }));
-  }
-
-  function addColumn() {
-    applyAnchors((anchors, height, width) => ({
-      anchors: [
-        ...anchors,
-        ...Array.from({ length: height }, (_x, r) => ({ row: r, col: width, cell: { text: "" } })),
-      ],
-      height,
-      selection: { r1: 0, c1: width, r2: 0, c2: width },
-    }));
-  }
-
-  function deleteLastRow() {
-    if (expanded.height <= 1) return;
-    const last = expanded.height - 1;
-    applyAnchors((anchors, height) => ({
-      height: height - 1,
-      anchors: anchors
-        .filter((a) => a.row !== last)
-        .map((a) => {
-          const s = spans(a.cell);
-          if (a.row < last && a.row + s.rowSpan - 1 >= last) {
-            return { ...a, cell: { ...a.cell, rowSpan: s.rowSpan - 1 || undefined } };
-          }
-          return a;
-        }),
-      selection: { r1: Math.min(selection.r1, last - 1), c1: 0, r2: Math.min(selection.r1, last - 1), c2: 0 },
-    }));
-  }
-
-  function deleteLastColumn() {
-    if (expanded.width <= 1) return;
-    const last = expanded.width - 1;
-    applyAnchors((anchors, height) => ({
-      height,
-      anchors: anchors
-        .filter((a) => a.col !== last)
-        .map((a) => {
-          const s = spans(a.cell);
-          if (a.col < last && a.col + s.colSpan - 1 >= last) {
-            return { ...a, cell: { ...a.cell, colSpan: s.colSpan - 1 || undefined } };
-          }
-          return a;
-        }),
-      selection: { r1: 0, c1: Math.min(selection.c1, last - 1), r2: 0, c2: Math.min(selection.c1, last - 1) },
-    }));
-  }
-
   function selectCell(r: number, c: number, extend = false) {
     if (extend) {
-      setSelection((s) => ({ ...s, r2: r, c2: c }));
+      setSelection((prev) => ({ ...prev, r2: r, c2: c }));
     } else {
       setSelection({ r1: r, c1: c, r2: r, c2: c });
     }
@@ -334,19 +310,23 @@ export function TableEditorModal({ open, initialSource, onClose, onConfirm }: Ta
   const activeAlign = activeCell?.align ?? "left";
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4">
-      <div className="flex max-h-[92vh] w-[920px] max-w-[96vw] flex-col rounded-lg border border-slate-200 bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-xs p-2.5 sm:p-4">
+      <div role="dialog" aria-modal="true" aria-label="编辑表格" className="or-dialog or-g48-dialog flex max-h-[92vh] w-[940px] max-w-[96vw] flex-col rounded-3xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] shadow-2xl ring-1 ring-black/5 overflow-hidden">
+        <div className="flex items-center justify-between border-b border-[var(--or-outline)] px-3.5 py-3 sm:px-5 sm:py-3.5">
           <div>
-            <h3 className="text-sm font-semibold text-slate-900">编辑表格</h3>
-            <p className="mt-0.5 text-xs text-slate-500">拖选单元格后可合并；双击单元格编辑，Enter 确认。</p>
+            <h3 className="text-base font-semibold text-[var(--or-text)]">编辑表格</h3>
+            <p className="mt-0.5 text-[13px] text-[var(--or-muted)]">拖选单元格后可合并；双击单元格编辑，Enter 确认。</p>
           </div>
-          <button type="button" className="rounded px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={onClose}>
-            关闭
+          <button
+            type="button"
+            className="or-icon-button inline-flex h-8 w-8 items-center justify-center rounded-full text-sm text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-text)] transition-colors"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] px-4 py-2">
           <IconButton title="增加行" onClick={addRow}>
             <Rows3 className="h-4 w-4" />
             <Plus className="-ml-1 h-3 w-3" />
@@ -363,27 +343,27 @@ export function TableEditorModal({ open, initialSource, onClose, onConfirm }: Ta
             <Columns3 className="h-4 w-4" />
             <Trash2 className="-ml-1 h-3 w-3" />
           </IconButton>
-          <div className="mx-1 h-5 w-px bg-slate-200" />
+          <div className="mx-1 h-5 w-px bg-[var(--or-inset)]" />
           <IconButton title="合并选区" onClick={mergeSelection}>
             <Merge className="h-4 w-4" />
           </IconButton>
           <IconButton title="拆分单元格" onClick={splitActiveCell} disabled={!activeCell || ((activeCell.rowSpan ?? 1) === 1 && (activeCell.colSpan ?? 1) === 1)}>
             <Split className="h-4 w-4" />
           </IconButton>
-          <div className="mx-1 h-5 w-px bg-slate-200" />
+          <div className="mx-1 h-5 w-px bg-[var(--or-inset)]" />
           <IconButton title="左对齐" onClick={() => updateActiveCell((cell) => ({ ...cell, align: "left" }))}>
-            <AlignLeft className={activeAlign === "left" ? "h-4 w-4 text-blue-600" : "h-4 w-4"} />
+            <AlignLeft className={activeAlign === "left" ? "h-4 w-4 text-[var(--or-on-container)]" : "h-4 w-4"} />
           </IconButton>
           <IconButton title="居中" onClick={() => updateActiveCell((cell) => ({ ...cell, align: "center" }))}>
-            <AlignCenter className={activeAlign === "center" ? "h-4 w-4 text-blue-600" : "h-4 w-4"} />
+            <AlignCenter className={activeAlign === "center" ? "h-4 w-4 text-[var(--or-on-container)]" : "h-4 w-4"} />
           </IconButton>
           <IconButton title="右对齐" onClick={() => updateActiveCell((cell) => ({ ...cell, align: "right" }))}>
-            <AlignRight className={activeAlign === "right" ? "h-4 w-4 text-blue-600" : "h-4 w-4"} />
+            <AlignRight className={activeAlign === "right" ? "h-4 w-4 text-[var(--or-on-container)]" : "h-4 w-4"} />
           </IconButton>
           <button
             type="button"
-            className={`h-8 rounded border px-3 text-xs font-medium ${
-              activeCell?.header ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-700"
+            className={`or-button or-pill inline-flex h-8 items-center justify-center rounded-full border px-3.5 text-sm font-medium transition-colors ${
+              activeCell?.header ? "border-blue-300 bg-[var(--or-primary-container)] text-[var(--or-on-container)]" : "border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-muted)] hover:bg-[var(--or-page)]"
             }`}
             onClick={() => updateActiveCell((cell) => ({ ...cell, header: !cell.header || undefined }))}
           >
@@ -391,9 +371,9 @@ export function TableEditorModal({ open, initialSource, onClose, onConfirm }: Ta
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-hidden p-4">
-          <div className="h-full min-h-0 overflow-auto rounded border border-slate-200 bg-slate-50 p-2">
-            <table className="min-w-full border-collapse bg-white text-sm" onMouseUp={() => setDragging(false)}>
+        <div className="min-h-0 flex-1 overflow-hidden p-2.5 sm:p-4">
+          <div className="h-full min-h-0 overflow-auto rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2.5">
+            <table className="min-w-full border-collapse bg-[var(--or-card)] text-sm" onMouseUp={() => setDragging(false)}>
               <tbody>
                 {expanded.slots.map((row, r) => (
                   <tr key={r}>
@@ -421,15 +401,15 @@ export function TableEditorModal({ open, initialSource, onClose, onConfirm }: Ta
                           onMouseEnter={() => {
                             if (dragging) selectCell(r, c, true);
                           }}
-                          className={`min-w-24 cursor-cell border px-2 py-2 align-top ${
-                            selected ? "border-blue-500 bg-blue-50 ring-1 ring-inset ring-blue-400" : "border-slate-300"
-                          } ${slot.cell.header ? "font-semibold text-slate-900" : "text-slate-700"}`}
+                          className={`min-w-24 cursor-cell border px-2.5 py-2 align-top ${
+                            selected ? "border-[var(--or-primary)] bg-[color-mix(in_srgb,var(--or-primary-container)_70%,transparent)] ring-1 ring-inset ring-[var(--or-focus)]" : "border-[var(--or-outline)]"
+                          } ${slot.cell.header ? "font-semibold text-[var(--or-text)] bg-[color-mix(in_srgb,var(--or-page)_60%,transparent)]" : "text-[var(--or-muted)]"}`}
                           style={{ textAlign: slot.cell.align ?? "left" }}
                         >
                           {editing ? (
                             <textarea
                               autoFocus
-                              className="block min-h-16 w-full resize-none rounded border border-blue-300 bg-white px-2 py-1 text-sm font-normal leading-relaxed text-slate-900 outline-none ring-2 ring-blue-200"
+                              className="block min-h-16 w-full resize-none rounded-lg border border-[var(--or-primary)] bg-[var(--or-card)] px-2 py-1 text-sm font-normal leading-relaxed text-[var(--or-text)] outline-none ring-2 ring-blue-200"
                               value={editingCell.value}
                               onMouseDown={(e) => e.stopPropagation()}
                               onDoubleClick={(e) => e.stopPropagation()}
@@ -462,19 +442,23 @@ export function TableEditorModal({ open, initialSource, onClose, onConfirm }: Ta
             </table>
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-[13px] text-[var(--or-muted)]">
             <span>{expanded.height} 行 x {expanded.width} 列 · 双击单元格编辑，Enter 确认，Shift+Enter 换行</span>
-            {error && <span className="rounded bg-red-50 px-2 py-1 text-red-700">{error}</span>}
+            {error && <span className="or-pill rounded-full bg-[var(--or-error-container)] px-2.5 py-0.5 text-[13px] font-medium text-[var(--or-on-error)]">{error}</span>}
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
-          <button type="button" className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100" onClick={onClose}>
+        <div className="flex justify-end gap-2.5 border-t border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-3 sm:px-5 sm:py-3.5">
+          <button
+            type="button"
+            className="inline-flex h-9 items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-4 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
+            onClick={onClose}
+          >
             取消
           </button>
           <button
             type="button"
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+            className="inline-flex h-9 items-center justify-center rounded-full bg-[var(--or-primary)] px-4 text-sm font-medium text-[var(--or-on-primary)] shadow-sm hover:bg-[var(--or-primary)] active:bg-slate-950 transition-colors"
             onClick={() => {
               const next = docWithCommittedEditing();
               setDoc(next);

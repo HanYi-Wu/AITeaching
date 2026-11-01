@@ -1,6 +1,8 @@
 import { ChangeEvent, ReactNode } from "react";
 import { Download, Search, Upload } from "lucide-react";
 import { type SchoolImportKind } from "../../../platform/auth";
+import "../../../ui-redesign/g53/g53.css";
+import { Select as AppSelect } from "../../../components/ui/select";
 
 export type PageQuery = { q: string; status?: string; page: number; pageSize: number };
 
@@ -8,18 +10,18 @@ export type PageMeta = { total: number; page: number; pageSize: number; totalPag
 
 export function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-slate-950">{value}</p>
+    <div className="or-g53-card p-3.5 sm:p-4 transition-colors">
+      <p className="text-sm font-medium text-or-muted">{label}</p>
+      <p className="mt-1 text-2xl font-semibold tracking-tight text-or-text">{value}</p>
     </div>
   );
 }
 
 export function SummaryTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-1 text-sm font-semibold text-slate-950">{value}</p>
+    <div className="rounded-xl border border-or-outline/80 bg-or-block/80 p-3 sm:p-3.5 transition-colors">
+      <p className="text-sm font-medium text-or-muted">{label}</p>
+      <p className="mt-1 text-base font-semibold text-or-text">{value}</p>
     </div>
   );
 }
@@ -36,15 +38,21 @@ export function ManagementSection({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-base font-semibold text-slate-950">{title}</h2>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{count}</span>
+    <section className="or-g53-card p-4 sm:p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <h2 className="text-base font-semibold tracking-tight text-or-text">{title}</h2>
+          <span className="or-g53-pill or-g53-pill-neutral font-medium">{count}</span>
         </div>
         {controls}
       </div>
-      {count === 0 ? <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">暂无数据</p> : children}
+      {count === 0 ? (
+        <p className="rounded-xl border border-dashed border-or-outline p-6 text-center text-sm text-or-muted">
+          暂无数据
+        </p>
+      ) : (
+        children
+      )}
     </section>
   );
 }
@@ -61,36 +69,37 @@ export function Toolbar({
   bulk?: ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
+    <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 w-full sm:w-auto">
+      <div className="relative flex-1 min-w-[150px] sm:w-52 sm:flex-initial">
+        <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-or-muted" />
         <input
-          className="w-48 rounded-md border border-slate-300 py-2 pl-8 pr-2 text-sm"
+          className="or-g53-input w-full py-1.5 pl-9 pr-3 text-sm"
           placeholder="搜索"
           value={query.q}
           onChange={(event) => onQueryChange({ q: event.target.value })}
         />
       </div>
       {status ? (
-        <select
-          className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+        <AppSelect
+          className="or-g53-select py-1.5 text-sm"
           value={query.status || "all"}
-          onChange={(event) => onQueryChange({ status: event.target.value })}
+          onValueChange={(value) => onQueryChange({ status: value })}
         >
           <option value="all">全部状态</option>
           <option value="active">启用</option>
           <option value="disabled">停用</option>
-        </select>
+        </AppSelect>
       ) : null}
-      <select
-        className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+      <AppSelect
+        aria-label="每页条数"
+        className="or-g53-select py-1.5 text-sm"
         value={query.pageSize}
-        onChange={(event) => onQueryChange({ pageSize: Number(event.target.value) })}
+        onValueChange={(value) => onQueryChange({ pageSize: Number(value) })}
       >
-        <option value={10}>10 条</option>
-        <option value={20}>20 条</option>
-        <option value={50}>50 条</option>
-      </select>
+        <option value={10}>10 条/页</option>
+        <option value={20}>20 条/页</option>
+        <option value={50}>50 条/页</option>
+      </AppSelect>
       {bulk}
     </div>
   );
@@ -108,12 +117,22 @@ export function BulkActions({
   onDisable: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded-md bg-slate-100 px-2 py-1">
-      <span className="text-xs text-slate-600">已选 {count}</span>
-      <button type="button" disabled={disabled} onClick={onEnable} className="text-xs font-medium text-emerald-700 disabled:opacity-60">
+    <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-or-outline bg-or-inset/90 px-3 py-1">
+      <span className="text-xs font-medium text-or-muted">已选 {count}</span>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onEnable}
+        className="or-g53-pill or-g53-pill-success text-xs font-semibold hover:opacity-80 disabled:opacity-50"
+      >
         启用
       </button>
-      <button type="button" disabled={disabled} onClick={onDisable} className="text-xs font-medium text-rose-700 disabled:opacity-60">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onDisable}
+        className="or-g53-pill or-g53-pill-error font-semibold hover:opacity-80 disabled:opacity-50"
+      >
         停用
       </button>
     </div>
@@ -122,16 +141,16 @@ export function BulkActions({
 
 export function Pager({ meta, onPage }: { meta: PageMeta; onPage: (page: number) => void }) {
   return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 text-sm text-slate-600">
-      <span>
+    <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-or-outline pt-3.5 text-sm text-or-muted">
+      <span className="font-medium text-or-muted text-center sm:text-left">
         第 {meta.page} / {meta.totalPages} 页，共 {meta.total} 条
       </span>
-      <div className="flex gap-2">
+      <div className="flex justify-center sm:justify-end gap-2">
         <button
           type="button"
           disabled={meta.page <= 1}
           onClick={() => onPage(meta.page - 1)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+          className="or-g53-btn-tonal flex-1 sm:flex-initial px-4 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
           上一页
         </button>
@@ -139,7 +158,7 @@ export function Pager({ meta, onPage }: { meta: PageMeta; onPage: (page: number)
           type="button"
           disabled={meta.page >= meta.totalPages}
           onClick={() => onPage(meta.page + 1)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+          className="or-g53-btn-tonal flex-1 sm:flex-initial px-4 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
           下一页
         </button>
@@ -151,7 +170,7 @@ export function Pager({ meta, onPage }: { meta: PageMeta; onPage: (page: number)
 export function StatusBadge({ status }: { status: string }) {
   const active = status === "active";
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+    <span className={`or-g53-pill ${active ? "or-g53-pill-success" : "or-g53-pill-neutral"}`}>
       {active ? "启用" : "停用"}
     </span>
   );
@@ -175,7 +194,7 @@ export function IconButton({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+      className="or-g53-icon-btn disabled:cursor-not-allowed disabled:opacity-50"
     >
       {icon}
     </button>
@@ -195,18 +214,18 @@ export function ImportActions({
   onChange: (event: ChangeEvent<HTMLInputElement>) => void;
 }) {
   return (
-    <div className="mt-3 grid grid-cols-2 gap-2">
+    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
       <button
         type="button"
         onClick={onTemplate}
-        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+        className="or-g53-btn-tonal py-2 text-sm text-or-text hover:bg-or-block"
       >
-        <Download className="h-4 w-4" />
+        <Download className="h-4 w-4 shrink-0" />
         模板
       </button>
-      <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
-        <Upload className="h-4 w-4" />
-        {label}
+      <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-or-outline bg-or-card px-3 py-2 text-sm font-medium text-or-text transition hover:border-or-outline hover:bg-or-block">
+        <Upload className="h-4 w-4 shrink-0 text-or-muted" />
+        <span className="min-w-0 text-center leading-snug">{label}</span>
         <input data-testid={testId} className="sr-only" type="file" accept=".json,.xlsx" onChange={onChange} />
       </label>
     </div>

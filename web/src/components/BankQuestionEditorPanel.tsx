@@ -5,7 +5,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ImagePlus } from "lucide-react";
+import { ImagePlus, Plus, Minus } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { QUESTION_TYPE_OPTIONS, isChoiceQuestionType } from "../lib/questionTypes";
 import { ChoiceOptionsFields } from "./ChoiceOptionsFields";
@@ -32,6 +32,7 @@ import {
   updateGroupUnifiedType,
   updateSingleQuestionType,
 } from "./bankEditorAdapters";
+import { Select as AppSelect } from "./ui/select";
 
 export type {
   QuestionJson,
@@ -75,7 +76,7 @@ function BankGiLatexField({
   const syncId = giFieldId(memberIndex, field);
   return (
     <div className="block">
-      {label ? <span className="text-xs font-medium text-slate-600">{label}</span> : null}
+      {label ? <span className="mb-1 block text-sm font-medium text-[var(--or-muted)]">{label}</span> : null}
       <LatexRichTextField
         textAreaRef={textAreaRef}
         syncTextAreaId={syncId}
@@ -142,22 +143,19 @@ export function BankQuestionEditorPanel({
       className={
         embedded
           ? "mx-auto w-full max-w-3xl"
-          : "mx-auto max-w-3xl rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+          : "mx-auto max-w-3xl rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] p-3.5 shadow-sm sm:p-5"
       }
     >
       {!embedded ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-          <div>
-            <p className="font-mono text-sm text-slate-800">{detail.qualified_id}</p>
-            <p className="text-[11px] text-slate-500">
-              {t("components:bankEditor.storage", { kind: detail.storage_kind, path: detail.storage_path })}
-            </p>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--or-outline)] pb-4">
+          <div className="min-w-0 flex-1">
+            <p className="break-all font-mono text-sm font-semibold text-[var(--or-text)] sm:text-base">{detail.qualified_id}</p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {onClose && (
               <button
                 type="button"
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50"
+                className="or-button or-pill inline-flex h-9 items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
                 onClick={onClose}
               >
                 {t("components:bankEditor.close")}
@@ -165,7 +163,7 @@ export function BankQuestionEditorPanel({
             )}
             <button
               type="button"
-              className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+              className="or-button or-button-danger or-pill inline-flex h-9 items-center justify-center rounded-full border border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_50%,transparent)] px-3.5 text-sm font-medium text-[var(--or-on-error)] hover:bg-[color-mix(in_srgb,var(--or-error-container)_60%,transparent)] active:bg-[var(--or-error-container)] transition-colors disabled:opacity-50"
               disabled={busy}
               onClick={() => void onRemove()}
             >
@@ -173,7 +171,7 @@ export function BankQuestionEditorPanel({
             </button>
             <button
               type="button"
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="or-button or-button-primary or-pill inline-flex h-9 items-center justify-center rounded-full bg-[var(--or-primary)] px-4 text-sm font-medium text-[var(--or-on-primary)] shadow-sm hover:bg-[var(--or-primary)] active:bg-slate-950 transition-colors disabled:opacity-50"
               disabled={busy}
               onClick={() => void runSave()}
             >
@@ -191,13 +189,17 @@ export function BankQuestionEditorPanel({
         className={embedded ? "mt-0" : "mt-4"}
       >
         <TabsList
-          className={showTabSwitch ? "grid w-full max-w-md grid-cols-2" : "hidden"}
+          className={showTabSwitch ? "or-tabs grid w-full max-w-xs grid-cols-2 rounded-full bg-[var(--or-block)] p-1" : "hidden"}
           aria-hidden={!showTabSwitch}
         >
-          <TabsTrigger value="form">{t("components:bankEditor.tabForm")}</TabsTrigger>
-          <TabsTrigger value="yaml">{t("components:bankEditor.tabYaml")}</TabsTrigger>
+          <TabsTrigger value="form" className="or-tab rounded-full py-1 text-sm font-medium transition-all data-[state=active]:bg-[var(--or-card)] data-[state=active]:text-[var(--or-text)] data-[state=active]:shadow-sm">
+            {t("components:bankEditor.tabForm")}
+          </TabsTrigger>
+          <TabsTrigger value="yaml" className="or-tab rounded-full py-1 text-sm font-medium transition-all data-[state=active]:bg-[var(--or-card)] data-[state=active]:text-[var(--or-text)] data-[state=active]:shadow-sm">
+            {t("components:bankEditor.tabYaml")}
+          </TabsTrigger>
         </TabsList>
-        <TabsContent value="form" className="mt-4 space-y-3 text-sm">
+        <TabsContent value="form" className="mt-4 space-y-4 text-sm">
           <input
             ref={imageInputRef as LegacyRef<HTMLInputElement>}
             type="file"
@@ -206,34 +208,53 @@ export function BankQuestionEditorPanel({
             aria-hidden
             onChange={(e) => void onImageFileSelected(e)}
           />
-          <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-            <div><p className="text-xs font-semibold text-slate-800">{advancedToolsOpen ? "高级编辑模式" : "简单编辑模式"}</p><p className="text-[11px] text-slate-500">{advancedToolsOpen ? "公式、绘图、图表、表格与图片工具已展开。" : "保留题型、题干、选项、答案、解析和分值；公式可直接输入 $...$。"}</p></div>
-            <button type="button" onClick={() => setAdvancedToolsOpen((value) => !value)} className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">{advancedToolsOpen ? "返回简单模式" : "展开公式与绘图工具"}</button>
+          <div className="or-surface flex flex-col items-start justify-between gap-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] p-3.5 sm:flex-row sm:items-center sm:gap-3">
+            <div>
+              <p className="text-sm font-semibold text-[var(--or-text)]">{advancedToolsOpen ? "高级编辑模式" : "简单编辑模式"}</p>
+              {advancedToolsOpen ? (
+                <p className="text-[13px] text-[var(--or-muted)]">公式、绘图、图表、表格与图片工具已展开。</p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => setAdvancedToolsOpen((value) => !value)}
+              className="or-button or-pill inline-flex w-full shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-4 py-1.5 text-sm font-semibold text-[var(--or-muted)] hover:bg-[var(--or-block)] active:bg-[var(--or-inset)] transition-colors sm:w-auto"
+            >
+              {advancedToolsOpen ? "返回简单模式" : "展开公式与绘图工具"}
+            </button>
           </div>
-          {!qg && <label className="block text-xs font-medium text-slate-600">分类（可自定义）
-            <input aria-label="题目分类" className="mt-1 w-full rounded border p-2" placeholder="例如：课前练习、单元复习、易错题" value={metaRows.find(row => row.key === 'category')?.value ?? ''}
-              onChange={e => setMetaRows(updateCategoryMetaRow(metaRows, e.target.value))} />
-          </label>}
+          {!qg && (
+            <label className="block text-sm font-medium text-[var(--or-muted)]">
+              分类（可自定义）
+              <input
+                aria-label="题目分类"
+                className="or-input mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-sm text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
+                placeholder="例如：课前练习、单元复习、易错题"
+                value={metaRows.find((row) => row.key === 'category')?.value ?? ''}
+                onChange={(e) => setMetaRows(updateCategoryMetaRow(metaRows, e.target.value))}
+              />
+            </label>
+          )}
           {qg ? (
             <>
-              <p className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-900">
+              <p className="rounded-xl border border-[color-mix(in_srgb,var(--or-success)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-success-container)_70%,transparent)] px-3 py-2 text-[13px] text-[var(--or-on-success)]">
                 {t("components:bankEditor.groupHint", { id: detail.question.id })}
               </p>
-              <label className="block text-xs font-medium text-slate-600">
+              <label className="block text-sm font-medium text-[var(--or-muted)]">
                 {t("components:bankEditor.groupRootId")}
                 <input
-                  className="mt-1 w-full cursor-not-allowed rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 font-mono text-sm"
+                  className="or-input mt-1 w-full cursor-not-allowed rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-3 py-2 font-mono text-sm text-[var(--or-muted)]"
                   readOnly
                   value={qg.id}
                 />
               </label>
-              <label className="block text-xs font-medium text-slate-600">
+              <label className="block text-sm font-medium text-[var(--or-muted)]">
                 {t("components:bankEditor.unified")}
-                <select
-                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
+                <AppSelect
+                  className="or-select mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
                   value={unifiedUi}
-                  onChange={(e) => {
-                    setDetail(updateGroupUnifiedType(detail, e.target.value));
+                  onValueChange={(value) => {
+                    setDetail(updateGroupUnifiedType(detail, value));
                   }}
                 >
                   <option value="mixed">{t("components:bankEditor.mixedOpt")}</option>
@@ -242,15 +263,15 @@ export function BankQuestionEditorPanel({
                       {t(`lib:questionTypes.${o.value}`)}
                     </option>
                   ))}
-                </select>
+                </AppSelect>
               </label>
               <div className="block">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-slate-600">{t("components:bankEditor.sharedLatex")}</span>
-                  <div className="flex shrink-0 flex-wrap gap-1">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-[var(--or-muted)]">{t("components:bankEditor.sharedLatex")}</span>
+                  <div className="flex shrink-0 flex-wrap gap-1.5">
                     <button
                       type="button"
-                      className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+                      className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
                       onClick={() => {
                         const el = materialGroupRef.current;
                         const sel = el ? { start: el.selectionStart, end: el.selectionEnd } : null;
@@ -261,7 +282,7 @@ export function BankQuestionEditorPanel({
                     </button>
                     <button
                       type="button"
-                      className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+                      className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
                       onClick={() => {
                         const el = materialGroupRef.current;
                         const sel = el ? { start: el.selectionStart, end: el.selectionEnd } : null;
@@ -272,7 +293,7 @@ export function BankQuestionEditorPanel({
                     </button>
                     <button
                       type="button"
-                      className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+                      className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
                       onClick={() => {
                         const el = materialGroupRef.current;
                         const sel = el ? { start: el.selectionStart, end: el.selectionEnd } : null;
@@ -283,7 +304,7 @@ export function BankQuestionEditorPanel({
                     </button>
                     <button
                       type="button"
-                      className="inline-flex items-center gap-0.5 rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      className="or-button or-pill inline-flex items-center justify-center gap-1.5 rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors disabled:opacity-50"
                       disabled={busy}
                       title={t("components:bankEditor.insertImageTitle")}
                       onClick={() => {
@@ -292,7 +313,7 @@ export function BankQuestionEditorPanel({
                         beginImageEmbed({ k: "gm" }, sel);
                       }}
                     >
-                      <ImagePlus className="h-3.5 w-3.5" aria-hidden />
+                      <ImagePlus className="h-4 w-4 shrink-0" aria-hidden />
                       <span className="hidden sm:inline">{t("components:bankEditor.image")}</span>
                     </button>
                   </div>
@@ -311,10 +332,10 @@ export function BankQuestionEditorPanel({
                   hideToolbar={!advancedToolsOpen}
                 />
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 pt-1">
                 <button
                   type="button"
-                  className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                  className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-1.5 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
                   onClick={() => {
                     setDetail(addGroupSubItem(detail, unifiedUi, innerTypeForItems));
                   }}
@@ -324,7 +345,7 @@ export function BankQuestionEditorPanel({
                 {qg.items.length > 1 && (
                   <button
                     type="button"
-                    className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                    className="or-button or-button-danger or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_40%,transparent)] px-3.5 py-1.5 text-sm font-medium text-[var(--or-on-error)] hover:bg-[color-mix(in_srgb,var(--or-error-container)_50%,transparent)] active:bg-[var(--or-error-container)] transition-colors"
                     onClick={() => {
                       setDetail(removeLastGroupSubItem(detail));
                     }}
@@ -334,18 +355,18 @@ export function BankQuestionEditorPanel({
                 )}
               </div>
               {qg.items.map((it, i) => (
-                <div key={i} className="rounded-lg border border-slate-200 bg-slate-50/80 p-3">
-                  <p className="mb-2 text-xs font-semibold text-slate-700">
+                <div key={i} className="or-surface rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-4 space-y-3">
+                  <p className="text-sm font-semibold text-[var(--or-text)]">
                     {t("components:bankEditor.subItem", { n: i + 1 })}
                   </p>
                   {unifiedUi === "mixed" && (
-                    <label className="mb-2 block text-xs font-medium text-slate-600">
+                    <label className="block text-sm font-medium text-[var(--or-muted)]">
                       {t("components:bankEditor.fieldType")}
-                      <select
-                        className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
+                      <AppSelect
+                        className="or-select mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
                         value={it.type ?? "single_choice"}
-                        onChange={(e) => {
-                          setDetail(updateGroupMemberType(detail, i, e.target.value));
+                        onValueChange={(value) => {
+                          setDetail(updateGroupMemberType(detail, i, value));
                         }}
                       >
                         {QUESTION_TYPE_OPTIONS.map((o) => (
@@ -353,16 +374,16 @@ export function BankQuestionEditorPanel({
                             {t(`lib:questionTypes.${o.value}`)}
                           </option>
                         ))}
-                      </select>
+                      </AppSelect>
                     </label>
                   )}
                   <div className="block">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-slate-600">{t("components:bankEditor.fieldContent")}</span>
-                      <div className="flex shrink-0 flex-wrap gap-1">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-[var(--or-muted)]">{t("components:bankEditor.fieldContent")}</span>
+                      <div className="flex shrink-0 flex-wrap gap-1.5">
                         <button
                           type="button"
-                          className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+                          className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
                           onClick={() => {
                             const el = document.getElementById(giFieldId(i, "content")) as HTMLTextAreaElement | null;
                             const sel = el ? { start: el.selectionStart, end: el.selectionEnd } : null;
@@ -373,7 +394,7 @@ export function BankQuestionEditorPanel({
                         </button>
                         <button
                           type="button"
-                          className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+                          className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
                           onClick={() => {
                             const el = document.getElementById(giFieldId(i, "content")) as HTMLTextAreaElement | null;
                             const sel = el ? { start: el.selectionStart, end: el.selectionEnd } : null;
@@ -384,7 +405,7 @@ export function BankQuestionEditorPanel({
                         </button>
                         <button
                           type="button"
-                          className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+                          className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
                           onClick={() => {
                             const el = document.getElementById(giFieldId(i, "content")) as HTMLTextAreaElement | null;
                             const sel = el ? { start: el.selectionStart, end: el.selectionEnd } : null;
@@ -395,7 +416,7 @@ export function BankQuestionEditorPanel({
                         </button>
                         <button
                           type="button"
-                          className="inline-flex items-center gap-0.5 rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          className="or-button or-pill inline-flex items-center justify-center gap-1.5 rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors disabled:opacity-50"
                           disabled={busy}
                           title={t("components:bankEditor.insertImageTitle")}
                           onClick={() => {
@@ -404,7 +425,7 @@ export function BankQuestionEditorPanel({
                             beginImageEmbed({ k: "gi", i, f: "content" }, sel);
                           }}
                         >
-                          <ImagePlus className="h-3.5 w-3.5" aria-hidden />
+                          <ImagePlus className="h-4 w-4 shrink-0" aria-hidden />
                           <span className="hidden sm:inline">{t("components:bankEditor.image")}</span>
                         </button>
                       </div>
@@ -484,24 +505,24 @@ export function BankQuestionEditorPanel({
             </>
           ) : (
             <>
-              <label className="block text-xs font-medium text-slate-600">
+              <label className="block text-sm font-medium text-[var(--or-muted)]">
                 {t("components:bankEditor.fieldId")}
                 <input
-                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-sm"
+                  className="mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-3 py-2 font-mono text-sm text-[var(--or-muted)] cursor-not-allowed"
                   value={detail.question.id}
                   readOnly
                   title="题目编号创建后不可在此修改，避免与题库路径不一致"
                 />
               </label>
-              <label className="block text-xs font-medium text-slate-600">
+              <label className="block text-sm font-medium text-[var(--or-muted)]">
                 {t("components:bankEditor.fieldType")}
-                <select
-                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
+                <AppSelect
+                  className="mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
                   value={detail.question.type}
-                  onChange={(e) => {
+                  onValueChange={(value) => {
                     setDetail({
                       ...detail,
-                      question: updateSingleQuestionType(detail.question, e.target.value),
+                      question: updateSingleQuestionType(detail.question, value),
                     });
                   }}
                 >
@@ -510,14 +531,15 @@ export function BankQuestionEditorPanel({
                       {t(`lib:questionTypes.${o.value}`)}
                     </option>
                   ))}
-                </select>
+                </AppSelect>
               </label>
               <div className="block">
-                <span className="text-xs font-medium text-slate-600">{t("components:bankEditor.contentLatex")}</span>
+                <span className="mb-1 block text-sm font-medium text-[var(--or-muted)]">{t("components:bankEditor.contentLatex")}</span>
                 <LatexRichTextField
                   textAreaRef={contentRef}
                   minRows={6}
                   value={detail.question.content}
+                  placeholder={t("bank:latexStemPh")}
                   onChange={(next) => setDetail({ ...detail, question: { ...detail.question, content: next } })}
                   onRequestMermaid={(sel) => beginMermaidEmbed({ k: "q", f: "content" }, sel)}
                   onRequestPrimeBrush={(sel) => beginPrimeBrushEmbed({ k: "q", f: "content" }, sel)}
@@ -542,9 +564,9 @@ export function BankQuestionEditorPanel({
                 </div>
               )}
               <div className="block">
-                <span className="text-xs font-medium text-slate-600">{t("components:bankEditor.fieldAnswer")}</span>
+                <span className="mb-1 block text-sm font-medium text-[var(--or-muted)]">{t("components:bankEditor.fieldAnswer")}</span>
                 <AnswerRelationEditor teacher value={detail.question.answer} onChange={next => setDetail({ ...detail, question: { ...detail.question, answer: next } })} />
-                {readAnswerLogic(detail.question.answer) ? <KatexText text={detail.question.answer} className="rounded border bg-emerald-50 p-3 text-sm" /> : <LatexRichTextField
+                {readAnswerLogic(detail.question.answer) ? <KatexText text={detail.question.answer} className="rounded-xl border border-[var(--or-success)] bg-[color-mix(in_srgb,var(--or-success-container)_70%,transparent)] p-3 text-sm text-[var(--or-on-success)]" /> : <LatexRichTextField
                   textAreaRef={answerRef}
                   minRows={3}
                   value={detail.question.answer}
@@ -557,7 +579,7 @@ export function BankQuestionEditorPanel({
                 />}
               </div>
               <div className="block">
-                <span className="text-xs font-medium text-slate-600">{t("components:bankEditor.fieldAnalysis")}</span>
+                <span className="mb-1 block text-sm font-medium text-[var(--or-muted)]">{t("components:bankEditor.fieldAnalysis")}</span>
                 <LatexRichTextField
                   textAreaRef={analysisRef}
                   minRows={3}
@@ -571,12 +593,12 @@ export function BankQuestionEditorPanel({
                 />
               </div>
               <div>
-                <p className="text-xs font-medium text-slate-600">{t("components:bankEditor.tagsCustomFields")}</p>
+                <p className="text-sm font-medium text-[var(--or-muted)]">{t("components:bankEditor.tagsCustomFields")}</p>
                 <div className="mt-2 space-y-2">
                   {metaRows.map((row, i) => (
-                    <div key={i} className="flex gap-2">
+                    <div key={i} className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
                       <input
-                        className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
+                        className="min-w-0 flex-1 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-sm text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
                         placeholder={t("components:bankEditor.keyPh")}
                         value={row.key}
                         onChange={(e) => {
@@ -586,7 +608,7 @@ export function BankQuestionEditorPanel({
                         }}
                       />
                       <input
-                        className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
+                        className="min-w-0 flex-1 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-sm text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
                         placeholder={t("components:bankEditor.valuePh")}
                         value={row.value}
                         onChange={(e) => {
@@ -597,19 +619,22 @@ export function BankQuestionEditorPanel({
                       />
                       <button
                         type="button"
-                        className="rounded border border-slate-300 px-2 text-xs"
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] text-sm font-semibold text-[var(--or-muted)] hover:bg-[var(--or-page)] hover:text-[var(--or-on-error)] transition-colors"
                         onClick={() => setMetaRows(metaRows.filter((_, j) => j !== i))}
+                        aria-label="删除此字段"
                       >
-                        −
+                        <Minus className="h-4 w-4" />
                       </button>
                     </div>
                   ))}
                   <button
                     type="button"
-                    className="text-xs text-slate-600 underline"
+                    className="or-button or-pill or-g48-pill-btn or-g48-pill-dropdown rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-1.5 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
                     onClick={() => setMetaRows([...metaRows, { key: "", value: "" }])}
                   >
-                    {t("components:bankEditor.addField")}
+                    <Plus className="h-4 w-4 shrink-0" aria-hidden />
+                    <span className="text-center">{t("components:bankEditor.addField")}</span>
+                    <span className="h-4 w-4 shrink-0" aria-hidden />
                   </button>
                 </div>
               </div>
@@ -618,12 +643,12 @@ export function BankQuestionEditorPanel({
         </TabsContent>
         <TabsContent value="yaml" className="mt-4">
           <textarea
-            className="w-full rounded-md border border-slate-300 font-mono text-xs leading-relaxed"
+            className="or-input w-full rounded-2xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-3.5 font-mono text-sm leading-relaxed focus:bg-[var(--or-card)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
             rows={24}
             value={rawYaml}
             onChange={(e) => setRawYaml(e.target.value)}
           />
-          <p className="mt-2 text-[11px] text-slate-500">
+          <p className="mt-2 text-[13px] text-[var(--or-muted)]">
             {qg ? t("components:bankEditor.saveHintGroup") : t("components:bankEditor.saveHintSingle")}
           </p>
         </TabsContent>

@@ -301,6 +301,8 @@ def expand_tables_for_docx_markdown(text: str) -> str:
 
 def separate_markdown_tables(text: str) -> str:
     """Keep pipe tables separate from paragraphs and generated question labels."""
+    if not text or "|" not in text:
+        return text
     lines = text.split("\n")
     output: list[str] = []
     fence: str | None = None

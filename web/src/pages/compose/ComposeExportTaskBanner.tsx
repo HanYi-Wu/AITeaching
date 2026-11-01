@@ -40,9 +40,9 @@ export function ComposeExportTaskBanner({
         role="status"
         data-testid="compose-export-task-banner"
         data-task-status="failed"
-        className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-900"
+        className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_90%,transparent)] px-4 py-2.5 text-sm text-[var(--or-on-error)]"
       >
-        <span>
+        <span className="font-medium">
           {t("compose:exportSubmissionUnconfirmed", {
             format: formatLabel,
             reason: pendingSubmissionFailure.reason,
@@ -53,7 +53,7 @@ export function ComposeExportTaskBanner({
             type="button"
             disabled={busy}
             onClick={onRetry}
-            className="rounded border border-red-300 bg-white px-2.5 py-0.5 text-xs font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
+            className="or-g49-btn border border-red-300 bg-[var(--or-card)] text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] disabled:opacity-50 py-1 px-3 text-sm"
           >
             {t("compose:exportTaskRetry")}
           </button>
@@ -78,20 +78,20 @@ export function ComposeExportTaskBanner({
   const canRetry = isFailed && (isRetryable ?? projection?.is_retryable ?? true);
 
   const toneClass = isFailed
-    ? "border-red-200 bg-red-50 text-red-900"
+    ? "border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_95%,transparent)] text-[var(--or-on-error)]"
     : isPending
-      ? "border-blue-200 bg-blue-50 text-blue-900"
-      : "border-emerald-200 bg-emerald-50 text-emerald-900";
+      ? "border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_95%,transparent)] text-[var(--or-on-container)]"
+      : "border-[var(--or-success)] bg-[color-mix(in_srgb,var(--or-success-container)_95%,transparent)] text-[var(--or-on-success)]";
 
   return (
     <div
       role="status"
       data-testid="compose-export-task-banner"
       data-task-status={task.status}
-      className={`shrink-0 flex flex-wrap items-center justify-between gap-2 border-b px-3 py-1.5 text-xs ${toneClass}`}
+      className={`shrink-0 flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2 text-sm ${toneClass}`}
     >
-      <div className="flex items-center gap-2 flex-wrap">
-        <span>
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <span className="font-medium">
           {task.status === "queued"
             ? t("compose:exportTaskQueued", { format: formatLabel, attempt: task.attempt })
             : task.status === "running"
@@ -103,7 +103,7 @@ export function ComposeExportTaskBanner({
 
         {isPending ? (
           effectiveStage ? (
-            <span data-testid="task-stage-label" className="font-medium text-slate-700 bg-white/60 px-1.5 py-0.5 rounded">
+            <span data-testid="task-stage-label" className="or-g49-pill bg-[color-mix(in_srgb,var(--or-card)_80%,transparent)] text-[var(--or-text)] border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] shadow-xs">
               {effectiveStage}
             </span>
           ) : null
@@ -111,18 +111,18 @@ export function ComposeExportTaskBanner({
 
         {isPending ? (
           hasFiniteProgress ? (
-            <span data-testid="task-progress-value" className="font-semibold text-blue-700">
+            <span data-testid="task-progress-value" className="font-bold tabular-nums text-[var(--or-on-container)]">
               {progressPercent}%
             </span>
           ) : (
-            <span data-testid="task-progress-indeterminate" className="text-slate-500">
+            <span data-testid="task-progress-indeterminate" className="text-[var(--or-muted)] font-medium">
               ({t("common:processing")})
             </span>
           )
         ) : null}
       </div>
 
-      {pollError ? <span role="alert">{t("compose:exportPollingPaused", { reason: pollError })}</span> : null}
+      {pollError ? <span role="alert" className="text-[var(--or-on-error)] font-medium">{t("compose:exportPollingPaused", { reason: pollError })}</span> : null}
 
       <div className="flex items-center gap-2">
         {isPending && pollError ? (
@@ -130,7 +130,7 @@ export function ComposeExportTaskBanner({
             type="button"
             disabled={busy}
             onClick={onResume}
-            className="rounded border border-blue-300 bg-white px-2.5 py-0.5 font-medium disabled:opacity-50"
+            className="or-g49-btn border border-sky-300 bg-[var(--or-card)] text-[var(--or-on-container)] hover:bg-[var(--or-primary-container)] py-1 px-3 text-sm"
           >
             {t("compose:exportResumePolling")}
           </button>
@@ -141,7 +141,7 @@ export function ComposeExportTaskBanner({
             type="button"
             disabled={busy}
             onClick={onRetry}
-            className="rounded border border-red-300 bg-white px-2.5 py-0.5 text-xs font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
+            className="or-g49-btn border border-red-300 bg-[var(--or-card)] text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] disabled:opacity-50 py-1 px-3 text-sm"
           >
             {t("compose:exportTaskRetry")}
           </button>
@@ -152,7 +152,7 @@ export function ComposeExportTaskBanner({
             type="button"
             disabled={busy}
             onClick={onDismiss}
-            className="rounded px-1.5 py-0.5 text-xs opacity-80 hover:opacity-100"
+            className="rounded-lg px-2.5 py-1 text-sm font-medium opacity-80 hover:opacity-100 hover:bg-black/5 transition-opacity"
           >
             {t("compose:exportTaskDismiss")}
           </button>

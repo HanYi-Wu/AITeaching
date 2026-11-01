@@ -1,4 +1,5 @@
 import { CheckCircle2, Circle } from "lucide-react";
+import "../../ui-redesign/g55/g55.css";
 
 export type GettingStartedStep = {
   label: string;
@@ -13,35 +14,46 @@ type Props = {
 };
 
 export function GettingStartedChecklist({ description, steps }: Props) {
+  const completedCount = steps.filter((step) => step.complete).length;
+
   return (
-    <section className="rounded-xl border border-indigo-100 bg-gradient-to-br from-indigo-50 to-white p-4 shadow-sm sm:p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <section className="or-g55-card rounded-2xl border border-[var(--or-outline)] bg-[var(--or-card)] p-5 shadow-sm   sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-slate-950">首次使用清单</h2>
-          <p className="mt-1 text-sm text-slate-600">{description}</p>
+          <h2 className="text-base font-bold text-[var(--or-text)] ">首次使用清单</h2>
+          <p className="mt-1 text-sm text-[var(--or-muted)] ">{description}</p>
         </div>
-        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-indigo-700 shadow-sm">
-          {steps.filter((step) => step.complete).length}/{steps.length} 已完成
+        <span className="or-g55-pill bg-or-primary-container text-xs font-semibold text-or-on-container">
+          {completedCount}/{steps.length} 已完成
         </span>
       </div>
-      <ol className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+      <ol className="mt-5 grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
         {steps.map((step, index) => (
-          <li key={step.label} className="flex min-h-20 items-start gap-3 rounded-lg border border-white bg-white/90 p-3">
+          <li
+            key={step.label}
+            className="or-g55-static-card flex min-h-[5.5rem] items-start gap-3 rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3.5  "
+          >
             {step.complete ? (
-              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" aria-hidden="true" />
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-or-success" aria-hidden="true" />
             ) : (
-              <Circle className="mt-0.5 h-5 w-5 shrink-0 text-slate-300" aria-hidden="true" />
+              <Circle className="mt-0.5 h-5 w-5 shrink-0 text-[var(--or-muted)] " aria-hidden="true" />
             )}
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-slate-900">{index + 1}. {step.label}</p>
+              <p className="text-sm font-medium text-[var(--or-text)] ">
+                {index + 1}. {step.label}
+              </p>
               {step.complete ? (
-                <p className="mt-1 text-xs font-medium text-emerald-700">已完成</p>
+                <p className="mt-1.5 text-xs font-medium text-or-success">已完成</p>
               ) : step.actionLabel && step.onAction ? (
-                <button type="button" onClick={step.onAction} className="mt-2 text-xs font-semibold text-indigo-700 hover:text-indigo-900">
+                <button
+                  type="button"
+                  onClick={step.onAction}
+                  className="mt-2 inline-flex items-center text-xs font-semibold text-or-primary transition hover:text-or-primary"
+                >
                   {step.actionLabel}
                 </button>
               ) : (
-                <p className="mt-1 text-xs text-slate-500">待完成</p>
+                <p className="mt-1.5 text-xs text-[var(--or-muted)] ">待完成</p>
               )}
             </div>
           </li>

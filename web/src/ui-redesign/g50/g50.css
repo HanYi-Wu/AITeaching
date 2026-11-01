@@ -1,0 +1,301 @@
+/* ==========================================================================
+   G50: 知识图谱与图形工作区 - FlClash 风格呈现系统
+   符合《共享前端呈现契约.md》及用户硬性规范
+   支持桌面端、平板端与手机移动端全响应式适配
+   ========================================================================== */
+
+/* 容器与页面布局 */
+.or-g50-container {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background-color: var(--or-page, #f8fafc);
+  color: var(--or-text, #0f172a);
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+/* 顶部操作条 */
+.or-g50-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 1rem;
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 1rem;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+}
+
+.or-g50-header-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--or-text, #0f172a);
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.or-g50-mode-tabs { display:flex; }
+.or-g50-mode-mobile,.or-g50-mobile-actions { display:none; }
+@media(max-width:767px) {
+  .or-g50-desktop-header,.or-g50-mode-tabs { display:none; }
+  .or-g50-mode-mobile { display:block; width:132px; }
+  .or-g50-mode-mobile > button { width:100%; }
+  .or-g50-mobile-actions { display:flex; align-items:center; gap:4px; }
+  .or-g50-mobile-actions > button { padding-inline:8px; }
+}
+
+/* FlClash 标准胶囊按钮 */
+.or-g50-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  font-size: 0.875rem; /* 14px */
+  font-weight: 500;
+  line-height: 1;
+  text-align: center;
+  box-sizing: border-box;
+  padding: 0.3125rem 0.625rem;
+  vertical-align: middle;
+}
+
+/* 胶囊文字几何居中保证 */
+.or-g50-pill > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 按钮规范 */
+.or-g50-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  height: 2.25rem; /* 36px */
+  padding: 0 0.875rem;
+  border-radius: 0.625rem; /* 10px */
+  font-size: 0.875rem; /* 14px */
+  font-weight: 500;
+  line-height: 1;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.or-g50-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed !important;
+}
+
+.or-g50-btn-primary {
+  background-color: var(--or-primary, #2563eb);
+  color: var(--or-on-primary, #ffffff);
+  border-color: transparent;
+}
+
+.or-g50-btn-primary:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.or-g50-btn-secondary {
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #0f172a);
+  border-color: var(--or-outline, #e2e8f0);
+}
+
+.or-g50-btn-secondary:hover:not(:disabled) {
+  background-color: var(--or-block, #f1f5f9);
+}
+
+.or-g50-btn-tonal {
+  background-color: var(--or-primary-container, #eff6ff);
+  color: var(--or-on-container, #1d4ed8);
+  border-color: transparent;
+}
+
+.or-g50-btn-tonal:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.or-g50-rel-type-selected {
+  border-color: var(--or-primary);
+  background-color: var(--or-primary-container);
+  color: var(--or-on-container);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--or-primary) 20%, transparent);
+}
+
+.or-g50-btn-ghost {
+  background-color: transparent;
+  color: var(--or-muted, #64748b);
+  border-color: transparent;
+}
+
+.or-g50-btn-ghost:hover:not(:disabled) {
+  background-color: var(--or-block, #f1f5f9);
+  color: var(--or-text, #0f172a);
+}
+
+.or-g50-btn-danger {
+  background-color: transparent;
+  color: var(--or-error, #dc2626);
+  border-color: color-mix(in srgb, var(--or-error) 24%, transparent);
+}
+
+.or-g50-btn-danger:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--or-error) 8%, transparent);
+}
+
+/* 输入框规范 */
+.or-g50-input {
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--or-outline, #e2e8f0);
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #0f172a);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  box-sizing: border-box;
+}
+
+/* 左侧图谱选择侧栏 */
+.or-g50-sidebar {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--or-sidebar, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 1rem;
+  overflow: hidden;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+}
+
+.or-g50-sidebar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.875rem; /* 14px */
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+  user-select: none;
+}
+
+.or-g50-sidebar-item:hover {
+  background-color: var(--or-block, #f1f5f9);
+}
+
+.or-g50-sidebar-item.active {
+  background-color: var(--or-primary, #2563eb);
+  color: var(--or-on-primary, #ffffff);
+}
+
+/* 画布主区域 */
+.or-g50-canvas-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 1rem; /* 16px */
+  overflow: hidden;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+}
+
+/* 画布控制栏 */
+.or-g50-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background-color: var(--or-card, #ffffff);
+  border-bottom: 1px solid var(--or-outline, #e2e8f0);
+  font-size: 0.875rem;
+}
+
+/* 右侧详情面板 */
+.or-g50-panel {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 1rem;
+  overflow: hidden;
+  box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.05);
+}
+
+/* 静态卡片禁止悬浮/上浮/手型 */
+.or-g50-static-card {
+  cursor: default !important;
+  transform: none !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04) !important;
+}
+
+.or-g50-static-card:hover {
+  transform: none !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04) !important;
+}
+
+/* 移动端滚动条隐藏与手势优化 */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* 移动端响应式适配 */
+@media (max-width: 640px) {
+  .or-g50-container {
+    padding: 0.375rem;
+    gap: 0.375rem;
+  }
+
+  .or-g50-header {
+    padding: 0.375rem 0.625rem;
+    border-radius: 0.75rem;
+  }
+
+  .or-g50-canvas-wrapper {
+    border-radius: 0.75rem;
+  }
+
+  .or-g50-panel {
+    border-radius: 0;
+    border-right: none;
+    border-top: none;
+    border-bottom: none;
+  }
+
+  .or-g50-sidebar {
+    border-radius: 0;
+    border-left: none;
+    border-top: none;
+    border-bottom: none;
+  }
+}
+
+/* 动效适配：遵循 prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .or-g50-btn,
+  .or-g50-sidebar-item,
+  .or-g50-pill {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

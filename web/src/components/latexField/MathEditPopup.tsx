@@ -69,30 +69,30 @@ export function MathEditPopup({
       className="fixed z-50"
       style={{ top: position.top, left: position.left }}
     >
-      <div className="w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-2xl ring-1 ring-black/5">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-700">
+      <div className="or-dialog w-84 max-w-[calc(100vw-1rem)] rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-3.5 shadow-2xl ring-1 ring-black/5 sm:p-4">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-1">
+          <span className="text-sm font-semibold text-[var(--or-text)]">
             {isNew ? "插入公式" : "编辑公式"}
           </span>
-          <span className="text-[10px] text-slate-400">Enter 确认 · Esc 取消</span>
+          <span className="text-[13px] text-[var(--or-muted)]">Enter 确认 · Esc 取消</span>
         </div>
         <div ref={hostRef} className="min-h-[40px]" />
         {!bridgeReady ? (
-          <p className="mt-1 text-[11px] text-slate-500" role={loadFailed ? "alert" : "status"}>
+          <p className="mt-1 text-[13px] text-[var(--or-muted)]" role={loadFailed ? "alert" : "status"}>
             {loadFailed ? "公式编辑器加载失败，请关闭后重试。" : "正在加载公式编辑器…"}
           </p>
         ) : null}
-        <div className="mt-2.5 flex justify-end gap-2">
+        <div className="mt-3 flex justify-end gap-2">
           <button
             type="button"
-            className="rounded-md px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+            className="or-button or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-1.5 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
             onClick={onCancel}
           >
             取消
           </button>
           <button
             type="button"
-            className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+            className="or-button or-button-primary or-pill inline-flex items-center justify-center rounded-full bg-[var(--or-primary)] px-4 py-1.5 text-sm font-medium text-[var(--or-on-primary)] shadow-sm hover:bg-[var(--or-primary)] active:bg-slate-950 transition-colors disabled:opacity-40"
             disabled={!bridgeReady}
             onClick={() => {
               const bridge = bridgeRef.current;

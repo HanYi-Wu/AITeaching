@@ -177,6 +177,7 @@ def auth_profile_update(
             require_platform_root(),
             user=user,
             avatar_data_url=body.avatar_data_url,
+            avatar_data_url_provided="avatar_data_url" in body.model_fields_set,
             preferences=body.preferences,
             subjects=body.subjects,
         )

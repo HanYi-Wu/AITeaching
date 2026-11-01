@@ -3,6 +3,7 @@ import { FileSpreadsheet, Trash2 } from "lucide-react";
 import { formatLocaleDate } from "../../lib/locale";
 import { cn } from "../../lib/utils";
 import { type ScoreBatch } from "./analysisTypes";
+import "../../ui-redesign/g52/g52-design-tokens.css";
 
 interface AnalysisBatchSelectorProps {
   batches: ScoreBatch[];
@@ -21,34 +22,41 @@ export function AnalysisBatchSelector({
   if (batches.length === 0) return null;
 
   return (
-    <div className="shrink-0 border-b border-slate-200 bg-slate-50 px-6 py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-slate-500">{t("batchLabel")}</span>
-        <div className="flex gap-1">
-          {batches.map((b) => (
-            <button
-              key={b.batch_id}
-              onClick={() => onSelectBatch(b.batch_id)}
-              className={cn(
-                "flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",
-                selectedBatchId === b.batch_id
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-slate-600 hover:bg-slate-200",
-              )}
-            >
-              <FileSpreadsheet className="h-3 w-3" />
-              {formatLocaleDate(b.imported_at)}
-              <span className="opacity-70">({t("students", { n: b.student_count })})</span>
-            </button>
-          ))}
+    <div className="shrink-0 border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] px-4 sm:px-6 py-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-[var(--or-muted)]">{t("batchLabel")}</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {batches.map((b) => {
+            const isSelected = selectedBatchId === b.batch_id;
+            return (
+              <button
+                key={b.batch_id}
+                type="button"
+                onClick={() => onSelectBatch(b.batch_id)}
+                className={cn(
+                  "or-g52-batch-pill",
+                  isSelected
+                    ? "or-g52-batch-pill-active"
+                    : "or-g52-batch-pill-inactive",
+                )}
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                <span>{formatLocaleDate(b.imported_at)}</span>
+                <span className={isSelected ? "text-white/80" : "text-[var(--or-muted)]"}>
+                  ({t("students", { n: b.student_count })})
+                </span>
+              </button>
+            );
+          })}
         </div>
         {selectedBatchId && (
           <button
+            type="button"
             onClick={onDeleteBatch}
-            className="ml-2 flex items-center gap-1 rounded border border-red-200 bg-white px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-50"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-[var(--or-error)] bg-[var(--or-card)] px-2.5 py-1 text-xs font-medium text-[var(--or-on-error)] transition-colors hover:bg-[var(--or-error-container)]"
           >
-            <Trash2 className="h-3 w-3" />
-            {t("deleteBatch")}
+            <Trash2 className="h-3.5 w-3.5" />
+            <span>{t("deleteBatch")}</span>
           </button>
         )}
       </div>

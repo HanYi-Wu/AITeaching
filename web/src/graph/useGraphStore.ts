@@ -3,6 +3,8 @@
  * Manages multi-graph (per-subject) data, active graph selection, view mode, and selection state.
  */
 import { create } from "zustand";
+import { reconcileNodeRows, reconcileRelationRows } from "./snapshotCommands/reconcile";
+
 import type { GraphInfo } from "../api/client";
 
 export type GraphNodeNoteRow = {
@@ -163,7 +165,11 @@ export const useGraphStore = create<GraphStore>((set) => ({
   kindCounts: {},
   subjects: [],
   levels: [],
-  setGraphNodes: (nodes) => set({ graphNodes: nodes }),
+  setGraphNodes: (nodes) =>
+    set((s) => {
+      const reconciled = reconcileNodeRows(s.graphNodes, nodes);
+      return reconciled === s.graphNodes ? s : { graphNodes: reconciled };
+    }),
   addGraphNode: (node) =>
     set((s) => {
       const nk = (node.node_kind ?? "concept") as string;
@@ -195,10 +201,27 @@ export const useGraphStore = create<GraphStore>((set) => ({
       selectedNodeId: s.selectedNodeId === oldId ? node.id : s.selectedNodeId,
     })),
   patchGraphNode: (id, patch) =>
-    set((s) => ({
-      graphNodes: s.graphNodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
-    })),
-  setRelations: (relations) => set({ relations }),
+    set((s) => {
+      const index = s.graphNodes.findIndex((n) => n.id === id);
+      if (index === -1) return s;
+      const target = s.graphNodes[index];
+      let changed = false;
+      for (const [k, v] of Object.entries(patch)) {
+        if (!Object.is((target as Record<string, unknown>)[k], v)) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) return s;
+      const nodes = s.graphNodes.slice();
+      nodes[index] = { ...target, ...patch };
+      return { graphNodes: nodes };
+    }),
+  setRelations: (relations) =>
+    set((s) => {
+      const reconciled = reconcileRelationRows(s.relations, relations);
+      return reconciled === s.relations ? s : { relations: reconciled };
+    }),
   addGraphRelation: (rel) =>
     set((s) => ({ relations: [...s.relations, rel] })),
   removeGraphRelations: (predicate) =>

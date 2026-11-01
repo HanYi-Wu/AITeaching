@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
+import "../../ui-redesign/g49/g49.css";
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../../api/client";
 import { useContentLibraryChanged } from "../../lib/contentEvents";
 import { TexSetupNotice } from "../../components/TexSetupNotice";
@@ -115,11 +116,12 @@ export function ComposeWorkspace({
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [composeFilterExpanded, setComposeFilterExpanded] = useState(false);
+  const [activeComposePanel, setActiveComposePanel] = useState<"paper" | "bank" | "history">("paper");
   const [activeSection, setActiveSection] = useState<string | null>(null);
   /** 左侧题库多选（qualified_id），顺序与列表一致；配合 Ctrl/⌘、Shift 桌面习惯 */
   const [selectedLeftIds, setSelectedLeftIds] = useState<string[]>([]);
   /** 用于 Shift+点击 范围选择的锚点（filteredQuestions 下标） */
-  const [leftListAnchorIndex, setLeftListAnchorIndex] = useState<number | null>(null);
+  const [leftListAnchorId, setLeftListAnchorId] = useState<string | null>(null);
   const [selectedRight, setSelectedRight] = useState<RightSelection | null>(null);
   /** 试卷栏 Shift 区间锚点（仅与 `section_id` 组合有效，不跨题型） */
   const [rightListAnchor, setRightListAnchor] = useState<{ sectionId: string; slotIndex: number } | null>(null);
@@ -181,7 +183,7 @@ export function ComposeWorkspace({
     currentExamIdRef.current = null;
     setCurrentExamId(null); setPdfExamId(null); setWordExamId(null); setLastExportedExamId(null);
     setPreviewPdfId(null); setPreviewOpen(false); setPreviewWarnings([]);
-    setSelectedLeftIds([]); setSelectedRight(null); setLeftListAnchorIndex(null); setRightListAnchor(null);
+    setSelectedLeftIds([]); setSelectedRight(null); setLeftListAnchorId(null); setRightListAnchor(null);
     setExportFailureExamIds([]); setMsg(null); setNewPaperDialogOpen(false); setPublishDialogOpen(false);
     setBusy(false);
     setConflictTargetId(null); setConflictExportKind(null);
@@ -435,7 +437,8 @@ export function ComposeWorkspace({
     if (!selectedTpl) {
       return false;
     }
-    return selectedTpl.sections.every((s) => {
+    const hasQuestions = Object.values(bySection).some((questions) => questions.length > 0);
+    return hasQuestions && selectedTpl.sections.every((s) => {
       if (s.type === "text") {
         return true;
       }
@@ -463,12 +466,13 @@ export function ComposeWorkspace({
     (q: QuestionRow, index: number, e: MouseEvent<HTMLButtonElement>) => {
       e.preventDefault();
       if (e.shiftKey) {
-        const anchor = leftListAnchorIndex ?? index;
+        const currentAnchorIndex = filteredQuestions.findIndex((row) => row.qualified_id === leftListAnchorId);
+        const anchor = currentAnchorIndex >= 0 ? currentAnchorIndex : index;
         const start = Math.min(anchor, index);
         const end = Math.max(anchor, index);
         const range = filteredQuestions.slice(start, end + 1).map((x) => x.qualified_id);
         setSelectedLeftIds(range);
-        setLeftListAnchorIndex(index);
+        setLeftListAnchorId(q.qualified_id);
         setSelectedRight(null);
         setRightListAnchor(null);
         return;
@@ -480,17 +484,17 @@ export function ComposeWorkspace({
           }
           return [...prev, q.qualified_id];
         });
-        setLeftListAnchorIndex(index);
+        setLeftListAnchorId(q.qualified_id);
         setSelectedRight(null);
         setRightListAnchor(null);
         return;
       }
       setSelectedLeftIds([q.qualified_id]);
-      setLeftListAnchorIndex(index);
+      setLeftListAnchorId(q.qualified_id);
       setSelectedRight(null);
       setRightListAnchor(null);
     },
-    [filteredQuestions, leftListAnchorIndex],
+    [filteredQuestions, leftListAnchorId],
   );
 
   const handleRightPaperSlotClick = useCallback(
@@ -709,7 +713,7 @@ export function ComposeWorkspace({
     examIdToDelete: string | null, failureIds: string[], workspaceId: string | null,
     snapshot?: ComposePaperState,
   ) => {
-    if (!selectedTpl) return;
+    if (!selectedTpl || !countsOk) return;
     const submitted = clonePaperState(snapshot ?? paperStateRef.current);
     const idsToDelete = [...new Set([examIdToDelete, ...failureIds].filter((id): id is string => Boolean(id)))];
     await exportTasks.startExportTask({ format, submitted, idsToDelete, body: {
@@ -720,7 +724,7 @@ export function ComposeWorkspace({
       ...(workspaceId ? { exam_workspace_id: workspaceId } : {}),
       ...(idsToDelete.length ? { exam_ids_to_delete_on_success: idsToDelete } : {}),
     } });
-  }, [exportTasks.startExportTask, selectedTpl]);
+  }, [countsOk, exportTasks.startExportTask, selectedTpl]);
 
   const applyExamDocument = useCallback((doc: ExamDoc) => {
     setPreviewPdfId(null);
@@ -732,7 +736,7 @@ export function ComposeWorkspace({
     const parsed = examDocToPaperState(doc, { templatePath });
     resetPaperHistory(parsed.state);
     setSelectedLeftIds([]);
-    setLeftListAnchorIndex(null);
+    setLeftListAnchorId(null);
     setSelectedRight(null);
     setRightListAnchor(null);
   }, [resetPaperHistory, templatePath]);
@@ -927,7 +931,7 @@ export function ComposeWorkspace({
 
   async function exportWithConflictCheck(format: ComposeExportTaskFormat) {
     const isCurrent = capturePaperRequest();
-    if (!selectedTpl || exportTasks.isPollingOrRunning) return;
+    if (!selectedTpl || !countsOk || exportTasks.isPollingOrRunning) return;
     const submitted = clonePaperState(paperStateRef.current);
     exportTasks.dismissExportTask();
     setExportPreflightFailure(null);
@@ -962,7 +966,7 @@ export function ComposeWorkspace({
 
   async function confirmOverwriteExport() {
     const isCurrent = capturePaperRequest();
-    if (!selectedTpl || !conflictTargetId) {
+    if (!selectedTpl || !countsOk || !conflictTargetId) {
       return;
     }
     const overwriteId = conflictTargetId;
@@ -1052,7 +1056,7 @@ export function ComposeWorkspace({
   }, [captureOwnerRequest, currentExamId, onError, persistDraftForPublish, t]);
 
   const publishing = useComposePublishing({ open: publishDialogOpen, setOpen: setPublishDialogOpen,
-    ownerKey: draftScope.ownerKey, exportLabel, countsOk, persistDraftForPublish, onError, setMsg });
+    ownerKey: draftScope.ownerKey, exportLabel, countsOk, composeSubject: subject, persistDraftForPublish, onError, setMsg });
   const { openPublishDialog, publishBusy } = publishing;
 
   async function deleteExamById(examId: string, opts?: { exported?: boolean }) {
@@ -1134,7 +1138,7 @@ export function ComposeWorkspace({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+          className="or-g49-btn or-g49-btn-primary"
           disabled={busy}
           onClick={() => {
             onError(null);
@@ -1156,7 +1160,7 @@ export function ComposeWorkspace({
         </button>
         <button
           type="button"
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+          className="or-g49-btn or-g49-btn-secondary"
           disabled={busy || !selectedTpl || !templatePath.trim()}
           onClick={() => void saveDraftToServer()}
         >
@@ -1168,36 +1172,36 @@ export function ComposeWorkspace({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 disabled:opacity-50"
+          className="or-g49-btn or-g49-btn-secondary"
           disabled={busy || !selectedTpl}
           onClick={() => void validate()}
         >
           {t("compose:validatePreview")}
         </button>
-        {previewPdfId || pdfExamId ? <button type="button" className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 xl:hidden" onClick={() => setPreviewOpen(true)}>查看预览</button> : null}
+        {previewPdfId || pdfExamId ? <button type="button" className="or-g49-btn or-g49-btn-secondary or-g49-preview-toggle" onClick={() => setPreviewOpen(true)}>查看预览</button> : null}
         <details className="relative group">
-          <summary className="list-none cursor-pointer rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50">导出 ▾</summary>
-          <div className="absolute right-0 top-full z-30 mt-1 min-w-32 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
-            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={(event) => {
+          <summary className="list-none cursor-pointer or-g49-btn or-g49-btn-secondary">导出 ▾</summary>
+          <div className="absolute right-0 top-full z-30 mt-1 min-w-36 rounded-xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-1.5 shadow-xl">
+            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-[var(--or-block)] disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={(event) => {
               event.currentTarget.closest("details")?.removeAttribute("open");
               void exportExam();
             }}>{t("compose:exportPdf")}</button>
-            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={(event) => {
+            <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-[var(--or-block)] disabled:opacity-50" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={(event) => {
               event.currentTarget.closest("details")?.removeAttribute("open");
               void exportWord();
             }}>{t("compose:exportWord")}</button>
-            {!previewPdfId && pdfExamId ? <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100" onClick={() => void downloadExportedBundle(pdfExamId, "pdf").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>{t("compose:downloadFinalPdf")}</button> : null}
-            {!previewPdfId && (wordExamId || (pdfExamId && examSummaries.some((exam) => exam.exam_id === pdfExamId && exam.has_docx))) ? <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100" onClick={() => void downloadExportedBundle((wordExamId || pdfExamId)!, "docx").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>{t("compose:downloadFinalWord")}</button> : null}
+            {!previewPdfId && pdfExamId ? <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-[var(--or-block)]" onClick={() => void downloadExportedBundle(pdfExamId, "pdf").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>{t("compose:downloadFinalPdf")}</button> : null}
+            {!previewPdfId && (wordExamId || (pdfExamId && examSummaries.some((exam) => exam.exam_id === pdfExamId && exam.has_docx))) ? <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-[var(--or-block)]" onClick={() => void downloadExportedBundle((wordExamId || pdfExamId)!, "docx").catch((error) => onError(error instanceof Error ? error.message : String(error)))}>{t("compose:downloadFinalWord")}</button> : null}
           </div>
         </details>
         <button
           type="button"
-          className="rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
+          className="or-g49-btn bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
           disabled={busy || publishBusy}
           onClick={() => void openPublishDialog()}
-          title="发布线上试卷"
+          title={countsOk ? "发布当前试卷" : "选择发布历史错题或专项巩固练习"}
         >
-          发布线上试卷
+          {countsOk ? "发布线上试卷" : "发布历史练习"}
         </button>
       </div>
     );
@@ -1268,7 +1272,7 @@ export function ComposeWorkspace({
       <TexSetupNotice onError={onError} />
       {msg ? (
         <div
-          className="shrink-0 border-b border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-800"
+          className="shrink-0 border-b border-[var(--or-success)] bg-[var(--or-success-container)] px-4 py-2 text-sm font-medium text-[var(--or-on-success)]"
           role="status"
         >
           {msg}
@@ -1276,7 +1280,7 @@ export function ComposeWorkspace({
       ) : null}
       {previewWarnings.length > 0 ? (
         <div
-          className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950"
+          className="shrink-0 border-b border-[var(--or-warning)] bg-[var(--or-warning-container)] px-4 py-2.5 text-sm text-[var(--or-on-warning)]"
           role="status"
         >
           <p className="font-medium">{t("compose:previewWarningsTitle")}</p>
@@ -1288,7 +1292,7 @@ export function ComposeWorkspace({
         </div>
       ) : null}
       {busy ? (
-        <div className="shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-1 text-[11px] text-slate-600" aria-live="polite">
+        <div className="shrink-0 border-b border-[var(--or-outline)] bg-[var(--or-page)] px-4 py-1.5 text-sm font-medium text-[var(--or-muted)]" aria-live="polite">
           {t("common:processing")}
         </div>
       ) : null}
@@ -1309,11 +1313,43 @@ export function ComposeWorkspace({
         }}
         onDismiss={exportTasks.dismissExportTask}
       />
-      {exportPreflightFailure ? <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+      {exportPreflightFailure ? <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--or-error)] bg-[var(--or-error-container)] px-3 py-2 text-xs text-[var(--or-on-error)]">
         <span>{t("compose:exportPreflightFailed", { format: exportPreflightFailure.format === "pdf" ? "PDF" : "Word", reason: exportPreflightFailure.reason })}</span>
-        <button type="button" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={() => void exportWithConflictCheck(exportPreflightFailure.format)} className="rounded border bg-white px-2.5 py-1 disabled:opacity-50">{t("compose:exportPreflightRetry")}</button>
+        <button type="button" disabled={busy || !countsOk || exportTasks.isPollingOrRunning} onClick={() => void exportWithConflictCheck(exportPreflightFailure.format)} className="rounded border bg-[var(--or-card)] px-2.5 py-1 disabled:opacity-50">{t("compose:exportPreflightRetry")}</button>
       </div> : null}
-      <div className="flex min-h-0 flex-1 flex-row">
+      <div
+        className={`or-g49-compose-workspace${composeRightPdfPath ? " has-pdf" : ""}`}
+        data-active-panel={activeComposePanel}
+      >
+        <div className="or-g49-compose-panel-switcher" role="group" aria-label="组卷面板">
+          <span className="or-g49-compose-panel-marker" aria-hidden="true" />
+          <button
+            type="button"
+            className="or-g49-compose-panel-button"
+            aria-pressed={activeComposePanel === "paper"}
+            onClick={() => setActiveComposePanel("paper")}
+          >
+            试卷
+          </button>
+          <button
+            type="button"
+            className="or-g49-compose-panel-button"
+            aria-pressed={activeComposePanel === "bank"}
+            onClick={() => setActiveComposePanel("bank")}
+          >
+            题库
+          </button>
+          <button
+            type="button"
+            className="or-g49-compose-panel-button"
+            aria-pressed={activeComposePanel === "history"}
+            onClick={() => setActiveComposePanel("history")}
+          >
+            历史
+          </button>
+        </div>
+
+        <div className="or-g49-compose-history-panel">
         <ComposeHistorySidebar
           busy={busy}
           currentExamId={currentExamId}
@@ -1333,14 +1369,14 @@ export function ComposeWorkspace({
           draftExamRows={draftExamRows}
           exportedExamRows={exportedExamRows}
           taggedItems={taggedItems}
-          onLoadDraftExam={(examId) => { void loadExamById(examId, null); }}
-          onLoadExportedExam={(exam) => { setLastExportedExamId(exam.exam_id); void loadExamById(exam.exam_id, exam.has_pdf ? exam.exam_id : null, exam.has_docx ? exam.exam_id : null); }}
+          onLoadDraftExam={(examId) => { setActiveComposePanel("paper"); void loadExamById(examId, null); }}
+          onLoadExportedExam={(exam) => { setActiveComposePanel("paper"); setLastExportedExamId(exam.exam_id); void loadExamById(exam.exam_id, exam.has_pdf ? exam.exam_id : null, exam.has_docx ? exam.exam_id : null); }}
           onDeleteExam={(examId, opts) => { void deleteExamById(examId, opts); }}
           onError={onError}
         />
+        </div>
 
-
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 md:flex-row">
+        <div className="or-g49-compose-bank-panel">
         <ComposeBankSearchPanel
           subject={subject}
           onSubjectChange={(value) => commitPaperState({ ...paperStateRef.current, subject: value })}
@@ -1368,8 +1404,29 @@ export function ComposeWorkspace({
           onDropPaperItemToRemove={removeDraggedQuestion}
           onError={onError}
         />
+          <div className="or-g49-bank-actions">
+            <button
+              type="button"
+              className="or-g49-btn or-g49-btn-primary"
+              disabled={!selectedLeftIds.length || busy || contentSyncing}
+              onClick={() => {
+                addFromLeft();
+                setActiveComposePanel("paper");
+              }}
+            >
+              {t("compose:addToSection")}（{selectedLeftIds.length}）
+            </button>
+            <button
+              type="button"
+              className="or-g49-btn or-g49-btn-secondary"
+              onClick={() => setActiveComposePanel("paper")}
+            >
+              返回试卷
+            </button>
+          </div>
+        </div>
 
-
+        <div className="or-g49-compose-paper-panel">
         <ComposePaperEditorPanel
           busy={busy}
           contentSyncing={contentSyncing}
@@ -1419,6 +1476,7 @@ export function ComposeWorkspace({
           onConfirmConflictOverwrite={() => void confirmOverwriteExport()}
           onError={onError}
         />
+        </div>
 
         <ComposePdfPreviewAside
           busy={busy}
@@ -1435,8 +1493,6 @@ export function ComposeWorkspace({
           onOpenPdfExternally={() => void openViewPdfExternally()}
           onOpenWordExternally={() => void openViewWordExternally()}
         />
-
-      </div>
       </div>
       <PreviewPdfModal open={previewOpen} pdfPath={composeRightPdfPath} onClose={() => setPreviewOpen(false)} />
     </div>

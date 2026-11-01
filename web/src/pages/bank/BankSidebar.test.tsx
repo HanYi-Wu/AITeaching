@@ -118,6 +118,6 @@ describe("BankSidebar component", () => {
     expect(screen.getByRole("checkbox", { name: "选择导出 数学/default/q1" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "选择导出 数学/default/q2" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "更新知识点" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "选择导出 数学/default/q1" }).closest("li")).toHaveClass("border-slate-900");
+    expect(screen.getByRole("checkbox", { name: "选择导出 数学/default/q1" }).closest("li")).toHaveClass("border-[var(--or-primary)]");
   });
 });

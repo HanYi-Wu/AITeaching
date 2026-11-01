@@ -1,0 +1,270 @@
+/* G53 components inherit the shared theme tokens from the application root. */
+
+/* Static Card: strictly 16px corner, low chroma surface, NO hover lift */
+.or-g53-card {
+  border-radius: 16px;
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+/* Interactive Card: for selectable school items */
+.or-g53-card-interactive {
+  border-radius: 16px;
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: border-color 220ms ease-in-out, background-color 220ms ease-in-out;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .or-g53-card-interactive:hover {
+    border-color: var(--or-primary, #007aff);
+  }
+}
+
+.or-g53-card-interactive:active {
+  background-color: var(--or-block, #f1f3f5);
+}
+
+.or-g53-card-interactive.is-selected {
+  border-color: var(--or-primary, #007aff);
+  background-color: var(--or-card, #ffffff);
+  box-shadow: 0 0 0 1.5px var(--or-primary, #007aff);
+}
+
+/* Pills & Badges: guaranteed optical and geometric center */
+.or-g53-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border-radius: 9999px;
+  padding: 3px 10px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.or-g53-pill-success {
+  background-color: var(--or-success-container);
+  color: var(--or-on-success);
+}
+
+.or-g53-pill-neutral {
+  background-color: var(--or-block, #f1f3f5);
+  color: var(--or-muted, #5f6368);
+}
+
+.or-g53-pill-warning {
+  background-color: var(--or-warning-container);
+  color: var(--or-on-warning);
+}
+
+.or-g53-pill-error,
+.or-g53-error-surface {
+  background-color: var(--or-error-container);
+  color: var(--or-on-error);
+}
+
+.or-g53-pill-error {
+  border: 1px solid color-mix(in srgb, var(--or-error) 28%, transparent);
+}
+
+.or-g53-error-surface {
+  border: 1px solid color-mix(in srgb, var(--or-error) 28%, transparent);
+}
+
+.or-g53-warning-surface {
+  border: 1px solid color-mix(in srgb, var(--or-warning) 28%, transparent);
+  background-color: var(--or-warning-container);
+  color: var(--or-on-warning);
+}
+
+.or-g53-accent-surface {
+  border: 1px solid color-mix(in srgb, var(--or-primary) 24%, transparent);
+  background-color: var(--or-primary-container);
+  color: var(--or-on-container);
+}
+
+/* Action Buttons: FlClash pill shapes with centered text & icons */
+.or-g53-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 9999px;
+  background-color: var(--or-primary, #007aff);
+  color: var(--or-on-primary, #ffffff);
+  padding: 8px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+  transition: opacity 200ms ease, filter 200ms ease;
+  border: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .or-g53-btn-primary:hover:not(:disabled) {
+    filter: brightness(0.94);
+  }
+}
+
+.or-g53-btn-tonal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 9999px;
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #1a1d20);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.25;
+  transition: background-color 200ms ease, border-color 200ms ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .or-g53-btn-tonal:hover:not(:disabled) {
+    background-color: var(--or-block, #f1f3f5);
+    border-color: var(--or-outline);
+  }
+}
+
+/* Icon Buttons: 36px touch friendly with centered icon */
+.or-g53-icon-btn {
+  display: inline-flex;
+  height: 36px;
+  width: 36px;
+  min-height: 36px;
+  min-width: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid var(--or-outline, #e2e8f0);
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #334155);
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .or-g53-icon-btn:hover:not(:disabled) {
+    background-color: var(--or-block, #f1f3f5);
+    color: var(--or-primary, #007aff);
+    border-color: var(--or-outline);
+  }
+}
+
+/* Inputs & Selects: 10px radius, clean outline, 14-15px font */
+.or-g53-input,
+.or-g53-select {
+  border-radius: 10px;
+  border: 1px solid var(--or-outline, #d1d5db);
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #1a1d20);
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  outline: none;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+  max-width: 100%;
+}
+
+/* Tab list navigation */
+.or-g53-tablist {
+  display: flex;
+  width: 100%;
+  gap: 4px;
+  border-radius: 14px;
+  background-color: var(--or-block, #f1f3f5);
+  padding: 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.or-g53-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+.or-g53-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: max-content;
+  border-radius: 10px;
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--or-muted, #5f6368);
+  background-color: transparent;
+  border: none;
+  transition: all 220ms ease-in-out;
+  cursor: pointer;
+  text-align: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .or-g53-tab:hover {
+    color: var(--or-text, #1a1d20);
+  }
+}
+
+.or-g53-tab[aria-selected="true"] {
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #1a1d20);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+/* Dialog: FlClash 28px rounded sheet (responsive on mobile) */
+.or-g53-dialog {
+  border-radius: 28px;
+  background-color: var(--or-card, #ffffff);
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.2);
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  .or-g53-dialog {
+    border-radius: 24px;
+    margin: 8px;
+    max-height: calc(100vh - 1rem);
+  }
+}
+
+/* Mobile responsive horizontal scroll indicator */
+.or-g53-table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 12px;
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .or-g53-card-interactive,
+  .or-g53-btn-primary,
+  .or-g53-btn-tonal,
+  .or-g53-icon-btn,
+  .or-g53-tab,
+  .or-g53-input,
+  .or-g53-select {
+    transition: none !important;
+    animation: none !important;
+  }
+}

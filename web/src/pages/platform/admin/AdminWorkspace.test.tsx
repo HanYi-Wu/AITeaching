@@ -112,4 +112,24 @@ describe("AdminWorkspace", () => {
     expect(screen.getByRole("button", { name: "创建第一所学校" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "创建学校端账号" })).toBeInTheDocument();
   });
+
+  it("localizes school status badges", async () => {
+    mocks.listSchools.mockResolvedValue({
+      schools: [{ id: "school1", name: "演示学校", status: "active", ai_enabled: 0 }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+    render(
+      <AdminWorkspace
+        user={{ id: "admin1", role: "admin", username: "admin", display_name: "Admin", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("启用")).toBeInTheDocument();
+    expect(screen.queryByText("active")).not.toBeInTheDocument();
+  });
 });

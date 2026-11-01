@@ -22,6 +22,7 @@ import {
   splitSubjects,
   type TeacherDraft,
 } from "../hooks/useSchoolWorkspaceData";
+import "../../../../ui-redesign/g53/g53.css";
 
 type TeachersMainProps = {
   teachers: TeacherRecord[];
@@ -84,20 +85,20 @@ export function TeachersMainPanel({
         />
       }
     >
-      <div className="overflow-x-auto">
+      <div className="or-g53-table-container">
         <table className="min-w-[860px] w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+          <thead className="border-b border-or-outline bg-or-block text-xs font-semibold text-or-muted">
             <tr>
-              <th className="w-10 px-3 py-2"></th>
-              <th className="px-3 py-2">账号</th>
-              <th className="px-3 py-2">姓名</th>
-              <th className="px-3 py-2">邮箱</th>
-              <th className="px-3 py-2">教师学科</th>
-              <th className="px-3 py-2">状态</th>
-              <th className="px-3 py-2 text-right">操作</th>
+              <th className="w-10 px-3.5 py-2.5"></th>
+              <th className="px-3.5 py-2.5">账号</th>
+              <th className="px-3.5 py-2.5">姓名</th>
+              <th className="px-3.5 py-2.5">邮箱</th>
+              <th className="px-3.5 py-2.5">教师学科</th>
+              <th className="px-3.5 py-2.5">状态</th>
+              <th className="px-3.5 py-2.5 text-right">操作</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-[var(--or-outline)]">
             {teachers.map((teacher) => {
               const draft = teacherDrafts[teacher.id] || {
                 display_name: teacher.display_name,
@@ -105,14 +106,19 @@ export function TeachersMainPanel({
                 subjects: teacher.subjects.join(", "),
               };
               return (
-                <tr key={teacher.id} className="border-t border-slate-100 align-top">
-                  <td className="px-3 py-2">
-                    <input type="checkbox" checked={selectedTeacherIds.includes(teacher.id)} onChange={() => toggleTeacher(teacher.id)} />
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-600">{teacher.username}</td>
-                  <td className="px-3 py-2">
+                <tr key={teacher.id} className="transition-colors hover:bg-or-block/50 align-middle">
+                  <td className="px-3.5 py-2.5">
                     <input
-                      className="w-36 rounded-md border border-slate-300 px-2 py-1 text-sm"
+                      type="checkbox"
+                      className="h-4 w-4 rounded accent-or-primary focus:ring-or-focus"
+                      checked={selectedTeacherIds.includes(teacher.id)}
+                      onChange={() => toggleTeacher(teacher.id)}
+                    />
+                  </td>
+                  <td className="px-3.5 py-2.5 font-mono text-xs font-medium text-or-muted">{teacher.username}</td>
+                  <td className="px-3.5 py-2.5">
+                    <input
+                      className="or-g53-input w-36 py-1 text-sm font-medium"
                       value={draft.display_name}
                       onChange={(event) =>
                         setTeacherDrafts((prev) => ({
@@ -122,18 +128,18 @@ export function TeachersMainPanel({
                       }
                     />
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3.5 py-2.5">
                     <input
-                      className="w-44 rounded-md border border-slate-300 px-2 py-1 text-sm"
+                      className="or-g53-input w-44 py-1 text-sm font-medium"
                       value={draft.email}
                       onChange={(event) =>
                         setTeacherDrafts((prev) => ({ ...prev, [teacher.id]: { ...draft, email: event.target.value } }))
                       }
                     />
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3.5 py-2.5">
                     <input
-                      className="w-44 rounded-md border border-slate-300 px-2 py-1 text-sm"
+                      className="or-g53-input w-44 py-1 text-sm font-medium"
                       value={draft.subjects}
                       onChange={(event) =>
                         setTeacherDrafts((prev) => ({
@@ -143,10 +149,10 @@ export function TeachersMainPanel({
                       }
                     />
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3.5 py-2.5">
                     <StatusBadge status={teacher.status} />
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3.5 py-2.5">
                     <div className="flex justify-end gap-2">
                       <IconButton
                         label="保存教师"
@@ -231,19 +237,19 @@ export function TeachersAsidePanel({
 }: TeachersAsideProps) {
   return (
     <aside className="min-w-0 space-y-6">
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-base font-semibold text-slate-950">创建教师账号</h2>
-        <p className="mt-1 text-sm text-slate-500">教师创建后可指定所教学科，也可以由教师登录后在个人设置中维护。</p>
+      <section className="or-g53-card p-4 sm:p-5">
+        <h2 className="text-base font-semibold text-or-text">创建教师账号</h2>
+        <p className="mt-1 text-sm text-or-muted">创建后可指定所教学科，教师亦可在个人设置中自行维护。</p>
         <form className="mt-4 space-y-3" onSubmit={submitTeacher}>
           <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="or-g53-input w-full text-sm"
             placeholder="登录用户名"
             value={teacherUsername}
             onChange={(e) => setTeacherUsername(e.target.value)}
             required
           />
           <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="or-g53-input w-full text-sm"
             type="password"
             placeholder="初始密码"
             value={teacherPassword}
@@ -251,20 +257,20 @@ export function TeachersAsidePanel({
             required
           />
           <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="or-g53-input w-full text-sm"
             placeholder="教师姓名"
             value={teacherName}
             onChange={(e) => setTeacherName(e.target.value)}
           />
           <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="or-g53-input w-full text-sm"
             placeholder="邮箱"
             type="email"
             value={teacherEmail}
             onChange={(e) => setTeacherEmail(e.target.value)}
           />
           <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="or-g53-input w-full text-sm"
             placeholder="任教学科（逗号分隔）"
             value={teacherSubjects}
             onChange={(e) => setTeacherSubjects(e.target.value)}
@@ -272,9 +278,9 @@ export function TeachersAsidePanel({
           <button
             type="submit"
             disabled={busy}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            className="or-g53-btn-primary w-full py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="h-4 w-4 shrink-0" />
             创建教师
           </button>
         </form>

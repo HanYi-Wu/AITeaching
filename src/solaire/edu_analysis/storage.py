@@ -123,7 +123,8 @@ def delete_script(project_root: Path, script_id: str) -> None:
 
 def save_output(project_root: Path, job_id: str, output: dict[str, Any]) -> str:
     path = outputs_dir(project_root) / f"{job_id}.json"
-    _write_json(path, output)
+    with path.open("w", encoding="utf-8") as stream:
+        json.dump(output, stream, ensure_ascii=False, separators=(",", ":"))
     return f"outputs/{job_id}.json"
 
 

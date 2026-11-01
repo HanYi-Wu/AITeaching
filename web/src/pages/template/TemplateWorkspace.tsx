@@ -1,23 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Save } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import "../../ui-redesign/g49/g49.css";
+import { PanelLeftClose, PanelLeftOpen, Plus, Save } from "lucide-react";
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../../api/client";
 import { TabPanel, type TabItem } from "../../components/layout/TabPanel";
-import { ContentFolders } from "../../components/ContentFolders";
 import { ContentTags, TagChips } from "../../components/ContentTags";
 import {
-  assignFolderItem,
-  listContentFolders,
-  listFolderItems,
   listTaggedItems,
-  type ContentFolder,
   type ContentTag,
 } from "../../platform/auth";
 import { useAgentContext } from "../../contexts/AgentContext";
 import { useToolBar } from "../../contexts/ToolBarContext";
+import { useCollapsedPanelInert } from "../../hooks/useCollapsedPanelInert";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
 import { notifyContentLibraryChanged } from "../../lib/contentEvents";
-import { isImeCompositionActive } from "../../lib/ime";
+import { isImeComposingKeyboardEvent, isImeCompositionActive } from "../../lib/ime";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { cn } from "../../lib/utils";
 import {
@@ -46,20 +44,21 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
   const { setPageContext } = useAgentContext();
   const { setToolBar, clearToolBar } = useToolBar();
   const [templates, setTemplates] = useState<TemplateListRow[]>([]);
-  const [folders, setFolders] = useState<ContentFolder[]>([]);
-  const [folderItems, setFolderItems] = useState<Record<string, string>>({});
   const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [path, setPath] = useState("");
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const baselineYamlRef = useRef<Record<string, string>>({});
+  const baselineDraftRef = useRef<Record<string, Draft>>({});
   const [draft, setDraft] = useState<Draft>(() => createDefaultDraft());
   const [yamlTab, setYamlTab] = useState("");
   const [tab, setTab] = useState<"visual" | "yaml">("visual");
   const [advancedMode, setAdvancedMode] = useState(false);
+  const [templateListCollapsed, setTemplateListCollapsed] = useState(false);
+  const templateListInnerRef = useCollapsedPanelInert(templateListCollapsed, 768);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [newName, setNewName] = useState("");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
   const [latexBasesInfo, setLatexBasesInfo] = useState<LatexBasesResponse>(FALLBACK_LATEX_BASES);
   const [metadataUi, setMetadataUi] = useState<{
     fields: MetadataUiField[];
@@ -108,15 +107,9 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
 
   useEffect(() => {
     let active = true;
-    void Promise.all([
-      listContentFolders("template"),
-      listFolderItems("template"),
-      listTaggedItems("template"),
-    ])
-      .then(([folderData, itemData, tags]) => {
+    void listTaggedItems("template")
+      .then((tags) => {
         if (active) {
-          setFolders(folderData.folders);
-          setFolderItems(itemData.items);
           setTaggedItems(tags.items);
         }
       })
@@ -169,7 +162,9 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         setYamlTab(raw.yaml);
         baselineYamlRef.current[targetPath] = raw.yaml;
         setLayoutBuiltinKeys(parsed.layout_builtin_keys);
-        setDraft(draftFromParsed(parsed));
+        const loadedDraft = draftFromParsed(parsed);
+        baselineDraftRef.current[targetPath] = loadedDraft;
+        setDraft(loadedDraft);
       })
       .catch((e: Error) => {
         if (isCurrent()) {
@@ -217,13 +212,20 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     [draft, metadataUi.fields, editorDefaults, layoutBuiltinKeys],
   );
 
-  const dirty = useMemo(() => {
+  const dirty = (() => {
     if (!path) return false;
-    const base = baselineYamlRef.current[path];
-    if (base === undefined) return false;
-    const current = tab === "yaml" ? yamlTab : yamlDump;
-    return current !== base;
-  }, [path, tab, yamlTab, yamlDump]);
+    if (tab === "yaml") {
+      const base = baselineYamlRef.current[path];
+      return base !== undefined && yamlTab !== base;
+    }
+    const baselineDraft = baselineDraftRef.current[path];
+    if (!baselineDraft) return false;
+    return yamlDump !== buildTemplateYaml(baselineDraft, {
+      fields: metadataUi.fields,
+      editorDefaults,
+      layoutBuiltinKeys,
+    });
+  })();
 
   const trySelectPath = useCallback(
     (next: string | null) => {
@@ -259,6 +261,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         return next;
       });
       delete baselineYamlRef.current[p];
+      delete baselineDraftRef.current[p];
     },
     [path, dirty, t],
   );
@@ -292,6 +295,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
 
       if (desiredPath !== saveOldPath) {
         delete baselineYamlRef.current[saveOldPath];
+        delete baselineDraftRef.current[saveOldPath];
         setOpenTabs((prev) => prev.map((p) => (p === saveOldPath ? finalPath : p)));
       }
 
@@ -302,6 +306,8 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
       ]);
 
       baselineYamlRef.current[finalPath] = raw.yaml;
+      const savedDraft = draftFromParsed(parsed);
+      baselineDraftRef.current[finalPath] = savedDraft;
 
       if (isCurrentPath(saveOldPath)) {
         if (finalPath !== saveOldPath) {
@@ -313,7 +319,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         }
         if (currentDraftRef.current === saveDraft) {
           setLayoutBuiltinKeys(parsed.layout_builtin_keys);
-          setDraft(draftFromParsed(parsed));
+          setDraft(savedDraft);
         }
       }
 
@@ -340,6 +346,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
       const q = encodeURIComponent(path);
       await apiDelete<{ ok: boolean }>(`/api/templates/raw?path=${q}`);
       delete baselineYamlRef.current[path];
+      delete baselineDraftRef.current[path];
       setOpenTabs((prev) => {
         const next = prev.filter((x) => x !== path);
         const fb = next[next.length - 1] ?? "";
@@ -356,8 +363,8 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     }
   }
 
-  async function createNew() {
-    const n = newName.trim() || t("newTemplateDefault");
+  async function createNew(name: string) {
+    const n = name.trim() || t("newTemplateDefault");
     onError(null);
     setBusy(true);
     try {
@@ -365,15 +372,12 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         `/api/templates/create?name=${encodeURIComponent(n)}&auto_rename=true`,
         {},
       );
-      if (selectedFolderId) {
-        await assignFolderItem("template", r.path, selectedFolderId);
-        setFolderItems((items) => ({ ...items, [r.path]: selectedFolderId }));
-      }
       await refreshList();
       notifyContentLibraryChanged("template");
       setPath(r.path);
       setOpenTabs((prev) => (prev.includes(r.path) ? prev : [...prev, r.path]));
-      setNewName("");
+      setNewTemplateName("");
+      setCreateDialogOpen(false);
       setMsg(t("created"));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -399,16 +403,19 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+          className="or-g49-btn or-g49-btn-secondary"
           disabled={busy}
-          onClick={() => void createNew()}
+          onClick={() => {
+            setNewTemplateName("");
+            setCreateDialogOpen(true);
+          }}
         >
           <Plus className="mr-1 inline h-4 w-4" />
           {t("create")}
         </button>
         <button
           type="button"
-          className="rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-800 hover:bg-red-50 disabled:opacity-50"
+          className="or-g49-btn text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] border-[var(--or-error)]"
           disabled={busy || !path}
           onClick={() => void deleteCurrent()}
         >
@@ -418,12 +425,12 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
     );
     const right: ReactNode = path ? (
       <div className="flex flex-wrap items-center gap-2">
-        {dirty ? <span className="text-[11px] text-amber-700">{t("unsavedHint")}</span> : null}
+        {dirty ? <span className="text-[13px] font-medium text-[var(--or-on-warning)]">{t("unsavedHint")}</span> : null}
         <button
           type="button"
           className={cn(
-            "rounded-md px-2.5 py-1 text-xs",
-            tab === "visual" ? "bg-slate-900 text-white" : "border border-slate-300 bg-white",
+            "",
+            tab === "visual" ? "or-g49-btn or-g49-btn-primary" : "or-g49-btn or-g49-btn-secondary",
           )}
           onClick={() => setTab("visual")}
         >
@@ -433,11 +440,13 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
           <button
             type="button"
             className={cn(
-              "rounded-md px-2.5 py-1 text-xs",
-              tab === "yaml" ? "bg-slate-900 text-white" : "border border-slate-300 bg-white",
+              "",
+              tab === "yaml" ? "or-g49-btn or-g49-btn-primary" : "or-g49-btn or-g49-btn-secondary",
             )}
             onClick={() => {
-              setYamlTab(yamlDump);
+            setYamlTab(
+              dirty ? yamlDump : baselineYamlRef.current[path] ?? yamlDump,
+            );
               setTab("yaml");
             }}
           >
@@ -446,7 +455,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         ) : null}
         <button
           type="button"
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs"
+          className="or-g49-btn or-g49-btn-secondary"
           onClick={() => {
             setAdvancedMode((value) => !value);
             setTab("visual");
@@ -456,11 +465,11 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
         </button>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
+          className="or-g49-btn bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-50"
           disabled={busy || !dirty}
           onClick={() => void saveRef.current()}
         >
-          <Save className="h-3.5 w-3.5" />
+          <Save className="mr-1 h-4 w-4" />
           {t("save")}
         </button>
       </div>
@@ -480,86 +489,47 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-0 flex-1 flex-row">
-        <aside className="flex w-full max-w-[14rem] shrink-0 flex-col border-r border-slate-200 bg-white">
-          <div className="p-2">
-            <ContentFolders
-              scope="template"
-              folders={folders}
-              selectedId={selectedFolderId}
-              onSelect={setSelectedFolderId}
-              onCreated={(folder) => setFolders((current) => [...current, folder])}
-              onUpdated={(folder) =>
-                setFolders((current) => current.map((item) => (item.id === folder.id ? folder : item)))
-              }
-              onDeleted={(result) => {
-                setFolders(result.folders);
-                setFolderItems(result.items);
-              }}
-              onDropItem={(id, folderId) =>
-                void assignFolderItem("template", id, folderId)
-                  .then(() => setFolderItems((items) => ({ ...items, [id]: folderId })))
-                  .catch((error) => onError(error instanceof Error ? error.message : String(error)))
-              }
-              onError={onError}
-            />
-          </div>
-          <div className="border-b border-slate-100 p-2">
-            <h2 className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <aside className={cn("or-g49-template-list-panel flex w-full shrink-0 flex-col border-b border-[var(--or-outline)] bg-[var(--or-card)] md:w-56 md:max-w-[14rem] md:border-b-0 md:border-r max-h-[35vh] md:max-h-none", templateListCollapsed && "is-collapsed")}>
+          <div ref={templateListInnerRef} className="or-g49-template-list-inner flex min-h-0 flex-1 flex-col">
+          <div className="border-b border-[var(--or-outline)] p-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--or-muted)]">
               {t("fileList")}
             </h2>
           </div>
           <ul className="min-h-0 flex-1 overflow-auto p-1">
-            {templates
-              .filter((tpl) => !selectedFolderId || folderItems[tpl.path] === selectedFolderId)
-              .map((tpl) => (
-                <li key={tpl.path}>
-                  <button
-                    type="button"
-                    draggable
-                    onDragStart={(event) =>
-                      event.dataTransfer.setData(
-                        "application/x-or-content-item",
-                        JSON.stringify({ scope: "template", id: tpl.path }),
-                      )
-                    }
-                    className={cn(
-                      "mb-0.5 w-full rounded-md px-2 py-1.5 text-left text-xs",
-                      path === tpl.path ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100",
-                    )}
-                    onClick={() => openOrFocusTemplate(tpl.path)}
-                  >
-                    <span className="block font-medium">{tpl.id}</span>
-                    {(taggedItems[tpl.path]?.length ?? 0) > 0 ? (
-                      <TagChips tags={taggedItems[tpl.path]} />
-                    ) : null}
-                    {advancedMode ? (
-                      <span className="block truncate font-mono text-[10px] opacity-80">{tpl.path}</span>
-                    ) : null}
-                  </button>
-                </li>
-              ))}
+            {templates.map((tpl) => (
+              <li key={tpl.path}>
+                <button
+                  type="button"
+                  className={cn(
+                    "mb-1 w-full rounded-xl px-2.5 py-2 text-left text-sm font-medium transition-colors",
+                    path === tpl.path ? "bg-[var(--or-primary)] text-[var(--or-on-primary)] shadow-sm" : "text-[var(--or-muted)] hover:bg-[var(--or-block)]",
+                  )}
+                  onClick={() => openOrFocusTemplate(tpl.path)}
+                >
+                  <span className="block font-medium">{tpl.id}</span>
+                  {(taggedItems[tpl.path]?.length ?? 0) > 0 ? (
+                    <TagChips tags={taggedItems[tpl.path]} />
+                  ) : null}
+                  {advancedMode ? (
+                    <span className="block truncate font-mono text-[13px] opacity-75 mt-0.5">{tpl.path}</span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
           </ul>
-          <div className="border-t border-slate-100 p-2">
-            <label className="block text-[10px] font-medium text-slate-600">
-              {t("newFileName")}
-              <input
-                className="mt-0.5 w-full rounded border border-slate-300 px-1.5 py-1 text-xs"
-                placeholder={t("newFilePh")}
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              className="mt-2 w-full rounded-md border border-slate-300 bg-slate-50 py-1 text-xs font-medium disabled:opacity-50"
-              disabled={busy}
-              onClick={() => void createNew()}
-            >
-              <Plus className="mr-1 inline h-3.5 w-3.5" />
-              {t("create")}
-            </button>
           </div>
+          <button
+            type="button"
+            className="or-sidebar-toggle or-g49-template-collapse-btn hidden md:inline-flex"
+            aria-label={templateListCollapsed ? "展开模板文件" : "收起模板文件"}
+            aria-expanded={!templateListCollapsed}
+            title={templateListCollapsed ? "展开模板文件" : "收起模板文件"}
+            onClick={() => setTemplateListCollapsed((prev) => !prev)}
+          >
+            {templateListCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
         </aside>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -579,26 +549,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
           />
           <div className="min-h-0 flex-1 overflow-auto p-4">
             {path ? (
-              <div className="mb-3 flex flex-wrap items-center gap-2 rounded border bg-white p-2 text-xs">
-                <span>模板归类</span>
-                <select
-                  aria-label="模板所在文件夹"
-                  value={folderItems[path] ?? ""}
-                  onChange={(event) => {
-                    const folderId = event.target.value;
-                    void assignFolderItem("template", path, folderId || null)
-                      .then(() => setFolderItems((items) => ({ ...items, [path]: folderId })))
-                      .catch((error) => onError(error instanceof Error ? error.message : String(error)));
-                  }}
-                  className="rounded border px-2 py-1"
-                >
-                  <option value="">未归类</option>
-                  {folders.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="mb-3 flex flex-wrap items-center gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] p-3 text-sm shadow-sm">
                 <ContentTags
                   scope="template"
                   itemId={path}
@@ -607,7 +558,7 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
                 />
               </div>
             ) : null}
-            {msg && <p className="mb-2 text-sm text-emerald-700">{msg}</p>}
+            {msg && <p className="mb-2 text-sm text-[var(--or-on-success)]">{msg}</p>}
             {tab === "yaml" ? (
               <TemplateYamlEditor value={yamlTab} onChange={setYamlTab} />
             ) : (
@@ -636,6 +587,71 @@ export function TemplateWorkspace({ onError }: { onError: (s: string | null) => 
           </div>
         </div>
       </div>
+      <Dialog.Root
+        open={createDialogOpen}
+        onOpenChange={(open) => {
+          if (busy) return;
+          setCreateDialogOpen(open);
+          if (!open) setNewTemplateName("");
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-[70] bg-slate-950/40 p-4 backdrop-blur-[2px]" />
+          <Dialog.Content
+            className="or-g49-dialog-surface fixed left-1/2 top-1/2 z-[71] w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 p-5 sm:p-6"
+            aria-describedby={undefined}
+            onPointerDownOutside={(event) => {
+              if (busy) event.preventDefault();
+            }}
+            onEscapeKeyDown={(event) => {
+              if (busy) event.preventDefault();
+            }}
+          >
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!busy) void createNew(newTemplateName);
+              }}
+            >
+              <Dialog.Title className="text-lg font-semibold text-[var(--or-text)]">
+                {t("create")}
+              </Dialog.Title>
+              <label className="mt-4 block text-sm font-medium text-[var(--or-muted)]">
+                {t("newFileName")}
+                <input
+                  autoFocus
+                  className="or-g49-input mt-1.5 w-full"
+                  placeholder={t("newFilePh")}
+                  value={newTemplateName}
+                  onChange={(event) => setNewTemplateName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && isImeComposingKeyboardEvent(event)) {
+                      event.preventDefault();
+                    }
+                  }}
+                />
+              </label>
+              <div className="mt-6 flex justify-end gap-2.5">
+                <button
+                  type="button"
+                  className="or-g49-btn or-g49-btn-secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    setCreateDialogOpen(false);
+                    setNewTemplateName("");
+                  }}
+                >
+                  {t("common:cancel")}
+                </button>
+                <button type="submit" className="or-g49-btn or-g49-btn-primary" disabled={busy}>
+                  <Plus className="h-4 w-4" />
+                  {t("create")}
+                </button>
+              </div>
+            </form>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }

@@ -9,11 +9,10 @@ from solaire.knowledge_forge.node_index import _find_node_slug
 from solaire.knowledge_forge.storage import _load_meta
 from solaire.knowledge_forge.storage import _load_subject_state
 from solaire.knowledge_forge.paths import _resolve_resource_path
-from solaire.knowledge_forge.storage import _save_subject_state
 from solaire.common.security import assert_within_project
 from solaire.knowledge_forge.migration import ensure_graph_layout
-from solaire.knowledge_forge.concurrency import graph_lock
 from solaire.knowledge_forge.concurrency import graph_mutation
+from solaire.knowledge_forge.mutation_session import GraphMutationSession
 import uuid
 
 
@@ -71,11 +70,11 @@ def attach_file_to_node(
     graph: str | None = None,
 ) -> str:
     ensure_graph_layout(project_root)
-    slug = graph or _find_node_slug(project_root, node_id)
-    if slug is None:
-        raise ValueError(f"Node not found: {node_id}")
-    with graph_lock(project_root, slug):
-        state = _load_subject_state(project_root, slug)
+    with GraphMutationSession(project_root) as session:
+        slug = graph or session.find_node_slug(node_id)
+        if slug is None:
+            raise ValueError(f"Node not found: {node_id}")
+        state = session.state(slug)
         if not any(n.id == node_id for n in state.nodes):
             raise ValueError(f"Node not found: {node_id}")
         rel = relative_path.strip().replace("\\", "/").lstrip("/")
@@ -87,7 +86,7 @@ def attach_file_to_node(
                 return l.id
         link_id = uuid.uuid4().hex
         state.file_links.append(NodeFileLink(id=link_id, node_id=node_id, relative_path=rel))
-        _save_subject_state(project_root, slug, state)
+        session.save(slug)
     return link_id
 
 
@@ -108,10 +107,10 @@ def detach_file_link(
     graph: str | None = None,
 ) -> None:
     ensure_graph_layout(project_root)
-    slug = graph or _find_file_link_slug(project_root, link_id)
-    if slug is None:
-        return
-    with graph_lock(project_root, slug):
-        state = _load_subject_state(project_root, slug)
+    with GraphMutationSession(project_root) as session:
+        slug = graph or session.find_file_link_slug(link_id)
+        if slug is None:
+            return
+        state = session.state(slug)
         state.file_links = [l for l in state.file_links if l.id != link_id]
-        _save_subject_state(project_root, slug, state)
+        session.save(slug)

@@ -6,9 +6,11 @@ from pathlib import Path
 
 import yaml
 
-from solaire.exam_compiler.models import ExamConfig, SelectedSection
+from solaire.common.actor_context import actor
+from solaire.exam_compiler.models import ExamConfig, QuestionItem, SelectedSection
 from solaire.web import state
 from solaire.web.auth_service import hash_password, utc_now
+from solaire.web.bank_service import save_question
 from solaire.web.exam_workspace_service import workspace_dir
 from solaire.web.paper_service import publish_online_paper, sync_paper_for_exam
 from solaire.web.platform_db import connect, default_platform_root, ensure_teacher_default_folder, init_platform_db, row_to_dict
@@ -27,6 +29,36 @@ PASSWORDS = {
     "demo_student4": "student123",
     "demo_student5": "student123",
 }
+
+DEMO_Q1 = "Math/demo/q1"
+DEMO_Q2 = "Math/demo/q2"
+
+
+def seed_demo_questions(project_root: Path, teacher: dict[str, object]) -> None:
+    """Write the demo questions into the teacher's private question bank."""
+    questions = (
+        QuestionItem(
+            id="q1",
+            type="single_choice",
+            content="6 + 7 等于多少？",
+            options={"A": "12", "B": "13"},
+            answer="B",
+            analysis="6 + 7 = 13。",
+        ),
+        QuestionItem(
+            id="q2",
+            type="judge",
+            content="两条平行直线被第三条直线所截，内错角相等。",
+            answer="T",
+            analysis="平行线的内错角相等。",
+        ),
+    )
+    token = actor.set(teacher)
+    try:
+        for question in questions:
+            save_question(project_root, f"Math/demo/{question.id}", question)
+    finally:
+        actor.reset(token)
 
 
 def new_id() -> str:
@@ -199,7 +231,7 @@ def ensure_teacher_links(root: Path, *, school_id: str, teacher_id: str, class_i
         )
 
 
-def write_exam(project_root: Path, *, label: str, title: str) -> str:
+def write_exam(project_root: Path, *, label: str, title: str, teacher_id: str) -> str:
     ensure_project_layout(project_root)
     exam_id = f"{label}/Math"
     exam_dir = workspace_dir(project_root, exam_id)
@@ -207,11 +239,11 @@ def write_exam(project_root: Path, *, label: str, title: str) -> str:
     exam = ExamConfig(
         exam_id=exam_id,
         template_ref="default",
-        metadata={"title": title, "subject": "Math", "export_label": label},
+        metadata={"title": title, "subject": "Math", "export_label": label, "owner_teacher_id": teacher_id},
         question_libraries=[],
         template_path="templates/test.yaml",
         selected_items=[
-            SelectedSection(section_id="Choice", question_ids=["demo/q1", "demo/q2"], score_per_item=5.0)
+            SelectedSection(section_id="Choice", question_ids=[DEMO_Q1, DEMO_Q2], score_per_item=5.0)
         ],
     )
     with (exam_dir / "exam.yaml").open("w", encoding="utf-8") as f:
@@ -229,56 +261,60 @@ def publish_demo_exam(
     submission_mode: str,
     max_screen_switches: int,
 ) -> dict[str, object]:
-    paper = sync_paper_for_exam(project_root, platform_root, teacher, exam_id=exam_id)
+    token = actor.set(teacher)
     try:
-        return publish_online_paper(
-            platform_root,
-            paper_id=str(paper["paper_id"]),
-            user=teacher,
-            class_ids=[class_id],
-            project_root=project_root,
-            title=str(paper["title"]),
-            submission_mode=submission_mode,
-            show_results_immediately=True,
-            max_screen_switches=max_screen_switches,
-        )
-    except ValueError as exc:
-        if "already published" not in str(exc):
-            raise
-    with connect(platform_root) as con:
-        row = con.execute(
-            """
-            SELECT ep.*
-            FROM exam_publications ep
-            JOIN publication_classes pc ON pc.publication_id = ep.id
-            WHERE ep.paper_id = ? AND pc.class_id = ? AND ep.status <> 'revoked'
-            ORDER BY ep.created_at DESC
-            LIMIT 1
-            """,
-            (str(paper["paper_id"]), class_id),
-        ).fetchone()
-        if row is None:
-            raise RuntimeError("failed to find existing demo publication")
-        con.execute(
-            """
-            UPDATE exam_publications
-            SET submission_mode = ?, show_results_immediately = 1, max_screen_switches = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (submission_mode, max_screen_switches, utc_now(), str(row["id"])),
-        )
-        updated = con.execute("SELECT * FROM exam_publications WHERE id = ?", (str(row["id"]),)).fetchone()
-    publication = row_to_dict(updated)
-    if publication is None:
-        raise RuntimeError("failed to load existing demo publication")
-    return publication
+        paper = sync_paper_for_exam(project_root, platform_root, teacher, exam_id=exam_id)
+        try:
+            return publish_online_paper(
+                platform_root,
+                paper_id=str(paper["paper_id"]),
+                user=teacher,
+                class_ids=[class_id],
+                project_root=project_root,
+                title=str(paper["title"]),
+                submission_mode=submission_mode,
+                show_results_immediately=True,
+                max_screen_switches=max_screen_switches,
+            )
+        except ValueError as exc:
+            if "already published" not in str(exc):
+                raise
+        with connect(platform_root) as con:
+            row = con.execute(
+                """
+                SELECT ep.*
+                FROM exam_publications ep
+                JOIN publication_classes pc ON pc.publication_id = ep.id
+                WHERE ep.paper_id = ? AND pc.class_id = ? AND ep.status <> 'revoked'
+                ORDER BY ep.created_at DESC
+                LIMIT 1
+                """,
+                (str(paper["paper_id"]), class_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("failed to find existing demo publication")
+            con.execute(
+                """
+                UPDATE exam_publications
+                SET submission_mode = ?, show_results_immediately = 1, max_screen_switches = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (submission_mode, max_screen_switches, utc_now(), str(row["id"])),
+            )
+            updated = con.execute("SELECT * FROM exam_publications WHERE id = ?", (str(row["id"]),)).fetchone()
+        publication = row_to_dict(updated)
+        if publication is None:
+            raise RuntimeError("failed to load existing demo publication")
+        return publication
+    finally:
+        actor.reset(token)
 
 
 def seed_demo_attempts(root: Path, *, publication_id: str, class_id: str) -> None:
     now = utc_now()
     questions = [
         {
-            "question_id": "demo/q1",
+            "question_id": DEMO_Q1,
             "header": "选择题 1",
             "section_id": "Choice",
             "score_per_item": 5,
@@ -287,22 +323,22 @@ def seed_demo_attempts(root: Path, *, publication_id: str, class_id: str) -> Non
             "options": {"A": "12", "B": "13"},
         },
         {
-            "question_id": "demo/q2",
+            "question_id": DEMO_Q2,
             "header": "判断题 2",
             "section_id": "Choice",
             "score_per_item": 5,
             "type": "judge",
             "content": "两条平行直线被第三条直线所截，内错角相等。",
-            "options": {"A": "正确", "B": "错误"},
+            "options": None,
         },
     ]
-    answer_keys = {"demo/q1": "B", "demo/q2": "A"}
+    answer_keys = {DEMO_Q1: "B", DEMO_Q2: "T"}
     scenarios = {
-        "S001": {"status": "submitted", "answers": {"demo/q1": "B", "demo/q2": "A"}, "score": 10, "seconds": 780, "events": []},
-        "S002": {"status": "submitted", "answers": {"demo/q1": "B", "demo/q2": "B"}, "score": 5, "seconds": 920, "events": [("visibility_hidden", 1100)]},
-        "S003": {"status": "submitted", "answers": {"demo/q1": "A", "demo/q2": "B"}, "score": 0, "seconds": 1080, "events": [("visibility_hidden", 2400), ("copy", 0), ("paste", 0)]},
-        "S004": {"status": "in_progress", "answers": {"demo/q1": "B"}, "score": None, "seconds": 420, "events": [("window_blur", 0)]},
-        "S005": {"status": "submitted", "answers": {"demo/q1": "A", "demo/q2": "A"}, "score": 5, "seconds": 650, "events": [("context_menu", 0)]},
+        "S001": {"status": "submitted", "answers": {DEMO_Q1: "B", DEMO_Q2: "T"}, "score": 10, "seconds": 780, "events": []},
+        "S002": {"status": "submitted", "answers": {DEMO_Q1: "B", DEMO_Q2: "F"}, "score": 5, "seconds": 920, "events": [("visibility_hidden", 1100)]},
+        "S003": {"status": "submitted", "answers": {DEMO_Q1: "A", DEMO_Q2: "F"}, "score": 0, "seconds": 1080, "events": [("visibility_hidden", 2400), ("copy", 0), ("paste", 0)]},
+        "S004": {"status": "in_progress", "answers": {DEMO_Q1: "B"}, "score": None, "seconds": 420, "events": [("window_blur", 0)]},
+        "S005": {"status": "submitted", "answers": {DEMO_Q1: "A", DEMO_Q2: "T"}, "score": 5, "seconds": 650, "events": [("context_menu", 0)]},
     }
     with connect(root) as con:
         students = con.execute(
@@ -605,8 +641,19 @@ def main() -> None:
     teacher = seeded["teachers"][0]
     class_id = str(seeded["class"]["id"])
 
-    online_exam = write_exam(project_root, label="demo-online", title="演示线上答题")
-    image_exam = write_exam(project_root, label="demo-image", title="演示图片AI批改")
+    seed_demo_questions(project_root, teacher)
+    online_exam = write_exam(
+        project_root,
+        label="demo-online",
+        title="演示线上答题",
+        teacher_id=str(teacher["id"]),
+    )
+    image_exam = write_exam(
+        project_root,
+        label="demo-image",
+        title="演示图片AI批改",
+        teacher_id=str(teacher["id"]),
+    )
     online_publication = publish_demo_exam(
         platform_root,
         project_root,

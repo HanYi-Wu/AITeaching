@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleCheck, Loader2, PlugZap, Save, Trash2 } from "lucide-react";
+import { CircleCheck, Loader2, PlugZap, RotateCcw, Save, Trash2 } from "lucide-react";
 import {
   apiAgentLlmSettingsPut,
   apiAgentLlmSettingsTest,
@@ -10,6 +10,7 @@ import {
 } from "../../api/client";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { isImeCompositionActive } from "../../lib/ime";
+import "../../ui-redesign/g55/g55.css";
 
 const PRESETS: Record<AgentLlmProvider, { baseUrl: string; main: string; fast: string }> = {
   openai: { baseUrl: "", main: "gpt-4o-mini", fast: "gpt-4o-mini" },
@@ -138,24 +139,30 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
 
   const card =
     variant === "welcome"
-      ? "rounded-lg border border-slate-600/80 bg-slate-900/40 p-4"
-      : "rounded-lg border border-slate-200 bg-white p-4 shadow-sm";
+      ? "rounded-xl border border-[color-mix(in_srgb,var(--or-primary)_80%,transparent)] bg-slate-950/60 p-4"
+      : "rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-5 shadow-sm  ";
   const labelCls =
-    variant === "welcome" ? "block text-sm font-medium text-slate-200" : "block text-sm font-medium text-slate-700";
-  const hintCls = variant === "welcome" ? "mt-0.5 text-xs text-slate-400" : "mt-0.5 text-xs text-slate-500";
+    variant === "welcome"
+      ? "block text-sm font-semibold text-[var(--or-text)]"
+      : "block text-sm font-semibold text-[var(--or-text)] ";
+  const hintCls =
+    variant === "welcome"
+      ? "mt-1 text-xs text-[var(--or-muted)]"
+      : "mt-1 text-xs text-[var(--or-muted)] ";
   const inputCls =
     variant === "welcome"
-      ? "mt-2 w-full rounded-md border border-slate-500 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 disabled:opacity-50"
-      : "mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50";
+      ? "mt-2.5 h-10 w-full rounded-lg border border-[var(--or-outline)] bg-[var(--or-primary)] px-3 text-sm text-[var(--or-on-primary)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus disabled:opacity-50"
+      : "mt-2.5 h-10 w-full rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 text-sm text-[var(--or-text)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus disabled:bg-[var(--or-page)]   ";
   const monoInput = `${inputCls} font-mono`;
+
   const radioBorder = (active: boolean) =>
     variant === "welcome"
       ? active
-        ? "border-violet-400/60 bg-violet-950/50"
-        : "border-slate-600 bg-slate-950/30"
+        ? "border-or-primary/80 bg-or-primary-container"
+        : "border-[color-mix(in_srgb,var(--or-primary)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-primary)_60%,transparent)] hover:border-[var(--or-outline)]"
       : active
-        ? "border-violet-300 bg-violet-50"
-        : "border-slate-200 bg-white";
+        ? "border-or-primary bg-or-primary-container"
+        : "border-[var(--or-outline)] bg-[var(--or-card)] hover:border-[var(--or-outline)]  ";
 
   const ids = useMemo(() => {
     const raw =
@@ -259,12 +266,12 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
       <div
         className={
           variant === "welcome"
-            ? "flex items-center gap-2 text-slate-300"
-            : "mt-4 flex items-center gap-2 text-slate-500"
+            ? "flex items-center gap-2 py-4 text-sm text-[var(--or-muted)]"
+            : "mt-4 flex items-center gap-2 py-4 text-sm text-[var(--or-muted)]"
         }
       >
-        <Loader2 className="h-5 w-5 animate-spin" />
-        {t("settings:loading")}
+        <Loader2 className="h-5 w-5 animate-spin text-or-primary" />
+        <span>{t("settings:loading")}</span>
       </div>
     );
   }
@@ -274,15 +281,15 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
       <div className={card}>
         <label className={labelCls}>{t("settings:providerTitle")}</label>
         <p className={hintCls}>{t("settings:providerHint")}</p>
-        <div className="mt-2 space-y-2">
+        <div className="mt-3 space-y-2">
           {ids.map((id) => (
             <label
               key={id}
-              className={`block cursor-pointer rounded-md border px-3 py-2 text-sm ${
+              className={`block cursor-pointer rounded-xl border p-3 transition ${
                 provider === id ? radioBorder(true) : radioBorder(false)
               } ${busy ? "opacity-60" : ""}`}
             >
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2.5">
                 <input
                   type="radio"
                   name={`model-provider-${variant}`}
@@ -290,37 +297,45 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
                   checked={provider === id}
                   disabled={busy}
                   onChange={() => selectProvider(id as AgentLlmProvider)}
+                  className="text-or-primary focus:ring-or-focus"
                 />
-                <span className={variant === "welcome" ? "font-medium text-slate-100" : "font-medium text-slate-800"}>
+                <span
+                  className={
+                    variant === "welcome"
+                      ? "text-sm font-medium text-[var(--or-text)]"
+                      : "text-sm font-medium text-[var(--or-text)] "
+                  }
+                >
                   {t(providerLabelKey(id as AgentLlmProvider))}
                 </span>
               </div>
-              <div className={`mt-1 pl-6 text-xs ${variant === "welcome" ? "text-slate-400" : "text-slate-600"}`}>
+              <div
+                className={`mt-1 pl-6 text-xs leading-relaxed ${
+                  variant === "welcome" ? "text-[var(--or-muted)]" : "text-[var(--or-muted)] "
+                }`}
+              >
                 {t(providerDescKey(id as AgentLlmProvider))}
               </div>
             </label>
           ))}
         </div>
+
         {provider === "deepseek" ? (
-          <div className="mt-3">
+          <div className="mt-4 border-t border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] pt-3 ">
             <span className={labelCls}>{t("settings:thinkingEffortTitle")}</span>
             <p className={hintCls}>{t("settings:thinkingEffortHint")}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div className="mt-2.5 flex flex-wrap gap-2">
               <button
                 type="button"
                 disabled={busy}
                 aria-pressed={reasoningEffort === "high"}
                 data-testid="thinking-effort-high"
                 onClick={() => setReasoningEffort("high")}
-                className={
-                  variant === "welcome"
-                    ? reasoningEffort === "high"
-                      ? "rounded-md border border-violet-400/70 bg-violet-950/40 px-3 py-1.5 text-sm text-violet-100"
-                      : "rounded-md border border-slate-600 bg-slate-950/30 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-900/50"
-                    : reasoningEffort === "high"
-                      ? "rounded-md border border-violet-400 bg-violet-50 px-3 py-1.5 text-sm text-violet-900"
-                      : "rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                }
+                className={`or-g55-pill px-4 py-1.5 transition ${
+                  reasoningEffort === "high"
+                    ? "bg-or-primary text-or-on-primary shadow-sm"
+                    : "border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-muted)] hover:bg-[var(--or-page)]   "
+                }`}
               >
                 {t("settings:thinkingEffortHigh")}
               </button>
@@ -330,33 +345,27 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
                 aria-pressed={reasoningEffort === "max"}
                 data-testid="thinking-effort-max"
                 onClick={() => setReasoningEffort("max")}
-                className={
-                  variant === "welcome"
-                    ? reasoningEffort === "max"
-                      ? "rounded-md border border-violet-400/70 bg-violet-950/40 px-3 py-1.5 text-sm text-violet-100"
-                      : "rounded-md border border-slate-600 bg-slate-950/30 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-900/50"
-                    : reasoningEffort === "max"
-                      ? "rounded-md border border-violet-400 bg-violet-50 px-3 py-1.5 text-sm text-violet-900"
-                      : "rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                }
+                className={`or-g55-pill px-4 py-1.5 transition ${
+                  reasoningEffort === "max"
+                    ? "bg-or-primary text-or-on-primary shadow-sm"
+                    : "border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-muted)] hover:bg-[var(--or-page)]   "
+                }`}
               >
                 {t("settings:thinkingEffortMax")}
               </button>
             </div>
           </div>
         ) : null}
-        <div className="mt-3">
+
+        <div className="mt-3.5">
           <button
             type="button"
             disabled={busy}
             onClick={() => void applyRecommended()}
-            className={
-              variant === "welcome"
-                ? "text-sm text-violet-300 underline-offset-2 hover:underline disabled:opacity-50"
-                : "text-sm text-violet-700 underline-offset-2 hover:underline disabled:opacity-50"
-            }
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-or-primary hover:text-or-primary disabled:opacity-50"
           >
-            {t("settings:applyRecommended")}
+            <RotateCcw className="h-3.5 w-3.5" />
+            <span>{t("settings:applyRecommended")}</span>
           </button>
         </div>
       </div>
@@ -376,13 +385,25 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
 
       <div className={card}>
         <label className={labelCls}>{t("settings:mainModel")}</label>
-        <input type="text" value={mainModel} onChange={(e) => setMainModel(e.target.value)} disabled={busy} className={monoInput} />
+        <input
+          type="text"
+          value={mainModel}
+          onChange={(e) => setMainModel(e.target.value)}
+          disabled={busy}
+          className={monoInput}
+        />
       </div>
 
       <div className={card}>
         <label className={labelCls}>{t("settings:fastModel")}</label>
         <p className={hintCls}>{t("settings:fastModelHint")}</p>
-        <input type="text" value={fastModel} onChange={(e) => setFastModel(e.target.value)} disabled={busy} className={monoInput} />
+        <input
+          type="text"
+          value={fastModel}
+          onChange={(e) => setFastModel(e.target.value)}
+          disabled={busy}
+          className={monoInput}
+        />
       </div>
 
       <div className={card}>
@@ -404,66 +425,54 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
         />
       </div>
 
-      <p className={variant === "welcome" ? "text-xs text-slate-500" : "text-xs text-slate-500"}>{t("settings:footerNote")}</p>
+      <p className="text-xs text-[var(--or-muted)] ">
+        {t("settings:footerNote")}
+      </p>
 
       {msg ? (
-        <p className={variant === "welcome" ? "text-sm text-emerald-300" : "text-sm text-emerald-700"}>{msg}</p>
+        <p className="or-g55-status-success rounded-lg p-2.5 text-xs font-medium">
+          {msg}
+        </p>
       ) : null}
 
       {connectionResult ? (
         <div
           role="status"
-          className={
-            variant === "welcome"
-              ? "flex items-start gap-2 rounded-md border border-emerald-700/60 bg-emerald-950/30 p-3 text-sm text-emerald-200"
-              : "flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"
-          }
+          className="or-g55-status-success flex items-start gap-2.5 rounded-xl p-3 text-xs"
         >
-          <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{connectionResult}</span>
+          <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-or-success" />
+          <span className="leading-relaxed">{connectionResult}</span>
         </div>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5 pt-1">
         <button
           type="button"
           disabled={busy}
           onClick={() => void handleSave()}
-          className={
-            variant === "welcome"
-              ? "inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
-              : "inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-          }
+          className="inline-flex h-11 sm:h-10 w-full sm:w-auto items-center justify-center gap-2 rounded-lg bg-or-primary px-5 text-sm font-semibold text-or-on-primary shadow-sm transition hover:brightness-95 disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          {data?.persist_scope === "project" ? t("settings:saveToProject") : t("settings:saveToProfile")}
+          <span>{data?.persist_scope === "project" ? t("settings:saveToProject") : t("settings:saveToProfile")}</span>
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => void handleTestConnection()}
-          className={
-            variant === "welcome"
-              ? "inline-flex items-center gap-2 rounded-md border border-slate-500 bg-slate-900/50 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
-              : "inline-flex items-center gap-2 rounded-md border border-violet-200 bg-white px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
-          }
+          className="inline-flex h-11 sm:h-10 w-full sm:w-auto items-center justify-center gap-2 rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-4 text-sm font-medium text-[var(--or-muted)] shadow-sm transition hover:bg-[var(--or-page)] disabled:opacity-50    dark:hover:bg-slate-700"
         >
-          {testingConnection ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
-          {testingConnection ? t("settings:testingConnection") : t("settings:testConnection")}
+          {testingConnection ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4 text-or-primary" />}
+          <span>{testingConnection ? t("settings:testingConnection") : t("settings:testConnection")}</span>
         </button>
         {data?.persist_scope === "project" && data.has_project_api_key_override && (
           <button
             type="button"
             disabled={busy}
             onClick={() => void handleClearSecret()}
-            className={
-              variant === "welcome"
-                ? "inline-flex items-center gap-2 rounded-md border border-slate-500 bg-slate-900/50 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
-                : "inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            }
+            className="inline-flex h-11 sm:h-10 w-full sm:w-auto items-center justify-center gap-1.5 rounded-lg border border-or-outline bg-or-card px-4 text-sm font-medium text-or-text transition hover:border-or-error/30 hover:bg-[var(--or-error-container)] hover:text-or-error disabled:opacity-50"
           >
             <Trash2 className="h-4 w-4" />
-            {t("settings:clearProjectKey")}
+            <span>{t("settings:clearProjectKey")}</span>
           </button>
         )}
         {data?.persist_scope === "global" && data.has_user_api_key_override && (
@@ -471,14 +480,10 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
             type="button"
             disabled={busy}
             onClick={() => void handleClearSecret()}
-            className={
-              variant === "welcome"
-                ? "inline-flex items-center gap-2 rounded-md border border-slate-500 bg-slate-900/50 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
-                : "inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            }
+            className="inline-flex h-11 sm:h-10 w-full sm:w-auto items-center justify-center gap-1.5 rounded-lg border border-or-outline bg-or-card px-4 text-sm font-medium text-or-text transition hover:border-or-error/30 hover:bg-[var(--or-error-container)] hover:text-or-error disabled:opacity-50"
           >
             <Trash2 className="h-4 w-4" />
-            {t("settings:clearUserKey")}
+            <span>{t("settings:clearUserKey")}</span>
           </button>
         )}
       </div>

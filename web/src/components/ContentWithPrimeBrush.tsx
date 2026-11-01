@@ -40,7 +40,7 @@ function MermaidFencePreview({ body }: { body: string }) {
   return (
     <div
       ref={ref}
-      className="my-2 max-h-72 w-full max-w-full overflow-auto rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600"
+      className="my-2 max-h-72 w-full max-w-full overflow-auto rounded-[12px] border border-[var(--or-outline)] bg-[var(--or-block)] p-3 text-xs sm:text-[13px] text-[var(--or-muted)]"
     />
   );
 }
@@ -76,14 +76,14 @@ function SolaireTablePreview({ source }: { source: string }) {
     expanded = expandSolaireTable(parseSolaireTable(source));
   } catch (e) {
     return (
-      <pre className="my-2 overflow-auto rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+      <pre className="my-2 overflow-auto rounded border border-[var(--or-error)] bg-[var(--or-error-container)] p-2 text-xs text-[var(--or-on-error)]">
         {e instanceof Error ? e.message : String(e)}
       </pre>
     );
   }
   return (
     <div className="my-2 max-w-full overflow-x-auto">
-      <table className="min-w-full border-collapse text-sm text-slate-800">
+      <table className="min-w-full border-collapse text-sm text-[var(--or-text)]">
         <tbody>
           {expanded.slots.map((row, r) => (
             <tr key={r}>
@@ -95,8 +95,8 @@ function SolaireTablePreview({ source }: { source: string }) {
                     key={`${r}-${c}`}
                     rowSpan={slot.cell.rowSpan ?? 1}
                     colSpan={slot.cell.colSpan ?? 1}
-                    className={`border border-slate-300 px-2 py-1.5 align-top ${cellAlignClass(slot.cell)} ${
-                      slot.cell.header ? "bg-slate-100 font-semibold" : "bg-white"
+                    className={`border border-[var(--or-outline)] px-2.5 py-1.5 align-top ${cellAlignClass(slot.cell)} ${
+                      slot.cell.header ? "bg-[var(--or-block)] font-semibold" : "bg-[var(--or-card)]"
                     }`}
                     // eslint-disable-next-line react/no-danger
                     dangerouslySetInnerHTML={{ __html: renderCellHtml(slot.cell.text) }}

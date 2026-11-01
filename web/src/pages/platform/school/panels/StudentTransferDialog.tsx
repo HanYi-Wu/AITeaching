@@ -9,6 +9,8 @@ import {
   type StudentRecord,
 } from "../../../../platform/auth";
 import { PlatformRequestError } from "../../../../platform/platformRequest";
+import "../../../../ui-redesign/g53/g53.css";
+import { Select as AppSelect } from "../../../../components/ui/select";
 
 type Props = {
   student: StudentRecord;
@@ -121,18 +123,18 @@ export function StudentTransferDialog({ student, scopeKey, onClose, onTransferre
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-3 sm:p-4 transition-opacity">
       <section
         role="dialog"
         aria-modal="true"
         aria-label="转班确认"
-        className="w-full max-w-xl rounded-xl bg-white shadow-2xl"
+        className="or-g53-dialog w-full max-w-xl shadow-2xl"
       >
-        <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+        <header className="flex items-start justify-between border-b border-or-outline bg-or-block/50 px-4 sm:px-6 py-3.5 sm:py-4">
           <div>
-            <h2 className="text-lg font-semibold text-slate-950">学生转班</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              {student.display_name} · {student.student_no}
+            <h2 className="text-lg font-semibold text-or-text">学生转班</h2>
+            <p className="mt-0.5 text-sm font-medium text-or-muted">
+              {student.display_name} · <span className="font-mono">{student.student_no}</span>
             </p>
           </div>
           <button
@@ -140,25 +142,25 @@ export function StudentTransferDialog({ student, scopeKey, onClose, onTransferre
             aria-label="关闭转班对话框"
             disabled={saving}
             onClick={onClose}
-            className="rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+            className="or-g53-icon-btn disabled:opacity-50"
           >
-            <X className="h-5 w-5" />
+            <X className="h-4 w-4" />
           </button>
         </header>
 
-        <div className="space-y-4 p-5">
+        <div className="space-y-4 p-4 sm:p-6">
           {loading ? (
-            <p className="flex items-center gap-2 text-sm text-slate-600" role="status">
-              <LoaderCircle className="h-4 w-4 animate-spin" /> 正在读取当前班级和考试记录…
+            <p className="flex items-center gap-2.5 text-sm font-medium text-or-muted" role="status">
+              <LoaderCircle className="h-4 w-4 animate-spin text-or-primary" /> 正在读取当前班级和考试记录…
             </p>
           ) : null}
           {error ? (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" role="alert">
+            <div className="or-g53-error-surface rounded-xl p-3.5 text-sm" role="alert">
               <p>{error}</p>
               {!preview ? (
                 <button
                   type="button"
-                  className="mt-2 font-semibold underline"
+                  className="mt-2 font-semibold text-or-on-error underline hover:no-underline"
                   onClick={() => loadPreview()}
                   disabled={loading}
                 >
@@ -170,62 +172,64 @@ export function StudentTransferDialog({ student, scopeKey, onClose, onTransferre
 
           {preview ? (
             <>
-              <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+              <div className="grid gap-3.5 rounded-2xl border border-or-outline bg-or-block/80 p-3.5 sm:p-4 grid-cols-1 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
                 <div>
-                  <p className="text-xs font-medium text-slate-500">当前班级</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-800">
+                  <p className="text-xs font-medium text-or-muted">当前班级</p>
+                  <p className="mt-1 text-sm font-semibold text-or-text">
                     {preview.current_classes.length
                       ? preview.current_classes.map((item) => classLabel(item.name, item.grade)).join("、")
                       : "未指定班级"}
                   </p>
                 </div>
-                <ArrowRightLeft className="hidden h-5 w-5 text-slate-400 sm:block" aria-hidden="true" />
+                <div className="hidden sm:flex sm:items-center sm:justify-center">
+                  <ArrowRightLeft className="h-4 w-4 text-or-muted" aria-hidden="true" />
+                </div>
                 <label className="block">
-                  <span className="text-xs font-medium text-slate-500">目标班级</span>
-                  <select
+                  <span className="text-xs font-medium text-or-muted">目标班级</span>
+                  <AppSelect
                     aria-label="目标班级"
-                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    className="or-g53-select mt-1 w-full text-sm"
                     value={targetClassId}
-                    onChange={(event) => setTargetClassId(event.target.value)}
+                    onValueChange={(value) => setTargetClassId(value)}
                     disabled={loading || saving || preview.available_classes.length === 0}
                   >
                     <option value="">请选择目标班级</option>
                     {preview.available_classes.map((item) => (
                       <option key={item.id} value={item.id}>{classLabel(item.name, item.grade)}</option>
                     ))}
-                  </select>
+                  </AppSelect>
                 </label>
               </div>
               {preview.available_classes.length === 0 ? (
-                <p className="text-sm text-slate-600">当前学校暂无可转入的班级。</p>
+                <p className="text-sm text-or-muted">当前学校暂无可转入的班级。</p>
               ) : null}
-              <p className="text-sm text-slate-700">
+              <p className="text-sm font-medium text-or-text">
                 转班后会保留 {preview.attempt_count} 份考试记录及其作答和成绩。
               </p>
               {preview.legacy_attempt_count > 0 ? (
-                <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+                <p className="or-g53-warning-surface rounded-xl p-3.5 text-sm leading-6">
                   有 {preview.legacy_attempt_count} 份旧考试记录没有冻结的原始班级快照。转班会保留这些记录目前可见的班级关联，不会推断未知的更早历史。
                 </p>
               ) : null}
-              <p className="text-sm text-slate-600">
+              <p className="text-sm text-or-muted">
                 请核对上述当前归属与目标班级。确认后将移除该学生的其他当前班级关联。
               </p>
               {selectedClass ? (
-                <p className="font-medium text-slate-800">
+                <div className="or-g53-accent-surface rounded-xl p-3 font-medium text-sm">
                   {preview.current_classes.length
                     ? preview.current_classes.map((item) => item.name).join("、")
                     : "未指定班级"}
                   {" → "}{selectedClass.name}
-                </p>
+                </div>
               ) : null}
             </>
           ) : null}
 
-          <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2.5 border-t border-or-outline pt-4">
             {completed ? (
               <button
                 type="button"
-                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                className="or-g53-btn-tonal w-full sm:w-auto px-5 py-2 text-sm"
                 onClick={onClose}
               >
                 关闭
@@ -234,7 +238,7 @@ export function StudentTransferDialog({ student, scopeKey, onClose, onTransferre
               <>
                 <button
                   type="button"
-                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  className="or-g53-btn-tonal w-full sm:w-auto px-4 py-2 text-sm disabled:opacity-50"
                   onClick={onClose}
                   disabled={saving}
                 >
@@ -242,7 +246,7 @@ export function StudentTransferDialog({ student, scopeKey, onClose, onTransferre
                 </button>
                 <button
                   type="button"
-                  className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="or-g53-btn-primary w-full sm:w-auto px-5 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => void confirmTransfer()}
                   disabled={!preview || !targetClassId || !selectedClass || isUnchanged || loading || saving}
                 >

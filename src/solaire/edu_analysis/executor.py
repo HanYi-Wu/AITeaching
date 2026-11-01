@@ -26,18 +26,31 @@ def build_graph_slice(rawdata: dict[str, Any]) -> dict[str, Any]:
     node_stats = rawdata.get("node_stats", [])
     if not isinstance(node_stats, list):
         return {"nodes": [], "edges": []}
-    node_ids = set()
+
+    # Pass 1: Collect all valid node IDs
+    node_ids: set[str] = set()
+    for item in node_stats:
+        if isinstance(item, dict):
+            node_id = str(item.get("node_id") or "")
+            if node_id:
+                node_ids.add(node_id)
+
+    # Pass 2: Connect parent-child hierarchy preserving deterministic order and deduplicating
     edges: list[dict[str, Any]] = []
+    seen_edges: set[tuple[str, str]] = set()
     for item in node_stats:
         if not isinstance(item, dict):
             continue
         node_id = str(item.get("node_id") or "")
         if not node_id:
             continue
-        node_ids.add(node_id)
         parent = node_id.rsplit("/", 1)[0] if "/" in node_id else ""
         if parent and parent in node_ids:
-            edges.append({"from": parent, "to": node_id, "type": "part_of"})
+            edge_key = (parent, node_id)
+            if edge_key not in seen_edges:
+                seen_edges.add(edge_key)
+                edges.append({"from": parent, "to": node_id, "type": "part_of"})
+
     nodes = [{"id": nid} for nid in sorted(node_ids)]
     return {"nodes": nodes, "edges": edges}
 
@@ -258,8 +271,12 @@ def execute_python_script(
             ),
             encoding="utf-8",
         )
-        (temp_dir / "runtime_rawdata.json").write_text(json.dumps(rawdata, ensure_ascii=False), encoding="utf-8")
-        (temp_dir / "runtime_graph.json").write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
+        (temp_dir / "runtime_rawdata.json").write_text(
+            json.dumps(rawdata, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+        )
+        (temp_dir / "runtime_graph.json").write_text(
+            json.dumps(graph, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+        )
         try:
             p = subprocess.run(
                 [sys.executable, "-I", "-X", "utf8", "runner.py"],

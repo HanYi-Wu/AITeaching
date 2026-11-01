@@ -12,6 +12,7 @@ import {
 import { QUESTION_TYPE_OPTIONS } from "../../lib/questionTypes";
 import { cn } from "../../lib/utils";
 import type { QuestionRow } from "../../types/compose";
+import { Select as AppSelect } from "../../components/ui/select";
 
 export type ComposeBankSearchPanelProps = {
   subject: string;
@@ -57,26 +58,27 @@ const ComposeQuestionList = memo(function ComposeQuestionList({
   const { t } = useTranslation(["compose", "common", "lib"]);
 
   return (
-    <ul className="min-h-0 flex-1 overflow-auto p-2">
+    <ul className="min-h-0 flex-1 space-y-1.5 overflow-auto p-2.5">
       {contentSyncing ? (
-        <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-700">
+        <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_80%,transparent)] p-4 text-sm font-medium text-[var(--or-on-container)]">
           正在更新内容库...
         </div>
       ) : totalQuestionCount === 0 ? (
-        <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
-          <p className="font-medium text-slate-800">{t("compose:emptyBank")}</p>
-          <p className="mt-2 text-xs leading-relaxed text-slate-500">
+        <li className="rounded-xl border border-dashed border-[var(--or-outline)] bg-[var(--or-page)] px-4 py-8 text-center text-sm text-[var(--or-muted)]">
+          <p className="font-semibold text-[var(--or-text)] text-[15px]">{t("compose:emptyBank")}</p>
+          <p className="mt-2 text-sm leading-relaxed text-[var(--or-muted)]">
             {t("compose:emptyBankHint")}
           </p>
         </li>
       ) : filteredQuestions.length === 0 ? (
-        <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-600">
-          <p className="font-medium text-slate-800">{t("compose:emptyFilter")}</p>
-          <p className="mt-2 text-xs text-slate-500">{t("compose:emptyFilterHint")}</p>
+        <li className="rounded-xl border border-dashed border-[var(--or-outline)] bg-[var(--or-page)] px-4 py-8 text-center text-sm text-[var(--or-muted)]">
+          <p className="font-semibold text-[var(--or-text)] text-[15px]">{t("compose:emptyFilter")}</p>
+          <p className="mt-2 text-sm text-[var(--or-muted)]">{t("compose:emptyFilterHint")}</p>
         </li>
       ) : (
         filteredQuestions.map((q, index) => {
           const isBundle = q.type === "group";
+          const isSelected = selectedLeftIdsSet.has(q.qualified_id);
           return (
             <li key={q.qualified_id}>
               <button
@@ -92,33 +94,37 @@ const ComposeQuestionList = memo(function ComposeQuestionList({
                 }
                 onClick={(e) => onLeftBankClick(q, index, e)}
                 className={cn(
-                  "mb-1 w-full rounded-lg border px-2 py-2 text-left text-sm transition-colors",
-                  selectedLeftIdsSet.has(q.qualified_id)
-                    ? "border-slate-900 bg-slate-100"
-                    : "border-transparent bg-slate-50 hover:border-slate-200 hover:bg-white",
+                  "w-full rounded-xl border p-2.5 text-left text-sm transition-all duration-150",
+                  isSelected
+                    ? "border-[var(--or-primary)] bg-[var(--or-block)] shadow-sm"
+                    : "border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] hover:border-[var(--or-outline)] hover:bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)]",
                 )}
               >
-                <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
-                  {t(`lib:questionTypes.${q.type}`, { defaultValue: q.type })}
-                </span>
-                {isBundle ? (
-                  <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-900">
-                    {t("compose:bundleBadge")}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="or-g49-pill bg-[var(--or-block)] text-[var(--or-muted)] font-medium">
+                    {t(`lib:questionTypes.${q.type}`, { defaultValue: q.type })}
                   </span>
-                ) : null}
-                <span title={q.qualified_id} className="ml-1 font-mono text-[11px] text-slate-800 [overflow-wrap:anywhere]">{q.qualified_id}</span>
+                  {isBundle ? (
+                    <span className="or-g49-pill bg-[var(--or-success-container)] text-[var(--or-on-success)] font-medium">
+                      {t("compose:bundleBadge")}
+                    </span>
+                  ) : null}
+                  <span data-question-id={q.qualified_id} className="min-w-0 font-mono text-[13px] text-[var(--or-muted)] [overflow-wrap:anywhere]">
+                    {q.qualified_id}
+                  </span>
+                </div>
                 <QuestionHoverDetails id={q.qualified_id}>
                   <KatexPlainPreview
                     text={q.content_preview}
-                    className="mt-1 line-clamp-3 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
+                    className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-[var(--or-muted)] [&_.katex]:text-[0.95em]"
                   />
                 </QuestionHoverDetails>
                 {Object.keys(q.metadata ?? {}).length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-1">
+                  <div className="mt-2 flex flex-wrap gap-1.5">
                     {Object.entries(q.metadata ?? {}).map(([k, v]) => (
                       <span
                         key={k}
-                        className="rounded-full bg-slate-200/80 px-1.5 py-0.5 text-[10px] text-slate-600"
+                        className="or-g49-pill bg-[var(--or-block)] text-[var(--or-muted)] text-[13px] px-2 py-0.5"
                       >
                         {k}:{String(v)}
                       </span>
@@ -162,10 +168,15 @@ export function ComposeBankSearchPanel({
   onError,
 }: ComposeBankSearchPanelProps) {
   const { t } = useTranslation(["compose", "common", "lib"]);
+  const activeFilterCount =
+    Number(namespaceFilter !== "__all__") +
+    Number(typeFilter !== "__all__") +
+    Number(Boolean(search.trim())) +
+    Number(hasActiveMetadataFilters(metadataFilters));
 
   return (
     <section
-      className="flex max-h-[35vh] w-full min-w-0 shrink-0 flex-col border-slate-200 bg-white md:max-h-none md:w-56 md:border-r xl:w-72"
+      className="flex max-h-[25vh] w-full min-w-0 shrink-0 flex-col border-[var(--or-outline)] bg-[var(--or-card)] md:max-h-none md:w-60 md:border-r xl:w-72"
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/x-originreach-paper-item")) {
           event.preventDefault();
@@ -183,24 +194,22 @@ export function ComposeBankSearchPanel({
         }
       }}
     >
-      <div className="border-b border-slate-100 px-3 py-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+      <div className="border-b border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] px-3.5 py-2.5">
+        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-[var(--or-muted)]">
           {t("compose:bankSearchTitle")}
         </h2>
         <button
           type="button"
-          className="mt-2 flex w-full items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left text-xs font-medium text-slate-800 hover:bg-slate-100"
+          className="mt-2.5 flex w-full items-center justify-between rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] px-3 py-2 text-left text-sm font-medium text-[var(--or-text)] transition-colors hover:bg-[var(--or-block)]"
           onClick={() => onFilterExpandedChange((v) => !v)}
         >
-          <span>
-            {t("compose:filter")} ·{" "}
-            {Number(namespaceFilter !== "__all__") +
-              Number(typeFilter !== "__all__") +
-              Number(Boolean(search.trim())) +
-              Number(hasActiveMetadataFilters(metadataFilters))}{" "}
-            项
+          <span className="flex items-center gap-1.5">
+            <span>{t("compose:filter")}</span>
+            <span className="or-g49-pill bg-[color-mix(in_srgb,var(--or-inset)_90%,transparent)] text-[var(--or-muted)] text-[13px] px-1.5 py-0.5">
+              {activeFilterCount} 项
+            </span>
           </span>
-          <span className="truncate pl-2 text-[10px] font-normal text-slate-500">
+          <span className="truncate pl-2 text-[13px] font-normal text-[var(--or-muted)]">
             {filterExpanded
               ? t("common:collapseHint")
               : t("compose:filterSummary", {
@@ -221,47 +230,48 @@ export function ComposeBankSearchPanel({
         </button>
         {filterExpanded && (
           <div
-            className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/40 p-4"
+            className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]"
             role="dialog"
             aria-modal="true"
             aria-label="组卷筛选"
             onClick={() => onFilterExpandedChange(false)}
           >
             <div
-              className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-xl bg-white p-5 shadow-xl"
+              className="or-g49-dialog-surface max-h-[85vh] w-full max-w-lg overflow-auto p-6"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="mb-4 flex items-center justify-between">
-                <h3 className="font-semibold">筛选题目</h3>
+                <h3 className="text-base font-semibold text-[var(--or-text)]">筛选题目</h3>
                 <button
                   type="button"
                   aria-label="关闭组卷筛选"
+                  className="rounded-lg p-1 text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-muted)] text-lg leading-none"
                   onClick={() => onFilterExpandedChange(false)}
                 >
                   ×
                 </button>
               </div>
-              <div className="space-y-2">
-                <label className="block text-[11px] font-medium text-slate-600">
+              <div className="space-y-3">
+                <label className="block text-sm font-medium text-[var(--or-muted)]">
                   {t("compose:subjectForExport")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+                  <AppSelect
+                    className="or-g49-input mt-1 w-full"
                     value={subject}
-                    onChange={(e) => onSubjectChange(e.target.value)}
+                    onValueChange={(value) => onSubjectChange(value)}
                   >
                     {subjectOptions.map((s) => (
                       <option key={s} value={s}>
                         {s}
                       </option>
                     ))}
-                  </select>
+                  </AppSelect>
                 </label>
-                <label className="block text-[11px] font-medium text-slate-600">
+                <label className="block text-sm font-medium text-[var(--or-muted)]">
                   {t("compose:collection")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+                  <AppSelect
+                    className="or-g49-input mt-1 w-full"
                     value={namespaceFilter}
-                    onChange={(e) => onNamespaceFilterChange(e.target.value)}
+                    onValueChange={(value) => onNamespaceFilterChange(value)}
                   >
                     <option value="__all__">{t("common:all")}</option>
                     {namespaces.map((n) => (
@@ -269,14 +279,14 @@ export function ComposeBankSearchPanel({
                         {n}
                       </option>
                     ))}
-                  </select>
+                  </AppSelect>
                 </label>
-                <label className="block text-[11px] font-medium text-slate-600">
+                <label className="block text-sm font-medium text-[var(--or-muted)]">
                   {t("compose:questionType")}
-                  <select
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+                  <AppSelect
+                    className="or-g49-input mt-1 w-full"
                     value={typeFilter}
-                    onChange={(e) => onTypeFilterChange(e.target.value)}
+                    onValueChange={(value) => onTypeFilterChange(value)}
                   >
                     <option value="__all__">{t("common:all")}</option>
                     <option value="group">{t("compose:groupOption")}</option>
@@ -285,12 +295,12 @@ export function ComposeBankSearchPanel({
                         {t(`lib:questionTypes.${o.value}`)}
                       </option>
                     ))}
-                  </select>
+                  </AppSelect>
                 </label>
-                <label className="block text-[11px] font-medium text-slate-600">
+                <label className="block text-sm font-medium text-[var(--or-muted)]">
                   {t("compose:search")}
                   <input
-                    className="mt-0.5 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm placeholder:text-slate-400"
+                    className="or-g49-input mt-1 w-full placeholder:text-[var(--or-muted)]"
                     placeholder={t("compose:searchPlaceholder")}
                     value={searchInput}
                     onChange={(e) => onSearchInputChange(e.target.value)}
@@ -309,11 +319,11 @@ export function ComposeBankSearchPanel({
                   onChange={onMetadataFiltersChange}
                 />
               </div>
-              <div className="mt-4 flex justify-end">
+              <div className="mt-5 flex justify-end">
                 <button
                   type="button"
                   onClick={() => onFilterExpandedChange(false)}
-                  className="rounded bg-slate-900 px-4 py-2 text-sm text-white"
+                  className="or-g49-btn or-g49-btn-primary"
                 >
                   查看结果
                 </button>
@@ -321,9 +331,6 @@ export function ComposeBankSearchPanel({
             </div>
           </div>
         )}
-        <p className="mt-2 text-[10px] leading-snug text-slate-500">
-          可将题目拖入右侧小节；多选后也可用箭头加入。
-        </p>
       </div>
       <ComposeQuestionList
         contentSyncing={contentSyncing}

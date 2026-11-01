@@ -175,64 +175,32 @@ def replace_record_data(document: BankDocument, index: int, replacement: dict[st
 
 def validate_bank_import(project_root: Path, library: Path, files: dict[Path, str]) -> None:
     """Check the resulting library before replacing any of its documents."""
-    planned = {path.resolve(): text for path, text in files.items()}
-    seen: dict[str, Path] = {}
-    existing_index = read_bank_library(project_root, library)
-    paths = {path.resolve() for path in iter_question_files(library)} | planned.keys()
-    for path in sorted(paths):
-        assert_within_project(project_root, path)
-        path.relative_to(library.resolve())
-        if path == (library / "questions.yaml").resolve():
-            raise ValueError("题库根目录的 questions.yaml 仅用于旧版合并导入，请使用其他题目文件名")
-        if path in planned:
-            if path.is_file():
-                try:
-                    read_bank_document(path)
-                except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
-                    raise ValueError(f"拒绝覆盖损坏的题目文件: {_diagnostic_path(project_root, path)} ({type(error).__name__})") from error
-            document = parse_bank_document(path, planned[path])
-            if not path.exists():
-                for record in document.records:
-                    existing_index.require_identity_complete(record.id)
-        else:
-            try:
-                document = read_bank_document(path)
-            except (OSError, UnicodeError, yaml.YAMLError, ValueError):
-                # Unreadable files remain untouched; diagnostics are exposed by bank listing.
-                continue
-        for record in document.records:
-            if record.id in seen:
-                raise ValueError(f"题集中存在重复题目编号: {record.id} ({seen[record.id].name}, {path.name})")
-            seen[record.id] = path
+    from solaire.web.bank_write_plan import WritePlan, capture_library_snapshot, validate_write_plan
+
+    snapshot = capture_library_snapshot(project_root, library)
+    plan = WritePlan(
+        project_root=project_root,
+        target_library=library,
+        yaml_writes={path.resolve(): t for path, t in files.items()},
+    )
+    validate_write_plan(snapshot, plan)
 
 
 def apply_bank_import(project_root: Path, files: dict[Path, str | bytes]) -> None:
     """Restore applied files if a replacement fails; no crash-wide transaction is implied."""
-    originals: dict[Path, bytes | None] = {}
-    for path in files:
-        assert_within_project(project_root, path)
-        if path.exists() and not path.is_file():
-            raise ValueError(f"导入目标不是普通文件: {path.name}")
-        originals[path] = path.read_bytes() if path.is_file() else None
-    applied: list[Path] = []
-    try:
-        for path, content in files.items():
-            if isinstance(content, str):
-                write_text_atomic(path, content)
-            else:
-                write_bytes_atomic(path, content)
-            applied.append(path)
-    except OSError as error:
-        failed_restores = []
-        for path in reversed(applied):
-            try:
-                previous = originals[path]
-                if previous is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    write_bytes_atomic(path, previous)
-            except OSError:
-                failed_restores.append(path.relative_to(project_root).as_posix())
-        if failed_restores:
-            raise ValueError("导入写入失败，以下文件未能恢复，请检查后重试: " + "、".join(failed_restores)) from error
-        raise ValueError("导入写入失败，已恢复本批已应用文件，原内容保持完整") from error
+    from solaire.web.bank_write_plan import WritePlan, apply_write_plan
+
+    yaml_writes: dict[Path, str] = {}
+    extra_writes: dict[Path, bytes] = {}
+    for path, content in files.items():
+        if isinstance(content, str):
+            yaml_writes[path] = content
+        else:
+            extra_writes[path] = content
+    plan = WritePlan(
+        project_root=project_root,
+        target_library=project_root,
+        yaml_writes=yaml_writes,
+        extra_writes=extra_writes,
+    )
+    apply_write_plan(project_root, plan)

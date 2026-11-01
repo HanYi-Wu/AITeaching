@@ -1,12 +1,21 @@
 {
-  "nodeKind": { "concept": "知识点", "skill": "技能", "causal": "因果" },
-  "edgeKind": { "prerequisite": "先修", "part_of": "组成", "related": "关联", "causal": "因果" },
+  "nodeKind": {
+    "concept": "知识点",
+    "skill": "技能",
+    "causal": "因果"
+  },
+  "edgeKind": {
+    "prerequisite": "先修",
+    "part_of": "组成",
+    "related": "关联",
+    "causal": "因果"
+  },
   "subjectUnset": "未选学科",
   "pageSummaryWithNode": "知识图谱：{{name}}",
   "pageSummaryDefault": "维护知识点节点与关系",
   "graphsTitle": "图谱",
   "noGraphsHint": "暂无图谱，请新建",
-  "createFirstGraph": "点击左侧「+」新建第一个图谱",
+  "createFirstGraph": "填写图谱名称后点击「创建」",
   "newGraph": "新建图谱",
   "newGraphNamePh": "图谱名称（如：数学）",
   "create": "创建",
@@ -137,5 +146,6 @@
   "typeGroup": "题组",
   "defaultSubject": "数学",
   "defaultLevel1": "高中",
-  "defaultLevel2": "高考"
+  "defaultLevel2": "高考",
+  "rename": "重命名"
 }

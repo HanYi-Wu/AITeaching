@@ -90,9 +90,11 @@ describe("bank toolbar uses the current selection and edits", () => {
         ...response, diagnostics: [{ storage_path: "resource/数学/default/broken.yaml", code: "invalid_yaml", message: "题目文件无法解析" }],
       } : response;
     });
-    mountWorkspace();
+    const { container } = mountWorkspace();
     await userEvent.click(await screen.findByText("有 1 个题目文件需要处理"));
-    expect(screen.getByText("resource/数学/default/broken.yaml")).toBeVisible();
+    expect(screen.getByText("broken.yaml")).toBeVisible();
+    expect(container.innerHTML).not.toContain("resource/数学/default/broken.yaml");
+    expect(document.body.innerHTML).not.toContain("resource/数学/default/broken.yaml");
     await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q1/ }));
     await screen.findByRole("textbox", { name: "附加信息名称" });
     damaged = false;
@@ -154,6 +156,96 @@ describe("bank toolbar uses the current selection and edits", () => {
     // Selection should remain intact
     expect(first).toBeChecked();
     expect(screen.getByRole("button", { name: "导出已选（1）" })).toBeEnabled();
+  });
+
+  it("keeps each bank dropdown free of dialog centering styles", async () => {
+    mountWorkspace();
+
+    const menus = [
+      { trigger: /筛选条件/, label: "筛选条件" },
+      { trigger: "新建题目", label: "新建题目" },
+      { trigger: /导入题库/, label: "导入题库" },
+    ];
+    for (const menu of menus) {
+      const trigger = screen.getByRole("button", { name: menu.trigger });
+      await userEvent.click(trigger);
+      expect(screen.getByRole("dialog", { name: menu.label })).not.toHaveClass("or-dialog");
+      await userEvent.click(trigger);
+    }
+  });
+
+  it("keeps the create form open and reports a duplicate question conflict", async () => {
+    const message = "题目已存在，请更换题号后重试";
+    mocks.post.mockRejectedValueOnce(new ApiError(message, 409));
+    mountWorkspace();
+
+    await userEvent.click(screen.getByRole("button", { name: /新建题目/ }));
+    await userEvent.click(screen.getByRole("button", { name: "创建空白草稿" }));
+
+    await waitFor(() => expect(mocks.error).toHaveBeenLastCalledWith(message));
+    expect(screen.getByRole("dialog", { name: "新建题目" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建空白草稿" })).toBeInTheDocument();
+    expect(screen.queryByTestId("editor-question-id")).not.toBeInTheDocument();
+    expect(mocks.get).not.toHaveBeenCalledWith(
+      `/api/bank/items/${encodeURIComponent("数学/默认/new_question_001")}`,
+    );
+  });
+
+  it("creates a blank stem and keeps the new editor modal open after saving", async () => {
+    const createdId = "数学/默认/new_question_001";
+    const createdQuestion: QuestionJson = {
+      id: "new_question_001",
+      type: "single_choice",
+      content: "",
+      options: { A: "", B: "", C: "", D: "" },
+      answer: "",
+      analysis: "",
+      metadata: {},
+    };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === `/api/bank/items/${encodeURIComponent(createdId)}`) {
+        return {
+          qualified_id: createdId,
+          question: createdQuestion,
+          file_yaml: yaml.dump(createdQuestion),
+          storage_path: "resource/数学/默认/new_question_001.yaml",
+          storage_kind: "single",
+        };
+      }
+      return baseGet(path);
+    });
+    mocks.post.mockResolvedValueOnce({ ok: true, qualified_id: createdId });
+    mocks.put.mockRejectedValueOnce(new ApiError("题目已在其他位置更新，请查看最新内容。", 409));
+    mountWorkspace();
+
+    await userEvent.click(screen.getByRole("button", { name: /新建题目/ }));
+    await userEvent.click(screen.getByRole("button", { name: "创建空白草稿" }));
+
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent(createdId);
+    await waitFor(() => expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true"));
+    expect(mocks.post).toHaveBeenCalledWith("/api/bank/items", expect.objectContaining({
+      subject: "数学",
+      collection: "默认",
+      question: expect.objectContaining({ id: "new_question_001", content: "" }),
+    }));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "still editing" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("题目已在其他位置更新，请查看最新内容。");
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByTestId("editor-question-id")).toHaveTextContent(createdId);
+
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2));
+    expect(mocks.put).toHaveBeenLastCalledWith(
+      `/api/bank/items/${encodeURIComponent(createdId)}`,
+      expect.objectContaining({ content: "" }),
+    );
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByTestId("editor-question-id")).toHaveTextContent(createdId);
   });
 
   it("removes deleted question from selectedExportIds and updates export count", async () => {
@@ -374,6 +466,8 @@ describe("bank toolbar uses the current selection and edits", () => {
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(expect.any(String), expect.any(Object), { "If-Match": "v1" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("当前编辑已保留");
+    expect(screen.getByRole("alert")).toHaveTextContent("updated elsewhere");
+    expect(mocks.error).toHaveBeenLastCalledWith("updated elsewhere");
     version = "v2";
     savedQuestion = { ...savedQuestion, metadata: { topic: "remote edit" } };
     await userEvent.click(screen.getByRole("button", { name: "查看最新内容" }));

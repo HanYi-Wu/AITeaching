@@ -1,0 +1,229 @@
+/**
+ * G55 Redesign Stylesheet - FlClash Aesthetic Alignment
+ * Fully respects COMMON_CONTRACTS.md and user feedback.
+ */
+
+/* Base resets & surface classes */
+.or-g55-page {
+  background-color: var(--or-page, #f8fafc);
+  color: var(--or-text, #0f172a);
+}
+
+.or-g55-card {
+  background-color: var(--or-card, #ffffff);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  border-radius: 16px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+}
+
+/* Static cards: explicitly non-interactive, no hover jumps or lift */
+.or-g55-static-card {
+  cursor: default !important;
+  transform: none !important;
+  transition: none !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04) !important;
+}
+
+.or-g55-static-card:hover {
+  transform: none !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04) !important;
+}
+
+/* Interactive elements: clear, constrained feedback */
+.or-g55-interactive {
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  cursor: pointer;
+}
+
+.or-g55-interactive:hover {
+  border-color: var(--or-primary, #007aff);
+}
+
+/* FlClash Capsule (Pill): strictly centered vertically and horizontally */
+.or-g55-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border-radius: 9999px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 6px 14px;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+/* Navigation items: 40px height, 10px radius, 15px font */
+.or-g55-nav-item {
+  height: 40px;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 15px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.or-g55-nav-indicator {
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background-color: var(--or-primary, #007aff);
+  transition: height 250ms ease, opacity 250ms ease;
+}
+
+/* Standard inputs: min-height 42px, radius 8px, font 15px */
+.or-g55-input {
+  min-height: 42px;
+  border-radius: 8px;
+  font-size: 15px;
+  padding: 9px 12px;
+  border: 1px solid var(--or-outline, #cbd5e1);
+  background-color: var(--or-card, #ffffff);
+  color: var(--or-text, #0f172a);
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+/* Standard primary button: min-height 42px, radius 8px, font 15-16px, centered */
+.or-g55-btn-primary {
+  min-height: 42px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 18px;
+  background-color: var(--or-primary, #007aff);
+  color: var(--or-on-primary, #ffffff);
+  border: none;
+  cursor: pointer;
+  transition: background-color 150ms ease, opacity 150ms ease;
+}
+
+.or-g55-btn-primary:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+.or-g55-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Standard secondary button */
+.or-g55-btn-secondary {
+  min-height: 42px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 18px;
+  background-color: var(--or-block, #f8fafc);
+  color: var(--or-text, #0f172a);
+  border: 1px solid var(--or-outline, #e2e8f0);
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.or-g55-btn-secondary:hover:not(:disabled) {
+  background-color: var(--or-inset, #f1f5f9);
+}
+
+.or-g55-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.or-g55-error-surface {
+  border: 1px solid color-mix(in srgb, var(--or-error) 28%, transparent);
+  background-color: var(--or-error-container);
+  color: var(--or-on-error);
+}
+
+.or-g55-status-success,
+.or-g55-status-warning,
+.or-g55-status-error {
+  border: 1px solid transparent;
+}
+
+.or-g55-status-success {
+  border-color: color-mix(in srgb, var(--or-success) 28%, transparent);
+  background-color: var(--or-success-container);
+  color: var(--or-on-success);
+}
+
+.or-g55-status-warning {
+  border-color: color-mix(in srgb, var(--or-warning) 28%, transparent);
+  background-color: var(--or-warning-container);
+  color: var(--or-on-warning);
+}
+
+.or-g55-status-error {
+  border-color: color-mix(in srgb, var(--or-error) 28%, transparent);
+  background-color: var(--or-error-container);
+  color: var(--or-on-error);
+}
+
+.or-g55-btn-error {
+  border: 1px solid color-mix(in srgb, var(--or-error) 28%, transparent);
+  background-color: var(--or-card);
+  color: var(--or-error);
+}
+
+.or-g55-btn-error:hover:not(:disabled) {
+  background-color: var(--or-error-container);
+}
+
+/* Mobile responsive & touch optimizations */
+@media (max-width: 640px) {
+  /* Prevent iOS Safari auto-zoom on input focus */
+  .or-g55-input,
+  input[type="text"],
+  input[type="password"],
+  input[type="url"],
+  input[type="email"],
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Safe area padding for notched mobile phones */
+  .or-g55-safe-bottom {
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 16px));
+  }
+
+  /* Minimum 44px touch targets on mobile for primary controls */
+  .or-g55-btn-primary,
+  .or-g55-btn-secondary {
+    min-height: 44px;
+  }
+}
+
+/* Hide scrollbars while allowing smooth touch scroll */
+.or-g55-no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.or-g55-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .or-g55-agent-panel button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+

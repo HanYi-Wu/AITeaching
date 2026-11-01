@@ -8,6 +8,7 @@ import "katex/dist/katex.min.css";
 import { MarkdownProseImg, MarkdownProseLink } from "../../lib/markdownTauriUrls";
 import { ASSISTANT_PROSE_CLASS, type ChatLine } from "./types";
 import { AgentConfirmCard, AgentPlanCard, AgentToolCard } from "./AgentCards";
+import "../../ui-redesign/g55/g55.css";
 
 export interface AgentMessageItemProps {
   line: ChatLine;
@@ -24,8 +25,10 @@ export const AgentMessageItem = memo(function AgentMessageItem({
 }: AgentMessageItemProps) {
   if (line.kind === "user") {
     return (
-      <div className="ml-6 rounded-lg bg-blue-50 px-2 py-1.5 text-slate-800">
-        {line.text}
+      <div className="ml-8 flex justify-end">
+        <div className="rounded-2xl bg-or-primary px-3.5 py-2 text-[15px] font-normal leading-relaxed text-or-on-primary shadow-sm">
+          {line.text}
+        </div>
       </div>
     );
   }
@@ -33,8 +36,10 @@ export const AgentMessageItem = memo(function AgentMessageItem({
   if (line.kind === "assistant") {
     if (!line.text) return null;
     return (
-      <div className="mr-4 flex gap-2">
-        <Bot className="mt-0.5 h-4 w-4 shrink-0 text-violet-500" />
+      <div className="mr-4 flex gap-3">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-or-primary-container text-or-primary">
+          <Bot className="h-4 w-4" />
+        </div>
         <div className={ASSISTANT_PROSE_CLASS}>
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
@@ -90,7 +95,7 @@ export const AgentMessageItem = memo(function AgentMessageItem({
   }
 
   if (line.kind === "system") {
-    return <div className="text-center text-[11px] text-slate-500">{line.text}</div>;
+    return <div className="text-center text-xs text-[var(--or-muted)] ">{line.text}</div>;
   }
 
   return null;

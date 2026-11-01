@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from scripts.seed_demo_data import PASSWORDS, seed_demo_accounts, seed_demo_adaptive_histories, seed_demo_attempts
+from scripts.seed_demo_data import (
+    DEMO_Q1,
+    DEMO_Q2,
+    PASSWORDS,
+    publish_demo_exam,
+    seed_demo_accounts,
+    seed_demo_adaptive_histories,
+    seed_demo_attempts,
+    seed_demo_questions,
+    write_exam,
+)
 from solaire.web.auth_service import authenticate_user
-from solaire.web.platform_db import connect, init_platform_db
+from solaire.web import state
+from solaire.web.exam_workspace_service import workspace_dir
+from solaire.web.platform_db import connect, default_platform_root, init_platform_db
+from solaire.web.project_layout import ensure_project_layout
 
 
 def test_seed_creates_one_school_three_teachers_and_five_ready_students(tmp_path: Path) -> None:
@@ -156,3 +170,70 @@ def test_seed_demo_attempts_creates_varied_idempotent_answer_data(tmp_path: Path
     assert answer_count == 9
     assert event_count == 6
     assert frozen_count == 5
+
+
+def test_seed_demo_exam_publishes_teacher_scoped_questions_idempotently(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EH_DATA_ROOT", str(tmp_path / "isolated-app-data"))
+    platform_root = default_platform_root()
+    project_root = state.default_content_root()
+    init_platform_db(platform_root)
+    ensure_project_layout(project_root)
+    seeded = seed_demo_accounts(platform_root)
+    teacher = seeded["teachers"][0]
+    class_id = str(seeded["class"]["id"])
+
+    seed_demo_questions(project_root, teacher)
+    exam_id = write_exam(
+        project_root,
+        label="demo-online",
+        title="演示线上答题",
+        teacher_id=str(teacher["id"]),
+    )
+    first = publish_demo_exam(
+        platform_root,
+        project_root,
+        teacher=teacher,
+        class_id=class_id,
+        exam_id=exam_id,
+        submission_mode="online",
+        max_screen_switches=1,
+    )
+    second = publish_demo_exam(
+        platform_root,
+        project_root,
+        teacher=teacher,
+        class_id=class_id,
+        exam_id=exam_id,
+        submission_mode="online",
+        max_screen_switches=1,
+    )
+    assert first["id"] == second["id"]
+
+    seed_demo_attempts(platform_root, publication_id=str(first["id"]), class_id=class_id)
+    with connect(platform_root) as con:
+        publication_count = con.execute(
+            "SELECT COUNT(*) FROM exam_publications WHERE paper_id = ? AND status <> 'revoked'",
+            (str(first["paper_id"]),),
+        ).fetchone()[0]
+        attempt_rows = con.execute(
+            "SELECT question_payload_json, answer_key_json FROM student_attempts WHERE publication_id = ?",
+            (str(first["id"]),),
+        ).fetchall()
+
+    assert publication_count == 1
+    assert len(attempt_rows) == 5
+    for row in attempt_rows:
+        questions = json.loads(row["question_payload_json"])
+        answer_keys = json.loads(row["answer_key_json"])
+        assert [question["question_id"] for question in questions] == [DEMO_Q1, DEMO_Q2]
+        assert questions[1]["type"] == "judge"
+        assert questions[1]["options"] is None
+        assert answer_keys == {DEMO_Q1: "B", DEMO_Q2: "T"}
+
+    teacher_exam = workspace_dir(project_root, exam_id) / "exam.yaml"
+    assert teacher_exam.is_file()
+    private_question_files = list((project_root / "resource" / "__teachers").rglob("q1.yaml"))
+    assert len(private_question_files) == 1

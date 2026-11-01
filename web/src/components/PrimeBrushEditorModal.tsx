@@ -221,7 +221,7 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="primebrush-editor-title"
@@ -233,24 +233,24 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
       }}
     >
       <div
-        className="grid max-h-[95vh] w-full max-w-6xl grid-cols-[220px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg"
+        className="or-dialog or-g48-dialog flex max-h-[92vh] w-full max-w-6xl flex-col overflow-y-auto rounded-3xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] shadow-2xl ring-1 ring-black/5 lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <aside className="flex min-h-0 flex-col border-r border-slate-200 bg-slate-50 p-3">
+        <aside className="flex shrink-0 flex-col border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] p-3.5 sm:p-4 lg:min-h-0 lg:shrink lg:border-b-0 lg:border-r">
           <div className="flex items-center justify-between gap-2">
-            <h3 id="primebrush-editor-title" className="text-sm font-semibold text-slate-900">
+            <h3 id="primebrush-editor-title" className="text-base font-semibold text-[var(--or-text)]">
               教育绘图
             </h3>
             <button
               type="button"
-              className="rounded p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-900"
+              className="or-icon-button inline-flex h-8 w-8 items-center justify-center rounded-full text-sm text-[var(--or-muted)] hover:bg-[color-mix(in_srgb,var(--or-inset)_80%,transparent)] hover:text-[var(--or-text)] transition-colors"
               onClick={onClose}
               title="关闭"
             >
               <X className="h-4 w-4" aria-hidden />
             </button>
           </div>
-          <div className="mt-3 space-y-1">
+          <div className="mt-3.5 space-y-1.5">
             {PRESETS.map((preset) => {
               const Icon = preset.icon;
               const active = selectedPreset.id === preset.id;
@@ -259,15 +259,17 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
                   key={preset.id}
                   type="button"
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition-colors",
-                    active ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-white hover:text-slate-950",
+                    "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition-all",
+                    active
+                      ? "bg-[var(--or-primary)] text-[var(--or-on-primary)] shadow-sm"
+                      : "text-[var(--or-muted)] hover:bg-[var(--or-card)] hover:text-[var(--or-text)]",
                   )}
                   onClick={() => choosePreset(preset)}
                 >
                   <Icon className="h-4 w-4 shrink-0" aria-hidden />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{preset.label}</span>
-                    <span className={cn("block truncate text-[10px]", active ? "text-slate-300" : "text-slate-400")}>
+                    <span className={cn("block truncate text-[13px]", active ? "text-[var(--or-muted)]" : "text-[var(--or-muted)]")}>
                       {preset.group}
                     </span>
                   </span>
@@ -275,11 +277,11 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
               );
             })}
           </div>
-          <div className="mt-4 border-t border-slate-200 pt-3">
-            <p className="text-[11px] font-semibold text-slate-500">下一批</p>
-            <div className="mt-2 flex flex-wrap gap-1">
+          <div className="mt-4 border-t border-[var(--or-outline)] pt-3">
+            <p className="text-[13px] font-medium text-[var(--or-muted)]">下一批预置</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
               {PLANNED_LABELS.map((label) => (
-                <span key={label} className="rounded border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-500">
+                <span key={label} className="or-pill rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 py-0.5 text-[13px] text-[var(--or-muted)]">
                   {label}
                 </span>
               ))}
@@ -287,51 +289,52 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
           </div>
         </aside>
 
-        <div className="grid min-h-0 grid-cols-2 gap-0">
-          <section className="flex min-h-0 flex-col border-r border-slate-200 p-3">
+        <div className="grid shrink-0 grid-cols-1 gap-0 bg-[var(--or-card)] md:grid-cols-2 lg:min-h-0 lg:shrink">
+          <section className="flex shrink-0 flex-col border-b border-[var(--or-outline)] p-3.5 sm:p-4 md:min-h-0 md:shrink md:border-b-0 md:border-r">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-slate-700">源 YAML</p>
-              <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+              <p className="text-sm font-semibold text-[var(--or-muted)]">源 YAML</p>
+              <span className="or-pill rounded-full bg-[var(--or-block)] px-2.5 py-0.5 text-[13px] font-medium text-[var(--or-muted)]">
                 {selectedPreset.group}
               </span>
             </div>
             <textarea
-              className="mt-2 min-h-0 flex-1 resize-none rounded-md border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-xs leading-relaxed text-slate-900 outline-none focus:border-slate-500 focus:bg-white focus:ring-2 focus:ring-slate-200"
+              className="or-input mt-2 min-h-[12rem] flex-1 resize-none rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-3 font-mono text-sm leading-relaxed text-[var(--or-text)] outline-none focus:border-[var(--or-primary)] focus:bg-[var(--or-card)] focus:ring-1 focus:ring-[var(--or-focus)] md:min-h-0"
               spellCheck={false}
               value={source}
               onChange={(e) => setSource(e.target.value)}
             />
           </section>
 
-          <section className="flex min-h-0 flex-col p-3">
+          <section className="flex shrink-0 flex-col p-3.5 sm:p-4 md:min-h-0 md:shrink">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-slate-700">预览</p>
-              {busy ? <span className="text-[10px] text-slate-400">渲染中</span> : null}
+              <p className="text-sm font-semibold text-[var(--or-muted)]">预览</p>
+              {busy ? <span className="text-[13px] text-[var(--or-muted)]">渲染中…</span> : null}
             </div>
-            <div className="mt-2 flex min-h-[22rem] flex-1 items-center justify-center overflow-auto rounded-md border border-slate-200 bg-white p-3">
+            <div className="mt-2 flex min-h-[14rem] flex-1 items-center justify-center overflow-auto rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3 md:min-h-[22rem]">
               {previewUrl ? (
                 <img src={previewUrl} alt="" className="max-h-full max-w-full object-contain" />
               ) : (
-                <p className="text-xs text-amber-600">{error ?? "暂无预览"}</p>
+                <p className="text-sm text-[var(--or-on-warning)]">{error ?? "暂无预览"}</p>
               )}
             </div>
-            {error ? <p className="mt-2 text-xs text-amber-700">{error}</p> : null}
-            <div className="mt-3 flex justify-end gap-2">
+            {error ? <p className="mt-2 text-[13px] text-[var(--or-on-warning)]">{error}</p> : null}
+            <div className="mt-4 flex justify-end gap-2.5">
               <button
                 type="button"
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                className="or-button or-pill inline-flex h-9 items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-4 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
                 onClick={onClose}
               >
                 取消
               </button>
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-40"
+                className="or-button or-button-primary or-pill or-g48-pill-dropdown h-9 rounded-full bg-[var(--or-primary)] px-4 text-sm font-medium text-[var(--or-on-primary)] shadow-sm hover:bg-[var(--or-primary)] active:bg-slate-950 transition-colors disabled:opacity-40"
                 disabled={!source.trim() || !!error}
                 onClick={handleInsert}
               >
-                <Check className="h-4 w-4" aria-hidden />
-                插入到题目
+                <Check className="h-4 w-4 shrink-0" aria-hidden />
+                <span className="text-center">插入到题目</span>
+                <span className="h-4 w-4 shrink-0" aria-hidden />
               </button>
             </div>
           </section>

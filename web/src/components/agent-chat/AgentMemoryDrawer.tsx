@@ -4,6 +4,8 @@ import {
   apiAgentMemoryTopicGet,
   apiAgentMemoryTopicPut,
 } from "../../api/client";
+import "../../ui-redesign/g55/g55.css";
+import { Select as AppSelect } from "../ui/select";
 
 export interface AgentMemoryDrawerProps {
   isOpen: boolean;
@@ -41,12 +43,14 @@ export function AgentMemoryDrawer({
   if (!isOpen) return null;
 
   return (
-    <div className="border-b border-slate-100 px-2 py-2 text-[11px] text-slate-700">
-      <div className="mb-1 flex gap-1">
+    <div className="border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3 text-xs text-[var(--or-muted)]   ">
+      <div className="mb-2 flex items-center gap-1.5">
         <button
           type="button"
-          className={`rounded px-2 py-0.5 ${
-            memoryTab === "index" ? "bg-violet-100 text-violet-900" : "bg-slate-100"
+          className={`or-g55-pill px-3 py-1 font-semibold transition ${
+            memoryTab === "index"
+              ? "bg-or-primary text-or-on-primary shadow-sm"
+              : "bg-[color-mix(in_srgb,var(--or-inset)_80%,transparent)] text-[var(--or-muted)] hover:bg-[color-mix(in_srgb,var(--or-outline)_80%,transparent)]  "
           }`}
           onClick={() => setMemoryTab("index")}
         >
@@ -54,23 +58,25 @@ export function AgentMemoryDrawer({
         </button>
         <button
           type="button"
-          className={`rounded px-2 py-0.5 ${
-            memoryTab === "topic" ? "bg-violet-100 text-violet-900" : "bg-slate-100"
+          className={`or-g55-pill px-3 py-1 font-semibold transition ${
+            memoryTab === "topic"
+              ? "bg-or-primary text-or-on-primary shadow-sm"
+              : "bg-[color-mix(in_srgb,var(--or-inset)_80%,transparent)] text-[var(--or-muted)] hover:bg-[color-mix(in_srgb,var(--or-outline)_80%,transparent)]  "
           }`}
           onClick={() => setMemoryTab("topic")}
         >
           {t("topicNotes")}
         </button>
       </div>
-      {memoryMsg && <p className="mb-1 text-red-600">{memoryMsg}</p>}
+      {memoryMsg && <p className="mb-2 text-xs font-medium text-or-error">{memoryMsg}</p>}
       {memoryTab === "index" && (
-        <div className="space-y-1">
+        <div className="space-y-2">
           <textarea
             value={indexDraft}
             onChange={(e) => setIndexDraft(e.target.value)}
             rows={5}
             disabled={memoryBusy}
-            className="w-full resize-y rounded border border-slate-200 px-1.5 py-1 font-mono text-[10px]"
+            className="w-full resize-y rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 font-mono text-xs text-[var(--or-text)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus   "
           />
           <button
             type="button"
@@ -80,26 +86,26 @@ export function AgentMemoryDrawer({
                 setMemoryMsg(t("indexSaved")),
               )
             }
-            className="rounded bg-violet-600 px-2 py-0.5 text-white hover:bg-violet-700 disabled:opacity-50"
+            className="inline-flex h-8 items-center justify-center rounded-lg bg-or-primary px-3.5 text-xs font-semibold text-or-on-primary shadow-sm transition hover:brightness-95 disabled:opacity-50"
           >
             {t("saveIndex")}
           </button>
         </div>
       )}
       {memoryTab === "topic" && (
-        <div className="space-y-1">
-          <div className="flex flex-wrap gap-1">
-            <select
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <AppSelect
               value={topicPick}
-              onChange={(e) => setTopicPick(e.target.value)}
-              className="max-w-[10rem] rounded border border-slate-200 px-1 py-0.5 text-[10px]"
+              onValueChange={(value) => setTopicPick(value)}
+              className="h-8 max-w-[12rem] rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 text-xs text-[var(--or-text)] outline-none transition focus:border-or-focus   "
             >
               {topicOptions.map((topic) => (
                 <option key={topic} value={topic}>
                   {topic}
                 </option>
               ))}
-            </select>
+            </AppSelect>
             <button
               type="button"
               disabled={memoryBusy || !topicPick}
@@ -109,7 +115,7 @@ export function AgentMemoryDrawer({
                   setMemoryMsg(null);
                 })
               }
-              className="rounded border border-slate-200 px-2 py-0.5 hover:bg-slate-50 disabled:opacity-50"
+              className="inline-flex h-8 items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 text-xs font-medium text-[var(--or-muted)] transition hover:bg-[var(--or-block)] disabled:opacity-50   "
             >
               {t("load")}
             </button>
@@ -119,7 +125,7 @@ export function AgentMemoryDrawer({
             onChange={(e) => setTopicDraft(e.target.value)}
             rows={5}
             placeholder={t("topicDraftPh")}
-            className="w-full resize-y rounded border border-slate-200 px-1.5 py-1 font-mono text-[10px]"
+            className="w-full resize-y rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 font-mono text-xs text-[var(--or-text)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus   "
           />
           <button
             type="button"
@@ -129,7 +135,7 @@ export function AgentMemoryDrawer({
                 setMemoryMsg(t("topicSaved")),
               )
             }
-            className="rounded bg-violet-600 px-2 py-0.5 text-white hover:bg-violet-700 disabled:opacity-50"
+            className="inline-flex h-8 items-center justify-center rounded-lg bg-or-primary px-3.5 text-xs font-semibold text-or-on-primary shadow-sm transition hover:brightness-95 disabled:opacity-50"
           >
             {t("saveTopic")}
           </button>

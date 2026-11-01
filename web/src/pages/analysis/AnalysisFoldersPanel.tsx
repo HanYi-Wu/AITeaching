@@ -2,6 +2,7 @@ import { useState, type DragEvent, type FormEvent } from "react";
 import { Folder, FolderOpen, Pencil, Plus, Trash2 } from "lucide-react";
 import { confirmDialog } from "../../lib/confirmDialog";
 import type { AnalysisFolder } from "./useAnalysisFolders";
+import "../../ui-redesign/g52/g52-design-tokens.css";
 
 export const ANALYSIS_ITEMS_MIME = "application/x-or-content-items";
 export type AnalysisFolderFilter = "all" | "unassigned" | string;
@@ -70,7 +71,7 @@ export function AnalysisFoldersPanel({
     const confirmed = await confirmDialog(
       `删除“${folder.name}”文件夹？其中的记录将移回未归类，试卷、成绩和答卷不会删除。`,
     );
-    if (confirmed && await onDeleteFolder(folder.id) && filter === folder.id) onFilterChange("all");
+    if (confirmed && (await onDeleteFolder(folder.id)) && filter === folder.id) onFilterChange("all");
   };
 
   const assignDrop = (event: DragEvent<HTMLElement>, folderId: string | null) => {
@@ -87,51 +88,62 @@ export function AnalysisFoldersPanel({
     }
   };
 
-  const itemCount = (folderId: string | null | "all") => folderId === "all"
-    ? visibleItemIds.length
-    : visibleItemIds.filter((itemId) => (
-      folderId === null ? !assignments[itemId] : assignments[itemId] === folderId
-    )).length;
+  const itemCount = (folderId: string | null | "all") =>
+    folderId === "all"
+      ? visibleItemIds.length
+      : visibleItemIds.filter((itemId) =>
+          folderId === null ? !assignments[itemId] : assignments[itemId] === folderId,
+        ).length;
 
-  const filterButtonClass = (active: boolean) => (
-    `flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs ${active ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-100"}`
-  );
+  const filterButtonClass = (active: boolean) =>
+    `flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
+      active
+        ? "bg-[var(--or-primary-container)] text-[var(--or-on-container)] font-semibold"
+        : "text-[var(--or-muted)] hover:bg-[color-mix(in_srgb,var(--or-block)_80%,transparent)]"
+    }`;
 
   return (
-    <section aria-label="分析文件夹" className="mb-3 rounded-md border border-slate-200 bg-white p-2">
-      <div className="mb-2 flex items-center justify-between">
-        <h4 className="text-xs font-semibold text-slate-700">分析文件夹</h4>
-        {loading ? <span className="text-[10px] text-slate-400">加载中</span> : null}
+    <section aria-label="分析文件夹" className="mb-3 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 shadow-xs">
+      <div className="mb-2 flex items-center justify-between px-0.5">
+        <h4 className="text-xs font-semibold text-[var(--or-muted)]">分析文件夹</h4>
+        {loading ? <span className="text-xs text-[var(--or-muted)]">加载中</span> : null}
       </div>
-      <form className="mb-2 flex gap-1" onSubmit={(event) => void submitNewFolder(event)}>
+      <form className="mb-2 flex gap-1.5" onSubmit={(event) => void submitNewFolder(event)}>
         <input
           aria-label="新建分析文件夹名称"
           value={newName}
           onChange={(event) => setNewName(event.target.value)}
           maxLength={80}
           placeholder="新建文件夹"
-          className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+          className="min-w-0 flex-1 rounded-lg border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] px-2.5 py-1.5 text-xs text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:bg-[var(--or-card)] focus:outline-none"
         />
         <button
           type="submit"
           aria-label="新建分析文件夹"
           disabled={busy || !newName.trim()}
-          className="rounded border border-slate-300 px-2 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          className="inline-flex items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
       </form>
-      <div className="max-h-40 space-y-1 overflow-y-auto">
+      <div className="max-h-44 space-y-1 overflow-y-auto pr-0.5">
         <div
           className={filterButtonClass(filter === "all")}
           role="button"
           tabIndex={0}
           onClick={() => onFilterChange("all")}
-          onKeyDown={(event) => { if (event.key === "Enter") onFilterChange("all"); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onFilterChange("all");
+          }}
           data-testid="analysis-folder-all"
         >
-          <span className="flex items-center gap-1.5"><FolderOpen className="h-3.5 w-3.5" />全部记录</span>
-          <span>{itemCount("all")}</span>
+          <span className="flex items-center gap-1.5">
+            <FolderOpen className="h-3.5 w-3.5 text-[var(--or-on-container)]" />
+            <span>全部记录</span>
+          </span>
+          <span className="or-g52-pill or-g52-pill-neutral !text-[11px] !px-1.5 !min-h-[18px]">
+            {itemCount("all")}
+          </span>
         </div>
         <div
           className={filterButtonClass(filter === "unassigned")}
@@ -140,16 +152,27 @@ export function AnalysisFoldersPanel({
           onClick={() => onFilterChange("unassigned")}
           onDragOver={dragOver}
           onDrop={(event) => assignDrop(event, null)}
-          onKeyDown={(event) => { if (event.key === "Enter") onFilterChange("unassigned"); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onFilterChange("unassigned");
+          }}
           data-testid="analysis-folder-unassigned"
         >
-          <span className="flex items-center gap-1.5"><Folder className="h-3.5 w-3.5" />未归类</span>
-          <span>{itemCount(null)}</span>
+          <span className="flex items-center gap-1.5">
+            <Folder className="h-3.5 w-3.5 text-[var(--or-muted)]" />
+            <span>未归类</span>
+          </span>
+          <span className="or-g52-pill or-g52-pill-neutral !text-[11px] !px-1.5 !min-h-[18px]">
+            {itemCount(null)}
+          </span>
         </div>
         {folders.map((folder) => (
           <div
             key={folder.id}
-            className={`rounded border px-2 py-1 ${filter === folder.id ? "border-blue-200 bg-blue-50" : "border-transparent hover:bg-slate-50"}`}
+            className={`rounded-lg border px-2 py-1 transition-colors ${
+              filter === folder.id
+                ? "border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_80%,transparent)] text-[var(--or-on-container)]"
+                : "border-transparent hover:bg-[var(--or-page)]"
+            }`}
             onDragOver={dragOver}
             onDrop={(event) => assignDrop(event, folder.id)}
             data-testid={`analysis-folder-${folder.id}`}
@@ -161,20 +184,40 @@ export function AnalysisFoldersPanel({
                   value={editingName}
                   onChange={(event) => setEditingName(event.target.value)}
                   maxLength={80}
-                  className="min-w-0 flex-1 rounded border border-slate-300 px-1.5 py-0.5 text-xs"
+                  className="min-w-0 flex-1 rounded border border-[var(--or-outline)] px-1.5 py-0.5 text-xs focus:outline-none focus:border-[var(--or-primary)]"
+                  autoFocus
                 />
-                <button type="submit" disabled={busy || !editingName.trim()} className="text-xs text-blue-600 disabled:opacity-50">保存</button>
-                <button type="button" onClick={() => setEditingFolderId(null)} className="text-xs text-slate-500">取消</button>
+                <button
+                  type="submit"
+                  disabled={busy || !editingName.trim()}
+                  className="text-xs font-medium text-[var(--or-on-container)] disabled:opacity-50"
+                >
+                  保存
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingFolderId(null)}
+                  className="text-xs text-[var(--or-muted)] hover:text-[var(--or-muted)]"
+                >
+                  取消
+                </button>
               </form>
             ) : (
               <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => onFilterChange(folder.id)}
-                  className={`flex min-w-0 flex-1 items-center justify-between gap-2 text-left text-xs ${filter === folder.id ? "text-blue-700" : "text-slate-600"}`}
+                  className={`flex min-w-0 flex-1 items-center justify-between gap-2 text-left text-xs ${
+                    filter === folder.id ? "text-[var(--or-on-container)] font-medium" : "text-[var(--or-muted)]"
+                  }`}
                 >
-                  <span className="flex min-w-0 items-center gap-1.5 truncate"><Folder className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{folder.name}</span></span>
-                  <span>{itemCount(folder.id)}</span>
+                  <span className="flex min-w-0 items-center gap-1.5 truncate">
+                    <Folder className={`h-3.5 w-3.5 shrink-0 ${filter === folder.id ? "text-[var(--or-on-container)]" : "text-[var(--or-muted)]"}`} />
+                    <span className="truncate">{folder.name}</span>
+                  </span>
+                  <span className="or-g52-pill or-g52-pill-neutral !text-[11px] !px-1.5 !min-h-[18px]">
+                    {itemCount(folder.id)}
+                  </span>
                 </button>
                 {selectedItemIds.length > 0 ? (
                   <button
@@ -182,7 +225,7 @@ export function AnalysisFoldersPanel({
                     disabled={busy}
                     aria-label={`将所选记录移入 ${folder.name}`}
                     onClick={() => void onAssignItems(selectedItemIds, folder.id)}
-                    className="text-[10px] text-blue-600 disabled:opacity-50"
+                    className="text-xs font-medium text-[var(--or-on-container)] hover:text-[var(--or-on-container)] disabled:opacity-50 px-1"
                   >
                     归类
                   </button>
@@ -191,8 +234,11 @@ export function AnalysisFoldersPanel({
                   type="button"
                   aria-label={`重命名 ${folder.name}`}
                   disabled={busy}
-                  onClick={() => { setEditingFolderId(folder.id); setEditingName(folder.name); }}
-                  className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                  onClick={() => {
+                    setEditingFolderId(folder.id);
+                    setEditingName(folder.name);
+                  }}
+                  className="rounded p-1 text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-muted)] disabled:opacity-50"
                 >
                   <Pencil className="h-3 w-3" />
                 </button>
@@ -201,7 +247,7 @@ export function AnalysisFoldersPanel({
                   aria-label={`删除 ${folder.name}`}
                   disabled={busy}
                   onClick={() => void deleteFolder(folder)}
-                  className="rounded p-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                  className="rounded p-1 text-[var(--or-muted)] hover:bg-[var(--or-error-container)] hover:text-[var(--or-on-error)] disabled:opacity-50"
                 >
                   <Trash2 className="h-3 w-3" />
                 </button>
@@ -211,19 +257,19 @@ export function AnalysisFoldersPanel({
         ))}
       </div>
       {selectedItemIds.length > 0 ? (
-        <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-[11px] text-slate-500">
+        <div className="mt-2 flex items-center justify-between border-t border-[var(--or-outline)] pt-2 text-xs text-[var(--or-muted)] px-0.5">
           <span>{selectedItemIds.length} 条已勾选</span>
           <button
             type="button"
             disabled={busy}
             onClick={() => void onAssignItems(selectedItemIds, null)}
-            className="text-blue-600 disabled:opacity-50"
+            className="font-medium text-[var(--or-on-container)] hover:text-[var(--or-on-container)] disabled:opacity-50"
           >
             移回未归类
           </button>
         </div>
       ) : null}
-      {error ? <div role="alert" className="mt-2 text-[11px] text-rose-600">{error}</div> : null}
+      {error ? <div role="alert" className="mt-2 text-xs text-[var(--or-on-error)] px-0.5">{error}</div> : null}
     </section>
   );
 }

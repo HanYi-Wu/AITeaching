@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   ensure: vi.fn(),
   confirm: vi.fn(),
   copy: vi.fn(),
+  savePath: vi.fn(),
 }));
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -21,6 +22,7 @@ vi.mock("../api/client", async (importOriginal) => {
     ensureApiBase: mocks.ensure,
     apiSystemExtensions: mocks.list,
     apiSystemExtensionInstall: mocks.install,
+    apiSystemExtensionManualPathPut: mocks.savePath,
   };
 });
 
@@ -104,5 +106,24 @@ describe("ExtensionsPanel", () => {
 
     expect(await screen.findByText(/未检测到 Windows 系统安装器/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "获取 Windows 系统安装器" })).toBeInTheDocument();
+  });
+
+  it("uses an explicit server path field in web mode and shows path validation failures", async () => {
+    mocks.list.mockResolvedValue({ extensions: [extension({})] });
+    mocks.savePath.mockRejectedValue(new Error("服务器路径无效"));
+
+    render(<TestI18nProvider><ExtensionsPanel onError={vi.fn()} /></TestI18nProvider>);
+
+    expect(await screen.findByText(/Web 端无法打开后端服务器上的原生文件选择窗口/)).toBeInTheDocument();
+    const pathField = screen.getByRole("textbox", { name: "文档转换 选择程序文件" });
+    await userEvent.type(pathField, "C:\\server\\bin\\pandoc.exe");
+    await userEvent.click(screen.getAllByRole("button", { name: "保存路径" })[0]);
+
+    expect(mocks.savePath).toHaveBeenCalledWith("pandoc", {
+      path: "C:\\server\\bin\\pandoc.exe",
+      location_kind: "file",
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("服务器路径无效");
+    expect(screen.queryByRole("button", { name: "选择程序文件" })).not.toBeInTheDocument();
   });
 });

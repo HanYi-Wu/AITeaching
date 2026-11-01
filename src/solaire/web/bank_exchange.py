@@ -261,7 +261,6 @@ def import_bank_exchange_zip(
 
     Returns keys: written, namespace, subject, collection, warnings (list[str]).
     """
-    warnings: list[str] = []
     ts = target_subject.strip()
     tc = target_collection.strip()
     if not ts or not tc:
@@ -269,104 +268,24 @@ def import_bank_exchange_zip(
     ns = f"{ts}/{tc}"
     target_lib = library_root_for_namespace(project_root, ns)
     assert_within_project(project_root, target_lib)
-    image_dir = target_lib / "image"
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            _safe_extract_zip(zf, tmp_path)
+    from solaire.web.bank_write_plan import (
+        capture_library_snapshot,
+        plan_zip_import,
+        validate_write_plan,
+        apply_write_plan,
+    )
 
-        yaml_pack = tmp_path / "yaml"
-        if yaml_pack.is_dir():
-            imported_yaml: list[tuple[Path, Any]] = []
-            all_rels: list[str] = []
-            for p in sorted(yaml_pack.rglob("*.yaml")):
-                text = p.read_text(encoding="utf-8")
-                document = parse_bank_document(p, text)
-                all_rels.extend(_collect_embed_rels_from_value(document.raw))
-                imported_yaml.append((p.relative_to(yaml_pack), document.raw))
-            unique_rels = list(dict.fromkeys(all_rels))
-            pkg_to_resource: dict[str, str] = {}
-            image_files: dict[Path, bytes] = {}
-            for rel in unique_rels:
-                src = _resolve_embed_file_in_extract(tmp_path, rel)
-                if src is None:
-                    warnings.append(f"未找到图片文件，保留占位符: {rel}")
-                    continue
-                data = src.read_bytes()
-                if len(data) > _MAX_BANK_IMAGE_BYTES:
-                    warnings.append(f"跳过大文件: {rel}")
-                    continue
-                ext = src.suffix.lower() or ".png"
-                if ext not in _ALLOWED_BANK_IMAGE_EXT:
-                    warnings.append(f"跳过不支持的格式: {rel}")
-                    continue
-                digest = hashlib.sha256(data).hexdigest()[:16]
-                dest = image_dir / f"{digest}{ext}"
-                assert_within_project(project_root, dest)
-                image_files[dest.resolve()] = data
-                resource_rel = _rel_to_resource(project_root, dest)
-                pkg_to_resource[rel] = resource_rel
+    with bank_write_lock(target_lib):
+        snapshot = capture_library_snapshot(project_root, target_lib)
+        plan = plan_zip_import(snapshot, zip_bytes, ts, tc)
+        validate_write_plan(snapshot, plan)
+        apply_write_plan(project_root, plan)
 
-            yaml_files: dict[Path, str] = {}
-            for rel, raw in imported_yaml:
-                dest = (target_lib / rel).resolve()
-                assert_within_project(project_root, dest)
-                if dest in yaml_files:
-                    raise ValueError(f"ZIP 内存在重复题目目标路径: {rel.as_posix()}")
-                rewritten = _rewrite_embeds_in_value(raw, pkg_to_resource)
-                text = "" if rewritten is None else yaml.safe_dump(rewritten, allow_unicode=True, sort_keys=False)
-                yaml_files[dest] = _normalize_bank_yaml_text(text) if text else ""
-
-            with bank_write_lock(target_lib):
-                validate_bank_import(project_root, target_lib, yaml_files)
-                files_to_apply: dict[Path, str | bytes] = dict(yaml_files)
-                for path, data in image_files.items():
-                    if path in files_to_apply:
-                        raise ValueError(f"导入资源路径冲突: {path.name}")
-                    files_to_apply[path] = data
-                apply_bank_import(project_root, files_to_apply)
-
-            return {
-                "written": len(yaml_files),
-                "namespace": ns,
-                "subject": ts,
-                "collection": tc,
-                "warnings": warnings,
-            }
-
-        qyaml = _find_questions_yaml(tmp_path)
-        if qyaml is None:
-            raise FileNotFoundError("ZIP 内未找到 yaml/ 目录或 questions.yaml")
-        raw = yaml.safe_load(qyaml.read_text(encoding="utf-8"))
-        if raw is None:
-            raise ValueError("questions.yaml 为空")
-
-        unique_rels = list(dict.fromkeys(_collect_embed_rels_from_value(raw)))
-
-        pkg_to_resource: dict[str, str] = {}
-        image_files: dict[Path, bytes] = {}
-        for rel in unique_rels:
-            src = _resolve_embed_file_in_extract(tmp_path, rel)
-            if src is None:
-                warnings.append(f"未找到图片文件，保留占位符: {rel}")
-                continue
-            data = src.read_bytes()
-            if len(data) > _MAX_BANK_IMAGE_BYTES:
-                warnings.append(f"跳过大文件: {rel}")
-                continue
-            ext = src.suffix.lower() or ".png"
-            if ext not in _ALLOWED_BANK_IMAGE_EXT:
-                warnings.append(f"跳过不支持的格式: {rel}")
-                continue
-            digest = hashlib.sha256(data).hexdigest()[:16]
-            dest = image_dir / f"{digest}{ext}"
-            assert_within_project(project_root, dest)
-            image_files[dest.resolve()] = data
-            pkg_to_resource[rel] = _rel_to_resource(project_root, dest)
-
-        rewritten_raw = _rewrite_embeds_in_value(raw, pkg_to_resource)
-        merged_yaml = yaml.safe_dump(rewritten_raw, allow_unicode=True, sort_keys=False)
-
-    r = import_merged_yaml(project_root, merged_yaml, ts, tc, extra_files=image_files)
-    return {**r, "warnings": warnings}
+    return {
+        "written": plan.written_count,
+        "namespace": ns,
+        "subject": ts,
+        "collection": tc,
+        "warnings": plan.warnings,
+    }

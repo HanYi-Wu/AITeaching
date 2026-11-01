@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MetadataFilterControls } from "./MetadataFilterControls";
+import { selectOption } from "../test/selectOption";
 
 const DIFFICULTY = "\u96be\u5ea6";
 const NOVELTY = "\u521b\u65b0\u6027";
@@ -12,7 +13,7 @@ const SELECT_FIELD = "\u9009\u62e9\u6807\u7b7e";
 const ALL = "\u5168\u90e8";
 
 describe("MetadataFilterControls", () => {
-  it("renders a newly added condition immediately", () => {
+  it("renders a newly added condition immediately", async () => {
     const onChange = vi.fn();
 
     render(
@@ -30,16 +31,17 @@ describe("MetadataFilterControls", () => {
 
     fireEvent.click(screen.getByRole("button", { name: ADD_CONDITION }));
 
-    const fieldSelect = screen.getByDisplayValue(SELECT_FIELD);
+    const fieldSelect = screen.getByRole("combobox", { name: "标签" });
     expect(fieldSelect).not.toBeNull();
 
-    fireEvent.change(fieldSelect, { target: { value: DIFFICULTY } });
+    await selectOption(fieldSelect, DIFFICULTY);
 
     expect(onChange).toHaveBeenLastCalledWith({ [DIFFICULTY]: { kind: "enum", selected: [] } });
-    expect(screen.getByDisplayValue(DIFFICULTY)).not.toBeNull();
-    expect(screen.getByDisplayValue(ALL)).not.toBeNull();
+    expect(screen.getByRole("combobox", { name: "标签" })).toHaveTextContent(DIFFICULTY);
+    const enumSelect = screen.getAllByRole("combobox")[1]!;
+    expect(enumSelect).toHaveTextContent(ALL);
 
-    fireEvent.change(screen.getByDisplayValue(ALL), { target: { value: HIGH } });
+    await selectOption(enumSelect, HIGH);
 
     expect(onChange).toHaveBeenLastCalledWith({ [DIFFICULTY]: { kind: "enum", selected: [HIGH] } });
   });

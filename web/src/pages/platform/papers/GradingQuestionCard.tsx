@@ -2,6 +2,7 @@ import { FileImage } from "lucide-react";
 import { memo } from "react";
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
 import type { PaperSubmissionAnswerRecord } from "../../../platform/auth";
+import { G51Pill } from "../../../ui-redesign/g51/PaperUiComponents";
 
 const MemoizedKatexText = memo(KatexText);
 
@@ -30,73 +31,107 @@ export default function GradingQuestionCard({
   onFeedbackChange,
   onSave,
 }: Props) {
+  const isGraded = statusLabel === "已批改";
+
   return (
-    <div className="rounded-md bg-slate-50 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <span className="font-medium">{answer.header || answer.question_id}</span>
-        <span className="text-xs text-slate-500">
+    <div className="or-g51-static-card rounded-2xl border border-[var(--or-outline)] bg-[var(--or-card)] p-4 sm:p-5 shadow-sm space-y-4">
+      {/* Question Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
+        <h4 className="text-base font-semibold text-[var(--or-text)]">
+          {answer.header || answer.question_id}
+        </h4>
+        <G51Pill variant={isGraded ? "success" : "neutral"}>
           本题 {answer.score_per_item ?? "-"} 分 · {statusLabel}
-        </span>
+        </G51Pill>
       </div>
+
+      {/* Version Changed Notice */}
       {versionChanged ? (
-        <p role="status" className="mt-2 text-xs text-amber-700">服务器批改版本已变化，本地草稿基于较早内容；保存前会请你确认。</p>
+        <p role="status" className="rounded-xl border border-[var(--or-warning)] bg-[var(--or-warning-container)] p-2.5 text-xs font-medium text-[var(--or-on-warning)]">
+          服务器批改版本已变化，本地草稿基于较早内容；保存前会请你确认。
+        </p>
       ) : null}
-      {answer.content ? <MemoizedKatexText text={answer.content} className="mt-2 whitespace-pre-wrap text-sm text-slate-700" /> : null}
-      <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-sm">
-        <span className="font-semibold">参考答案：</span>
-        <MemoizedKatexText text={answer.correct_answer ?? '未配置参考答案'} className="inline" />
+
+      {/* Question Content & Formulas */}
+      {answer.content ? (
+        <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-3.5">
+          <MemoizedKatexText
+            text={answer.content}
+            className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--or-text)]"
+          />
+        </div>
+      ) : null}
+
+      {/* Reference Answer */}
+      <div className="rounded-xl border border-[var(--or-success)] bg-[color-mix(in_srgb,var(--or-success-container)_60%,transparent)] p-3 text-sm">
+        <span className="font-semibold text-[var(--or-on-success)]">参考答案：</span>
+        <MemoizedKatexText
+          text={answer.correct_answer ?? "未配置参考答案"}
+          className="inline text-[var(--or-on-success)] font-medium"
+        />
       </div>
+
+      {/* Question Options */}
       {answer.options && Object.keys(answer.options).length > 0 ? (
-        <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+        <div className="grid gap-2 sm:grid-cols-2">
           {Object.entries(answer.options).map(([optionKey, optionText]) => (
-            <div key={optionKey} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
-              <span className="mr-1 font-semibold">{optionKey}.</span>
+            <div
+              key={optionKey}
+              className="rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3 text-sm text-[var(--or-text)]"
+            >
+              <span className="mr-1.5 font-bold text-[var(--or-on-container)]">{optionKey}.</span>
               <MemoizedKatexText text={optionText} className="inline" />
             </div>
           ))}
         </div>
       ) : null}
-      <div className="mt-3 rounded-md border border-blue-100 bg-white p-3">
-        <p className="text-xs font-semibold text-blue-700">学生作答</p>
-        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-900">
+
+      {/* Student Answer */}
+      <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_40%,transparent)] p-4">
+        <p className="text-xs font-bold text-[var(--or-on-container)] uppercase tracking-wide">学生作答</p>
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-sm font-medium leading-relaxed text-[var(--or-text)]">
           {studentAnswerText}
         </p>
       </div>
+
+      {/* Student Uploaded Images */}
       {answer.images && answer.images.length > 0 ? (
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {answer.images.map((image, index) => (
             <a
               key={`${answer.question_id}:${image.name}:${index}`}
               href={image.data_url}
               target="_blank"
               rel="noreferrer"
-              className="group block overflow-hidden rounded-md border border-slate-200 bg-white"
+              className="group block overflow-hidden rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] transition hover:border-[var(--or-primary)]"
             >
               <img
                 data-testid={`paper-answer-image-${answer.question_id}`}
                 src={image.data_url}
                 alt={image.name || "学生提交图片"}
-                className="aspect-[4/3] w-full object-contain bg-white"
+                className="aspect-[4/3] w-full object-contain bg-[var(--or-page)]"
               />
-              <div className="flex items-center gap-2 border-t border-slate-100 px-2 py-1 text-xs text-slate-500">
-                <FileImage className="h-3.5 w-3.5" />
+              <div className="flex items-center gap-2 border-t border-[var(--or-outline)] px-3 py-1.5 text-xs text-[var(--or-muted)]">
+                <FileImage className="h-3.5 w-3.5 text-[var(--or-on-container)]" />
                 <span className="truncate">{image.name || `image-${index + 1}`}</span>
               </div>
             </a>
           ))}
         </div>
       ) : null}
-      <div className="mt-3 grid gap-2 sm:grid-cols-[120px_minmax(0,1fr)_auto]">
+
+      {/* Score & Feedback Controls */}
+      <div className="grid gap-2.5 sm:grid-cols-[130px_minmax(0,1fr)_auto] pt-1">
         <input
           data-testid={`paper-grade-${answer.question_id}`}
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          className="or-g51-input text-base font-semibold w-full"
           value={scoreValue}
           placeholder="分数"
           onChange={(event) => onScoreChange(event.target.value)}
         />
         <input
           data-testid={`paper-feedback-${answer.question_id}`}
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          className="or-g51-input text-sm w-full"
           value={feedbackValue}
           placeholder="批改反馈"
           onChange={(event) => onFeedbackChange(event.target.value)}
@@ -106,9 +141,9 @@ export default function GradingQuestionCard({
           data-testid={`paper-save-grade-${answer.question_id}`}
           disabled={saving}
           onClick={() => void onSave()}
-          className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          className="or-g51-btn or-g51-btn-primary min-w-[80px] text-sm font-semibold w-full sm:w-auto"
         >
-          保存
+          {saving ? "保存中" : "保存"}
         </button>
       </div>
     </div>

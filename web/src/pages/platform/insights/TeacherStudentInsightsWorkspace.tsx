@@ -13,6 +13,8 @@ import {
 
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
 import { useAgentContext } from "../../../contexts/AgentContext";
+import { SelectionIndicator } from "../../../design-system/SelectionIndicator";
+import { cn } from "../../../lib/utils";
 import {
   getTeacherStudentProfile,
   listTeacherAssignedClasses,
@@ -21,8 +23,15 @@ import {
   type TeacherClassStudentRecord,
   type TeacherStudentProfile,
 } from "../../../platform/auth";
+import { G52StatCard, G52Pill } from "../../../ui-redesign/g52/G52UIComponents";
+import "../../../ui-redesign/g52/g52-design-tokens.css";
+import { Select as AppSelect } from "../../../components/ui/select";
 
-type Props = { onError?: (message: string | null) => void; onOpenPaper?: (target: { paperId: string; attemptId: string; title: string }) => void; onAssignStudent?: (target: { classId: string; studentId: string; name: string }) => void };
+type Props = {
+  onError?: (message: string | null) => void;
+  onOpenPaper?: (target: { paperId: string; attemptId: string; title: string }) => void;
+  onAssignStudent?: (target: { classId: string; studentId: string; name: string }) => void;
+};
 type ListedStudent = TeacherClassStudentRecord & { class_id: string; class_name: string };
 
 function formatSeconds(seconds?: number | null): string {
@@ -39,6 +48,8 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssign
   const [students, setStudents] = useState<ListedStudent[]>([]);
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedStudentKey, setSelectedStudentKey] = useState("");
+  const [mobileTab, setMobileTab] = useState<"list" | "profile">("list");
+  const mobileSegmentRef = useRef<HTMLDivElement>(null);
   const [profile, setProfile] = useState<TeacherStudentProfile | null>(null);
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -57,7 +68,9 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssign
       .then((result) => active && setClasses(result.classes))
       .catch((error) => active && onError?.(error instanceof Error ? error.message : String(error)))
       .finally(() => active && setLoading(false));
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [onError]);
 
   useEffect(() => {
@@ -67,10 +80,12 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssign
     setProfile(null);
     setLoading(true);
     const targets = selectedClassId ? classes.filter((item) => item.id === selectedClassId) : classes;
-    void Promise.all(targets.map(async (klass) => {
-      const result = await listTeacherClassStudents(klass.id);
-      return result.students.map((student) => ({ ...student, class_id: klass.id, class_name: klass.name }));
-    }))
+    void Promise.all(
+      targets.map(async (klass) => {
+        const result = await listTeacherClassStudents(klass.id);
+        return result.students.map((student) => ({ ...student, class_id: klass.id, class_name: klass.name }));
+      }),
+    )
       .then((groups) => {
         if (studentListRequestIdRef.current !== requestId) return;
         const unique = new Map<string, ListedStudent>();
@@ -103,89 +118,425 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssign
   }, [selectedStudent?.class_id, selectedStudent?.id, dateFrom, dateTo, onError]);
 
   useEffect(() => {
-    setPageContext(profile ? {
-      current_page: "student_profile",
-      selected_resource_type: "student",
-      selected_resource_id: profile.student.id,
-      summary: `学生分析：${profile.student.display_name}，完成率 ${profile.summary.completion_rate}%，平均得分率 ${profile.summary.average_score_percent ?? "暂无"}%`,
-    } : { current_page: "student_profile", summary: "教师学生分析：可按班级、姓名和日期查看" });
+    setPageContext(
+      profile
+        ? {
+            current_page: "student_profile",
+            selected_resource_type: "student",
+            selected_resource_id: profile.student.id,
+            summary: `学生分析：${profile.student.display_name}，完成率 ${profile.summary.completion_rate}%，平均得分率 ${profile.summary.average_score_percent ?? "暂无"}%`,
+          }
+        : { current_page: "student_profile", summary: "教师学生分析：可按班级、姓名和日期查看" },
+    );
     return () => setPageContext(null);
   }, [profile, setPageContext]);
 
   const visibleStudents = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return students.filter((student) => !needle || [student.student_no, student.display_name, student.account_username, student.class_name]
-      .some((value) => String(value || "").toLowerCase().includes(needle)));
+    return students.filter(
+      (student) =>
+        !needle ||
+        [student.student_no, student.display_name, student.account_username, student.class_name].some((value) =>
+          String(value || "").toLowerCase().includes(needle),
+        ),
+    );
   }, [query, students]);
-  const weakPapers = useMemo(() => Array.from(new Map((profile?.weak_questions ?? []).map((item) => [item.paper_id, item.paper_title])).entries()), [profile]);
-  const weakQuestions = useMemo(() => (profile?.weak_questions ?? [])
-    .filter((item) => weakPaperId === "all" || item.paper_id === weakPaperId)
-    .sort((a, b) => b.wrong_count - a.wrong_count || b.attempt_count - a.attempt_count)
-    .slice(0, 5), [profile, weakPaperId]);
+
+  const weakPapers = useMemo(
+    () => Array.from(new Map((profile?.weak_questions ?? []).map((item) => [item.paper_id, item.paper_title])).entries()),
+    [profile],
+  );
+
+  const weakQuestions = useMemo(
+    () =>
+      (profile?.weak_questions ?? [])
+        .filter((item) => weakPaperId === "all" || item.paper_id === weakPaperId)
+        .sort((a, b) => b.wrong_count - a.wrong_count || b.attempt_count - a.attempt_count)
+        .slice(0, 5),
+    [profile, weakPaperId],
+  );
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-50 text-slate-950">
-      <header className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white"><Users className="h-5 w-5" /></div>
-          <div><h1 className="text-xl font-semibold">学生详细分析</h1><p className="text-sm text-slate-500">成绩、完成度、每题用时、考试行为与薄弱模块均来自真实答卷记录</p></div>
+    <div className="flex h-full min-h-0 flex-col bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] text-[var(--or-text)]">
+      <header className="flex shrink-0 items-center justify-between border-b border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-3 sm:px-6 sm:py-4">
+        <div className="flex items-center gap-3 sm:gap-3.5">
+          <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--or-primary)] text-[var(--or-on-primary)] shadow-2xs">
+            <Users className="h-5 w-5" />
+          </div>
+          <div>
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight text-[var(--or-text)]">学生详细分析</h1>
+          </div>
         </div>
-        {loading ? <RefreshCw className="h-5 w-5 animate-spin text-slate-400" /> : null}
+        {loading ? <RefreshCw className="h-4 w-4 sm:h-5 sm:w-5 animate-spin text-[var(--or-muted)]" /> : null}
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] overflow-hidden">
-        <aside className="flex min-h-0 flex-col border-r border-slate-200 bg-white p-4">
-          <div className="mb-3 shrink-0 space-y-2 border-b border-slate-200 pb-3">
-            <div className="relative"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索姓名、学号、账号" className="w-full rounded-md border border-slate-300 py-2 pl-8 pr-3 text-sm" /></div>
-            <select value={selectedClassId} onChange={(e) => { profileRequestIdRef.current += 1; setSelectedStudentKey(""); setProfile(null); setSelectedClassId(e.target.value); }} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
+      {/* Mobile View Switcher */}
+      <div className="flex lg:hidden shrink-0 border-b border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2">
+        <div ref={mobileSegmentRef} className="or-g52-mobile-segmented or-g52-mobile-segmented-indicator relative isolate w-full">
+          <SelectionIndicator rootRef={mobileSegmentRef} selector={'[data-state="active"]'} />
+          <button
+            type="button"
+            aria-pressed={mobileTab === "list"}
+            data-state={mobileTab === "list" ? "active" : "inactive"}
+            onClick={() => setMobileTab("list")}
+            className={cn("or-g52-mobile-segmented-btn", mobileTab === "list" && "or-g52-mobile-segmented-btn-active")}
+          >
+            学生列表
+          </button>
+          <button
+            type="button"
+            aria-pressed={mobileTab === "profile"}
+            data-state={mobileTab === "profile" ? "active" : "inactive"}
+            onClick={() => setMobileTab("profile")}
+            className={cn("or-g52-mobile-segmented-btn", mobileTab === "profile" && "or-g52-mobile-segmented-btn-active")}
+          >
+            详细分析
+          </button>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[300px_minmax(0,1fr)] overflow-hidden">
+        <aside
+          className={cn(
+            "min-h-0 flex-col border-r border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3.5",
+            mobileTab === "list" ? "flex flex-1 w-full" : "hidden lg:flex lg:w-[300px]",
+          )}
+        >
+          <div className="mb-3 shrink-0 space-y-2 border-b border-[var(--or-outline)] pb-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-[var(--or-muted)]" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索姓名、学号、账号"
+                className="w-full rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] py-1.5 pl-8 pr-3 text-xs text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none"
+              />
+            </div>
+            <AppSelect
+              value={selectedClassId}
+              onValueChange={(value) => {
+                profileRequestIdRef.current += 1;
+                setSelectedStudentKey("");
+                setProfile(null);
+                setSelectedClassId(value);
+              }}
+              className="w-full rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 py-1.5 text-xs text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none"
+            >
               <option value="">全部班级</option>
-              {classes.map((klass) => <option key={klass.id} value={klass.id}>{classLabel(klass.name, klass.grade)}</option>)}
-            </select>
+              {classes.map((klass) => (
+                <option key={klass.id} value={klass.id}>
+                  {classLabel(klass.name, klass.grade)}
+                </option>
+              ))}
+            </AppSelect>
           </div>
-          <div className="min-h-0 flex-1 space-y-1 overflow-auto">
-            {visibleStudents.map((student) => (
-              <button key={`${student.class_id}:${student.id}`} type="button" onClick={() => setSelectedStudentKey(`${student.class_id}:${student.id}`)}
-                className={`w-full rounded-md px-3 py-2 text-left text-sm ${selectedStudentKey === `${student.class_id}:${student.id}` ? "bg-blue-50 text-blue-800" : "hover:bg-slate-100"}`}>
-                <span className="block font-medium">{student.display_name}</span>
-                <span className="mt-0.5 block text-xs text-slate-500">{student.student_no} · {student.class_name}</span>
-              </button>
-            ))}
-            {!loading && visibleStudents.length === 0 ? <p className="p-4 text-center text-sm text-slate-400">没有匹配的学生</p> : null}
+          <div className="min-h-0 flex-1 space-y-1 overflow-auto pr-0.5">
+            {visibleStudents.map((student) => {
+              const isSelected = selectedStudentKey === `${student.class_id}:${student.id}`;
+              return (
+                <button
+                  key={`${student.class_id}:${student.id}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedStudentKey(`${student.class_id}:${student.id}`);
+                    setMobileTab("profile");
+                  }}
+                  className={`w-full rounded-xl px-3 py-2 text-left text-xs transition-colors ${
+                    isSelected ? "bg-[var(--or-primary-container)] text-[var(--or-on-container)] border border-[var(--or-outline)] font-semibold shadow-2xs" : "hover:bg-[var(--or-block)] text-[var(--or-muted)]"
+                  }`}
+                >
+                  <span className="block font-medium text-[var(--or-text)]">{student.display_name}</span>
+                  <span className="mt-0.5 block text-xs text-[var(--or-muted)]">
+                    {student.student_no} · {student.class_name}
+                  </span>
+                </button>
+              );
+            })}
+            {!loading && visibleStudents.length === 0 ? (
+              <p className="p-4 text-center text-xs text-[var(--or-muted)]">没有匹配的学生</p>
+            ) : null}
           </div>
         </aside>
 
-        <main className="min-h-0 overflow-auto p-6">
-          <section className="mb-5 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <CalendarDays className="mb-2 h-5 w-5 text-slate-500" />
-            <label className="text-xs text-slate-600">开始日期<input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="mt-1 block rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
-            <label className="text-xs text-slate-600">结束日期<input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="mt-1 block rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
-            <button type="button" onClick={() => { setDateFrom(""); setDateTo(""); }} className="rounded-md border border-slate-300 px-3 py-2 text-sm">全部时间</button>
+        <main
+          className={cn(
+            "min-h-0 overflow-auto p-4 sm:p-6 space-y-5",
+            mobileTab === "profile" ? "flex flex-1 flex-col w-full" : "hidden lg:flex lg:flex-1 lg:flex-col",
+          )}
+        >
+          <section className="flex flex-wrap items-end gap-3.5 or-g52-surface-card p-4">
+            <CalendarDays className="mb-2 h-5 w-5 text-[var(--or-on-container)] shrink-0" />
+            <label className="text-xs font-medium text-[var(--or-muted)]">
+              开始日期
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="mt-1 block rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 py-1.5 text-xs text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none"
+              />
+            </label>
+            <label className="text-xs font-medium text-[var(--or-muted)]">
+              结束日期
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="mt-1 block rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 py-1.5 text-xs text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                setDateFrom("");
+                setDateTo("");
+              }}
+              className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
+            >
+              全部时间
+            </button>
           </section>
+
           {profile ? (
-            <div className="mx-auto max-w-6xl space-y-5">
-              <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div><h2 className="text-lg font-semibold">{profile.student.display_name}</h2><p className="mt-1 text-sm text-slate-500">{profile.student.student_no} · {selectedStudent?.class_name}</p></div>{selectedStudent && onAssignStudent ? <button type="button" onClick={() => onAssignStudent({ classId: selectedStudent.class_id, studentId: selectedStudent.id, name: selectedStudent.display_name })} className="rounded-md bg-slate-900 px-3 py-2 text-sm text-white">布置练习</button> : null}</section>
-              <section className="grid gap-4 md:grid-cols-4">
-                {[
-                  { label: "考试完成率", value: `${profile.summary.completion_rate}%`, icon: BookOpen, color: "text-blue-600" },
-                  { label: "已发布成绩平均得分率", value: profile.summary.average_score_percent == null ? "暂无" : `${profile.summary.average_score_percent}%`, icon: TrendingUp, color: "text-emerald-600" },
-                  { label: "平均每题答题时间", value: formatSeconds(profile.summary.average_time_per_question_seconds), icon: Clock3, color: "text-amber-600" },
-                  { label: "考试行为事件（平均每场）", value: profile.summary.behavior_event_average_per_exam.toFixed(1), icon: ShieldAlert, color: profile.summary.behavior_event_average_per_exam ? "text-rose-600" : "text-slate-500" },
-                ].map(({ label, value, icon: Icon, color }) => <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><Icon className={`h-5 w-5 ${color}`} /><p className="mt-3 text-2xl font-bold">{value}</p><p className="mt-1 text-xs text-slate-500">{label}</p></div>)}
+            <div className="mx-auto max-w-6xl space-y-6">
+              <button
+                type="button"
+                onClick={() => setMobileTab("list")}
+                className="inline-flex items-center gap-1 text-xs font-medium text-[var(--or-on-container)] hover:text-[var(--or-on-container)] lg:hidden"
+              >
+                ← 返回学生列表
+              </button>
+              <section className="flex flex-wrap items-center justify-between gap-3 or-g52-surface-card p-5">
+                <div>
+                  <h2 className="text-xl font-bold text-[var(--or-text)] tracking-tight">{profile.student.display_name}</h2>
+                  <p className="mt-1 text-xs text-[var(--or-muted)]">
+                    {profile.student.student_no} · {selectedStudent?.class_name}
+                  </p>
+                </div>
+                {selectedStudent && onAssignStudent ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onAssignStudent({
+                        classId: selectedStudent.class_id,
+                        studentId: selectedStudent.id,
+                        name: selectedStudent.display_name,
+                      })
+                    }
+                    className="inline-flex items-center justify-center rounded-lg bg-[var(--or-primary)] px-4 py-2 text-xs font-medium text-[var(--or-on-primary)] hover:bg-[var(--or-primary)] transition-colors shadow-2xs"
+                  >
+                    布置练习
+                  </button>
+                ) : null}
               </section>
-              <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="font-semibold">个人分析维度</h3>
-                <div className="mt-3 grid gap-3 md:grid-cols-5">{(profile.radar ?? []).map((axis) => <div key={axis.id}><div className="flex justify-between text-xs"><span>{axis.label}</span><b>{axis.value}%</b></div><div className="mt-1 h-2 overflow-hidden rounded bg-slate-100"><div className="h-full bg-blue-600" style={{ width: `${Math.max(0, Math.min(100, axis.value))}%` }} /></div></div>)}</div>
+
+              {/* 4 Core Stat Cards - Strictly static, no hover lift */}
+              <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+                <G52StatCard
+                  label="考试完成率"
+                  value={`${profile.summary.completion_rate}%`}
+                  icon={<BookOpen className="h-5 w-5 text-[var(--or-on-container)]" />}
+                  valueClassName="text-[var(--or-on-container)]"
+                />
+                <G52StatCard
+                  label="已发布成绩平均得分率"
+                  value={profile.summary.average_score_percent == null ? "暂无" : `${profile.summary.average_score_percent}%`}
+                  icon={<TrendingUp className="h-5 w-5 text-[var(--or-on-success)]" />}
+                  valueClassName="text-[var(--or-on-success)]"
+                />
+                <G52StatCard
+                  label="平均每题答题时间"
+                  value={formatSeconds(profile.summary.average_time_per_question_seconds)}
+                  icon={<Clock3 className="h-5 w-5 text-[var(--or-on-warning)]" />}
+                  valueClassName="text-[var(--or-on-warning)]"
+                />
+                <G52StatCard
+                  label="考试行为事件（平均每场）"
+                  value={profile.summary.behavior_event_average_per_exam.toFixed(1)}
+                  icon={<ShieldAlert className={`h-5 w-5 ${profile.summary.behavior_event_average_per_exam ? "text-[var(--or-on-error)]" : "text-[var(--or-muted)]"}`} />}
+                  valueClassName={profile.summary.behavior_event_average_per_exam ? "text-[var(--or-on-error)]" : "text-[var(--or-muted)]"}
+                />
               </section>
-              <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between"><h3 className="font-semibold">考试记录</h3><button type="button" onClick={() => setWeakModalOpen(true)} className="rounded-md bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">查看薄弱题排名</button></div>
-                <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-xs text-slate-500"><tr><th className="py-2">考试</th><th>类型</th><th>状态</th><th>得分率</th><th>行为事件</th><th>操作</th></tr></thead><tbody>{profile.recent_exams.map((exam) => <tr key={exam.attempt_id} className="border-t border-slate-100"><td className="py-3 font-medium">{exam.title}</td><td>{exam.submission_mode === "offline_scan" ? "线下照片" : "在线答题"}</td><td>{{ submitted: "已提交", in_progress: "答题中", not_started: "未开始" }[exam.status] ?? exam.status}</td><td>{exam.score_percent == null ? "待教师发布" : `${exam.score_percent}%`}</td><td>{exam.integrity_event_count || 0}</td><td><button type="button" disabled={!onOpenPaper} className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50" onClick={() => onOpenPaper?.({ paperId: exam.paper_id, attemptId: exam.attempt_id, title: exam.title })}>查看与批改</button></td></tr>)}</tbody></table>{profile.recent_exams.length === 0 ? <p className="py-8 text-center text-sm text-slate-400">所选时间内暂无记录</p> : null}</div>
+
+              <section className="or-g52-surface-card p-5">
+                <h3 className="font-semibold text-[var(--or-text)] text-sm tracking-tight">个人分析维度</h3>
+                <div className="mt-3.5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                  {(profile.radar ?? []).map((axis) => (
+                    <div key={axis.id} className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3">
+                      <div className="flex justify-between text-xs font-medium text-[var(--or-muted)]">
+                        <span>{axis.label}</span>
+                        <b className="font-mono text-[var(--or-text)]">{axis.value}%</b>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--or-inset)]">
+                        <div
+                          className="h-full rounded-full bg-[var(--or-primary)]"
+                          style={{ width: `${Math.max(0, Math.min(100, axis.value))}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="or-g52-surface-card p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--or-outline)] pb-3.5">
+                  <h3 className="font-semibold text-[var(--or-text)] text-sm tracking-tight">考试记录</h3>
+                  <button
+                    type="button"
+                    onClick={() => setWeakModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--or-error-container)] border border-[var(--or-error)] px-3 py-1.5 text-xs font-medium text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] transition-colors"
+                  >
+                    查看薄弱题排名
+                  </button>
+                </div>
+                <div className="mt-3.5 overflow-x-auto">
+                  <table className="w-full or-g52-table text-left">
+                    <thead>
+                      <tr>
+                        <th className="font-semibold">考试</th>
+                        <th className="font-semibold">类型</th>
+                        <th className="font-semibold">状态</th>
+                        <th className="font-semibold text-right">得分率</th>
+                        <th className="font-semibold text-right">行为事件</th>
+                        <th className="font-semibold text-right">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {profile.recent_exams.map((exam) => (
+                        <tr key={exam.attempt_id}>
+                          <td className="font-semibold text-[var(--or-text)]">{exam.title}</td>
+                          <td className="text-[var(--or-muted)]">
+                            {exam.submission_mode === "offline_scan" ? "线下照片" : "在线答题"}
+                          </td>
+                          <td>
+                            <G52Pill
+                              variant={
+                                exam.status === "submitted"
+                                  ? "success"
+                                  : exam.status === "in_progress"
+                                    ? "warning"
+                                    : "neutral"
+                              }
+                            >
+                              {{ submitted: "已提交", in_progress: "答题中", not_started: "未开始" }[exam.status] ??
+                                exam.status}
+                            </G52Pill>
+                          </td>
+                          <td className="text-right font-mono text-[var(--or-muted)]">
+                            {exam.score_percent == null ? "待教师发布" : `${exam.score_percent}%`}
+                          </td>
+                          <td className="text-right font-mono text-[var(--or-muted)]">{exam.integrity_event_count || 0}</td>
+                          <td className="text-right">
+                            <button
+                              type="button"
+                              disabled={!onOpenPaper}
+                              className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 py-1 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
+                              onClick={() =>
+                                onOpenPaper?.({
+                                  paperId: exam.paper_id,
+                                  attemptId: exam.attempt_id,
+                                  title: exam.title,
+                                })
+                              }
+                            >
+                              查看与批改
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {profile.recent_exams.length === 0 ? (
+                    <p className="py-8 text-center text-xs text-[var(--or-muted)]">所选时间内暂无记录</p>
+                  ) : null}
+                </div>
               </section>
             </div>
-          ) : <div className="flex h-64 items-center justify-center text-sm text-slate-400">请从左侧选择学生</div>}
+          ) : (
+            <div className="flex h-64 items-center justify-center text-sm text-[var(--or-muted)]">
+              请从左侧选择学生
+            </div>
+          )}
         </main>
       </div>
 
-      {weakModalOpen && profile ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="薄弱题目分析"><section className="flex h-[85vh] w-[85vw] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><header className="flex items-center justify-between border-b border-slate-200 px-6 py-4"><div><h2 className="text-lg font-semibold">{profile.student.display_name} · 易错题前 5</h2><p className="text-sm text-slate-500">按真实错误次数排序，可按试卷筛选</p></div><button type="button" aria-label="关闭薄弱题目" onClick={() => setWeakModalOpen(false)} className="rounded p-2 hover:bg-slate-100"><X className="h-5 w-5" /></button></header><div className="min-h-0 flex-1 overflow-auto p-6"><select value={weakPaperId} onChange={(e) => setWeakPaperId(e.target.value)} className="mb-4 rounded-md border border-slate-300 px-3 py-2 text-sm"><option value="all">全部试卷</option>{weakPapers.map(([id, title]) => <option key={id} value={id}>{title}</option>)}</select><div className="space-y-3">{weakQuestions.map((item, index) => <article key={`${item.paper_id}:${item.question_id}:${item.question_version ?? "unknown"}`} className="rounded-xl border border-rose-100 bg-rose-50/40 p-4"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-rose-600 px-2 py-1 text-xs font-bold text-white">TOP {index + 1}</span><b>{item.paper_title} · {item.header || item.question_id}</b>{item.question_version_label ? <span className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600">{item.question_version_label}</span> : null}{(item.tags ?? []).map((tag) => <span key={tag} className="rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-800">易错：{tag}</span>)}</div>{item.content ? <KatexText text={item.content} className="mt-3 text-sm text-slate-700" /> : null}<p className="mt-3 text-sm text-rose-700">错误 {item.wrong_count} 次 · 出现 {item.attempt_count} 次{item.average_score_percent == null ? "" : ` · 平均得分率 ${item.average_score_percent}%`}</p></article>)}{weakQuestions.length === 0 ? <p className="py-12 text-center text-sm text-slate-400">暂无已确认错题</p> : null}</div></div></section></div> : null}
+      {weakModalOpen && profile ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-2xs p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="薄弱题目分析"
+        >
+          <section className="flex h-full w-full sm:h-[85vh] sm:w-[85vw] max-w-5xl flex-col overflow-hidden rounded-none sm:rounded-2xl border-0 sm:border border-[var(--or-outline)] bg-[var(--or-card)] shadow-2xl">
+            <header className="flex items-center justify-between border-b border-[var(--or-outline)] px-4 py-3 sm:px-6 sm:py-4">
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-[var(--or-text)] tracking-tight">
+                  {profile.student.display_name} · 易错题前 5
+                </h2>
+                <p className="text-xs text-[var(--or-muted)]">按真实错误次数排序，可按试卷筛选</p>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭薄弱题目"
+                onClick={() => setWeakModalOpen(false)}
+                className="rounded-lg p-1.5 text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-muted)] transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+            <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6 space-y-4">
+              <AppSelect
+                value={weakPaperId}
+                onValueChange={(value) => setWeakPaperId(value)}
+                className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-xs text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none"
+              >
+                <option value="all">全部试卷</option>
+                {weakPapers.map(([id, title]) => (
+                  <option key={id} value={id}>
+                    {title}
+                  </option>
+                ))}
+              </AppSelect>
+              <div className="space-y-3.5">
+                {weakQuestions.map((item, index) => (
+                  <article
+                    key={`${item.paper_id}:${item.question_id}:${item.question_version ?? "unknown"}`}
+                    className="rounded-xl border border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_40%,transparent)] p-4 space-y-2.5"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="or-g52-pill or-g52-pill-error font-bold text-xs !bg-rose-600 !text-white">
+                        TOP {index + 1}
+                      </span>
+                      <b className="text-sm text-[var(--or-text)]">
+                        {item.paper_title} · {item.header || item.question_id}
+                      </b>
+                      {item.question_version_label ? (
+                        <span className="or-g52-pill or-g52-pill-neutral !text-xs">
+                          {item.question_version_label}
+                        </span>
+                      ) : null}
+                      {(item.tags ?? []).map((tag) => (
+                        <span key={tag} className="or-g52-pill or-g52-pill-warning !text-xs">
+                          易错：{tag}
+                        </span>
+                      ))}
+                    </div>
+                    {item.content ? (
+                      <KatexText text={item.content} className="mt-2 text-sm text-[var(--or-muted)]" />
+                    ) : null}
+                    <p className="text-xs font-medium text-[var(--or-on-error)]">
+                      错误 {item.wrong_count} 次 · 出现 {item.attempt_count} 次
+                      {item.average_score_percent == null ? "" : ` · 平均得分率 ${item.average_score_percent}%`}
+                    </p>
+                  </article>
+                ))}
+                {weakQuestions.length === 0 ? (
+                  <p className="py-12 text-center text-xs text-[var(--or-muted)]">暂无已确认错题</p>
+                ) : null}
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

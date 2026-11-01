@@ -561,142 +561,22 @@ def import_merged_yaml(
     if not ts or not tc:
         raise ValueError("必须提供 target_subject 与 target_collection")
     ns = f"{ts}/{tc}"
-    raw = yaml.safe_load(yaml_text)
-    if raw is None:
-        raise ValueError("Empty YAML")
-    if not isinstance(raw, dict):
-        raise ValueError("Merged import expects a mapping with optional questions: and groups:")
-    questions = raw.get("questions") or []
-    groups = raw.get("groups") or []
-    if not isinstance(questions, list) or not isinstance(groups, list):
-        raise ValueError("Merged import questions and groups must be lists")
-
-    records: list[tuple[str, BankRecord, dict[str, Any]]] = []
-    seen_ids: set[str] = set()
-    for question in questions:
-        if not isinstance(question, dict):
-            raise ValueError("Merged import question must be a mapping")
-        source_meta = question.get("metadata") or {}
-        if not isinstance(source_meta, dict):
-            raise ValueError("Question metadata must be a mapping")
-        metadata = dict(source_meta)
-        metadata.setdefault("source", "人工导入")
-        record = QuestionItem.model_validate({**question, "metadata": metadata})
-        if record.id in seen_ids:
-            raise ValueError(f"题集中存在重复题目编号: {record.id}")
-        seen_ids.add(record.id)
-        records.append((record.id, record, _dump_record_yaml(record)))
-
-    for group in groups:
-        if not isinstance(group, dict):
-            raise ValueError("Merged import group must be a mapping")
-        group_id = str(group.get("group_id") or "").strip()
-        if not group_id:
-            raise ValueError("group without group_id")
-        inner_type = group.get("type")
-        if inner_type not in (
-            "choice",
-            "single_choice",
-            "multiple_choice",
-            "fill",
-            "judge",
-            "short_answer",
-            "reasoning",
-            "essay",
-        ):
-            raise ValueError(f"invalid group inner type: {inner_type!r}")
-        items = group.get("items") or []
-        if not isinstance(items, list):
-            raise ValueError("Group items must be a list")
-        record = QuestionGroupRecord(
-            id=group_id,
-            type="group",
-            material=str(group.get("material") or ""),
-            unified=inner_type,
-            items=items,
-        )
-        if record.id in seen_ids:
-            raise ValueError(f"题集中存在重复题目编号: {record.id}")
-        seen_ids.add(record.id)
-        records.append((record.id, record, _dump_record_yaml(record)))
-
     target = library_root_for_namespace(project_root, ns)
     assert_within_project(project_root, target)
-    extra_files = extra_files or {}
-    for path in extra_files:
-        assert_within_project(project_root, path)
-        try:
-            path.resolve().relative_to((project_root / "resource").resolve())
-        except ValueError as exc:
-            raise ValueError("导入资源必须位于项目 resource 目录中") from exc
 
-    written = 0
+    from solaire.web.bank_write_plan import (
+        capture_library_snapshot,
+        plan_merged_import,
+        validate_write_plan,
+        apply_write_plan,
+    )
     with bank_write_lock(target):
-        library_index = read_bank_library(project_root, target)
-        existing_documents = {document.path.resolve(): document for document in library_index.documents}
-        existing_ids: dict[str, tuple[Path, int]] = {}
-        for document in library_index.documents:
-            path = document.path
-            resolved_path = document.path.resolve()
-            for index, existing_record in enumerate(document.records):
-                if existing_record.id in existing_ids:
-                    other_path, _ = existing_ids[existing_record.id]
-                    raise ValueError(
-                        f"题集中存在重复题目编号: {existing_record.id} ({other_path.name}, {path.name})"
-                    )
-                existing_ids[existing_record.id] = (resolved_path, index)
+        snapshot = capture_library_snapshot(project_root, target)
+        plan = plan_merged_import(snapshot, yaml_text, extra_files=extra_files)
+        validate_write_plan(snapshot, plan)
+        apply_write_plan(project_root, plan)
 
-        planned_by_path: dict[Path, str] = {}
-        path_claims: dict[Path, str] = {}
-        updated_raw: dict[Path, Any] = {}
-        for qid, _record, record_data in records:
-            location = existing_ids.get(qid)
-            if location is not None:
-                path, index = location
-                if path in planned_by_path:
-                    raise ValueError(f"导入题目路径与其他题目写入冲突: {path.name}")
-                document = existing_documents[path]
-                working_document = BankDocument(
-                    document.path,
-                    document.text,
-                    updated_raw.get(path, document.raw),
-                    document.records,
-                )
-                updated_raw[path] = replace_record_data(working_document, index, record_data)
-                written += 1
-                continue
-
-            path = (target / f"{_safe_filename_id(qid)}.yaml").resolve()
-            assert_within_project(project_root, path)
-            if path.exists():
-                raise ValueError(f"导入题目目标文件已存在，不能覆盖未匹配的稳定题号: {path.name}")
-            library_index.require_identity_complete(qid)
-            prior_claim = path_claims.get(path)
-            if prior_claim is not None and prior_claim != qid:
-                raise ValueError(f"导入题目文件名冲突: {prior_claim} 与 {qid}")
-            if path in updated_raw:
-                raise ValueError(f"导入题目路径与已有题目更新冲突: {path.name}")
-            path_claims[path] = qid
-            planned_by_path[path] = yaml.safe_dump(record_data, allow_unicode=True, sort_keys=False)
-            written += 1
-
-        yaml_files = dict(planned_by_path)
-        yaml_files.update(
-            {
-                path: yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-                for path, data in updated_raw.items()
-            }
-        )
-        validate_bank_import(project_root, target, yaml_files)
-
-        files_to_apply: dict[Path, str | bytes] = dict(yaml_files)
-        for path, data in extra_files.items():
-            if path.resolve() in files_to_apply:
-                raise ValueError(f"导入资源路径冲突: {path.name}")
-            files_to_apply[path] = data
-        apply_bank_import(project_root, files_to_apply)
-
-    return {"written": written, "namespace": ns, "subject": ts, "collection": tc}
+    return {"written": plan.written_count, "namespace": ns, "subject": ts, "collection": tc}
 
 
 def collections_list(project_root: Path) -> list[dict[str, str]]:

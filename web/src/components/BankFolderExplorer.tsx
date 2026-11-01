@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
-import { Folder } from 'lucide-react';
+import { Folder, Share2, Layers, X, ArrowLeft } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { apiPost } from '../api/client';
 import { confirmDialog } from '../lib/confirmDialog';
@@ -18,14 +18,32 @@ import {
   toggleFolderOrFilteredSelection,
 } from '../pages/bank/bankOperationModel';
 import { BankFileGrid } from './BankFileGrid';
+import '../ui-redesign/g48/g48-bank.css';
+import { Select as AppSelect } from "./ui/select";
 
 export type { BankFolders };
 type Item = { qualified_id: string; content_preview?: string };
-const buttonClass = 'rounded border border-slate-300 px-2 py-1.5 text-xs hover:bg-slate-100 disabled:opacity-50';
+const buttonClass = 'or-button or-pill or-g48-pill-btn px-3 py-1.5 text-sm font-medium';
 
-export function BankFolderExplorer<T extends Item>({ data, items, allItems, selectedIds, onChange, onError, renderItem, onSelectIds, onOpenItem, onRefresh }: {
-  data: BankFolders; items: T[]; allItems?: T[]; selectedIds: string[]; onChange: (data: BankFolders) => void;
-  onError: (message: string | null) => void; renderItem: (item: T) => ReactNode;
+export function BankFolderExplorer<T extends Item>({
+  data,
+  items,
+  allItems,
+  selectedIds,
+  onChange,
+  onError,
+  renderItem,
+  onSelectIds,
+  onOpenItem,
+  onRefresh,
+}: {
+  data: BankFolders;
+  items: T[];
+  allItems?: T[];
+  selectedIds: string[];
+  onChange: (data: BankFolders) => void;
+  onError: (message: string | null) => void;
+  renderItem: (item: T) => ReactNode;
   onSelectIds?: (ids: string[]) => void;
   onOpenItem?: (id: string) => void;
   onRefresh?: () => void | Promise<void>;
@@ -47,6 +65,7 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
   const blockClickUntil = useRef(0);
   const [dropHighlight, setDropHighlight] = useState<string | null>(null);
   const transferType = 'application/x-eh-bank';
+
   async function perform(body: { action: string; path: string; target?: string; qualified_ids?: string[] }) {
     if (busy) return;
     const snapshot = {
@@ -127,16 +146,19 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
+
   function cut(folder = focusedFolder) {
     if (busy) return;
     setClipboard(folder ? { folder } : { ids: [...selectedIds] }); setMenu(null);
   }
+
   function paste(target = selectedFolder) {
     if (busy || !clipboard) return;
     const snapClipboard = { ...clipboard, ids: clipboard.ids ? [...clipboard.ids] : undefined };
     const snapTarget = target;
     void perform(snapClipboard.folder ? { action: 'move_folder', path: snapClipboard.folder, target: snapTarget } : { action: 'move', path: snapTarget, qualified_ids: snapClipboard.ids });
   }
+
   function drop(event: React.DragEvent, target: string) {
     event.preventDefault(); event.stopPropagation();
     fileDrag.current = null; setDropHighlight(null);
@@ -148,6 +170,7 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
       else if (Array.isArray(value.ids)) void perform({ action: 'move', path: snapTarget, qualified_ids: [...value.ids] });
     } catch { onError('无法读取拖动内容，请拖动本题库中的题目或文件夹'); }
   }
+
   function startDrag(event: React.DragEvent, id?: string, folder?: string) {
     setDropHighlight(null);
     const ids = id && selectedIds.includes(id) ? selectedIds : id ? [id] : [];
@@ -157,6 +180,7 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData(transferType, JSON.stringify(folder ? { folder } : { ids }));
   }
+
   function pointerDrag(event: React.PointerEvent) {
     const source = fileDrag.current;
     if (!source || Math.hypot(event.clientX-source.x,event.clientY-source.y) < 8) return;
@@ -166,6 +190,7 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
     const target = folder ?? (hit?.closest('[data-file-area]') ? selectedFolder : hit?.closest('[data-drop-root]') ? '' : null);
     setDropHighlight(target);
   }
+
   function finishPointerDrag(event: { clientX: number; clientY: number }) {
     const source = fileDrag.current;
     fileDrag.current = null; setDropHighlight(null);
@@ -179,6 +204,7 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
       void perform(source.folder ? { action:'move_folder',path:source.folder,target:snapTarget } : { action:'move',path:snapTarget,qualified_ids:source.ids ? [...source.ids] : [] });
     }
   }
+
   async function share(action: 'create' | 'redeem' | 'revoke', path = focusedFolder || selectedFolder) {
     setBusy(true); onError(null); setMenu(null);
     try {
@@ -189,6 +215,7 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
+
   function toggleAll(path: string) {
     const ids = items.filter(item => !path || (data.assignments[item.qualified_id] ?? '') === path || (data.assignments[item.qualified_id] ?? '').startsWith(path + '/')).map(item => item.qualified_id);
     onSelectIds?.(toggleFolderOrFilteredSelection(selectedIds, ids));
@@ -274,129 +301,541 @@ export function BankFolderExplorer<T extends Item>({ data, items, allItems, sele
   }
 
   function branch(path: string): ReactNode {
-    return <ul className={path ? 'ml-2 border-l border-slate-200 pl-2' : 'p-2'}>
-      {(index.children.get(path) ?? []).map(child => <li key={child}>
+    return <ul className={path ? 'ml-2 border-l border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] pl-2' : 'p-2'}>
+      {(index.children.get(path) ?? []).map(child => <li key={child} className="mb-1">
         <details open>
-          <summary data-folder={child} draggable onDragStart={e => startDrag(e, undefined, child)} onDragOver={e => e.preventDefault()} onDrop={e => drop(e, child)} onContextMenu={e => { e.preventDefault(); setFocusedFolder(child); setMenu({ x: e.clientX, y: e.clientY, folder: child }); }} className={`cursor-pointer break-all rounded px-1 py-2 text-sm ${selectedFolder === child || dropHighlight === child ? 'bg-slate-200' : 'hover:bg-slate-100'}`} onClick={() => { setSelectedFolder(child); setName(child); }}>
-            <Folder className="mr-1 inline h-4 w-4 text-amber-600" aria-hidden />{child.split('/').at(-1)}
-            {onSelectIds ? <button type="button" className="ml-2 rounded border px-1 text-xs" onClick={event => { event.preventDefault(); event.stopPropagation(); toggleAll(child); }}>全选 / 取消</button> : null}
+          <summary
+            data-folder={child}
+            draggable
+            onDragStart={e => startDrag(e, undefined, child)}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => drop(e, child)}
+            onContextMenu={e => { e.preventDefault(); setFocusedFolder(child); setMenu({ x: e.clientX, y: e.clientY, folder: child }); }}
+            className={`cursor-pointer break-all rounded-lg px-2 py-1.5 text-sm font-medium transition-colors ${
+              selectedFolder === child || dropHighlight === child ? 'bg-[var(--or-primary-container)] text-[var(--or-on-container)]' : 'text-[var(--or-text)] hover:bg-[var(--or-block)]'
+            }`}
+            onClick={() => { setSelectedFolder(child); setName(child); }}
+          >
+            <Folder className="mr-1.5 inline h-4 w-4 text-[var(--or-on-warning)]" aria-hidden />
+            <span>{child.split('/').at(-1)}</span>
+            {onSelectIds ? (
+              <button
+                type="button"
+                className="or-button or-pill or-g48-pill-btn ml-2 px-2.5 py-1 text-sm text-[var(--or-muted)] hover:text-[var(--or-text)]"
+                onClick={event => { event.preventDefault(); event.stopPropagation(); toggleAll(child); }}
+              >
+                全选 / 取消
+              </button>
+            ) : null}
           </summary>
           {branch(child)}
         </details>
       </li>)}
-      {(index.questions.get(path) ?? []).map(item => <div key={item.qualified_id} data-question={item.qualified_id} draggable onDragStart={e => startDrag(e, item.qualified_id)} onContextMenu={e => { e.preventDefault(); if (!selectedIds.includes(item.qualified_id)) onSelectIds?.([item.qualified_id]); setFocusedFolder(''); setMenu({ x: e.clientX, y: e.clientY, folder: null, id: item.qualified_id }); }}>{renderItem(item)}</div>)}
+      {(index.questions.get(path) ?? []).map(item => (
+        <div
+          key={item.qualified_id}
+          data-question={item.qualified_id}
+          draggable
+          onDragStart={e => startDrag(e, item.qualified_id)}
+          onContextMenu={e => {
+            e.preventDefault();
+            if (!selectedIds.includes(item.qualified_id)) onSelectIds?.([item.qualified_id]);
+            setFocusedFolder('');
+            setMenu({ x: e.clientX, y: e.clientY, folder: null, id: item.qualified_id });
+          }}
+        >
+          {renderItem(item)}
+        </div>
+      ))}
     </ul>;
   }
 
-  return <div className="flex min-h-0 flex-1 flex-col" onClick={() => setMenu(null)} onClickCapture={e => { if (performance.now() < blockClickUntil.current) { e.preventDefault(); e.stopPropagation(); } }} onPointerDown={e => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest('input,select,textarea')) return;
-    const element = (e.target as HTMLElement).closest<HTMLElement>('[data-folder],[data-question]');
-    if (!element) return;
-    const folder = element.dataset.folder, id = element.dataset.question;
-    fileDrag.current = { x:e.clientX,y:e.clientY,folder,ids:id ? selectedIds.includes(id) ? [...selectedIds] : [id] : undefined,moved:false };
-  }} onPointerMove={pointerDrag} onPointerUp={finishPointerDrag} onDragEnd={finishPointerDrag} onPointerCancel={() => { if (!fileDrag.current?.moved) fileDrag.current = null; setDropHighlight(null); }}>
-    <div className="space-y-2 border-b p-2">
-      <p className="truncate text-xs font-medium text-slate-700" title={selectedFolder || '根目录（未分组）'}>当前：{selectedFolder || '全部目录'}</p>
-      <div className="flex flex-wrap gap-1">
-        {onSelectIds ? <button type="button" className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100" onClick={() => toggleAll('')}>{items.length > 0 && items.every(item => selectedIds.includes(item.qualified_id)) ? '取消全选' : '全选当前结果'}</button> : null}
-        {onSelectIds ? <button type="button" className={buttonClass} onClick={() => setExploring(true)}>文件管理器</button> : null}
-      </div>
-      <details className="rounded border border-slate-200 bg-slate-50 p-2">
-        <summary className="cursor-pointer text-xs font-medium text-slate-700">目录操作与分享</summary>
-        <div className="mt-2 space-y-2">
-      <label className="block text-xs">目录名称 / 子目录路径<input aria-label="目录路径" value={name} onChange={e => setName(e.target.value)} placeholder="数学/函数" className="mt-1 w-full rounded border px-2 py-1.5" /></label>
-      <div className="flex flex-wrap gap-1">
-        <button type="button" className={buttonClass} disabled={busy || !name.trim()} onClick={() => void act('create')}>新建目录</button>
-        <button type="button" className={buttonClass} disabled={busy || !selectedFolder || !name.trim()} onClick={() => void act('rename')}>重命名</button>
-        <button type="button" className={buttonClass} disabled={busy || !selectedFolder} onClick={() => void act('remove')}>删除目录</button>
-      </div>
-      <select aria-label="移动到目录" value={destination} onChange={e => setDestination(e.target.value)} className="w-full rounded border px-2 py-1.5 text-xs"><option value="">根目录（未分组）</option>{data.folders.map(path => <option key={path} value={path}>{path}</option>)}</select>
-      <button type="button" className={buttonClass} disabled={busy || !selectedIds.length} onClick={() => void act('move')}>移动已选 {selectedIds.length} 题</button>
-      <button type="button" className={buttonClass} disabled={busy || !selectedFolder} onClick={() => void perform({ action: 'move_folder', path: selectedFolder, target: destination })}>移动当前目录及子目录</button>
-      <div className="space-y-1 border-t pt-2"><button className={buttonClass} disabled={busy || !selectedFolder} onClick={() => void share('create', selectedFolder)}>生成文件夹邀请CDK</button>
-        {shareCode ? <><input aria-label="生成的邀请码" readOnly value={shareCode} className="w-full rounded border p-1 text-xs" onFocus={e => e.target.select()} /><button className={buttonClass} disabled={busy} onClick={() => void share('revoke')}>撤销邀请</button></> : null}
-        <input aria-label="输入文件夹邀请CDK" value={invitation} onChange={e => setInvitation(e.target.value)} placeholder="输入其他教师的CDK" className="w-full rounded border p-1 text-xs" /><button className={buttonClass} disabled={busy || !invitation.trim()} onClick={() => void share('redeem')}>导入分享文件夹</button></div>
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      onClick={() => setMenu(null)}
+      onClickCapture={e => {
+        if (performance.now() < blockClickUntil.current) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+      onPointerDown={e => {
+        if (e.button !== 0 || (e.target as HTMLElement).closest('input,select,textarea')) return;
+        const element = (e.target as HTMLElement).closest<HTMLElement>('[data-folder],[data-question]');
+        if (!element) return;
+        const folder = element.dataset.folder, id = element.dataset.question;
+        fileDrag.current = {
+          x: e.clientX,
+          y: e.clientY,
+          folder,
+          ids: id ? selectedIds.includes(id) ? [...selectedIds] : [id] : undefined,
+          moved: false,
+        };
+      }}
+      onPointerMove={pointerDrag}
+      onPointerUp={finishPointerDrag}
+      onDragEnd={finishPointerDrag}
+      onPointerCancel={() => {
+        if (!fileDrag.current?.moved) fileDrag.current = null;
+        setDropHighlight(null);
+      }}
+    >
+      <div className="space-y-2 border-b border-[var(--or-outline)] p-3">
+        <p className="truncate text-[13px] font-semibold text-[var(--or-muted)]" title={selectedFolder || '根目录（未分组）'}>
+          当前：<span className="font-normal text-[var(--or-muted)]">{selectedFolder || '全部目录'}</span>
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {onSelectIds ? (
+            <button
+              type="button"
+              className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3.5 py-1.5 text-sm font-semibold"
+              onClick={() => toggleAll('')}
+            >
+              {items.length > 0 && items.every(item => selectedIds.includes(item.qualified_id)) ? '取消全选' : '全选当前结果'}
+            </button>
+          ) : null}
+          {onSelectIds ? (
+            <button
+              type="button"
+              className={`${buttonClass} or-g48-pill-dropdown`}
+              onClick={() => setExploring(true)}
+            >
+              <Layers className="h-4 w-4 shrink-0 text-[var(--or-muted)]" aria-hidden />
+              <span className="text-center">文件管理器</span>
+              <span className="h-4 w-4 shrink-0" aria-hidden />
+            </button>
+          ) : null}
         </div>
-      </details>
-      {message ? <p role="status" className="text-xs text-emerald-700">{message}</p> : null}
-    </div>
-    <nav data-drop-root aria-label="题目文件夹" className="min-h-0 flex-1 overflow-auto" onClick={e => { if (!(e.target as HTMLElement).closest('li,button,input,summary')) { onSelectIds?.([]); setFocusedFolder(''); } }} onDragOver={e => e.preventDefault()} onDrop={e => drop(e, '')}>
-      <button type="button" className="m-1 w-[calc(100%-0.5rem)] rounded border border-slate-200 bg-white p-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-100" onDrop={e => drop(e, '')} onClick={() => { setSelectedFolder(''); setName(''); }}>全部目录 · {items.length} 道匹配题目</button>
-      {branch('')}
-      {!items.length ? <p className="p-3 text-xs text-slate-500">暂无匹配题目；可调整搜索与筛选，或新建题目。</p> : null}
-    </nav>
-    {exploring ? <Dialog.Root open={exploring} onOpenChange={setExploring}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-black/30" /><Dialog.Content aria-label="题库文件管理器" aria-describedby={undefined} className="fixed inset-[5%] z-50 flex flex-col rounded-xl border bg-white p-4 shadow-2xl">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Dialog.Title asChild><h2 className="mr-auto font-semibold">题库文件管理器 · {selectedFolder || '根目录'}</h2></Dialog.Title>
-        <button className={buttonClass} onClick={() => { setSelectedFolder(''); setName(''); }}>返回根目录</button>
-        <button className={buttonClass} disabled={!selectedFolder} onClick={() => { setSelectedFolder(selectedFolder.split('/').slice(0,-1).join('/')); setFocusedFolder(''); }}>上一级</button>
-        <button className={buttonClass} onClick={() => toggleAll(selectedFolder)}>全选 / 取消全选</button>
-        <select aria-label="文件管理器移动目标" value={destination} onChange={event => setDestination(event.target.value)} className="max-w-48 rounded border p-1"><option value="">根目录</option>{data.folders.map(path => <option key={path}>{path}</option>)}</select>
-        <button className={buttonClass} disabled={busy || !selectedIds.length} onClick={() => void act('move')}>移动已选 {selectedIds.length} 题</button>
-        <button className={buttonClass} disabled={!focusedFolder && !selectedIds.length} onClick={() => cut()}>剪切</button>
-        <button className={buttonClass} disabled={busy || !clipboard} onClick={() => paste()}>粘贴到当前目录</button>
-        <button className={buttonClass} onClick={() => setExploring(false)}>关闭</button>
+        <details className="or-surface or-g48-card rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-3">
+          <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">
+            目录操作与分享
+          </summary>
+          <div className="mt-2.5 space-y-2.5">
+            <label className="block text-sm font-medium text-[var(--or-muted)]">
+              目录名称 / 子目录路径
+              <input
+                aria-label="目录名称 / 子目录路径"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="数学/函数"
+                className="or-input or-g48-input mt-1 w-full py-1.5 text-sm"
+              />
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                className={buttonClass}
+                disabled={busy || !name.trim()}
+                onClick={() => void act('create')}
+              >
+                新建目录
+              </button>
+              <button
+                type="button"
+                className={buttonClass}
+                disabled={busy || !selectedFolder || !name.trim()}
+                onClick={() => void act('rename')}
+              >
+                重命名
+              </button>
+              <button
+                type="button"
+                className="or-button or-button-danger or-pill or-g48-pill-btn or-g48-pill-btn-danger px-3 py-1.5 text-sm"
+                disabled={busy || !selectedFolder}
+                onClick={() => void act('remove')}
+              >
+                删除目录
+              </button>
+            </div>
+            <AppSelect
+              aria-label="移动到目录"
+              value={destination}
+              onValueChange={value => setDestination(value)}
+              className="or-select or-g48-input w-full py-1.5 text-sm bg-[var(--or-card)]"
+            >
+              <option value="">根目录（未分组）</option>
+              {data.folders.map(path => <option key={path} value={path}>{path}</option>)}
+            </AppSelect>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3 py-1.5 text-sm font-medium"
+                disabled={busy || !selectedIds.length}
+                onClick={() => void act('move')}
+              >
+                移动已选 {selectedIds.length} 题
+              </button>
+              <button
+                type="button"
+                className={buttonClass}
+                disabled={busy || !selectedFolder}
+                onClick={() => void perform({ action: 'move_folder', path: selectedFolder, target: destination })}
+              >
+                移动当前目录及子目录
+              </button>
+            </div>
+            <div className="space-y-1.5 border-t border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] pt-2">
+              <button
+                className={`${buttonClass} or-g48-pill-dropdown`}
+                disabled={busy || !selectedFolder}
+                onClick={() => void share('create', selectedFolder)}
+              >
+                <Share2 className="h-4 w-4 shrink-0 text-[var(--or-muted)]" aria-hidden />
+                <span className="text-center">生成文件夹邀请CDK</span>
+                <span className="h-4 w-4 shrink-0" aria-hidden />
+              </button>
+              {shareCode ? (
+                <div className="space-y-1">
+                  <input
+                    aria-label="生成的邀请码"
+                    readOnly
+                    value={shareCode}
+                    className="or-input or-g48-input w-full py-1.5 font-mono text-sm"
+                    onFocus={e => e.target.select()}
+                  />
+                  <button
+                    className="or-button or-button-danger or-pill or-g48-pill-btn or-g48-pill-btn-danger px-3 py-1 text-sm"
+                    disabled={busy}
+                    onClick={() => void share('revoke')}
+                  >
+                    撤销邀请
+                  </button>
+                </div>
+              ) : null}
+              <div className="flex flex-wrap gap-1.5">
+                <input
+                  aria-label="输入文件夹邀请CDK"
+                  value={invitation}
+                  onChange={e => setInvitation(e.target.value)}
+                  placeholder="输入其他教师的CDK"
+                  className="or-input or-g48-input min-w-0 flex-1 py-1.5 text-sm"
+                />
+                <button
+                  className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3 py-1.5 text-sm shrink-0"
+                  disabled={busy || !invitation.trim()}
+                  onClick={() => void share('redeem')}
+                >
+                  导入分享文件夹
+                </button>
+              </div>
+            </div>
+          </div>
+        </details>
+        {message ? (
+          <p role="status" className="text-[13px] font-medium text-[var(--or-on-success)]">
+            {message}
+          </p>
+        ) : null}
       </div>
-      <p className="mb-2 text-xs text-slate-500">空白取消选择；Ctrl多选、Shift范围选择、空白框选；双击打开；拖到目录移动（包含子目录）；右键菜单，Ctrl+X/V剪切粘贴，Esc取消选择。</p>
-      {message ? <p role="status" className="mb-2 text-xs text-emerald-700">{message}</p> : null}
-      {shareCode ? <label className="mb-2 text-xs">邀请CDK（7天有效）<input readOnly value={shareCode} aria-label="文件管理器邀请码" onFocus={e => e.target.select()} className="ml-2 rounded border p-1" /></label> : null}
-      {editing ? <form className="mb-3 flex flex-wrap items-center gap-2 rounded border bg-blue-50 p-2" onSubmit={e => { e.preventDefault(); void perform(editing.action === 'create' ? { action: 'create', path: editing.value.trim() } : { action: 'rename', path: editing.path, target: editing.value.trim() }); }}><label className="text-xs">{editing.action === 'create' ? '新目录路径' : '新路径'}<input autoFocus aria-label="文件管理器目录路径" value={editing.value} onChange={e => setEditing({ ...editing, value: e.target.value })} className="ml-2 rounded border p-1" /></label><button className={buttonClass} disabled={busy || !editing.value.trim()}>保存目录</button><button type="button" className={buttonClass} onClick={() => setEditing(null)}>取消</button></form> : null}
-      <BankFileGrid
-        folders={index.children.get(selectedFolder) ?? []}
-        questions={index.questions.get(selectedFolder) ?? []}
-        selectedFolder={selectedFolder}
-        focusedFolder={focusedFolder}
-        dropHighlight={dropHighlight}
-        selectedIds={selectedIds}
-        busy={busy}
-        clipboard={clipboard}
-        onSelectIds={onSelectIds}
-        onSetFocusedFolder={setFocusedFolder}
-        onOpenFolder={(path) => {
-          setSelectedFolder(path);
-          setName(path);
-          setFocusedFolder('');
+
+      <nav
+        data-drop-root
+        aria-label="题目文件夹"
+        className="flex min-h-0 flex-1 flex-col overflow-auto"
+        onClick={e => {
+          if (!(e.target as HTMLElement).closest('li,button,input,summary')) {
+            onSelectIds?.([]);
+            setFocusedFolder('');
+          }
         }}
-        onOpenItem={(id) => {
-          onOpenItem?.(id);
-          setExploring(false);
-        }}
-        onContextMenu={(info) => setMenu(info)}
-        onStartDrag={startDrag}
-        onDrop={drop}
-        onCut={() => cut()}
-        onPaste={() => paste()}
-        onToggleAll={toggleAll}
-        onClearSelection={() => {
-          onSelectIds?.([]);
-          setFocusedFolder('');
-          setMenu(null);
-          setClipboard(null);
-        }}
-      />
-      {menu ? contextMenu() : null}
-    </Dialog.Content></Dialog.Portal></Dialog.Root> : null}
-    {!exploring && menu ? contextMenu() : null}
-  </div>;
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => drop(e, '')}
+      >
+        <button
+          type="button"
+          className="m-2 w-[calc(100%-1rem)] rounded-xl border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] p-2.5 text-left text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] hover:border-[var(--or-outline)] transition-colors shadow-2xs"
+          onDrop={e => drop(e, '')}
+          onClick={() => { setSelectedFolder(''); setName(''); }}
+        >
+          全部目录 · {items.length} 道匹配题目
+        </button>
+        {branch('')}
+        {!items.length ? (
+          <p className="flex min-h-48 flex-1 items-center justify-center p-4 text-center text-sm text-[var(--or-muted)]">
+            暂无匹配题目；可调整搜索与筛选，或新建题目。
+          </p>
+        ) : null}
+      </nav>
+
+      {exploring ? (
+        <Dialog.Root open={exploring} onOpenChange={setExploring}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="or-dialog-backdrop fixed inset-0 z-50 bg-black/40 backdrop-blur-xs" />
+            <Dialog.Content
+              aria-label="题库文件管理器"
+              aria-describedby={undefined}
+              className="or-dialog or-g48-dialog fixed inset-2 z-50 flex flex-col p-3.5 sm:inset-[5%] sm:p-5"
+            >
+              <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[var(--or-outline)] pb-3">
+                <Dialog.Title asChild>
+                  <h2 className="mr-auto text-base font-semibold text-[var(--or-text)]">
+                    题库文件管理器 · {selectedFolder || '根目录'}
+                  </h2>
+                </Dialog.Title>
+                <button
+                  className={buttonClass}
+                  onClick={() => { setSelectedFolder(''); setName(''); }}
+                >
+                  返回根目录
+                </button>
+                <button
+                  className={`${buttonClass} or-g48-pill-dropdown`}
+                  disabled={!selectedFolder}
+                  onClick={() => {
+                    setSelectedFolder(selectedFolder.split('/').slice(0, -1).join('/'));
+                    setFocusedFolder('');
+                  }}
+                >
+                  <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="text-center">上一级</span>
+                  <span className="h-4 w-4 shrink-0" aria-hidden />
+                </button>
+                <button
+                  className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3.5 py-1.5 text-sm font-medium"
+                  onClick={() => toggleAll(selectedFolder)}
+                >
+                  全选 / 取消全选
+                </button>
+                <AppSelect
+                  aria-label="文件管理器移动目标"
+                  value={destination}
+                  onValueChange={value => setDestination(value)}
+                  className="or-select or-g48-input max-w-48 py-1.5 text-sm bg-[var(--or-card)]"
+                >
+                  <option value="">根目录</option>
+                  {data.folders.map(path => <option key={path} value={path}>{path}</option>)}
+                </AppSelect>
+                <button
+                  className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3.5 py-1.5 text-sm font-medium"
+                  disabled={busy || !selectedIds.length}
+                  onClick={() => void act('move')}
+                >
+                  移动已选 {selectedIds.length} 题
+                </button>
+                <button
+                  className={buttonClass}
+                  disabled={!focusedFolder && !selectedIds.length}
+                  onClick={() => cut()}
+                >
+                  剪切
+                </button>
+                <button
+                  className="or-button or-button-primary or-pill or-g48-pill-btn or-g48-pill-btn-primary px-3.5 py-1.5 text-sm font-medium"
+                  disabled={busy || !clipboard}
+                  onClick={() => paste()}
+                >
+                  粘贴到当前目录
+                </button>
+                <button
+                  className="or-button or-pill or-g48-pill-btn or-g48-pill-dropdown px-3.5 py-1.5 text-sm"
+                  onClick={() => setExploring(false)}
+                >
+                  <X className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="text-center">关闭</span>
+                  <span className="h-4 w-4 shrink-0" aria-hidden />
+                </button>
+              </div>
+              <p className="mb-2 text-[13px] text-[var(--or-muted)]">
+                空白取消选择；Ctrl多选、Shift范围选择、空白框选；双击打开；拖到目录移动；右键菜单支持剪切粘贴。
+              </p>
+              {message ? (
+                <p role="status" className="mb-2 text-[13px] font-medium text-[var(--or-on-success)]">
+                  {message}
+                </p>
+              ) : null}
+              {shareCode ? (
+                <label className="mb-2 flex flex-wrap items-center gap-2 text-sm text-[var(--or-muted)]">
+                  邀请CDK（7天有效）
+                  <input
+                    readOnly
+                    value={shareCode}
+                    aria-label="文件管理器邀请码"
+                    onFocus={e => e.target.select()}
+                    className="or-input or-g48-input min-w-0 flex-1 py-1 text-sm font-mono sm:flex-none"
+                  />
+                </label>
+              ) : null}
+              {editing ? (
+                <form
+                  className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_70%,transparent)] p-2.5"
+                  onSubmit={e => {
+                    e.preventDefault();
+                    void perform(
+                      editing.action === 'create'
+                        ? { action: 'create', path: editing.value.trim() }
+                        : { action: 'rename', path: editing.path, target: editing.value.trim() },
+                    );
+                  }}
+                >
+                  <label className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-[var(--or-text)]">
+                    {editing.action === 'create' ? '新目录路径' : '新路径'}
+                    <input
+                      autoFocus
+                      aria-label="文件管理器目录路径"
+                      value={editing.value}
+                      onChange={e => setEditing({ ...editing, value: e.target.value })}
+                      className="or-input or-g48-input min-w-0 flex-1 py-1 text-sm sm:flex-none"
+                    />
+                  </label>
+                  <button className="or-button or-button-primary or-pill or-g48-pill-btn or-g48-pill-btn-primary px-3.5 py-1.5 text-sm font-medium" disabled={busy || !editing.value.trim()}>
+                    保存目录
+                  </button>
+                  <button type="button" className={buttonClass} onClick={() => setEditing(null)}>
+                    取消
+                  </button>
+                </form>
+              ) : null}
+              <BankFileGrid
+                folders={index.children.get(selectedFolder) ?? []}
+                questions={index.questions.get(selectedFolder) ?? []}
+                selectedFolder={selectedFolder}
+                focusedFolder={focusedFolder}
+                dropHighlight={dropHighlight}
+                selectedIds={selectedIds}
+                busy={busy}
+                clipboard={clipboard}
+                onSelectIds={onSelectIds}
+                onSetFocusedFolder={setFocusedFolder}
+                onOpenFolder={(path) => {
+                  setSelectedFolder(path);
+                  setName(path);
+                  setFocusedFolder('');
+                }}
+                onOpenItem={(id) => {
+                  onOpenItem?.(id);
+                  setExploring(false);
+                }}
+                onContextMenu={(info) => setMenu(info)}
+                onStartDrag={startDrag}
+                onDrop={drop}
+                onCut={() => cut()}
+                onPaste={() => paste()}
+                onToggleAll={toggleAll}
+                onClearSelection={() => {
+                  onSelectIds?.([]);
+                  setFocusedFolder('');
+                  setMenu(null);
+                  setClipboard(null);
+                }}
+              />
+              {menu ? contextMenu() : null}
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      ) : null}
+      {!exploring && menu ? contextMenu() : null}
+    </div>
+  );
 
   function contextMenu() {
-    return <div role="menu" aria-label="题库文件操作" className="fixed z-[60] grid min-w-44 gap-1 rounded border bg-white p-2 shadow-xl" style={{ left: Math.min(menu!.x, window.innerWidth - 210), top: Math.min(menu!.y, window.innerHeight - 310) }} onClick={e => e.stopPropagation()}>
-      {menu!.folder ? <><button role="menuitem" className={buttonClass} onClick={() => { setSelectedFolder(menu!.folder!); setName(menu!.folder!); setMenu(null); }}>打开目录</button><button role="menuitem" className={buttonClass} onClick={() => { setEditing({ action: 'rename', path: menu!.folder!, value: menu!.folder! }); setExploring(true); setMenu(null); }}>重命名目录</button><button role="menuitem" className={buttonClass} disabled={busy} onClick={() => void share('create', menu!.folder!)}>生成邀请CDK</button></> : null}
-      {menu!.id ? <button role="menuitem" className={buttonClass} onClick={() => { onOpenItem?.(menu!.id!); setExploring(false); setMenu(null); }}>编辑题目</button> : null}
-      <button role="menuitem" className={buttonClass} disabled={!menu!.folder && !selectedIds.length} onClick={() => cut(menu!.folder ?? '')}>剪切</button>
-      <button role="menuitem" className={buttonClass} disabled={busy || !clipboard} onClick={() => paste(menu!.folder ?? selectedFolder)}>粘贴到此目录</button>
-      <button role="menuitem" className={buttonClass} onClick={() => { const parent = menu!.folder ?? selectedFolder; setEditing({ action: 'create', path: parent, value: parent ? parent + '/新目录' : '新目录' }); setExploring(true); setMenu(null); }}>新建子目录</button>
-      {menu!.folder ? <button role="menuitem" className={buttonClass} disabled={busy} onClick={async () => {
-        if (busy) return;
-        const path = menu!.folder!;
-        setMenu(null);
-        if (await confirmDialog('删除目录及子目录？题目保留并移到父目录。')) {
-          if (busy) return;
-          await perform({ action: 'remove', path });
-        }
-      }}>删除目录（保留题目）</button> : null}
-      <button role="menuitem" className={buttonClass} onClick={() => { onSelectIds?.([]); setFocusedFolder(''); setMenu(null); }}>取消选择</button>
-      <button role="menuitem" className={buttonClass} onClick={() => { setMenu(null); void onRefresh?.(); }}>刷新</button>
-    </div>;
+    return (
+      <div
+        role="menu"
+        aria-label="题库文件操作"
+        className="or-dialog or-g48-dialog fixed z-[60] grid min-w-44 gap-1 p-2"
+        style={{
+          left: Math.min(menu!.x, window.innerWidth - 210),
+          top: Math.min(menu!.y, window.innerHeight - 310),
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {menu!.folder ? (
+          <>
+            <button
+              role="menuitem"
+              className={buttonClass}
+              onClick={() => { setSelectedFolder(menu!.folder!); setName(menu!.folder!); setMenu(null); }}
+            >
+              打开目录
+            </button>
+            <button
+              role="menuitem"
+              className={buttonClass}
+              onClick={() => { setEditing({ action: 'rename', path: menu!.folder!, value: menu!.folder! }); setExploring(true); setMenu(null); }}
+            >
+              重命名目录
+            </button>
+            <button
+              role="menuitem"
+              className={buttonClass}
+              disabled={busy}
+              onClick={() => void share('create', menu!.folder!)}
+            >
+              生成邀请CDK
+            </button>
+          </>
+        ) : null}
+        {menu!.id ? (
+          <button
+            role="menuitem"
+            className="or-button or-button-primary or-pill or-g48-pill-btn or-g48-pill-btn-primary px-3 py-1.5 text-sm font-medium"
+            onClick={() => { onOpenItem?.(menu!.id!); setExploring(false); setMenu(null); }}
+          >
+            编辑题目
+          </button>
+        ) : null}
+        <button
+          role="menuitem"
+          className={buttonClass}
+          disabled={!menu!.folder && !selectedIds.length}
+          onClick={() => cut(menu!.folder ?? '')}
+        >
+          剪切
+        </button>
+        <button
+          role="menuitem"
+          className={buttonClass}
+          disabled={busy || !clipboard}
+          onClick={() => paste(menu!.folder ?? selectedFolder)}
+        >
+          粘贴到此目录
+        </button>
+        <button
+          role="menuitem"
+          className={buttonClass}
+          onClick={() => {
+            const parent = menu!.folder ?? selectedFolder;
+            setEditing({ action: 'create', path: parent, value: parent ? parent + '/新目录' : '新目录' });
+            setExploring(true);
+            setMenu(null);
+          }}
+        >
+          新建子目录
+        </button>
+        {menu!.folder ? (
+          <button
+            role="menuitem"
+            className="or-button or-button-danger or-pill or-g48-pill-btn or-g48-pill-btn-danger px-3 py-1.5 text-sm"
+            disabled={busy}
+            onClick={async () => {
+              if (busy) return;
+              const path = menu!.folder!;
+              setMenu(null);
+              if (await confirmDialog('删除目录及子目录？题目保留并移到父目录。')) {
+                if (busy) return;
+                await perform({ action: 'remove', path });
+              }
+            }}
+          >
+            删除目录（保留题目）
+          </button>
+        ) : null}
+        <button
+          role="menuitem"
+          className={buttonClass}
+          onClick={() => { onSelectIds?.([]); setFocusedFolder(''); setMenu(null); }}
+        >
+          取消选择
+        </button>
+        <button
+          role="menuitem"
+          className={buttonClass}
+          onClick={() => { setMenu(null); void onRefresh?.(); }}
+        >
+          刷新
+        </button>
+      </div>
+    );
   }
 }

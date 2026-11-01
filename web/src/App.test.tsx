@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(), getCurrentUser: vi.fn(), getPlatformStatus: vi.fn(),
   logoutPlatform: vi.fn(), setPlatformProjectRoot: vi.fn(), setSidebarOpen: vi.fn(),
   resetAgentContext: vi.fn(),
+  loadSchoolWorkspace: vi.fn(),
   sidebarOpen: false,
 }));
 const school: PlatformUser = { id: "school-user", username: "school", role: "school", display_name: "学校", status: "active" };
@@ -40,7 +41,10 @@ vi.mock("./app/routes", () => ({
   GraphRoute: () => null,
   TemplateRoute: () => null,
 }));
-vi.mock("./pages/platform/school/SchoolWorkspace", () => ({ SchoolWorkspace: () => <div>学校工作区</div> }));
+vi.mock("./pages/platform/school/SchoolWorkspace", async () => {
+  await mocks.loadSchoolWorkspace();
+  return { SchoolWorkspace: () => <div>学校工作区</div> };
+});
 vi.mock("./pages/platform/student/StudentWorkspace", () => ({ StudentWorkspace: () => <div>学生工作区</div> }));
 vi.mock("./pages/platform/admin/AdminWorkspace", () => ({
   AdminWorkspace: ({ onLogout }: { onLogout: () => void }) => <div>管理员工作区<button onClick={onLogout}>退出登录</button></div>,
@@ -63,6 +67,23 @@ describe("role-specific project requests", () => {
     mocks.getPlatformStatus.mockResolvedValue({ admin_exists: true, public_mode: true });
     mocks.apiGet.mockResolvedValue({ bound: true, root: "/teacher-project" });
     mocks.logoutPlatform.mockResolvedValue({});
+    mocks.loadSchoolWorkspace.mockResolvedValue(undefined);
+  });
+
+  it("keeps the login screen up until the authenticated workspace chunk is ready", async () => {
+    let releaseWorkspace!: () => void;
+    mocks.getCurrentUser.mockResolvedValue({ user: null });
+    mocks.loadSchoolWorkspace.mockImplementationOnce(() => new Promise<void>((resolve) => { releaseWorkspace = resolve; }));
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByRole("button", { name: "以学校身份登录" }));
+    await waitFor(() => expect(mocks.loadSchoolWorkspace).toHaveBeenCalledOnce());
+    expect(screen.getByText("登录页")).toBeInTheDocument();
+    expect(screen.queryByText(/加载工作区/)).not.toBeInTheDocument();
+
+    await act(async () => { releaseWorkspace(); });
+    await screen.findByText("学校工作区");
   });
 
   it.each([

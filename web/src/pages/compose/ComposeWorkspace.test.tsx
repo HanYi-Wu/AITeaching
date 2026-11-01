@@ -9,8 +9,9 @@ import { ComposeWorkspace } from "./ComposeWorkspace";
 import type { TemplateRow } from "../../types/compose";
 import { ApiError } from "../../api/client";
 import { buildComposeDraftStorageKey } from "./composeDraftStorage";
+import { selectOption } from "../../test/selectOption";
 
-const mocks = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), download: vi.fn(), sync: vi.fn(), onError: vi.fn(), setPageContext: vi.fn(), listContentFolders: vi.fn(), moveContentItemsToFolder: vi.fn() }));
+const mocks = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), download: vi.fn(), sync: vi.fn(), onError: vi.fn(), setPageContext: vi.fn(), listContentFolders: vi.fn(), moveContentItemsToFolder: vi.fn(), listClasses: vi.fn(), listPracticeHistory: vi.fn(), getProfile: vi.fn() }));
 vi.mock("../../api/client", async (importOriginal) => ({ ...await importOriginal<typeof import("../../api/client")>(), apiGet: mocks.apiGet, apiPost: mocks.apiPost }));
 vi.mock("../../contexts/AgentContext", () => ({ useAgentContext: () => ({ setPageContext: mocks.setPageContext }) }));
 vi.mock("../../components/PdfPreview", () => ({ PdfPreview: () => null }));
@@ -18,6 +19,7 @@ vi.mock("./composeHelpers", async (original) => ({ ...await original<typeof impo
 vi.mock("../../platform/auth", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../platform/auth")>(),
   listContentFolders: mocks.listContentFolders, listFolderItems: async () => ({ items: {} }), listTaggedItems: async () => ({ items: {} }),
+  listTeacherAssignedClasses: mocks.listClasses, listClassPracticeHistory: mocks.listPracticeHistory, getAccountProfile: mocks.getProfile,
   moveContentItemsToFolder: mocks.moveContentItemsToFolder,
   syncPlatformPaperFromExam: mocks.sync,
 }));
@@ -61,7 +63,7 @@ describe("new paper template selection", () => {
     await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledWith("/api/templates"));
     templates = [template("replacement")];
     const user = await openDialog();
-    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveValue("templates/replacement.yaml");
+    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveTextContent("replacement");
     await user.click(screen.getByRole("button", { name: "创建并进入编辑" }));
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exams", expect.objectContaining({ template_path: "templates/replacement.yaml", auto_rename: true })));
     expect(mocks.onError).not.toHaveBeenCalledWith("请先选择模板后再保存草稿");
@@ -70,10 +72,10 @@ describe("new paper template selection", () => {
   it("submits the same template shown after the library changes while the dialog is open", async () => {
     renderWorkspace();
     const user = await openDialog();
-    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveValue("templates/original.yaml");
+    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveTextContent("original");
     templates = [template("current")];
     act(() => notifyContentLibraryChanged("template"));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "模板" })).toHaveValue("templates/current.yaml"));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "模板" })).toHaveTextContent("current"));
     await user.click(screen.getByRole("button", { name: "创建并进入编辑" }));
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exams", expect.objectContaining({ template_path: "templates/current.yaml" })));
   });
@@ -84,7 +86,7 @@ describe("new paper template selection", () => {
     await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledWith("/api/templates"));
     templates = [template("first")];
     const user = await openDialog();
-    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveValue("templates/first.yaml");
+    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveTextContent("first");
     await user.click(screen.getByRole("button", { name: "创建并进入编辑" }));
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exams", expect.objectContaining({ template_path: "templates/first.yaml" })));
   });
@@ -102,11 +104,39 @@ describe("new paper template selection", () => {
     await waitFor(() => expect(templateRequests).toBe(1));
     templates = [template("latest")];
     const user = await openDialog();
-    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveValue("templates/latest.yaml");
+    expect(await screen.findByRole("combobox", { name: "模板" })).toHaveTextContent("latest");
     await act(async () => { finishOld({ templates: [template("outdated")] }); });
-    expect(screen.getByRole("combobox", { name: "模板" })).toHaveValue("templates/latest.yaml");
+    expect(screen.getByRole("combobox", { name: "模板" })).toHaveTextContent("latest");
     await user.click(screen.getByRole("button", { name: "创建并进入编辑" }));
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith("/api/exams", expect.objectContaining({ template_path: "templates/latest.yaml" })));
+  });
+
+  it("marks an empty paper as not publishable while keeping history practice available", async () => {
+    templates = [];
+    mocks.listClasses.mockResolvedValue({ classes: [{ id: "class-1", name: "演示一班" }] });
+    mocks.listPracticeHistory.mockResolvedValue({ publications: [] });
+    mocks.getProfile.mockResolvedValue({ profile: { id: "teacher-a", subjects: ["数学"] } });
+    mocks.listContentFolders.mockResolvedValue({ folders: [{ id: "folder-1", kind: "category", name: "试卷" }] });
+    renderWorkspace();
+
+    const missingTemplate = await screen.findByText("未找到试卷模板文件，请将模板放入内容目录的 templates/ 目录。");
+    expect(missingTemplate.closest('[role="status"]')).toBeInTheDocument();
+    await userEvent.click(screen.getByText("导出 ▾"));
+    expect(screen.getByRole("button", { name: "导出 PDF" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "导出 Word" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "发布历史练习" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "当前试卷" })).toBeDisabled();
+    expect(screen.getByText(/历史错题卷和专项巩固卷仍可选择/)).toBeInTheDocument();
+
+    const classCheckbox = screen.getAllByRole("checkbox").find((input) =>
+      input.closest("label")?.textContent?.includes("演示一班"),
+    );
+    expect(classCheckbox).toBeDefined();
+    await userEvent.click(classCheckbox!);
+    expect(screen.getByRole("radio", { name: "历史错题卷" })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: "专项巩固卷" })).toBeEnabled();
   });
 });
 
@@ -152,11 +182,11 @@ describe("export result integration", () => {
     );
     const mounted = renderWorkspace();
     const getVisibleQuestionIds = () =>
-      Array.from(mounted.container.querySelectorAll<HTMLSpanElement>('button[draggable="true"] span[title]'))
-        .map((span) => span.getAttribute("title"));
+      Array.from(mounted.container.querySelectorAll<HTMLSpanElement>('button[draggable="true"] span[data-question-id]'))
+        .map((span) => span.getAttribute("data-question-id"));
     const getQuestionButton = (qid: string) =>
-      Array.from(mounted.container.querySelectorAll<HTMLSpanElement>('button[draggable="true"] span[title]'))
-        .find((span) => span.getAttribute("title") === qid)?.closest("button") ?? null;
+      Array.from(mounted.container.querySelectorAll<HTMLSpanElement>('button[draggable="true"] span[data-question-id]'))
+        .find((span) => span.getAttribute("data-question-id") === qid)?.closest("button") ?? null;
 
     await waitFor(() => expect(getVisibleQuestionIds()).toEqual(questionRows.map((question) => question.qualified_id)));
     await userEvent.click(screen.getByRole("button", { name: /筛选/ }));
@@ -190,12 +220,12 @@ describe("export result integration", () => {
     expect(q2Button).not.toBeNull();
     expect(q3Button).not.toBeNull();
     await userEvent.click(q2Button!);
-    await waitFor(() => expect(getQuestionButton("数学/main/q2")).toHaveClass("border-slate-900"));
+    await waitFor(() => expect(getQuestionButton("数学/main/q2")).toHaveClass("border-[var(--or-primary)]"));
     fireEvent.click(q3Button!, { ctrlKey: true });
-    await waitFor(() => expect(getQuestionButton("数学/main/q3")).toHaveClass("border-slate-900"));
-    expect(getQuestionButton("数学/main/q2")).toHaveClass("border-slate-900");
-    expect(getQuestionButton("数学/main/q3")).toHaveClass("border-slate-900");
-    expect(getQuestionButton("数学/main/q1")).not.toHaveClass("border-slate-900");
+    await waitFor(() => expect(getQuestionButton("数学/main/q3")).toHaveClass("border-[var(--or-primary)]"));
+    expect(getQuestionButton("数学/main/q2")).toHaveClass("border-[var(--or-primary)]");
+    expect(getQuestionButton("数学/main/q3")).toHaveClass("border-[var(--or-primary)]");
+    expect(getQuestionButton("数学/main/q1")).not.toHaveClass("border-[var(--or-primary)]");
   });
 
   it("selects compose history items, drags the selected group, and applies a successful batch move", async () => {
@@ -230,7 +260,7 @@ describe("export result integration", () => {
     expect(setData).toHaveBeenCalledWith("application/x-or-content-items", JSON.stringify({ scope: "compose", ids: ["Draft/Math", "Quiz/Science"] }));
     expect(setData).toHaveBeenCalledWith("application/x-or-content-item", JSON.stringify({ scope: "compose", id: "Draft/Math" }));
 
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "批量移动到文件夹" }), "compose-folder");
+    await selectOption(screen.getByRole("combobox", { name: "批量移动到文件夹" }), "compose-folder");
     await userEvent.click(screen.getByRole("button", { name: "移动所选" }));
     await waitFor(() => expect(mocks.moveContentItemsToFolder).toHaveBeenCalledWith("compose", ["Draft/Math", "Quiz/Science"], "compose-folder"));
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "选择草稿 Draft math" })).not.toBeChecked());
@@ -253,7 +283,7 @@ describe("export result integration", () => {
 
     const checkbox = await screen.findByRole("checkbox", { name: "选择草稿 Draft math" });
     await userEvent.click(checkbox);
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "批量移动到文件夹" }), "compose-folder");
+    await selectOption(screen.getByRole("combobox", { name: "批量移动到文件夹" }), "compose-folder");
     await userEvent.click(screen.getByRole("button", { name: "移动所选" }));
 
     await waitFor(() => expect(mocks.onError).toHaveBeenCalledWith("move rejected"));

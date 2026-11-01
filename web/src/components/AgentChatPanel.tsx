@@ -3,8 +3,6 @@ import { useTranslation } from "react-i18next";
 import {
   AlertCircle,
   BookMarked,
-  ChevronDown,
-  ChevronRight,
   History,
   Loader2,
   Paperclip,
@@ -50,6 +48,7 @@ import {
   type ChatLine,
   type FileAttachment,
 } from "./agent-chat";
+import "../ui-redesign/g55/g55.css";
 
 export { ASSISTANT_PROSE_CLASS };
 
@@ -147,7 +146,6 @@ export function AgentChatPanel({
       .catch(() => setSkills([]));
   }, [projectBound]);
 
-  // Auto-scroll when user is at bottom; preserve position if user manually departed
   useEffect(() => {
     if (isAtBottomRef.current) {
       bottomRef.current?.scrollIntoView?.({ behavior: busy ? "auto" : "smooth" });
@@ -367,9 +365,11 @@ export function AgentChatPanel({
     [t, refreshSessionList, sessionId, startNewChat],
   );
 
+  const sendLabel = i18n.language.startsWith("zh") ? "发送消息" : "Send message";
+
   return (
     <div
-      className="relative flex h-full min-h-[320px] flex-col border-t border-slate-200 bg-white"
+      className="or-g55-agent-panel relative flex h-full min-h-[320px] flex-col bg-[var(--or-card)] text-[var(--or-text)]"
       data-testid="agent-file-drop-surface"
       onDragEnter={(e) => {
         if (!isFileDrag(Array.from(e.dataTransfer.types))) return;
@@ -399,77 +399,74 @@ export function AgentChatPanel({
     >
       {fileDragActive ? (
         <div
-          className="pointer-events-none absolute inset-1 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-violet-500 bg-violet-50/95 p-4 text-center text-sm font-semibold text-violet-800 shadow-inner"
+          className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-or-primary bg-or-primary-container p-4 text-center text-sm font-semibold text-or-on-container shadow-xl backdrop-blur-sm "
           role="status"
           aria-live="polite"
         >
           {t("dropFilesHere")}
         </div>
       ) : null}
-      <div ref={historyShellRef} className="relative shrink-0 border-b border-slate-100">
-        <div className="relative px-2 py-1.5 pr-10">
+
+      {/* Header Bar */}
+      <div ref={historyShellRef} className="relative shrink-0 border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_90%,transparent)] px-3 py-2.5 backdrop-blur-md  ">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-or-primary-container text-or-primary">
+              <Sparkles className="h-4 w-4" />
+            </span>
+            <span className="truncate text-sm font-bold tracking-tight text-[var(--or-text)] ">
+              {t("title")}
+            </span>
+          </div>
           {onRequestCollapse ? (
             <button
               type="button"
+              data-assistant-close
               title={t("collapseSidebar")}
               aria-label={t("collapseSidebar")}
               onClick={() => onRequestCollapse()}
-              className="absolute right-1.5 top-1/2 z-10 -translate-y-1/2 rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--or-muted)] transition hover:bg-[var(--or-block)]"
             >
               <X className="h-4 w-4" strokeWidth={2} />
             </button>
           ) : null}
-          <div className="flex min-w-0 items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-slate-700">
-              <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-500" />
-              <span className="truncate">{t("title")}</span>
-            </div>
-            <div className="flex min-w-0 shrink items-center justify-end gap-1">
-              <div className="shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSessionMenuOpen((o) => {
-                      if (!o) void refreshSessionList();
-                      return !o;
-                    });
-                  }}
-                  className="flex items-center gap-0.5 rounded px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
-                >
-                  <History className="h-3 w-3" />
-                  {t("history")}
-                  {sessionMenuOpen ? (
-                    <ChevronDown className="h-3 w-3" />
-                  ) : (
-                    <ChevronRight className="h-3 w-3" />
-                  )}
-                </button>
-              </div>
-              <div className="flex min-w-0 shrink items-center justify-end gap-1 overflow-x-auto">
-                <button
-                  type="button"
-                  onClick={() => setMemoryOpen((o) => !o)}
-                  className="flex shrink-0 items-center gap-0.5 rounded px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
-                >
-                  <BookMarked className="h-3 w-3" />
-                  {t("longTermMemory")}
-                  {memoryOpen ? (
-                    <ChevronDown className="h-3 w-3" />
-                  ) : (
-                    <ChevronRight className="h-3 w-3" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={startNewChat}
-                  className="shrink-0 rounded px-2 py-0.5 text-[11px] text-slate-500 hover:bg-slate-100"
-                >
-                  {t("newChat")}
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
+
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            title={t("history")}
+            aria-label={t("history")}
+            aria-expanded={sessionMenuOpen}
+            onClick={() => {
+              setSessionMenuOpen((o) => {
+                if (!o) void refreshSessionList();
+                return !o;
+              });
+            }}
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--or-outline)] text-[var(--or-muted)] transition hover:bg-[var(--or-block)]"
+          >
+            <History className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            title={t("longTermMemory")}
+            aria-label={t("longTermMemory")}
+            aria-expanded={memoryOpen}
+            onClick={() => setMemoryOpen((o) => !o)}
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--or-outline)] text-[var(--or-muted)] transition hover:bg-[var(--or-block)]"
+          >
+            <BookMarked className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={startNewChat}
+            className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center rounded-lg bg-or-primary-container px-3 text-xs font-semibold text-or-on-container transition hover:brightness-95"
+          >
+            {t("newChat")}
+          </button>
+        </div>
+
         <AgentSessionHistoryMenu
           isOpen={sessionMenuOpen}
           onClose={() => setSessionMenuOpen(false)}
@@ -481,6 +478,7 @@ export function AgentChatPanel({
           onRemoveSession={removeHistorySession}
         />
       </div>
+
       <AgentMemoryDrawer
         isOpen={memoryOpen}
         memoryTab={memoryTab}
@@ -496,64 +494,73 @@ export function AgentChatPanel({
         topicOptions={topicOptions}
         memoryBusy={memoryBusy}
       />
+
       {config && !config.llm_configured && (
-        <div className="mx-2 mt-2 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{t("noLlmConfig")}</span>
+        <div className="or-g55-status-warning mx-3 mt-3 flex items-start gap-2.5 rounded-xl p-3 text-xs">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-or-warning" />
+          <span className="leading-relaxed">{t("noLlmConfig")}</span>
         </div>
       )}
+
+      {/* Message Stream Scroll Area */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 space-y-2 overflow-y-auto px-2 py-2 text-sm"
+        className="flex-1 space-y-3.5 overflow-y-auto p-3 text-sm"
       >
         {currentFocus && currentFocus !== "general" && (
-          <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1 text-[11px] text-blue-900">
-            {t("currentFocus")}
-            {t(`focusLabels.${currentFocus}`, { defaultValue: currentFocus })}
+          <div className="rounded-xl border border-or-primary/25 bg-or-primary-container px-3 py-1.5 text-xs text-or-on-container">
+            <span className="font-medium">{t("currentFocus")}</span>
+            <span>{t(`focusLabels.${currentFocus}`, { defaultValue: currentFocus })}</span>
           </div>
         )}
+
         {activeSkillId && (
-          <div className="rounded border border-violet-100 bg-violet-50/60 px-2 py-1 text-[11px] text-violet-900">
-            {t("quickAssist")}
-            {skills.find((x) => x.id === activeSkillId)?.label ?? activeSkillId}
+          <div className="flex items-center justify-between rounded-xl border border-or-primary/25 bg-or-primary-container px-3 py-1.5 text-xs text-or-on-container">
+            <div>
+              <span className="font-medium">{t("quickAssist")}</span>
+              <span>{skills.find((x) => x.id === activeSkillId)?.label ?? activeSkillId}</span>
+            </div>
             <button
               type="button"
-              className="ml-2 text-violet-600 underline"
+              className="font-medium text-or-primary underline hover:text-or-primary"
               onClick={() => setActiveSkillId(null)}
             >
               {t("clear")}
             </button>
           </div>
         )}
+
         {taskSteps && taskSteps.length > 0 && (
-          <div className="rounded border border-violet-100 bg-violet-50/80 px-2 py-1.5 text-[11px] text-violet-950">
-            <div className="font-medium text-violet-900">{t("currentSteps")}</div>
-            <ol className="mt-1 list-decimal pl-4 text-violet-900">
+          <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] p-3 text-xs text-[var(--or-text)]   ">
+            <div className="font-semibold text-[var(--or-text)] ">{t("currentSteps")}</div>
+            <ol className="mt-1.5 list-decimal space-y-1 pl-4 leading-relaxed">
               {taskSteps.map((s, j) => (
                 <li key={j}>
-                  <span className="text-violet-600">[{s.status}]</span> {s.title}
+                  <span className="font-medium text-or-primary">[{s.status}]</span> {s.title}
                 </li>
               ))}
             </ol>
           </div>
         )}
+
         {pageContext?.summary && (
-          <div className="rounded border border-slate-100 bg-slate-50/80 px-2 py-1.5 text-[11px] text-slate-600">
+          <div className="rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-3 py-1.5 text-xs text-[var(--or-muted)]   ">
             {t("currentUi", { summary: pageContext.summary })}
           </div>
         )}
+
         {lines.length === 0 && skills.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-[11px] text-slate-500">{t("quickStart")}</p>
-            <div className="flex flex-wrap gap-1">
+          <div className="space-y-2 pt-2">
+            <p className="text-xs font-medium text-[var(--or-muted)] ">{t("quickStart")}</p>
+            <div className="flex flex-wrap gap-2">
               {skills.map((s) => (
                 <button
                   key={s.id}
                   type="button"
                   title={s.description}
                   onClick={() => pickSkill(s)}
-                  className="rounded-full border border-violet-200 bg-white px-2 py-0.5 text-[11px] text-violet-800 hover:bg-violet-50"
+                  className="or-g55-pill border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-xs font-medium text-[var(--or-muted)] shadow-sm transition hover:border-or-primary hover:text-or-primary   "
                 >
                   {s.label}
                 </button>
@@ -561,9 +568,11 @@ export function AgentChatPanel({
             </div>
           </div>
         )}
+
         {lines.length === 0 && (
-          <p className="text-xs text-slate-500">{t("freeformHint")}</p>
+          <p className="pt-2 text-xs leading-relaxed text-[var(--or-muted)] ">{t("freeformHint")}</p>
         )}
+
         {lines.map((ln) => (
           <div key={lineKey(ln)}>
             <AgentMessageItem
@@ -574,21 +583,26 @@ export function AgentChatPanel({
             />
           </div>
         ))}
+
         {thinkingText && (
-          <div className="flex items-center gap-2 overflow-hidden text-xs text-violet-600">
+          <div className="flex items-center gap-2 overflow-hidden text-xs font-medium text-or-primary">
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
             <span className="animate-pulse">{thinkingText}</span>
           </div>
         )}
+
         {busy && !thinkingText && (
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {t("processing")}
+          <div className="flex items-center gap-2 text-xs text-[var(--or-muted)]">
+            <Loader2 className="h-4 w-4 animate-spin text-or-primary" />
+            <span>{t("processing")}</span>
           </div>
         )}
+
         <div ref={bottomRef} />
       </div>
-      <div className="border-t border-slate-100 p-2">
+
+      {/* Input Area */}
+      <div className="border-t border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_90%,transparent)] p-3 backdrop-blur-md   or-g55-safe-bottom">
         <input
           ref={fileInputRef}
           type="file"
@@ -601,12 +615,14 @@ export function AgentChatPanel({
             e.target.value = "";
           }}
         />
+
         <AgentAttachmentList
           files={pendingFiles}
           onRemove={(i) => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
         />
-        <div className="flex gap-1">
-          <div className="flex shrink-0 flex-col items-center gap-1 self-end">
+
+        <div className="flex items-end gap-2">
+          <div className="flex shrink-0 flex-col items-center gap-1.5 pb-1">
             {sessionId != null &&
             (contextTokensEst != null ||
               contextLimit != null ||
@@ -643,11 +659,12 @@ export function AgentChatPanel({
               aria-label={t("addAttachment")}
               disabled={!assistantEnabled}
               onClick={() => fileInputRef.current?.click()}
-              className="rounded-md border border-slate-300 bg-white p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-page)] text-[var(--or-muted)] transition hover:bg-[var(--or-block)] hover:text-[var(--or-text)] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:text-[var(--or-text)]"
             >
               <Paperclip className="h-4 w-4" />
             </button>
           </div>
+
           <textarea
             value={input}
             disabled={!assistantEnabled}
@@ -661,17 +678,18 @@ export function AgentChatPanel({
             }}
             rows={2}
             placeholder={assistantEnabled ? t("inputPh") : t("disabledInputPh")}
-            className="min-h-[44px] flex-1 resize-none rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+            className="min-h-[46px] flex-1 resize-none rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 text-[16px] sm:text-[15px] text-[var(--or-text)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus disabled:cursor-not-allowed disabled:bg-[var(--or-page)] disabled:text-[var(--or-muted)]"
           />
+
           {busy ? (
             <button
               type="button"
               title={t("stop")}
               aria-label={t("stop")}
               onClick={() => void stopStream()}
-              className="self-end rounded-md border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-muted)] shadow-sm transition hover:bg-[var(--or-page)]"
             >
-              <Square className="h-4 w-4 fill-current" />
+              <Square className="h-4 w-4 fill-current text-or-error" />
             </button>
           ) : (
             <button
@@ -680,7 +698,9 @@ export function AgentChatPanel({
                 !assistantEnabled || busy || (!input.trim() && pendingFiles.length === 0)
               }
               onClick={() => void send()}
-              className="self-end rounded-md bg-violet-600 p-2 text-white hover:bg-violet-700 disabled:opacity-50"
+              aria-label={sendLabel}
+              title={sendLabel}
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-or-primary text-or-on-primary shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:bg-[var(--or-page)] disabled:text-[var(--or-muted)] disabled:opacity-100 disabled:shadow-none"
             >
               <Send className="h-4 w-4" />
             </button>

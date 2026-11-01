@@ -2,6 +2,7 @@ import { GettingStartedChecklist } from "../../GettingStartedChecklist";
 import { SummaryTile, type PageMeta } from "../SchoolControls";
 import type { SchoolAiSettings } from "../../../../platform/auth";
 import type { SchoolPage } from "../hooks/useSchoolWorkspaceData";
+import "../../../../ui-redesign/g53/g53.css";
 
 type OverviewPanelProps = {
   teacherMeta: PageMeta;
@@ -21,7 +22,7 @@ export function OverviewPanel({
   onNavigate,
 }: OverviewPanelProps) {
   return (
-    <>
+    <div className="space-y-6">
       <GettingStartedChecklist
         description="按顺序完成教师、班级、学生和任课分配"
         steps={[
@@ -31,18 +32,18 @@ export function OverviewPanel({
           { label: "分配任课教师", complete: assignmentMeta.total > 0, actionLabel: "分配任课教师", onAction: () => onNavigate("assignments") },
         ]}
       />
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-base font-semibold text-slate-950">学校管理总览</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">
-          教师、学生、班级和分配已经拆到单独页面。学生初始账号可以在学生页面查看和导出，教师分配到班级后才能向对应班级发布试卷。
+      <section className="or-g53-card p-4 sm:p-5">
+        <h2 className="text-base font-semibold text-or-text">学校管理总览</h2>
+        <p className="mt-1.5 text-sm text-or-muted">
+          集中管理本校教师学科、班级结构、学生账号与任课分配关系。
         </p>
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid gap-2.5 sm:gap-3 grid-cols-2 xl:grid-cols-4">
           <SummaryTile label="AI 状态" value={aiSettings?.ai_enabled ? "已开启" : aiSettings?.ai_available ? "可开启" : "未配置"} />
           <SummaryTile label="教师账号" value={`${teacherMeta.total} 个`} />
           <SummaryTile label="班级" value={`${classMeta.total} 个`} />
           <SummaryTile label="学生账号" value={`${studentMeta.total} 个`} />
         </div>
       </section>
-    </>
+    </div>
   );
 }

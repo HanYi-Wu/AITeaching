@@ -90,21 +90,21 @@ export function ProjectPanel({
   }
 
   return (
-    <div className="mx-auto max-w-2xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h2 className="mt-0 font-semibold text-slate-900">{t("app:project.openTitle")}</h2>
-      <p className="text-sm text-slate-600">
+    <div className="mx-auto max-w-2xl rounded-[16px] border border-[var(--or-outline)] bg-[var(--or-card)] p-4 sm:p-8 text-[var(--or-text)] shadow-sm">
+      <h2 className="text-lg font-semibold text-[var(--or-text)]">{t("app:project.openTitle")}</h2>
+      <p className="mt-1 text-sm text-[var(--or-muted)] leading-relaxed">
         {t("app:project.openIntroBefore")}
         <strong>{t("app:project.openIntroStrong")}</strong>
         {t("app:project.openIntroMid")}
-        <code className="rounded bg-slate-100 px-1">SOLAIRE_PROJECT_ROOT</code>
+        <code className="rounded bg-[var(--or-block)] px-1 py-0.5 font-mono text-xs">SOLAIRE_PROJECT_ROOT</code>
         {t("app:project.openIntroAnd")}
-        <code className="rounded bg-slate-100 px-1">SOLAIRE_BIND_PROJECT_FROM_ENV=1</code>
+        <code className="rounded bg-[var(--or-block)] px-1 py-0.5 font-mono text-xs">SOLAIRE_BIND_PROJECT_FROM_ENV=1</code>
         {t("app:project.openIntroAfter")}
       </p>
       <div className="mt-4 flex flex-wrap items-end gap-2">
         <button
           type="button"
-          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+          className="or-button or-button-outline inline-flex items-center gap-2 rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm font-medium text-[var(--or-text)] shadow-sm hover:bg-[var(--or-block)] disabled:opacity-50"
           disabled={busy}
           onClick={() => void pickOpenFolder()}
         >
@@ -113,10 +113,10 @@ export function ProjectPanel({
         </button>
       </div>
       <div className="mt-4 flex flex-wrap items-end gap-3">
-        <label className="flex min-w-[240px] flex-1 flex-col gap-1 text-xs font-medium text-slate-600">
+        <label className="flex min-w-0 w-full sm:min-w-[240px] sm:w-auto flex-1 flex-col gap-1.5 text-xs sm:text-[13px] font-medium text-[var(--or-muted)]">
           {t("app:project.rootLabel")}
           <input
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+            className="or-input or-field rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] shadow-sm focus:border-[var(--or-focus)] focus:outline-none"
             value={root}
             onChange={(e) => setRoot(e.target.value)}
             placeholder={t("app:project.rootPlaceholder")}
@@ -124,7 +124,7 @@ export function ProjectPanel({
         </label>
         <button
           type="button"
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow hover:bg-slate-800 disabled:opacity-50"
+          className="or-button or-button-primary rounded-[10px] px-4 py-2 text-sm font-semibold shadow disabled:opacity-50"
           disabled={busy || !root.trim()}
           onClick={() => void openProject()}
         >
@@ -132,44 +132,46 @@ export function ProjectPanel({
         </button>
       </div>
 
-      <h2 className="mt-10 font-semibold text-slate-900">{t("app:project.newTitle")}</h2>
-      <div className="mt-2 flex flex-wrap items-end gap-2">
-        <button
-          type="button"
-          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-50"
-          disabled={busy}
-          onClick={() => void pickParentFolder()}
-        >
-          <FolderOpen className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-          {t("app:project.pickParent")}
-        </button>
-      </div>
-      <div className="mt-4 flex flex-wrap items-end gap-3">
-        <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-xs font-medium text-slate-600">
-          {t("app:project.parentLabel")}
-          <input
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
-            value={parent}
-            onChange={(e) => setParent(e.target.value)}
-            placeholder={t("app:project.parentPlaceholder")}
-          />
-        </label>
-        <label className="flex min-w-[160px] flex-col gap-1 text-xs font-medium text-slate-600">
-          {t("app:project.folderName")}
-          <input
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-50"
-          disabled={busy || !parent.trim() || !name.trim()}
-          onClick={() => void createProject()}
-        >
-          {t("app:project.createButton")}
-        </button>
+      <div className="mt-8 border-t border-[var(--or-outline)] pt-6">
+        <h2 className="text-lg font-semibold text-[var(--or-text)]">{t("app:project.newTitle")}</h2>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <button
+            type="button"
+            className="or-button or-button-outline inline-flex items-center gap-2 rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm font-medium text-[var(--or-text)] shadow-sm hover:bg-[var(--or-block)] disabled:opacity-50"
+            disabled={busy}
+            onClick={() => void pickParentFolder()}
+          >
+            <FolderOpen className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+            {t("app:project.pickParent")}
+          </button>
+        </div>
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="flex min-w-0 w-full sm:min-w-[200px] sm:w-auto flex-1 flex-col gap-1.5 text-xs sm:text-[13px] font-medium text-[var(--or-muted)]">
+            {t("app:project.parentLabel")}
+            <input
+              className="or-input or-field rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm shadow-sm focus:border-[var(--or-focus)] focus:outline-none"
+              value={parent}
+              onChange={(e) => setParent(e.target.value)}
+              placeholder={t("app:project.parentPlaceholder")}
+            />
+          </label>
+          <label className="flex min-w-0 w-full sm:min-w-[160px] sm:w-auto flex-col gap-1.5 text-xs sm:text-[13px] font-medium text-[var(--or-muted)]">
+            {t("app:project.folderName")}
+            <input
+              className="or-input or-field rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm shadow-sm focus:border-[var(--or-focus)] focus:outline-none"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="or-button or-button-primary rounded-[10px] px-4 py-2 text-sm font-semibold shadow disabled:opacity-50"
+            disabled={busy || !parent.trim() || !name.trim()}
+            onClick={() => void createProject()}
+          >
+            {t("app:project.createButton")}
+          </button>
+        </div>
       </div>
     </div>
   );

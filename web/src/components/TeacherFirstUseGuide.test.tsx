@@ -30,3 +30,15 @@ test('walkthrough requires acknowledgement, navigates and persists the next step
   await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/auth/teacher-guide', { step: 1 }));
   expect(updated).toHaveBeenCalled();
 });
+
+test('walkthrough can be postponed and reopened from settings without becoming a modal', async () => {
+  vi.mocked(apiPost).mockResolvedValue({ user });
+  render(<TeacherFirstUseGuide user={user} onUpdated={vi.fn()} onNavigate={vi.fn()} onOpenAssistant={vi.fn()} />);
+
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '稍后继续使用引导' }));
+  expect(screen.queryByLabelText('教师使用引导')).not.toBeInTheDocument();
+
+  window.dispatchEvent(new Event('eh-replay-teacher-guide'));
+  expect(await screen.findByLabelText('教师使用引导')).toBeInTheDocument();
+});

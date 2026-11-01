@@ -17,7 +17,7 @@ export function ToolBar({
   return (
     <div
       className={cn(
-        "flex min-h-14 shrink-0 flex-col items-stretch gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-900/[0.02] sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:py-2",
+        "or-toolbar flex min-h-12 sm:min-h-14 shrink-0 flex-col items-stretch gap-2 border-b border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4 sm:py-2.5",
         className,
       )}
     >

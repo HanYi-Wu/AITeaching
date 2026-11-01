@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { BookOpenCheck, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 
 type Props = {
   roleLabel: string;
@@ -20,41 +20,46 @@ export function PlatformShell({
   userName,
   actions,
   onLogout,
-  compactMobile = false,
   hideLogout = false,
   children,
 }: Props) {
   return (
-    <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-slate-50 text-slate-950">
+    <div className="or-app flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-[var(--or-page)] text-[var(--or-text)]">
       <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col">
-        <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-7">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
-              <BookOpenCheck className="h-5 w-5" />
+        <header className="flex shrink-0 flex-wrap items-center justify-between gap-2.5 border-b border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2.5 sm:gap-3 sm:px-7 sm:py-3">
+          <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+            <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--or-outline)] bg-white shadow-sm">
+              <img src="/splash-logo.png" alt="" width={40} height={40} draggable={false} className="block h-full w-full object-contain" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold tracking-wide text-slate-950">源远教学平台 <span className="text-indigo-600">OR</span></p>
-              {!compactMobile && <p className="text-xs text-slate-500">让教学管理更清晰</p>}
+              <p className="truncate text-sm font-semibold tracking-wide text-[var(--or-text)]">
+                源远教学平台
+              </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="rounded-full bg-indigo-50 px-3 py-1 font-medium text-indigo-700">{roleLabel}</span>
-            {userName && <span className="hidden max-w-36 truncate text-slate-600 sm:inline">{userName}</span>}
+          <div className="flex items-center gap-2 sm:gap-2.5 text-sm">
+            <span className="or-pill inline-flex items-center justify-center rounded-full bg-[var(--or-primary-container)] px-2.5 py-1 sm:px-3 text-xs font-semibold text-[var(--or-on-container)]">
+              {roleLabel}
+            </span>
+            {userName && <span className="hidden max-w-36 truncate text-sm text-[var(--or-muted)] sm:inline">{userName}</span>}
             {onLogout && !hideLogout && (
-              <button type="button" onClick={onLogout} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 font-medium text-slate-700 hover:bg-slate-50">
-                <LogOut className="h-4 w-4" />退出登录
+              <button
+                type="button"
+                onClick={onLogout}
+                className="or-button or-button-outline inline-flex min-h-[36px] items-center gap-1.5 sm:gap-2 rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 sm:px-3 text-xs sm:text-sm font-medium text-[var(--or-text)] hover:bg-[var(--or-block)] transition-colors"
+              >
+                <LogOut className="h-3.5 w-3.5 sm:h-4 sm:w-4" />退出登录
               </button>
             )}
           </div>
         </header>
-        <main className="min-h-0 flex-1 overflow-auto p-4 sm:p-7">
-          <div className="mb-6 flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
+        <main className="or-workspace-content min-h-0 flex-1 overflow-auto p-3.5 sm:p-7">
+          <div className="mb-4 flex flex-col gap-3 border-b border-[var(--or-outline)] pb-4 sm:mb-6 sm:pb-5 sm:flex-row sm:items-end sm:justify-between">
             <div className="min-w-0">
-              <p className="mb-1 text-xs font-semibold tracking-wider text-indigo-600">{roleLabel}</p>
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-950">{title}</h1>
-              {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
+              <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-[var(--or-text)]">{title}</h1>
+              {subtitle && <p className="mt-1 text-sm text-[var(--or-muted)]">{subtitle}</p>}
             </div>
-            {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+            {actions && <div className="flex w-full sm:w-auto shrink-0 flex-wrap items-center gap-2">{actions}</div>}
           </div>
           {children}
         </main>

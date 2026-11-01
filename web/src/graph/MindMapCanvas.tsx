@@ -31,6 +31,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { Plus, Link as LinkIcon, RefreshCw, X } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { GraphNodeRow, GraphRelationRow } from "./useGraphStore";
 import { useGraphUndoStore } from "./useUndoStack";
@@ -61,8 +62,8 @@ interface TreeNode {
   subtreeHeight: number;
 }
 
-const NODE_W = 160;
-const NODE_H = 44;
+const NODE_W = 168;
+const NODE_H = 48;
 const H_GAP = 80;
 const V_GAP = 16;
 
@@ -95,19 +96,10 @@ function assignPositions(
   node.x = x;
   node.y = y + node.subtreeHeight / 2 - NODE_H / 2;
 
-  if (isVirtualRoot) {
-    // Virtual root: distribute children vertically
-    let curY = y;
-    for (const child of node.children) {
-      assignPositions(child, x + NODE_W + H_GAP, curY);
-      curY += child.subtreeHeight + V_GAP;
-    }
-  } else {
-    let curY = y;
-    for (const child of node.children) {
-      assignPositions(child, x + NODE_W + H_GAP, curY);
-      curY += child.subtreeHeight + V_GAP;
-    }
+  let curY = y;
+  for (const child of node.children) {
+    assignPositions(child, x + NODE_W + H_GAP, curY, isVirtualRoot);
+    curY += child.subtreeHeight + V_GAP;
   }
 }
 
@@ -152,12 +144,18 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
     return (
       <div
         className={cn(
-          "flex items-center justify-center rounded-full border-2 border-slate-700 bg-slate-700 px-4 py-2 text-sm font-bold text-white shadow-md",
-          selected ? "ring-2 ring-blue-400 ring-offset-1" : "",
+          "flex items-center justify-center rounded-2xl border-2 border-[var(--or-primary)] bg-[var(--or-primary)] px-4 py-2.5 text-sm font-semibold text-[var(--or-on-primary)] shadow-md   or-g50-static-card",
+          selected ? "ring-2 ring-[var(--or-focus)] ring-offset-2" : "",
         )}
         style={{ minWidth: NODE_W, minHeight: NODE_H }}
       >
-        <Handle type="source" id="s" position={Position.Right} isConnectable={true} className="!border-0 !bg-slate-500" />
+        <Handle
+          type="source"
+          id="s"
+          position={Position.Right}
+          isConnectable={true}
+          className="!border-0 !bg-slate-500"
+        />
         <span className="line-clamp-2 text-center">{String(data.label ?? "")}</span>
       </div>
     );
@@ -165,17 +163,19 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
 
   const kindBorder =
     kind === "skill"
-      ? "border-violet-400 bg-violet-50"
+      ? "border-violet-300 bg-violet-50/90 dark:border-violet-700 dark:bg-violet-950/50"
       : kind === "causal"
-        ? "border-amber-400 bg-amber-50"
-        : "border-slate-300 bg-white";
+        ? "border-amber-300 bg-[color-mix(in_srgb,var(--or-warning-container)_90%,transparent)] dark:border-amber-700 dark:bg-amber-950/50"
+        : "border-[var(--or-outline)] bg-[var(--or-card)]  ";
 
   return (
     <div
       className={cn(
-        "group flex items-center rounded-md border shadow-sm transition-all",
+        "group relative flex items-center rounded-xl border shadow-sm transition-all or-g50-static-card",
         kindBorder,
-        selected ? "ring-2 ring-slate-900 ring-offset-1" : "hover:shadow-md",
+        selected
+          ? "ring-2 ring-[var(--or-focus)] ring-offset-2  "
+          : "hover:border-[var(--or-outline)] dark:hover:border-[var(--or-outline)]",
       )}
       style={{ minWidth: NODE_W, minHeight: NODE_H, width: NODE_W, height: NODE_H }}
     >
@@ -184,26 +184,29 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
         id="t"
         position={Position.Left}
         isConnectable={true}
-        className="!h-2.5 !w-2.5 !border-2 !border-slate-300 !bg-white"
+        className="!h-2.5 !w-2.5 !border-2 !border-[var(--or-outline)] !bg-[var(--or-card)] dark:!border-[var(--or-outline)] dark:!bg-[var(--or-primary)]"
       />
 
-      <div className="flex min-w-0 flex-1 flex-col justify-center px-2 py-1">
+      <div className="flex min-w-0 flex-1 flex-col justify-center px-2.5 py-1">
         <span
           className={cn(
-            "rounded-sm px-1 py-0.5 text-[9px] font-medium leading-none",
+            "inline-flex items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-none shrink-0",
             kind === "skill"
-              ? "bg-violet-200 text-violet-800"
+              ? "bg-violet-200 text-violet-900 dark:bg-violet-900 dark:text-violet-200"
               : kind === "causal"
-                ? "bg-amber-200 text-amber-800"
-                : "bg-slate-100 text-slate-600",
+                ? "bg-[var(--or-warning-container)] text-[var(--or-on-warning)] dark:bg-amber-900 dark:text-amber-200"
+                : "bg-[var(--or-block)] text-[var(--or-muted)]  ",
           )}
-          style={{ display: "inline-block", width: "fit-content", marginBottom: 2 }}
+          style={{ width: "fit-content", marginBottom: 3 }}
         >
-          {i18n.t(`nodeKind.${kind}`, { ns: "graph", defaultValue: kind })}
+          <span className="inline-block transform translate-y-[0.5px]">
+            {i18n.t(`nodeKind.${kind}`, { ns: "graph", defaultValue: kind })}
+          </span>
         </span>
+
         {isInlineEditing ? (
           <input
-            className="w-full rounded border border-blue-400 px-1 py-0 text-xs font-medium outline-none"
+            className="w-full rounded-lg border border-[var(--or-primary)] px-1.5 py-0.5 text-sm font-medium outline-none  "
             autoFocus
             value={inlineValue}
             onChange={(e) => onInlineChange?.(e.target.value)}
@@ -218,7 +221,7 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <span className="line-clamp-2 text-xs font-medium text-slate-800">
+          <span className="line-clamp-2 text-sm font-medium text-[var(--or-text)] ">
             {String(data.label ?? "")}
           </span>
         )}
@@ -229,16 +232,21 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
         id="s"
         position={Position.Right}
         isConnectable={true}
-        className="!h-2.5 !w-2.5 !border-2 !border-slate-300 !bg-white"
+        className="!h-2.5 !w-2.5 !border-2 !border-[var(--or-outline)] !bg-[var(--or-card)] dark:!border-[var(--or-outline)] dark:!bg-[var(--or-primary)]"
       />
 
       {hasChildren ? (
         <button
           type="button"
-          className="absolute -right-4 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] text-slate-600 shadow-sm hover:bg-slate-100"
-          onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
+          className="absolute -right-3 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] text-xs font-bold text-[var(--or-muted)] shadow-sm hover:bg-[var(--or-block)]    dark:hover:bg-slate-700"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleCollapse?.();
+          }}
         >
-          {isCollapsed ? "+" : "−"}
+          <span className="inline-block transform -translate-y-[0.5px]">
+            {isCollapsed ? "+" : "−"}
+          </span>
         </button>
       ) : null}
     </div>
@@ -333,10 +341,13 @@ export function MindMapCanvas({
     return m;
   }, [graphNodes]);
 
-
   // Layout
   useEffect(() => {
-    if (!graphNodes.length) { setNodes([]); setEdges([]); return; }
+    if (!graphNodes.length) {
+      setNodes([]);
+      setEdges([]);
+      return;
+    }
 
     const nodeById = new Map(graphNodes.map((n) => [n.id, n]));
 
@@ -357,12 +368,13 @@ export function MindMapCanvas({
           isVirtualRoot: true,
           hasChildren: (childrenByParent.get(VIRTUAL_ROOT_ID) ?? []).length > 0,
           isCollapsed: collapsed.has(VIRTUAL_ROOT_ID),
-          onToggleCollapse: () => setCollapsed((prev) => {
-            const n = new Set(prev);
-            if (n.has(VIRTUAL_ROOT_ID)) n.delete(VIRTUAL_ROOT_ID);
-            else n.add(VIRTUAL_ROOT_ID);
-            return n;
-          }),
+          onToggleCollapse: () =>
+            setCollapsed((prev) => {
+              const n = new Set(prev);
+              if (n.has(VIRTUAL_ROOT_ID)) n.delete(VIRTUAL_ROOT_ID);
+              else n.add(VIRTUAL_ROOT_ID);
+              return n;
+            }),
         },
         width: NODE_W,
         height: NODE_H,
@@ -397,12 +409,13 @@ export function MindMapCanvas({
             }
             if (inlineEditGenerationRef.current === editGeneration) setInlineEditId(null);
           },
-          onToggleCollapse: () => setCollapsed((prev) => {
-            const ns = new Set(prev);
-            if (ns.has(n.id)) ns.delete(n.id);
-            else ns.add(n.id);
-            return ns;
-          }),
+          onToggleCollapse: () =>
+            setCollapsed((prev) => {
+              const ns = new Set(prev);
+              if (ns.has(n.id)) ns.delete(n.id);
+              else ns.add(n.id);
+              return ns;
+            }),
         },
         width: NODE_W,
         height: NODE_H,
@@ -453,7 +466,7 @@ export function MindMapCanvas({
           opacity: 0.6,
         },
         label: t(`edgeKind.${r.relation_type}`, { defaultValue: r.relation_type }),
-        labelStyle: { fontSize: 9, fill: REL_COLOR[r.relation_type] ?? "#64748b" },
+        labelStyle: { fontSize: 11, fill: REL_COLOR[r.relation_type] ?? "#64748b" },
         labelShowBg: true,
         labelBgStyle: { fill: "white", opacity: 0.8 },
       });
@@ -461,7 +474,20 @@ export function MindMapCanvas({
 
     setNodes(rfNodes);
     setEdges(rfEdges);
-  }, [graphNodes, relations, childrenByParent, collapsed, crossRelTypeFilter, inlineEditId, inlineEditGeneration, activeGraphName, layoutNonce, t, onRenameNode, updateInlineEditValue]);
+  }, [
+    graphNodes,
+    relations,
+    childrenByParent,
+    collapsed,
+    crossRelTypeFilter,
+    inlineEditId,
+    inlineEditGeneration,
+    activeGraphName,
+    layoutNonce,
+    t,
+    onRenameNode,
+    updateInlineEditValue,
+  ]);
 
   // Draft keystrokes update only the active custom node. Tree geometry and edges do not depend
   // on the draft text, so keep their full rebuild tied to edit start/end and graph state changes.
@@ -522,7 +548,10 @@ export function MindMapCanvas({
   }, [selectedNodeId, inlineEditId, onAddChildNode, onAddSiblingNode, onDeleteSelectedNode]);
 
   const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    if (node.id === VIRTUAL_ROOT_ID) { onPaneClick(); return; }
+    if (node.id === VIRTUAL_ROOT_ID) {
+      onPaneClick();
+      return;
+    }
     if (connectingFromId && connectingFromId !== node.id) {
       onConnect(connectingFromId, node.id);
     } else {
@@ -563,34 +592,56 @@ export function MindMapCanvas({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Canvas toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
-        <button type="button" className="rounded border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-50" onClick={onAddNode}>
-          + {t("addNode")}
+      {/* Canvas toolbar with mobile horizontal scroll */}
+      <div className="flex items-center gap-2 border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_95%,transparent)] px-3 py-2 backdrop-blur-sm   overflow-x-auto scrollbar-none touch-pan-x sm:flex-wrap">
+        <button
+          type="button"
+          className="or-g50-btn or-g50-btn-secondary !h-8 !text-xs font-medium shrink-0 whitespace-nowrap"
+          onClick={onAddNode}
+        >
+          <Plus className="h-3.5 w-3.5 shrink-0" />
+          <span>{t("addNode")}</span>
         </button>
 
         {connectingFromId ? (
-          <button type="button" className="rounded border border-amber-400 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-900" onClick={onCancelConnect}>
-            {t("cancelConnect")} ✕
+          <button
+            type="button"
+            className="or-g50-btn or-g50-btn-tonal !h-8 !text-xs font-medium !bg-[var(--or-warning-container)] !text-[var(--or-on-warning)] hover:!bg-[var(--or-warning-container)] dark:!bg-amber-950/70 dark:!text-amber-200 shrink-0 whitespace-nowrap"
+            onClick={onCancelConnect}
+          >
+            <X className="h-3.5 w-3.5 shrink-0" />
+            <span>{t("cancelConnect")}</span>
           </button>
         ) : (
-          <button type="button" className="rounded border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40" onClick={onStartConnect} disabled={!selectedNodeId}>
-            {t("addRelation")}
+          <button
+            type="button"
+            className="or-g50-btn or-g50-btn-secondary !h-8 !text-xs font-medium shrink-0 whitespace-nowrap"
+            onClick={onStartConnect}
+            disabled={!selectedNodeId}
+          >
+            <LinkIcon className="h-3.5 w-3.5 shrink-0" />
+            <span>{t("addRelation")}</span>
           </button>
         )}
 
-        <button type="button" className="rounded border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-50" onClick={onRelayout}>
-          {t("relayout")}
+        <button
+          type="button"
+          className="or-g50-btn or-g50-btn-secondary !h-8 !text-xs font-medium shrink-0 whitespace-nowrap"
+          onClick={onRelayout}
+        >
+          <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+          <span>{t("relayout")}</span>
         </button>
 
-        <span className="hidden h-4 w-px bg-slate-200 sm:inline" aria-hidden />
+        <span className="hidden h-4 w-px bg-[var(--or-inset)]  sm:inline shrink-0" aria-hidden />
 
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-          <span className="text-slate-500">{t("relTypeMindmap")}</span>
+        <div className="flex items-center gap-x-2.5 gap-y-1 text-xs shrink-0 whitespace-nowrap">
+          <span className="text-[var(--or-muted)]  font-medium">{t("relTypeMindmap")}</span>
           {REL_KEYS.map((k) => (
-            <label key={k} className="inline-flex cursor-pointer items-center gap-1">
+            <label key={k} className="inline-flex cursor-pointer items-center gap-1.5 font-medium shrink-0">
               <input
                 type="checkbox"
+                className="rounded border-[var(--or-outline)] text-[var(--or-on-container)] focus:ring-[var(--or-focus)]  "
                 checked={crossRelTypeFilter[k] === true}
                 onChange={(e) => setCrossRelTypeFilter((prev) => ({ ...prev, [k]: e.target.checked }))}
               />
@@ -599,14 +650,17 @@ export function MindMapCanvas({
           ))}
         </div>
 
-        <span className="hidden text-[11px] text-slate-400 sm:inline">
+        <span className="hidden text-xs text-[var(--or-muted)]  sm:inline shrink-0 whitespace-nowrap">
           {t("mindmapHint")}
         </span>
       </div>
 
       {connectingFromId ? (
-        <div className="bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800 border-b border-amber-200">
-          {t("connectModeHint")} {graphNodes.find((n) => n.id === connectingFromId)?.canonical_name ?? connectingFromId}
+        <div className="flex items-center gap-2 border-b border-[var(--or-warning)] bg-[var(--or-warning-container)] px-4 py-2 text-xs font-medium text-[var(--or-on-warning)] dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+          <LinkIcon className="h-4 w-4 shrink-0 text-[var(--or-on-warning)]" />
+          <span>
+            {t("connectModeHint")} {graphNodes.find((n) => n.id === connectingFromId)?.canonical_name ?? connectingFromId}
+          </span>
         </div>
       ) : null}
 

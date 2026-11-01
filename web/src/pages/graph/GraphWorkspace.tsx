@@ -1,3 +1,5 @@
+import { Pencil } from "lucide-react";
+import { Select } from "../../components/ui/select";
 /**
  * GraphWorkspace – Main knowledge graph page.
  *
@@ -8,7 +10,10 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Download, Upload } from "lucide-react";
+import { Download, Upload, Network, ChevronLeft } from "lucide-react";
+import "../../ui-redesign/g50/g50.css";
+import { G50EmptyState } from "../../ui-redesign/g50/G50EmptyState";
+import { G50ConnectModal } from "../../ui-redesign/g50/G50ConnectModal";
 import {
   apiGraphCreateGraph,
   apiGraphCreateNode,
@@ -107,8 +112,8 @@ function GraphWorkspaceContent({
   const [pendingConnectTarget, setPendingConnectTarget] = useState<string | null>(null);
   const [connectRelType, setConnectRelType] = useState("related");
   const [showConnectDialog, setShowConnectDialog] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const [firstGraphName, setFirstGraphName] = useState("");
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? graphNodes.find((n) => n.id === selectedNodeId) ?? null : null),
@@ -137,36 +142,6 @@ function GraphWorkspaceContent({
     setPanelExpanded(true);
     queueMicrotask(() => onFocusConsumed?.());
   }, [focusNodeId, onFocusConsumed, setSelectedNodeId, setPanelExpanded]);
-
-  // Mind map / graph view toggle in app menubar (ToolBar)
-  useEffect(() => {
-    const left: ReactNode = (
-      <div className="flex rounded-md border border-slate-200 bg-white p-0.5 text-[11px]">
-        <button
-          type="button"
-          className={cn(
-            "rounded px-2.5 py-1 font-medium",
-            viewMode === "mindmap" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50",
-          )}
-          onClick={() => setViewMode("mindmap")}
-        >
-          {t("viewMindmap")}
-        </button>
-        <button
-          type="button"
-          className={cn(
-            "rounded px-2.5 py-1 font-medium",
-            viewMode === "graph" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50",
-          )}
-          onClick={() => setViewMode("graph")}
-        >
-          {t("viewGraph")}
-        </button>
-      </div>
-    );
-    setToolBar({ left });
-    return () => clearToolBar();
-  }, [viewMode, setViewMode, t, setToolBar, clearToolBar]);
 
   const isMountedRef = useRef(true);
   const loadSeqRef = useRef(0);
@@ -854,73 +829,182 @@ function GraphWorkspaceContent({
     [graphs, activeSlug],
   );
 
+  // Mind map / graph view toggle in app menubar (ToolBar)
+  useEffect(() => {
+    const left: ReactNode = (
+      <div className="or-g50-mode-tabs items-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-0.5 shadow-sm  ">
+        <button
+          type="button"
+          className={cn(
+            "inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+            viewMode === "mindmap"
+              ? "bg-[var(--or-primary)] text-[var(--or-on-primary)] shadow-sm "
+              : "text-[var(--or-muted)] hover:text-[var(--or-text)]  dark:hover:text-[var(--or-text)]",
+          )}
+          onClick={() => setViewMode("mindmap")}
+        >
+          <span className="inline-block transform translate-y-[0.5px]">
+            {t("viewMindmap")}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+            viewMode === "graph"
+              ? "bg-[var(--or-primary)] text-[var(--or-on-primary)] shadow-sm "
+              : "text-[var(--or-muted)] hover:text-[var(--or-text)]  dark:hover:text-[var(--or-text)]",
+          )}
+          onClick={() => setViewMode("graph")}
+        >
+          <span className="inline-block transform translate-y-[0.5px]">
+            {t("viewGraph")}
+          </span>
+        </button>
+      </div>
+    );
+    const mobileMode = <div className="or-g50-mode-mobile">
+      <Select aria-label="图谱视图" value={viewMode} onValueChange={(value) => setViewMode(value as "mindmap" | "graph")}>
+        <option value="mindmap">{t("viewMindmap")}</option><option value="graph">{t("viewGraph")}</option>
+      </Select>
+    </div>;
+    const right = <div className="or-g50-mobile-actions">
+      <button type="button" className="or-g50-btn or-g50-btn-secondary" onClick={() => setMobileSidebarOpen(true)} title={t("graphsTitle")} aria-label={t("graphsTitle")}>
+        <Network className="h-4 w-4" />
+        {!(selectedNode && !panelExpanded) ? <span className="max-w-16 truncate">{activeGraphInfo?.display_name ?? t("graphsTitle")}</span> : null}
+      </button>
+      {selectedNode && !panelExpanded ? <button type="button" className="or-g50-btn or-g50-btn-tonal" onClick={() => setPanelExpanded(true)} aria-label={t("expandMaintain")} title={t("expandMaintain")}><Pencil className="h-4 w-4" /></button> : null}
+      <button type="button" className="or-g50-btn or-g50-btn-secondary" disabled={busy} onClick={() => importInputRef.current?.click()} aria-label="导入" title="导入"><Upload className="h-4 w-4" /></button>
+      <button type="button" className="or-g50-btn or-g50-btn-secondary" disabled={busy || !activeSlug} onClick={() => void handleExportGraph()} aria-label="导出" title="导出"><Download className="h-4 w-4" /></button>
+    </div>;
+    setToolBar({ left: <>{left}{mobileMode}</>, right });
+    return () => clearToolBar();
+  }, [viewMode, setViewMode, t, setToolBar, clearToolBar, selectedNode, panelExpanded, activeGraphInfo, busy, activeSlug, handleExportGraph, setPanelExpanded]);
+
   const REL_KEYS = ["prerequisite", "part_of", "related", "causal"] as const;
 
   return (
-    <div className="flex h-full min-h-[70vh] flex-col gap-2 p-2">
-      <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-        <span className="text-sm font-medium text-slate-800">知识图谱</span>
-        <div className="flex items-center gap-2">
-        <input
-          ref={importInputRef}
-          type="file"
-          data-testid="graph-import-file"
-          accept="application/json,.json"
-          className="hidden"
-          onChange={(event) => void handleImportGraph(event)}
-        />
-        <button
-          type="button"
-          data-testid="graph-import-button"
-          disabled={busy}
-          onClick={() => importInputRef.current?.click()}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-        >
-          <Upload className="h-3.5 w-3.5" />
-          导入
-        </button>
-        <button
-          type="button"
-          data-testid="graph-export-button"
-          disabled={busy || !activeSlug}
-          onClick={() => void handleExportGraph()}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-        >
-          <Download className="h-3.5 w-3.5" />
-          导出
-        </button>
+    <div className="or-g50-container h-full min-h-[70vh] flex flex-col gap-3 p-3">
+          <input
+            ref={importInputRef}
+            type="file"
+            data-testid="graph-import-file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(event) => void handleImportGraph(event)}
+          />
+      {/* Top Workspace Header Bar */}
+      <div className="or-g50-header or-g50-desktop-header">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Mobile drawer toggle */}
+          <button
+            type="button"
+            className="md:hidden or-g50-btn or-g50-btn-secondary !h-8 !px-2.5 !text-xs font-medium shrink-0"
+            onClick={() => setMobileSidebarOpen(true)}
+            title={t("graphsTitle")}
+          >
+            <Network className="h-3.5 w-3.5 text-[var(--or-on-container)]  shrink-0" />
+            <span className="max-w-[120px] truncate">
+              {activeGraphInfo?.display_name ?? t("graphsTitle")}
+            </span>
+          </button>
+
+          <div className="hidden md:flex or-g50-header-title">
+            <Network className="h-5 w-5 text-[var(--or-on-container)] " />
+            <span>知识图谱</span>
+          </div>
+
+          {activeGraphInfo && (
+            <span className="hidden md:inline-flex items-center rounded-full bg-[var(--or-block)]  px-2.5 py-0.5 text-xs font-medium text-[var(--or-muted)] ">
+              {activeGraphInfo.display_name}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Mobile quick-open node panel if a node is selected but panel was collapsed */}
+          {selectedNode && !panelExpanded && (
+            <button
+              type="button"
+              onClick={() => setPanelExpanded(true)}
+              className="lg:hidden or-g50-btn or-g50-btn-primary !h-8 !px-2.5 !text-xs font-medium"
+              title={t("expandMaintain")}
+            >
+              <span className="max-w-[80px] truncate">{selectedNode.canonical_name}</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            data-testid="graph-import-button"
+            disabled={busy}
+            onClick={() => importInputRef.current?.click()}
+            className="or-g50-btn or-g50-btn-secondary !h-8 !px-2 sm:!px-3 !text-xs font-medium"
+            title="导入"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">导入</span>
+          </button>
+          <button
+            type="button"
+            data-testid="graph-export-button"
+            disabled={busy || !activeSlug}
+            onClick={() => void handleExportGraph()}
+            className="or-g50-btn or-g50-btn-secondary !h-8 !px-2 sm:!px-3 !text-xs font-medium"
+            title="导出"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">导出</span>
+          </button>
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-row gap-2">
-        {/* Left: Subject selector */}
-        <GraphSubjectSidebar
-          graphs={graphs}
-          activeSlug={activeSlug}
-          onSelect={(slug) => {
-            setActiveSlug(slug);
-            setSelectedNodeId(null);
-            setSelectedEdgeId(null);
-          }}
-          onCreateGraph={handleCreateGraph}
-          onDeleteGraph={handleDeleteGraph}
-          onRenameGraph={handleRenameGraph}
-          busy={busy}
-        />
 
-        {/* Center: Canvas */}
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+      {/* Main 3-column / 2-column workspace */}
+      <div className="flex min-h-0 flex-1 flex-row gap-3">
+        {/* Left: Subject selector (responsive drawer on mobile, inline on md+) */}
+        {mobileSidebarOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs md:hidden"
+            onClick={() => setMobileSidebarOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+        <div
+          className={cn(
+            "md:flex md:w-56 lg:w-60 md:shrink-0",
+            mobileSidebarOpen
+              ? "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col shadow-2xl animate-in slide-in-from-left duration-200 md:shadow-none md:animate-none"
+              : "hidden",
+          )}
+        >
+          <GraphSubjectSidebar
+            graphs={graphs}
+            activeSlug={activeSlug}
+            onSelect={(slug) => {
+              setActiveSlug(slug);
+              setSelectedNodeId(null);
+              setSelectedEdgeId(null);
+              setMobileSidebarOpen(false);
+            }}
+            onCreateGraph={handleCreateGraph}
+            onDeleteGraph={handleDeleteGraph}
+            onRenameGraph={handleRenameGraph}
+            busy={busy}
+            onClose={() => setMobileSidebarOpen(false)}
+          />
+        </div>
+
+        {/* Center: Canvas Area */}
+        <div className="or-g50-canvas-wrapper flex-1 relative">
           {busy && graphNodes.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-slate-500">
+            <div className="flex h-full items-center justify-center text-sm font-medium text-[var(--or-muted)] ">
               {t("loading")}
             </div>
           ) : activeSlug === null ? (
-            <div className="flex h-full flex-col items-center justify-center gap-4 px-4 text-center text-sm text-slate-600">
-              <div><p className="font-medium text-slate-900">还没有图谱</p><p className="mt-1 text-xs text-slate-500">输入名称，先建一个空图谱；也可以在上方导入 JSON。</p></div>
-              <form className="flex w-full max-w-sm gap-2" onSubmit={(event) => { event.preventDefault(); if (!firstGraphName.trim()) return; void handleCreateGraph(firstGraphName.trim()); setFirstGraphName(""); }}>
-                <input aria-label="新图谱名称" className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" placeholder="例如：高中数学" value={firstGraphName} onChange={(event) => setFirstGraphName(event.target.value)} />
-                <button type="submit" disabled={busy || !firstGraphName.trim()} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">新建图谱</button>
-              </form>
-            </div>
+            <G50EmptyState
+              busy={busy}
+              onCreateGraph={handleCreateGraph}
+            />
           ) : viewMode === "mindmap" ? (
             <MindMapCanvas
               graphNodes={graphNodes}
@@ -962,68 +1046,83 @@ function GraphWorkspaceContent({
               onCancelConnect={handleCancelConnect}
             />
           )}
+
+          {/* Floating edit button on mobile when a node is selected but panel is collapsed */}
+          {selectedNode && !panelExpanded && (
+            <div className="absolute bottom-4 right-4 z-20 lg:hidden">
+              <button
+                type="button"
+                className="or-g50-btn or-g50-btn-primary shadow-lg !h-9 !px-3.5 !text-xs font-semibold rounded-full flex items-center gap-1.5"
+                onClick={() => setPanelExpanded(true)}
+              >
+                <span className="max-w-[120px] truncate">{selectedNode.canonical_name}</span>
+                <span className="text-white/80">· {t("panelTabEdit")}</span>
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Right: Detail panel */}
+        {/* Right: Detail panel or collapse handle (responsive drawer on mobile/tablet, inline on lg+) */}
         {panelExpanded ? (
-          <GraphNodePanel
-            selectedNode={selectedNode}
-            relations={relations}
-            graphNodes={graphNodes}
-            activeSlug={activeSlug}
-            tab={panelTab}
-            onTabChange={setPanelTab}
-            onSaved={reloadActiveGraphData}
-            onDeleteNode={handlePanelDeleteNode}
-            onDeleted={() => { setSelectedNodeId(null); }}
-            onError={onError}
-            onClose={() => setPanelExpanded(false)}
-            highlightEdgeId={selectedEdgeId}
-          />
+          <>
+            {/* Mobile/tablet backdrop */}
+            <div
+              className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs lg:hidden"
+              onClick={() => setPanelExpanded(false)}
+              aria-hidden="true"
+            />
+            <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[92vw] sm:max-w-md flex-col shadow-2xl lg:relative lg:inset-auto lg:z-auto lg:w-[380px] lg:max-w-[380px] xl:w-[420px] xl:max-w-[420px] lg:shadow-none animate-in slide-in-from-right duration-200 lg:animate-none">
+              <GraphNodePanel
+                selectedNode={selectedNode}
+                relations={relations}
+                graphNodes={graphNodes}
+                activeSlug={activeSlug}
+                tab={panelTab}
+                onTabChange={setPanelTab}
+                onSaved={reloadActiveGraphData}
+                onDeleteNode={handlePanelDeleteNode}
+                onDeleted={() => { setSelectedNodeId(null); }}
+                onError={onError}
+                onClose={() => setPanelExpanded(false)}
+                highlightEdgeId={selectedEdgeId}
+              />
+            </div>
+          </>
         ) : selectedNode ? (
           <button
             type="button"
-            className="flex w-12 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white py-4 text-[11px] text-slate-600 hover:bg-slate-50"
+            className="hidden lg:flex w-10 shrink-0 flex-col items-center justify-center gap-2 rounded-2xl border border-[var(--or-outline)] bg-[var(--or-card)] py-4 shadow-sm hover:bg-[var(--or-page)]   dark:hover:bg-[var(--or-primary)] transition-colors"
             onClick={() => setPanelExpanded(true)}
+            title={t("expandMaintain")}
           >
-            <span className="[writing-mode:vertical-rl]">{t("expandMaintain")}</span>
+            <ChevronLeft className="h-4 w-4 text-[var(--or-muted)]" />
+            <span className="[writing-mode:vertical-rl] text-xs font-medium text-[var(--or-muted)]  tracking-wider">
+              {t("expandMaintain")}
+            </span>
           </button>
         ) : null}
       </div>
 
-      {/* Connect relation type dialog */}
-      {showConnectDialog ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-4 shadow-xl">
-            <h3 className="text-sm font-semibold text-slate-900">{t("chooseRelationType")}</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              {graphNodes.find((n) => n.id === pendingConnectSource)?.canonical_name ?? pendingConnectSource}
-              {" → "}
-              {graphNodes.find((n) => n.id === pendingConnectTarget)?.canonical_name ?? pendingConnectTarget}
-            </p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {REL_KEYS.map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  className={`rounded-md border px-3 py-2 text-sm font-medium transition-colors ${connectRelType === k ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
-                  onClick={() => setConnectRelType(k)}
-                >
-                  {t(`edgeKind.${k}`)}
-                </button>
-              ))}
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button type="button" className="rounded-md border border-slate-300 px-3 py-2 text-sm" onClick={handleCancelConnect}>
-                {t("cancel")}
-              </button>
-              <button type="button" className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={busy} onClick={() => void commitConnect()}>
-                {t("createRelation")}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {/* Connect relation type dialog modal */}
+      <G50ConnectModal
+        isOpen={showConnectDialog}
+        sourceNodeName={
+          graphNodes.find((n) => n.id === pendingConnectSource)?.canonical_name ??
+          pendingConnectSource ??
+          ""
+        }
+        targetNodeName={
+          graphNodes.find((n) => n.id === pendingConnectTarget)?.canonical_name ??
+          pendingConnectTarget ??
+          ""
+        }
+        connectRelType={connectRelType}
+        onSelectRelType={setConnectRelType}
+        onConfirm={() => void commitConnect()}
+        onCancel={handleCancelConnect}
+        busy={busy}
+        relKeys={REL_KEYS}
+      />
     </div>
   );
 }

@@ -20,11 +20,14 @@ import {
   type PlatformPaperAnalysis,
   type PlatformPaperRecord,
 } from "../../platform/auth";
+import { formatSubjectLabel } from "../../lib/subjectLabels";
 import { PlatformPaperAnalysisCharts } from "../platform/AnalysisCharts";
 import { useAgentContext } from "../../contexts/AgentContext";
+import { SelectionIndicator } from "../../design-system/SelectionIndicator";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { dispatchExamsChanged } from "../../lib/examEvents";
 import { saveBlobToDisk } from "../../lib/saveBlobToDisk";
+import { isShiftSpace, rangeSelection } from "../../lib/rangeSelection";
 import { formatLocaleDate } from "../../lib/locale";
 import { cn } from "../../lib/utils";
 import {
@@ -38,6 +41,10 @@ import {
   Trash2,
   Upload,
   XCircle,
+  Users,
+  Target,
+  Clock,
+  ShieldAlert,
 } from "lucide-react";
 import {
   type ExamResult,
@@ -55,6 +62,9 @@ import { AnalysisDiagnosisPanel } from "./AnalysisDiagnosisPanel";
 import { AnalysisResultView } from "./AnalysisResultView";
 import { AnalysisFoldersPanel, ANALYSIS_ITEMS_MIME, type AnalysisFolderFilter } from "./AnalysisFoldersPanel";
 import { useAnalysisFolders } from "./useAnalysisFolders";
+import { G52StatCard } from "../../ui-redesign/g52/G52UIComponents";
+import "../../ui-redesign/g52/g52-design-tokens.css";
+import { Select as AppSelect } from "../../components/ui/select";
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -94,6 +104,8 @@ export function AnalysisWorkspace({
   const [importError, setImportError] = useState<string | null>(null);
   const [importWarnings, setImportWarnings] = useState<ImportResult["warnings"]>([]);
   const [tab, setTab] = useState<"overview" | "questions" | "nodes" | "students" | "diagnosis">("overview");
+  const [mobileTab, setMobileTab] = useState<"list" | "detail" | "actions">("list");
+  const mobileSegmentRef = useRef<HTMLDivElement>(null);
   const [questionSectionFilter, setQuestionSectionFilter] = useState("all");
   const [folderScripts, setFolderScripts] = useState<AnalysisFolderScript[]>([]);
   const [jobs, setJobs] = useState<AnalysisJob[]>([]);
@@ -107,6 +119,7 @@ export function AnalysisWorkspace({
   const [historyMode, setHistoryMode] = useState<"all" | "online" | "offline">("all");
   const [analysisFolderFilter, setAnalysisFolderFilter] = useState<AnalysisFolderFilter>("all");
   const [selectedAnalysisItemIds, setSelectedAnalysisItemIds] = useState<string[]>([]);
+  const analysisSelectionAnchor = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rightChartRef = useRef<HTMLDivElement>(null);
   const onlineAnalysisRequestIdRef = useRef(0);
@@ -192,6 +205,7 @@ export function AnalysisWorkspace({
   useEffect(() => {
     if (previousOwnerProjectScopeKeyRef.current === ownerProjectScopeKey) return;
     previousOwnerProjectScopeKeyRef.current = ownerProjectScopeKey;
+    analysisSelectionAnchor.current = null;
     examListRequestIdRef.current += 1;
     onlinePapersRequestIdRef.current += 1;
     eduAnalysisMetaRequestIdRef.current += 1;
@@ -362,9 +376,21 @@ export function AnalysisWorkspace({
       (!needle || `${exam.exam_title} ${exam.exam_id} ${exam.subject || ""}`.toLowerCase().includes(needle)),
     );
   }, [historyMode, historyQuery, historySubject, legacyExams, folderMatches]);
+  const filteredAnalysisItemIds = useMemo(() => [
+    ...filteredOnlinePapers.map((paper) => `paper:${paper.paper_id}`),
+    ...filteredLegacyExams.map((exam) => `exam:${exam.exam_id}`),
+  ], [filteredLegacyExams, filteredOnlinePapers]);
+  const selectAnalysisRange = (itemId: string) => {
+    setSelectedAnalysisItemIds((current) => {
+      const next = rangeSelection(current, filteredAnalysisItemIds, analysisSelectionAnchor.current, itemId);
+      return next.length > 200 ? next.slice(0, 200) : next;
+    });
+    analysisSelectionAnchor.current = itemId;
+  };
 
   const handleOnlinePaperSelect = useCallback(async (paper: PlatformPaperRecord, publicationId?: string, classId?: string) => {
     if (ownerProjectScopeKeyRef.current !== ownerProjectScopeKey) return;
+    setMobileTab("detail");
     const requestId = ++onlineAnalysisRequestIdRef.current;
     const scopeKey = ownerProjectScopeKey;
     studioRunRequestIdRef.current += 1;
@@ -472,6 +498,7 @@ export function AnalysisWorkspace({
 
   const handleExamSelect = useCallback(
     async (examId: string) => {
+      setMobileTab("detail");
       selectedExamIdRef.current = examId;
       setSelectedExamId(examId);
       await loadExamDetail(examId);
@@ -712,8 +739,8 @@ export function AnalysisWorkspace({
 
   // SVG chart helpers
   const errorColorFn = (v: number, _warn?: boolean) => {
-    if (v < 0.2) return "#22c55e";
-    if (v < 0.5) return "#eab308";
+    if (v < 0.2) return "#10b981";
+    if (v < 0.5) return "#f59e0b";
     return "#ef4444";
   };
 
@@ -763,31 +790,122 @@ export function AnalysisWorkspace({
   }, []);
 
   return ownerProjectScopeReady ? (
-    <div className="flex h-full overflow-hidden">
-      {/* Left sidebar: exam history */}
-      <div className={cn("flex shrink-0 flex-col border-r border-slate-200 bg-slate-50", leftWidth === 56 ? "w-56" : leftWidth === 64 ? "w-64" : "w-72")}>
-        <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
-          <h3 className="text-sm font-semibold text-slate-700">{t("historyTitle")}</h3>
-          <div className="flex items-center gap-1">
-            <button onClick={() => setLeftWidth(56)} className={cn("rounded px-1.5 py-0.5 text-xs", leftWidth === 56 ? "bg-blue-100 text-blue-700" : "text-slate-500 hover:bg-slate-200")}>S</button>
-            <button onClick={() => setLeftWidth(64)} className={cn("rounded px-1.5 py-0.5 text-xs", leftWidth === 64 ? "bg-blue-100 text-blue-700" : "text-slate-500 hover:bg-slate-200")}>M</button>
-            <button onClick={() => setLeftWidth(72)} className={cn("rounded px-1.5 py-0.5 text-xs", leftWidth === 72 ? "bg-blue-100 text-blue-700" : "text-slate-500 hover:bg-slate-200")}>L</button>
+    <div className="flex h-full flex-col lg:flex-row overflow-hidden bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)]">
+      {/* Mobile View Switcher */}
+      <div className="flex lg:hidden shrink-0 border-b border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2">
+        <div ref={mobileSegmentRef} className="or-g52-mobile-segmented or-g52-mobile-segmented-indicator relative isolate w-full">
+          <SelectionIndicator rootRef={mobileSegmentRef} selector={'[data-state="active"]'} />
+          <button
+            type="button"
+            aria-pressed={mobileTab === "list"}
+            data-state={mobileTab === "list" ? "active" : "inactive"}
+            onClick={() => setMobileTab("list")}
+            className={cn("or-g52-mobile-segmented-btn", mobileTab === "list" && "or-g52-mobile-segmented-btn-active")}
+          >
+            {t("historyTitle")}
+          </button>
+          <button
+            type="button"
+            aria-pressed={mobileTab === "detail"}
+            data-state={mobileTab === "detail" ? "active" : "inactive"}
+            onClick={() => setMobileTab("detail")}
+            className={cn("or-g52-mobile-segmented-btn", mobileTab === "detail" && "or-g52-mobile-segmented-btn-active")}
+          >
+            {t("tabOverview")}
+          </button>
+          {selectedExamId && examSummary && (
             <button
+              type="button"
+              aria-pressed={mobileTab === "actions"}
+              data-state={mobileTab === "actions" ? "active" : "inactive"}
+              onClick={() => setMobileTab("actions")}
+              className={cn("or-g52-mobile-segmented-btn", mobileTab === "actions" && "or-g52-mobile-segmented-btn-active")}
+            >
+              {t("quickActions")}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Left sidebar: exam history */}
+      <div
+        className={cn(
+          "shrink-0 flex-col border-r border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)]",
+          leftWidth === 56 ? "lg:w-56" : leftWidth === 64 ? "lg:w-64" : "lg:w-72",
+          mobileTab === "list" ? "flex flex-1 w-full" : "hidden lg:flex"
+        )}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_70%,transparent)] px-3.5 py-2.5">
+          <h3 className="text-sm font-semibold text-[var(--or-text)] tracking-tight">{t("historyTitle")}</h3>
+          <div className="flex items-center gap-1.5">
+            <div className="hidden lg:flex items-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-block)] p-0.5">
+              <button
+                type="button"
+                onClick={() => setLeftWidth(56)}
+                className={cn("rounded-md px-1.5 py-0.5 text-xs font-medium transition-colors", leftWidth === 56 ? "bg-[var(--or-card)] text-[var(--or-on-container)] shadow-2xs" : "text-[var(--or-muted)] hover:text-[var(--or-muted)]")}
+              >
+                S
+              </button>
+              <button
+                type="button"
+                onClick={() => setLeftWidth(64)}
+                className={cn("rounded-md px-1.5 py-0.5 text-xs font-medium transition-colors", leftWidth === 64 ? "bg-[var(--or-card)] text-[var(--or-on-container)] shadow-2xs" : "text-[var(--or-muted)] hover:text-[var(--or-muted)]")}
+              >
+                M
+              </button>
+              <button
+                type="button"
+                onClick={() => setLeftWidth(72)}
+                className={cn("rounded-md px-1.5 py-0.5 text-xs font-medium transition-colors", leftWidth === 72 ? "bg-[var(--or-card)] text-[var(--or-on-container)] shadow-2xs" : "text-[var(--or-muted)] hover:text-[var(--or-muted)]")}
+              >
+                L
+              </button>
+            </div>
+            <button
+              type="button"
               onClick={() => {
                 void loadExams();
                 void loadOnlinePapers();
               }}
-              className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+              className="rounded-lg p-1 text-[var(--or-muted)] hover:bg-[color-mix(in_srgb,var(--or-inset)_80%,transparent)] hover:text-[var(--or-muted)] transition-colors"
               title={t("refresh")}
             >
               <RefreshCw className="h-4 w-4" />
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto bg-white px-3 py-3">
-          <div className="mb-3 space-y-2 rounded-md border border-slate-200 bg-slate-50 p-2">
-            <div className="relative"><Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-400" /><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="搜索考试名称" className="w-full rounded border border-slate-300 bg-white py-1.5 pl-7 pr-2 text-xs" /></div>
-            <div className="grid grid-cols-2 gap-2"><select value={historySubject} onChange={(event) => setHistorySubject(event.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs"><option value="all">全部学科</option>{historySubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}</select><select value={historyMode} onChange={(event) => setHistoryMode(event.target.value as "all" | "online" | "offline")} className="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs"><option value="all">全部形式</option><option value="online">线上</option><option value="offline">线下</option></select></div>
+        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+          <div className="space-y-2 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 shadow-2xs">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-[var(--or-muted)]" />
+              <input
+                value={historyQuery}
+                onChange={(event) => setHistoryQuery(event.target.value)}
+                placeholder="搜索考试名称"
+                className="w-full rounded-lg border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] py-1.5 pl-8 pr-2.5 text-xs text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:bg-[var(--or-card)] focus:outline-none"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <AppSelect
+                value={historySubject}
+                onValueChange={(value) => setHistorySubject(value)}
+                className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2 py-1.5 text-xs text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none"
+              >
+                <option value="all">全部学科</option>
+                {historySubjects.map((subject) => (
+                  <option key={subject} value={subject}>{subject}</option>
+                ))}
+              </AppSelect>
+              <AppSelect
+                value={historyMode}
+                onValueChange={(value) => setHistoryMode(value as "all" | "online" | "offline")}
+                className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2 py-1.5 text-xs text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none"
+              >
+                <option value="all">全部形式</option>
+                <option value="online">线上</option>
+                <option value="offline">线下</option>
+              </AppSelect>
+            </div>
           </div>
           <AnalysisFoldersPanel
             folders={analysisFolders.folders}
@@ -805,32 +923,52 @@ export function AnalysisWorkspace({
             onAssignItems={assignAnalysisItems}
           />
           <div>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <h4 className="text-xs font-semibold text-slate-600">考试记录与分析</h4>
-              {loadingOnlinePapers || loadingExams ? <RefreshCw className="h-3 w-3 animate-spin text-slate-400" /> : null}
+            <div className="mb-2 flex items-center justify-between gap-2 px-1">
+              <h4 className="text-xs font-semibold text-[var(--or-muted)]">考试记录与分析</h4>
+              {loadingOnlinePapers || loadingExams ? <RefreshCw className="h-3 w-3 animate-spin text-[var(--or-muted)]" /> : null}
             </div>
             {filteredOnlinePapers.length === 0 && filteredLegacyExams.length === 0 ? (
-              <p className="text-xs text-slate-400">暂无考试记录</p>
+              <p className="px-2 py-4 text-center text-xs text-[var(--or-muted)]">暂无考试记录</p>
             ) : (
               <div className="space-y-1">
                 {filteredOnlinePapers.map((paper) => {
                   const hasSubmittedAnswers = (paper.submitted_student_count ?? 0) > 0;
                   const hasImportedScores = paper.score_batch_count > 0;
                   const hasBothSources = hasSubmittedAnswers && hasImportedScores;
+                  const isSelected = selectedOnlinePaperId === paper.paper_id;
                   return (
                     <div
                       key={paper.paper_id}
-                      className="flex items-stretch rounded hover:bg-slate-100"
+                      className={cn(
+                        "flex items-stretch rounded-xl border transition-colors",
+                        isSelected
+                          ? "border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_70%,transparent)] text-[var(--or-on-container)]"
+                          : "border-transparent bg-[var(--or-card)] hover:border-[var(--or-outline)] hover:bg-[var(--or-page)]",
+                      )}
                       draggable
                       onDragStart={(event) => startAnalysisItemDrag(event, `paper:${paper.paper_id}`)}
                     >
-                      <label className="flex shrink-0 items-center pl-2" onClick={(event) => event.stopPropagation()}>
+                      <label className="flex w-6 shrink-0 items-start justify-center pt-2" onClick={(event) => event.stopPropagation()}>
                         <input
                           type="checkbox"
                           aria-label={`选择归类 ${paper.title}`}
                           checked={selectedAnalysisItemSet.has(`paper:${paper.paper_id}`)}
                           disabled={!selectedAnalysisItemSet.has(`paper:${paper.paper_id}`) && selectedAnalysisItemIds.length >= 200}
-                          onChange={() => toggleAnalysisItem(`paper:${paper.paper_id}`)}
+                          onKeyDown={(event) => {
+                            if (isShiftSpace(event)) {
+                              event.preventDefault();
+                              selectAnalysisRange(`paper:${paper.paper_id}`);
+                            }
+                          }}
+                          onChange={(event) => {
+                            if ((event.nativeEvent as MouseEvent).shiftKey) {
+                              selectAnalysisRange(`paper:${paper.paper_id}`);
+                            } else {
+                              analysisSelectionAnchor.current = `paper:${paper.paper_id}`;
+                              toggleAnalysisItem(`paper:${paper.paper_id}`);
+                            }
+                          }}
+                          className="h-4 w-4 shrink-0 rounded border-[var(--or-outline)] text-[var(--or-on-container)] focus:ring-0"
                         />
                       </label>
                       <button
@@ -842,21 +980,16 @@ export function AnalysisWorkspace({
                             void handleOnlinePaperSelect(paper);
                           }
                         }}
-                        className={cn(
-                          "min-w-0 flex-1 rounded-l px-2 py-2 text-left text-xs transition-colors",
-                          selectedOnlinePaperId === paper.paper_id
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "text-slate-600",
-                        )}
+                        className="min-w-0 flex-1 px-2.5 py-2 text-left text-xs"
                       >
-                        <span className="block truncate font-medium">{paper.title}</span>
-                        <span className="mt-0.5 block truncate text-[11px] text-slate-400">
-                          {[paper.subject, `${paper.question_count} 题`, `${paper.published_class_count} 班`]
+                        <span className="block truncate font-medium text-[var(--or-text)]">{paper.title}</span>
+                        <span className="mt-0.5 block truncate text-xs text-[var(--or-muted)]">
+                          {[formatSubjectLabel(paper.subject), `${paper.question_count} 题`, `${paper.published_class_count} 班`]
                             .filter(Boolean)
                             .join(" · ")}
                         </span>
                         {hasSubmittedAnswers || (paper.in_progress_student_count ?? 0) > 0 ? (
-                          <span className="mt-1 block truncate text-[11px] font-medium text-emerald-700">
+                          <span className="mt-1 block truncate text-xs font-medium text-[var(--or-on-success)]">
                             {paper.submitted_student_count ?? 0} 份已提交 · {paper.in_progress_student_count ?? 0} 份答题中
                           </span>
                         ) : null}
@@ -864,7 +997,7 @@ export function AnalysisWorkspace({
                       {hasBothSources ? (
                         <button
                           type="button"
-                          className="shrink-0 rounded-r border-l border-slate-200 px-2 text-[11px] font-medium text-blue-600 hover:bg-blue-50"
+                          className="shrink-0 rounded-r-xl border-l border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] px-2 text-xs font-medium text-[var(--or-on-container)] hover:bg-[color-mix(in_srgb,var(--or-primary-container)_60%,transparent)] transition-colors"
                           onClick={() => void handleExamSelect(paper.exam_id)}
                           title="查看已导入的成绩批次"
                         >
@@ -874,52 +1007,69 @@ export function AnalysisWorkspace({
                     </div>
                   );
                 })}
-                {filteredLegacyExams.map((exam) => (
+                {filteredLegacyExams.map((exam) => {
+                  const isSelected = selectedExamId === exam.exam_id;
+                  return (
                     <div
                       key={exam.exam_id}
-                      className="flex items-stretch rounded hover:bg-slate-100"
+                      className={cn(
+                        "flex items-stretch rounded-xl border transition-colors",
+                        isSelected
+                          ? "border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_70%,transparent)] text-[var(--or-on-container)]"
+                          : "border-transparent bg-[var(--or-card)] hover:border-[var(--or-outline)] hover:bg-[var(--or-page)]",
+                      )}
                       draggable
                       onDragStart={(event) => startAnalysisItemDrag(event, `exam:${exam.exam_id}`)}
                     >
-                      <label className="flex shrink-0 items-center pl-2" onClick={(event) => event.stopPropagation()}>
+                      <label className="flex w-6 shrink-0 items-start justify-center pt-2" onClick={(event) => event.stopPropagation()}>
                         <input
                           type="checkbox"
                           aria-label={`选择归类 ${exam.exam_title || exam.exam_id}`}
                           checked={selectedAnalysisItemSet.has(`exam:${exam.exam_id}`)}
                           disabled={!selectedAnalysisItemSet.has(`exam:${exam.exam_id}`) && selectedAnalysisItemIds.length >= 200}
-                          onChange={() => toggleAnalysisItem(`exam:${exam.exam_id}`)}
+                          onKeyDown={(event) => {
+                            if (isShiftSpace(event)) {
+                              event.preventDefault();
+                              selectAnalysisRange(`exam:${exam.exam_id}`);
+                            }
+                          }}
+                          onChange={(event) => {
+                            if ((event.nativeEvent as MouseEvent).shiftKey) {
+                              selectAnalysisRange(`exam:${exam.exam_id}`);
+                            } else {
+                              analysisSelectionAnchor.current = `exam:${exam.exam_id}`;
+                              toggleAnalysisItem(`exam:${exam.exam_id}`);
+                            }
+                          }}
+                          className="h-4 w-4 shrink-0 rounded border-[var(--or-outline)] text-[var(--or-on-container)] focus:ring-0"
                         />
                       </label>
-                    <button
-                      type="button"
-                      onClick={() => void handleExamSelect(exam.exam_id)}
-                      className={cn(
-                        "min-w-0 flex-1 rounded-l px-2 py-2 text-left text-xs transition-colors",
-                        selectedExamId === exam.exam_id
-                          ? "bg-blue-50 text-blue-700"
-                          : "text-slate-600",
-                      )}
-                    >
-                      <span className="block truncate font-medium">{exam.exam_title || exam.exam_id}</span>
-                      <span className="mt-0.5 block truncate text-[11px] text-slate-400">
-                        {[exam.subject, `${exam.question_count} 题`, exam.score_batch_count > 0 ? `${exam.score_batch_count} 批成绩` : null]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </span>
-                      <span className="mt-0.5 block truncate text-[11px] text-slate-400">
-                        {formatLocaleDate(exam.mtime)}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="shrink-0 rounded-r border-l border-slate-200 px-2 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-                      disabled={browsePdfBusyId === exam.exam_id}
-                      onClick={() => void openExamPdfWithDefaultApp(exam.exam_id)}
-                    >
-                      {browsePdfBusyId === exam.exam_id ? "…" : t("browse")}
-                    </button>
-                  </div>
-                ))}
+                      <button
+                        type="button"
+                        onClick={() => void handleExamSelect(exam.exam_id)}
+                        className="min-w-0 flex-1 px-2.5 py-2 text-left text-xs"
+                      >
+                        <span className="block truncate font-medium text-[var(--or-text)]">{exam.exam_title || exam.exam_id}</span>
+                        <span className="mt-0.5 block truncate text-xs text-[var(--or-muted)]">
+                          {[formatSubjectLabel(exam.subject), `${exam.question_count} 题`, exam.score_batch_count > 0 ? `${exam.score_batch_count} 批成绩` : null]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                        <span className="mt-0.5 block truncate text-xs text-[var(--or-muted)]">
+                          {formatLocaleDate(exam.mtime)}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-r-xl border-l border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] px-2.5 text-xs font-medium text-[var(--or-on-container)] hover:bg-[color-mix(in_srgb,var(--or-primary-container)_60%,transparent)] transition-colors disabled:opacity-50"
+                        disabled={browsePdfBusyId === exam.exam_id}
+                        onClick={() => void openExamPdfWithDefaultApp(exam.exam_id)}
+                      >
+                        {browsePdfBusyId === exam.exam_id ? "…" : t("browse")}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -927,105 +1077,157 @@ export function AnalysisWorkspace({
       </div>
 
       {/* Middle: results only */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden border-r border-slate-200 bg-white">
+      <div
+        className={cn(
+          "min-w-0 flex-1 flex-col overflow-hidden border-r border-[var(--or-outline)] bg-[var(--or-card)]",
+          mobileTab === "detail" ? "flex w-full" : "hidden lg:flex",
+        )}
+      >
         {selectedOnlinePaperId ? (
-          <div className="min-h-0 flex-1 overflow-y-auto p-6">
-            <div className="mb-4 border-b border-slate-200 pb-4">
-              <h2 className="text-lg font-semibold text-slate-800">
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+            <div className="border-b border-[var(--or-outline)] pb-4">
+              <button
+                type="button"
+                onClick={() => setMobileTab("list")}
+                className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--or-on-container)] hover:text-[var(--or-on-container)] lg:hidden"
+              >
+                ← 返回考试列表
+              </button>
+              <h2 className="text-xl font-bold text-[var(--or-text)] tracking-tight">
                 {selectedOnlinePaper?.title ?? onlineAnalysis?.paper.title ?? "试卷分析"}
               </h2>
-              <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-slate-500">
-                {selectedOnlinePaper?.subject ? <span>{selectedOnlinePaper.subject}</span> : null}
+              <div className="mt-1.5 flex flex-wrap items-center gap-3 text-sm text-[var(--or-muted)]">
+                {selectedOnlinePaper?.subject ? <span className="font-medium text-[var(--or-muted)]">{formatSubjectLabel(selectedOnlinePaper.subject)}</span> : null}
                 {selectedOnlinePaper ? <span>{selectedOnlinePaper.question_count} 题</span> : null}
                 {selectedOnlinePaper ? <span>{selectedOnlinePaper.published_class_count} 个班级</span> : null}
               </div>
             </div>
             {loadingOnlineAnalysis ? (
-              <div className="flex min-h-[20rem] items-center justify-center text-slate-400">
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                {t("loading")}
+              <div className="flex min-h-[20rem] items-center justify-center text-[var(--or-muted)]">
+                <RefreshCw className="mr-2 h-5 w-5 animate-spin" />
+                <span>{t("loading")}</span>
               </div>
             ) : onlineAnalysis ? (
-              <div className="space-y-5">
-                <div className="grid gap-4 md:grid-cols-4">
-                  <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                    <div className="text-2xl font-bold text-slate-800">{onlineAnalysis.summary.total_students}</div>
-                    <div className="text-xs text-slate-500">学生数</div>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                    <div className="text-2xl font-bold text-blue-600">{onlineAnalysis.summary.completion_rate}%</div>
-                    <div className="text-xs text-slate-500">完成率</div>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                    <div className="text-2xl font-bold text-emerald-600">
-                      {onlineAnalysis.summary.average_score ?? "-"}
-                    </div>
-                    <div className="text-xs text-slate-500">平均得分率</div>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                    <div className="text-2xl font-bold text-rose-600">
-                      {onlineAnalysis.proctoring.exceeded_student_count ?? onlineAnalysis.proctoring.flagged_student_count}
-                    </div>
-                    <div className="text-xs text-slate-500">切屏超限</div>
-                  </div>
+              <div className="space-y-6">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <G52StatCard
+                    label="学生数"
+                    value={onlineAnalysis.summary.total_students}
+                    icon={<Users className="h-5 w-5" />}
+                    valueClassName="text-[var(--or-text)]"
+                  />
+                  <G52StatCard
+                    label="完成率"
+                    value={`${onlineAnalysis.summary.completion_rate}%`}
+                    icon={<Target className="h-5 w-5 text-[var(--or-on-container)]" />}
+                    valueClassName="text-[var(--or-on-container)]"
+                  />
+                  <G52StatCard
+                    label="平均得分率"
+                    value={onlineAnalysis.summary.average_score ?? "-"}
+                    icon={<Clock className="h-5 w-5 text-[var(--or-on-success)]" />}
+                    valueClassName="text-[var(--or-on-success)]"
+                  />
+                  <G52StatCard
+                    label="切屏超限"
+                    value={onlineAnalysis.proctoring.exceeded_student_count ?? onlineAnalysis.proctoring.flagged_student_count}
+                    icon={<ShieldAlert className="h-5 w-5 text-[var(--or-on-error)]" />}
+                    valueClassName="text-[var(--or-on-error)]"
+                  />
                 </div>
-                {(onlineAnalysis.publications?.length ?? 0) > 0 && (
-                  <label className="block text-sm">发布批次
-                    <select aria-label="分析发布批次" className="ml-3 max-w-full rounded border p-2" value={onlineAnalysis.publication_id ?? ""}
-                      onChange={(e) => { if (selectedOnlinePaper) void handleOnlinePaperSelect(selectedOnlinePaper, e.target.value); }}>
-                      {onlineAnalysis.publications?.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.created_at} · {item.id.slice(0, 8)}</option>)}
-                    </select>
-                  </label>
-                )}
-                {(onlineAnalysis.available_classes?.length ?? 0) > 0 && selectedOnlinePaper && (
-                  <label className="block text-sm">分析班级
-                    <select aria-label="分析班级" className="ml-3 max-w-full rounded border p-2" value={onlineAnalysis.class_id ?? ""}
-                      onChange={(e) => void handleOnlinePaperSelect(selectedOnlinePaper, onlineAnalysis.publication_id ?? undefined, e.target.value || undefined)}>
-                      <option value="">全部班级</option>
-                      {onlineAnalysis.available_classes?.map((item) => <option key={item.id} value={item.id}>{item.name}{item.grade && !item.name.includes(item.grade) ? ` · ${item.grade}` : ""}</option>)}
-                    </select>
-                  </label>
-                )}
+                <div className="flex flex-wrap items-center gap-4 text-sm font-medium text-[var(--or-muted)]">
+                  {(onlineAnalysis.publications?.length ?? 0) > 0 && (
+                    <label className="flex items-center gap-2">
+                      <span>发布批次</span>
+                      <AppSelect
+                        aria-label="分析发布批次"
+                        className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-sm font-normal text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none"
+                        value={onlineAnalysis.publication_id ?? ""}
+                        onValueChange={(value) => {
+                          if (selectedOnlinePaper) void handleOnlinePaperSelect(selectedOnlinePaper, value);
+                        }}
+                      >
+                        {onlineAnalysis.publications?.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.title} · {item.created_at} · {item.id.slice(0, 8)}
+                          </option>
+                        ))}
+                      </AppSelect>
+                    </label>
+                  )}
+                  {(onlineAnalysis.available_classes?.length ?? 0) > 0 && selectedOnlinePaper && (
+                    <label className="flex items-center gap-2">
+                      <span>分析班级</span>
+                      <AppSelect
+                        aria-label="分析班级"
+                        className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-sm font-normal text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none"
+                        value={onlineAnalysis.class_id ?? ""}
+                        onValueChange={(value) =>
+                          void handleOnlinePaperSelect(
+                            selectedOnlinePaper,
+                            onlineAnalysis.publication_id ?? undefined,
+                            value || undefined,
+                          )
+                        }
+                      >
+                        <option value="">全部班级</option>
+                        {onlineAnalysis.available_classes?.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
+                            {item.grade && !item.name.includes(item.grade) ? ` · ${item.grade}` : ""}
+                          </option>
+                        ))}
+                      </AppSelect>
+                    </label>
+                  )}
+                </div>
                 <PlatformPaperAnalysisCharts analysis={onlineAnalysis} />
               </div>
             ) : (
-              <div className="flex min-h-[20rem] items-center justify-center text-sm text-slate-400">
+              <div className="flex min-h-[20rem] items-center justify-center text-sm text-[var(--or-muted)]">
                 暂无分析数据；线下考试请先上传成绩或答卷照片。
               </div>
             )}
           </div>
         ) : !selectedExamId ? (
-          <div className="flex h-full items-center justify-center text-slate-400">
+          <div className="flex h-full items-center justify-center text-[var(--or-muted)]">
             <div className="text-center">
-              <BarChart3 className="mx-auto mb-3 h-12 w-12 text-slate-300" />
-              <p className="text-sm">{t("emptyBeforeSelect")}</p>
+              <BarChart3 className="mx-auto mb-3 h-12 w-12 text-[var(--or-muted)]" />
+              <p className="text-sm font-medium">{t("emptyBeforeSelect")}</p>
             </div>
           </div>
         ) : loadingDetail ? (
-          <div className="flex h-full items-center justify-center text-slate-400">
-            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-            {t("loading")}
+          <div className="flex h-full items-center justify-center text-[var(--or-muted)]">
+            <RefreshCw className="mr-2 h-5 w-5 animate-spin" />
+            <span>{t("loading")}</span>
           </div>
         ) : examSummary ? (
           <>
             {/* Exam header */}
-            <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
-              <h2 className="text-lg font-semibold text-slate-800">
+            <div className="shrink-0 border-b border-[var(--or-outline)] bg-[var(--or-card)] px-4 sm:px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setMobileTab("list")}
+                className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--or-on-container)] hover:text-[var(--or-on-container)] lg:hidden"
+              >
+                ← 返回考试列表
+              </button>
+              <h2 className="text-xl font-bold text-[var(--or-text)] tracking-tight">
                 {examSummary.exam_title}
               </h2>
-              <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-slate-500">
-                {examSummary.subject && <span>{examSummary.subject}</span>}
+              <div className="mt-1.5 flex flex-wrap items-center gap-3 text-sm text-[var(--or-muted)]">
+                {examSummary.subject && <span className="font-medium text-[var(--or-muted)]">{formatSubjectLabel(examSummary.subject)}</span>}
                 <span>{t("questionCount", { n: examSummary.question_count })}</span>
                 <span>{t("sectionCount", { n: examSummary.section_count })}</span>
                 {examSummary.score_batch_count > 0 && (
-                  <span className="text-green-600">
-                    <CheckCircle className="mr-1 inline h-3.5 w-3.5" />
+                  <span className="inline-flex items-center gap-1 font-medium text-[var(--or-on-success)]">
+                    <CheckCircle className="h-4 w-4" />
                     {t("importCount", { n: examSummary.score_batch_count })}
                   </span>
                 )}
               </div>
               {visibleJobOutput && (
-                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                <div className="mt-3 rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] px-4 py-2.5 text-xs text-[var(--or-muted)]">
                   {t("lastOutput", {
                     title: String(outputSummary?.title ?? t("defaultOutputTitle")),
                     status: String(outputSummary?.status ?? t("statusUnknown")),
@@ -1033,30 +1235,33 @@ export function AnalysisWorkspace({
                 </div>
               )}
               {visibleJobError && (
-                <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{visibleJobError}</div>
+                <div className="mt-2.5 rounded-xl border border-[var(--or-error)] bg-[var(--or-error-container)] px-4 py-2.5 text-sm text-[var(--or-on-error)]">
+                  {visibleJobError}
+                </div>
               )}
 
               {/* Import error */}
               {importError && (
-                <div className="mt-2 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-[var(--or-error)] bg-[var(--or-error-container)] px-4 py-2.5 text-sm text-[var(--or-on-error)]">
                   <XCircle className="h-4 w-4 shrink-0" />
-                  {importError}
+                  <span>{importError}</span>
                 </div>
               )}
 
               {/* Import warnings (unbound questions) */}
               {importWarnings.length > 0 && (
-                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
-                  <div className="mb-1 flex items-center gap-2 font-medium text-amber-700">
+                <div className="mt-2.5 rounded-xl border border-[var(--or-warning)] bg-[color-mix(in_srgb,var(--or-warning-container)_70%,transparent)] p-4 text-sm text-[var(--or-on-warning)]">
+                  <div className="mb-1 flex items-center gap-2 font-medium text-[var(--or-on-warning)]">
                     <AlertTriangle className="h-4 w-4" />
                     {t("unboundWarning", { n: importWarnings.length })}
                   </div>
-                  <ul className="space-y-0.5 text-amber-600">
+                  <ul className="space-y-1 text-xs text-[var(--or-on-warning)]">
                     {importWarnings.map((w) => (
-                      <li key={w.question_id} className="text-xs">
-                        <span className="font-mono font-semibold">{w.header}</span>
-                        {": "}
-                        {w.message}
+                      <li key={w.question_id} className="flex items-center gap-1.5">
+                        <span className="font-mono font-semibold px-1 py-0.5 rounded bg-[var(--or-warning-container)] text-[var(--or-on-warning)]">
+                          {w.header}
+                        </span>
+                        <span>: {w.message}</span>
                       </li>
                     ))}
                   </ul>
@@ -1083,10 +1288,10 @@ export function AnalysisWorkspace({
 
             {/* Stats tabs */}
             {!selectedBatchId ? (
-              <div className="flex flex-1 items-center justify-center text-slate-400">
+              <div className="flex flex-1 items-center justify-center text-[var(--or-muted)]">
                 <div className="text-center">
-                  <TrendingUp className="mx-auto mb-3 h-12 w-12 text-slate-300" />
-                  <p className="text-sm">{t("importToSee")}</p>
+                  <TrendingUp className="mx-auto mb-3 h-12 w-12 text-[var(--or-muted)]" />
+                  <p className="text-sm font-medium">{t("importToSee")}</p>
                 </div>
               </div>
             ) : analysis ? (
@@ -1124,9 +1329,9 @@ export function AnalysisWorkspace({
                 />
               </AnalysisResultView>
             ) : (
-              <div className="flex flex-1 items-center justify-center text-slate-400">
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                {t("computing")}
+              <div className="flex flex-1 items-center justify-center text-[var(--or-muted)]">
+                <RefreshCw className="mr-2 h-5 w-5 animate-spin" />
+                <span>{t("computing")}</span>
               </div>
             )}
           </>
@@ -1135,124 +1340,183 @@ export function AnalysisWorkspace({
 
       {/* Right: analysis controls + agent */}
       {selectedExamId && examSummary && (
-        <div className="flex w-[22rem] shrink-0 flex-col bg-slate-50">
+        <div
+          className={cn(
+            "shrink-0 flex-col bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] border-l border-[var(--or-outline)] lg:w-[22rem]",
+            mobileTab === "actions" ? "flex flex-1 w-full" : "hidden lg:flex",
+          )}
+        >
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <div className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">{t("quickActions")}</div>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-            <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-              <button onClick={() => void handleDownloadTemplate(examSummary.exam_id)} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
-                <Download className="h-4 w-4" />
-                {t("downloadTemplate")}
-              </button>
-              <button onClick={() => fileInputRef.current?.click()} disabled={importing} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                {importing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                {importing ? t("importing") : t("importScores")}
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void handleImport(examSummary.exam_id, file);
-                  e.target.value = "";
-                }}
-              />
-              <button onClick={() => void handleRecompute()} disabled={!selectedBatchId} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                <RefreshCw className="h-4 w-4" />
-                {t("recompute")}
-              </button>
-              <button onClick={() => void handleDeleteBatch()} disabled={!selectedBatchId} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50">
-                <Trash2 className="h-3 w-3" />
-                {t("deleteCurrentBatch")}
-              </button>
-              <button onClick={() => void handleDeleteExam()} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm text-red-700 hover:bg-red-50">
-                <Trash2 className="h-4 w-4" />
-                {t("deleteExam")}
+            <div className="flex items-center justify-between border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_70%,transparent)] px-4 py-3 text-sm font-semibold text-[var(--or-text)]">
+              <span>{t("quickActions")}</span>
+              <button
+                type="button"
+                onClick={() => setMobileTab("detail")}
+                className="text-xs font-normal text-[var(--or-on-container)] hover:text-[var(--or-on-container)] lg:hidden"
+              >
+                查看报告 →
               </button>
             </div>
+            <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-3.5">
+              <div className="space-y-2 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3.5 shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadTemplate(examSummary.exam_id)}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
+                >
+                  <Download className="h-4 w-4 text-[var(--or-muted)]" />
+                  <span>{t("downloadTemplate")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={importing}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
+                >
+                  {importing ? <RefreshCw className="h-4 w-4 animate-spin text-[var(--or-muted)]" /> : <Upload className="h-4 w-4 text-[var(--or-muted)]" />}
+                  <span>{importing ? t("importing") : t("importScores")}</span>
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleImport(examSummary.exam_id, file);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleRecompute()}
+                  disabled={!selectedBatchId}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw className="h-4 w-4 text-[var(--or-muted)]" />
+                  <span>{t("recompute")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteBatch()}
+                  disabled={!selectedBatchId}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--or-error)] bg-[var(--or-card)] px-3 py-2 text-xs font-medium text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] disabled:opacity-50 transition-colors"
+                >
+                  <Trash2 className="h-4 w-4 text-[var(--or-on-error)]" />
+                  <span>{t("deleteCurrentBatch")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteExam()}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-300 bg-[var(--or-card)] px-3 py-2 text-xs font-medium text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] transition-colors"
+                >
+                  <Trash2 className="h-4 w-4 text-[var(--or-on-error)]" />
+                  <span>{t("deleteExam")}</span>
+                </button>
+              </div>
 
-            <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-              {hostToolsAvailable && <>
-              <div className="text-xs font-semibold text-slate-600">{t("scriptPickTitle")}</div>
-              <select
-                value={selectedFolderScriptPath}
-                onChange={(e) => setSelectedFolderScriptPath(e.target.value)}
-                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-              >
-                {folderScripts.length === 0 && <option value="">{t("noPyScripts")}</option>}
-                {folderScripts.map((s) => (
-                  <option key={s.path} value={s.path}>
-                    {s.path}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => void handleRunFolderScriptStudio()}
-                disabled={!selectedBatchId || !selectedFolderScriptPath}
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                {t("runSelectedScript")}
-              </button>
-              </>}
-              <button
-                onClick={() => void handleRunBuiltinStudio()}
-                disabled={!selectedBatchId}
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                {t("runBuiltin")}
-              </button>
-              {hostToolsAvailable && <div className="text-[11px] text-slate-500">
-                {t("toolScriptCount", { tools: tools.length, scripts: folderScripts.length })}
-              </div>}
-            </div>
-
-            <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-              <div className="text-xs font-semibold text-slate-600">{t("scriptCharts")}</div>
-              <div ref={rightChartRef}>
-                {firstBarSpec && firstBarPoints.length > 0 ? (
-                  <SvgBarChart
-                    data={firstBarPoints.map((p) => ({ label: p.label, value: p.value }))}
-                    title={firstBarSpec.title ?? t("chartFallback")}
-                    colorFn={(v) => errorColorFn(v)}
-                    maxVal={1}
-                    formatVal={formatPct}
-                  />
-                ) : (
-                  <div className="rounded bg-slate-50 p-3 text-xs text-slate-500">{t("noChart")}</div>
+              <div className="space-y-2 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3.5 shadow-2xs">
+                {hostToolsAvailable && (
+                  <>
+                    <div className="text-xs font-semibold text-[var(--or-muted)]">{t("scriptPickTitle")}</div>
+                    <AppSelect
+                      value={selectedFolderScriptPath}
+                      onValueChange={(value) => setSelectedFolderScriptPath(value)}
+                      className="w-full rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 py-1.5 text-xs text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none"
+                    >
+                      {folderScripts.length === 0 && <option value="">{t("noPyScripts")}</option>}
+                      {folderScripts.map((s) => (
+                        <option key={s.path} value={s.path}>
+                          {s.path}
+                        </option>
+                      ))}
+                    </AppSelect>
+                    <button
+                      type="button"
+                      onClick={() => void handleRunFolderScriptStudio()}
+                      disabled={!selectedBatchId || !selectedFolderScriptPath}
+                      className="w-full rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
+                    >
+                      {t("runSelectedScript")}
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleRunBuiltinStudio()}
+                  disabled={!selectedBatchId}
+                  className="w-full rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
+                >
+                  {t("runBuiltin")}
+                </button>
+                {hostToolsAvailable && (
+                  <div className="text-xs text-[var(--or-muted)]">
+                    {t("toolScriptCount", { tools: tools.length, scripts: folderScripts.length })}
+                  </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => void handleDownloadMetadata()} disabled={!metadataScopeReady || !jobOutput} className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                  {t("downloadMeta")}
-                </button>
-                <button onClick={() => void handleDownloadChartImage()} disabled={!firstBarSpec || firstBarPoints.length === 0} className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                  {t("downloadImage")}
-                </button>
-              </div>
-            </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
-              <div className="mb-1 font-semibold text-slate-700">{t("recentJobs")}</div>
-              <div className="max-h-28 overflow-y-auto space-y-1">
-                {visibleJobs.slice(0, 5).map((j) => (
-                  <div key={j.job_id} className="rounded bg-slate-50 px-2 py-1">
-                    <span className="font-mono">{j.job_id.slice(0, 8)}</span> · {j.kind} · {j.status}
-                  </div>
-                ))}
-                {visibleJobs.length === 0 && <div className="text-slate-400">{t("noJobs")}</div>}
+              <div className="space-y-2.5 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3.5 shadow-2xs">
+                <div className="text-xs font-semibold text-[var(--or-muted)]">{t("scriptCharts")}</div>
+                <div ref={rightChartRef}>
+                  {firstBarSpec && firstBarPoints.length > 0 ? (
+                    <SvgBarChart
+                      data={firstBarPoints.map((p) => ({ label: p.label, value: p.value }))}
+                      title={firstBarSpec.title ?? t("chartFallback")}
+                      colorFn={(v) => errorColorFn(v)}
+                      maxVal={1}
+                      formatVal={formatPct}
+                    />
+                  ) : (
+                    <div className="rounded-lg bg-[var(--or-page)] p-4 text-center text-xs text-[var(--or-muted)]">
+                      {t("noChart")}
+                    </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadMetadata()}
+                    disabled={!metadataScopeReady || !jobOutput}
+                    className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2 py-1.5 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
+                  >
+                    {t("downloadMeta")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadChartImage()}
+                    disabled={!firstBarSpec || firstBarPoints.length === 0}
+                    className="rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2 py-1.5 text-xs font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
+                  >
+                    {t("downloadImage")}
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3.5 text-xs text-[var(--or-muted)] shadow-2xs">
+                <div className="mb-2 font-semibold text-[var(--or-muted)]">{t("recentJobs")}</div>
+                <div className="max-h-32 overflow-y-auto space-y-1.5">
+                  {visibleJobs.slice(0, 5).map((j) => (
+                    <div key={j.job_id} className="flex items-center justify-between rounded-lg bg-[var(--or-page)] px-2.5 py-1.5">
+                      <span className="font-mono text-xs text-[var(--or-muted)]">{j.job_id.slice(0, 8)}</span>
+                      <span className="text-[var(--or-muted)]">{j.kind}</span>
+                      <span className="or-g52-pill or-g52-pill-neutral !text-[11px] !px-1.5 !min-h-[18px]">
+                        {j.status}
+                      </span>
+                    </div>
+                  ))}
+                  {visibleJobs.length === 0 && <div className="text-center py-2 text-[var(--or-muted)]">{t("noJobs")}</div>}
+                </div>
               </div>
             </div>
-          </div>
           </div>
         </div>
       )}
     </div>
   ) : (
-    <div className="flex h-full items-center justify-center text-slate-400" role="status">
-      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-      {t("loading")}
+    <div className="flex h-full items-center justify-center text-[var(--or-muted)]" role="status">
+      <RefreshCw className="mr-2 h-5 w-5 animate-spin" />
+      <span>{t("loading")}</span>
     </div>
   );
 }

@@ -4,6 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlatformRequestError } from "../../../platform/platformRequest";
 import { SchoolWorkspace } from "./SchoolWorkspace";
+import { selectOption } from "../../../test/selectOption";
+
+function comboboxWithText(text: string) {
+  const trigger = screen.getAllByRole("combobox").find((element) => element.textContent?.includes(text));
+  if (!trigger) throw new Error(`Select trigger not found: ${text}`);
+  return trigger;
+}
 
 const mocks = vi.hoisted(() => ({
   assignTeacherClass: vi.fn(),
@@ -225,7 +232,7 @@ describe("SchoolWorkspace", () => {
     await waitFor(() => expect(mocks.askSchoolAi).toHaveBeenCalledWith("有哪些教师名字"));
     expect(await screen.findByText(/Teacher Li/)).toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByTestId("school-ai-import-kind"), "students");
+    await selectOption(screen.getByTestId("school-ai-import-kind"), "students");
     const file = new File([JSON.stringify([{ student_no: "S002", display_name: "Student Two" }])], "students.json", {
       type: "application/json",
     });
@@ -290,7 +297,7 @@ describe("SchoolWorkspace", () => {
     );
 
     await userEvent.click(await screen.findByTestId("school-page-ai"));
-    await userEvent.selectOptions(screen.getByTestId("school-ai-import-kind"), "all");
+    await selectOption(screen.getByTestId("school-ai-import-kind"), "all");
     const file = new File([JSON.stringify({ classes: [], teachers: [], students: [], assignments: [] })], "school.json", {
       type: "application/json",
     });
@@ -608,7 +615,9 @@ describe("SchoolWorkspace", () => {
 
     // Verify cross-panel dependent dropdown (Assignments panel teacher select)
     await userEvent.click(screen.getByTestId("school-page-assignments"));
+    await userEvent.click(comboboxWithText("Teacher Li"));
     expect(screen.getByRole("option", { name: /Teacher Wang/ })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
   });
 
   it("refreshes class and cross-panel select options after a class write", async () => {
@@ -660,11 +669,17 @@ describe("SchoolWorkspace", () => {
     // Verify cross-panel dependent dropdowns
     // 1. Assignments panel class select
     await userEvent.click(screen.getByTestId("school-page-assignments"));
+    await userEvent.click(comboboxWithText("Class 2"));
     expect(screen.getByRole("option", { name: /Class 2/ })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
 
     // 2. Students panel class select and filter options
     await userEvent.click(screen.getByTestId("school-page-students"));
+    await userEvent.click(comboboxWithText("全部班级"));
     expect(screen.getAllByRole("option", { name: /Class 2/ }).length).toBeGreaterThan(0);
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(comboboxWithText("Class 2"));
+    expect(screen.getByRole("option", { name: "Class 2" })).toBeInTheDocument();
   });
 
   it("clears deleted class selections and refreshes students without stale responses", async () => {
@@ -714,7 +729,7 @@ describe("SchoolWorkspace", () => {
     );
 
     await userEvent.click(await screen.findByTestId("school-page-students"));
-    await userEvent.selectOptions(screen.getByDisplayValue("全部班级"), "c1");
+    await selectOption(comboboxWithText("全部班级"), "c1");
     await waitFor(() => expect(mocks.listStudents).toHaveBeenCalledWith("c1", expect.anything()));
     await waitFor(() => expect(resolveStaleStudents).toBeDefined());
 
@@ -723,12 +738,13 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(screen.getAllByRole("button", { name: "删除班级" })[0]);
 
     await userEvent.click(await screen.findByTestId("school-page-students"));
-    const filter = screen.getByDisplayValue("全部班级") as HTMLSelectElement;
-    expect(filter.value).toBe("");
-    const importClassSelect = screen.getAllByRole("combobox").find((element) =>
-      Array.from((element as HTMLSelectElement).options).some((option) => option.textContent === "未指定班级"),
-    ) as HTMLSelectElement | undefined;
-    expect(importClassSelect?.value).toBe("c2");
+    const filter = comboboxWithText("全部班级");
+    expect(filter).toHaveTextContent("全部班级");
+    const importClassSelect = comboboxWithText("Class 2");
+    await userEvent.click(importClassSelect);
+    expect(screen.getByRole("option", { name: "未指定班级" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Class 2" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Escape}");
     expect(await screen.findByText("Class 2", { selector: "td" })).toBeInTheDocument();
     expect(mocks.listStudents).toHaveBeenCalledWith(null, expect.anything());
 
@@ -816,7 +832,7 @@ describe("SchoolWorkspace", () => {
 
     const studentCallsBefore = mocks.listStudents.mock.calls.length;
     const classCallsBefore = mocks.listClasses.mock.calls.length;
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "目标班级" }), "c2");
+    await selectOption(screen.getByRole("combobox", { name: "目标班级" }), "c2");
     expect(dialog).toHaveTextContent("Class 1 → Class 2");
     await userEvent.click(screen.getByRole("button", { name: "确认转班" }));
 
@@ -860,13 +876,13 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(await screen.findByTestId("school-page-students"));
     await userEvent.click(screen.getByRole("button", { name: "转班" }));
     await screen.findByRole("dialog", { name: "转班确认" });
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "目标班级" }), "c2");
+    await selectOption(screen.getByRole("combobox", { name: "目标班级" }), "c2");
     await userEvent.click(screen.getByRole("button", { name: "确认转班" }));
 
     const dialog = await screen.findByRole("dialog", { name: "转班确认" });
     await waitFor(() => expect(dialog).toHaveTextContent("班级信息已变化，已刷新转班预览"));
     expect(dialog).toHaveTextContent("Class 2");
-    expect((screen.getByRole("combobox", { name: "目标班级" }) as HTMLSelectElement).value).toBe("");
+    expect(screen.getByRole("combobox", { name: "目标班级" })).toHaveTextContent("请选择目标班级");
     expect(mocks.getStudentClassTransfer).toHaveBeenCalledTimes(2);
     expect(mocks.transferStudentClass).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "确认转班" })).toBeDisabled();
@@ -915,7 +931,7 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(await screen.findByTestId("school-page-students"));
     await userEvent.click(screen.getByRole("button", { name: "转班" }));
     await screen.findByRole("dialog", { name: "转班确认" });
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "目标班级" }), "c2");
+    await selectOption(screen.getByRole("combobox", { name: "目标班级" }), "c2");
     holdStudentRefresh = true;
     await userEvent.click(screen.getByRole("button", { name: "确认转班" }));
     await waitFor(() => expect(mocks.transferStudentClass).toHaveBeenCalledTimes(1));
@@ -968,7 +984,7 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(await screen.findByTestId("school-page-students"));
     await userEvent.click(screen.getByRole("button", { name: "转班" }));
     await screen.findByRole("dialog", { name: "转班确认" });
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "目标班级" }), "c2");
+    await selectOption(screen.getByRole("combobox", { name: "目标班级" }), "c2");
     mocks.listStudents.mockRejectedValueOnce(new Error("offline"));
     await userEvent.click(screen.getByRole("button", { name: "确认转班" }));
 
@@ -994,7 +1010,7 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(await screen.findByTestId("school-page-students"));
     await userEvent.click(screen.getByRole("button", { name: "转班" }));
     await waitFor(() => expect(pendingPreviews).toHaveLength(1));
-    await userEvent.selectOptions(screen.getByDisplayValue("全部班级"), "c2");
+    await selectOption(comboboxWithText("全部班级"), "c2");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "转班确认" })).not.toBeInTheDocument());
     await act(async () => {
       pendingPreviews[0]({
@@ -1139,7 +1155,7 @@ describe("SchoolWorkspace", () => {
     );
 
     // 1. Overview panel: verify metric cards
-    expect(await screen.findByText("学校数据概览")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "学校管理总览" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "首次使用清单" })).toBeInTheDocument();
 
     // 2. Teachers panel: navigate, search, filter by status
@@ -1158,8 +1174,8 @@ describe("SchoolWorkspace", () => {
     );
 
     // Teacher status filter
-    const statusSelect = screen.getByDisplayValue("全部状态");
-    await userEvent.selectOptions(statusSelect, "active");
+    const statusSelect = comboboxWithText("全部状态");
+    await selectOption(statusSelect, "active");
     await waitFor(() =>
       expect(mocks.listTeachers).toHaveBeenCalledWith(
         expect.objectContaining({ status: "active" }),
@@ -1180,8 +1196,8 @@ describe("SchoolWorkspace", () => {
     // 4. Students panel: navigate, filter by class dropdown
     await userEvent.click(screen.getByTestId("school-page-students"));
     expect(await screen.findByDisplayValue("Student One")).toBeInTheDocument();
-    const classFilterSelect = screen.getByDisplayValue("全部班级");
-    await userEvent.selectOptions(classFilterSelect, "c1");
+    const classFilterSelect = comboboxWithText("全部班级");
+    await selectOption(classFilterSelect, "c1");
     await waitFor(() =>
       expect(mocks.listStudents).toHaveBeenCalledWith(
         "c1",
@@ -1225,7 +1241,7 @@ describe("SchoolWorkspace", () => {
     );
 
     // Overview shows 0 metrics without error
-    expect(await screen.findByText("学校数据概览")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "学校管理总览" })).toBeInTheDocument();
 
     // Teachers panel shows empty message "暂无数据"
     await userEvent.click(screen.getByTestId("school-page-teachers"));

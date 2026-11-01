@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PapersWorkspace } from "./PapersWorkspace";
 import { PaperPublishingSidebar } from "./PaperPublishingSidebar";
 import { buildGradingDraftStorageKey } from "./gradingDraftStorage";
+import { selectOption } from "../../../test/selectOption";
 
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
@@ -130,7 +131,7 @@ describe("PapersWorkspace", () => {
     expect((await screen.findAllByText("线上")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("2 份已提交").length).toBeGreaterThan(0);
     await userEvent.click(screen.getByLabelText(/Class 1/));
-    await userEvent.selectOptions(screen.getByLabelText("发布文件夹"), "f1");
+    await selectOption(screen.getByRole("combobox", { name: "发布文件夹" }), "f1");
     expect(screen.getByTestId("paper-publish")).toBeEnabled();
   });
 
@@ -150,7 +151,7 @@ describe("PapersWorkspace", () => {
     expect(setData).toHaveBeenCalledWith("application/x-or-content-items", JSON.stringify({ scope: "paper", ids: ["p1", "p2"] }));
     expect(setData).toHaveBeenCalledWith("application/x-or-content-item", JSON.stringify({ scope: "paper", id: "p1" }));
 
-    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "批量移动到文件夹" }), "f1");
+    await selectOption(await screen.findByRole("combobox", { name: "批量移动到文件夹" }), "f1");
     await userEvent.click(screen.getByRole("button", { name: "移动所选" }));
     await waitFor(() => expect(mocks.moveContentItemsToFolder).toHaveBeenCalledWith("paper", ["p1", "p2"], "f1"));
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "选择试卷 Paper One" })).not.toBeChecked());
@@ -176,7 +177,7 @@ describe("PapersWorkspace", () => {
     expect(screen.getByTestId("paper-list-item-p2")).toHaveAttribute("draggable", "false");
     expect(screen.getByTestId("paper-list-item-p3")).toHaveAttribute("draggable", "false");
     await userEvent.click(movable);
-    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "批量移动到文件夹" }), "f1");
+    await selectOption(await screen.findByRole("combobox", { name: "批量移动到文件夹" }), "f1");
     await userEvent.click(screen.getByRole("button", { name: "移动所选" }));
 
     await waitFor(() => expect(mocks.moveContentItemsToFolder).toHaveBeenCalledWith("paper", ["p1"], "f1"));
@@ -204,7 +205,7 @@ describe("PapersWorkspace", () => {
 
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByLabelText(/Class 1/));
-    await userEvent.selectOptions(screen.getByLabelText("发布文件夹"), "f1");
+    await selectOption(screen.getByRole("combobox", { name: "发布文件夹" }), "f1");
     await userEvent.click(screen.getByTestId("paper-publish"));
 
     await waitFor(() =>
@@ -228,7 +229,7 @@ describe("PapersWorkspace", () => {
     mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
     render(<PapersWorkspace assignStudent={{ classId: "c1", studentId: "s1", name: "张三" }} />);
     expect(await screen.findByText("张三 · S001")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "指定学生" })).toHaveClass("bg-slate-900");
+    expect(screen.getByRole("button", { name: "指定学生" })).toHaveClass("bg-[var(--or-primary)]");
     expect(screen.getByRole("checkbox", { name: /张三/ })).toBeChecked();
   });
 
@@ -408,7 +409,7 @@ describe("PapersWorkspace", () => {
     await userEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => expect(screen.getByTestId("paper-publish")).toBeDisabled());
     await userEvent.click(screen.getByLabelText(/Class 1/));
-    await userEvent.selectOptions(screen.getByLabelText("发布文件夹"), "f1");
+    await selectOption(screen.getByRole("combobox", { name: "发布文件夹" }), "f1");
     expect(screen.getByTestId("paper-publish")).not.toBeDisabled();
     await userEvent.click(screen.getByTestId("paper-submission-image-ai"));
     await userEvent.clear(screen.getByTestId("paper-time-limit"));
@@ -1121,7 +1122,7 @@ describe("PapersWorkspace", () => {
     expect(firstScore).toHaveValue("4");
     expect(firstFeedback).toHaveValue("教师在批量请求后修改");
     expect(await screen.findByText("AI 批量预批改完成：生成 1 条建议，0 题可重试，忽略 2 个过期字段。请教师逐题复核。")).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByTestId("paper-grading-student-select"), "a2");
+    await selectOption(screen.getByTestId("paper-grading-student-select"), "a2");
     expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("3");
     expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("AI 学生二");
     confirm.mockRestore();
@@ -1349,11 +1350,12 @@ describe("PapersWorkspace", () => {
     render(<PapersWorkspace />);
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
     const selector = await screen.findByTestId("paper-grading-student-select");
-    expect(selector).toHaveValue("a1");
+    expect(selector).toHaveTextContent("Student One");
     expect(screen.getByText("学生真实作答一")).toBeInTheDocument();
     expect(screen.queryByText("学生真实作答二")).not.toBeInTheDocument();
 
-    await userEvent.selectOptions(selector, "a2");
+    await selectOption(selector, "a2");
+    expect(selector).toHaveTextContent("Student Two");
     expect(await screen.findByText("学生真实作答二")).toBeInTheDocument();
     expect(screen.queryByText("学生真实作答一")).not.toBeInTheDocument();
   });
@@ -1819,7 +1821,8 @@ describe("PapersWorkspace", () => {
 
     // 4. Change page size to 20
     const pageSizeSelect = screen.getByLabelText("每页条数");
-    await userEvent.selectOptions(pageSizeSelect, "20");
+    await selectOption(pageSizeSelect, "20");
+    expect(pageSizeSelect).toHaveTextContent("20 条/页");
     expect(await screen.findByText("第 1 / 2 页，共 25 条")).toBeInTheDocument();
     expect(screen.getByText(/Exam Paper 20 ·/)).toBeInTheDocument();
 
@@ -1885,7 +1888,7 @@ describe("PapersWorkspace", () => {
 
     // User selects folder
     const folderSelect = screen.getByLabelText("发布文件夹");
-    await userEvent.selectOptions(folderSelect, "f1");
+    await selectOption(folderSelect, "f1");
 
     // Now button is enabled
     expect(publishBtn).toBeEnabled();

@@ -32,18 +32,11 @@ export function BootstrapShell() {
 
   if (phase === "loading") {
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          minHeight: "100vh",
-          fontFamily: "system-ui, sans-serif",
-          color: "#334155",
-          fontSize: 15,
-        }}
-      >
-        {i18n.t("connectingLocalService", { ns: "common" })}
+      <div className="flex min-h-screen items-center justify-center bg-[var(--or-page)] text-[var(--or-muted)] text-[15px] select-none">
+        <div className="flex items-center gap-3">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--or-primary)] border-t-transparent" />
+          <span>{i18n.t("connectingLocalService", { ns: "common" })}</span>
+        </div>
       </div>
     );
   }
@@ -51,18 +44,13 @@ export function BootstrapShell() {
   if (phase === "error" && errorMessage) {
     const title = i18n.t("couldNotReachLocalService", { ns: "common" });
     return (
-      <div
-        style={{
-          padding: 24,
-          fontFamily: "system-ui, sans-serif",
-          lineHeight: 1.5,
-          maxWidth: 520,
-        }}
-      >
-        <p style={{ fontWeight: 600, marginBottom: 8 }}>{title}</p>
-        <p style={{ color: "#444", fontSize: 14 }}>
-          {errorMessage.replace(/</g, "\u003c")}
-        </p>
+      <div className="flex min-h-screen items-center justify-center bg-[var(--or-page)] p-6">
+        <div className="w-full max-w-md rounded-[16px] border border-[var(--or-outline)] bg-[var(--or-card)] p-6 shadow-sm">
+          <p className="text-base font-semibold text-[var(--or-text)]">{title}</p>
+          <p className="mt-2 text-sm text-[var(--or-muted)] leading-relaxed">
+            {errorMessage.replace(/</g, "\u003c")}
+          </p>
+        </div>
       </div>
     );
   }

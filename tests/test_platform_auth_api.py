@@ -85,3 +85,37 @@ def test_authenticated_user_can_change_own_password(web_client: TestClient) -> N
     assert changed.status_code == 200
     assert web_client.post("/api/auth/login", json={"username": "admin", "password": "secret123"}).status_code == 401
     assert web_client.post("/api/auth/login", json={"username": "admin", "password": "safer456"}).status_code == 200
+
+
+def test_profile_patch_preserves_omitted_avatar_and_clears_explicit_null(web_client: TestClient) -> None:
+    created = web_client.post(
+        "/api/auth/bootstrap-admin",
+        json={"username": "admin", "password": "secret123", "display_name": "Administrator"},
+    ).json()
+    headers = {"Authorization": f"Bearer {created['token']}"}
+    avatar = "data:image/png;base64,aGVsbG8="
+
+    saved = web_client.patch(
+        "/api/auth/profile",
+        json={"avatar_data_url": avatar, "preferences": {"theme": "classic", "density": "comfortable", "font_scale": 1}},
+        headers=headers,
+    )
+    assert saved.status_code == 200
+    assert saved.json()["profile"]["avatar_data_url"] == avatar
+
+    preferences_only = web_client.patch(
+        "/api/auth/profile",
+        json={"preferences": {"theme": "night", "density": "compact", "font_scale": 1.1}},
+        headers=headers,
+    )
+    assert preferences_only.status_code == 200
+    assert preferences_only.json()["profile"]["avatar_data_url"] == avatar
+    assert preferences_only.json()["profile"]["preferences"]["theme"] == "night"
+
+    cleared = web_client.patch(
+        "/api/auth/profile",
+        json={"avatar_data_url": None, "preferences": {"theme": "night", "density": "compact", "font_scale": 1.1}},
+        headers=headers,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["profile"]["avatar_data_url"] is None

@@ -1,4 +1,5 @@
 import { AlertTriangle } from "lucide-react";
+import "../../ui-redesign/g52/g52-design-tokens.css";
 
 // ---------------------------------------------------------------------------
 // SVG Bar Chart (browser-native, zero deps)
@@ -25,17 +26,24 @@ export function SvgBarChart({
   const barW = Math.max(4, (chartW / data.length) - 4);
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <h4 className="mb-3 text-sm font-semibold text-slate-700">{title}</h4>
+    <div className="or-g52-surface-card p-5">
+      <h4 className="mb-3.5 text-sm font-semibold text-[var(--or-text)] tracking-tight">{title}</h4>
       <div className="overflow-x-auto">
         <svg
           viewBox={`0 0 ${W} ${H}`}
           style={{ width: "100%", maxWidth: W, height: "auto", display: "block" }}
           fontSize="11"
-          fontFamily="ui-sans-serif, system-ui, sans-serif"
+          fontFamily="ui-sans-serif, system-ui, -apple-system, sans-serif"
         >
-          {/* X axis */}
-          <line x1={PAD} y1={H - PAD + 4} x2={W - PAD} y2={H - PAD + 4} stroke="#cbd5e1" strokeWidth={1} />
+          {/* Subtle grid and X axis */}
+          <line
+            x1={PAD}
+            y1={H - PAD + 4}
+            x2={W - PAD}
+            y2={H - PAD + 4}
+            stroke="#e2e8f0"
+            strokeWidth={1}
+          />
           {data.map((d, i) => {
             const bx = PAD + i * (chartW / data.length) + 2;
             const bh = (d.value / maxVal) * (H - PAD * 2 - 20);
@@ -48,19 +56,27 @@ export function SvgBarChart({
                   width={barW}
                   height={Math.max(2, bh)}
                   fill={colorFn(d.value, d.warning)}
-                  rx={2}
+                  rx={3}
                 />
                 <text
                   x={bx + barW / 2}
-                  y={H - PAD + 16}
+                  y={H - PAD + 18}
                   textAnchor="middle"
                   fill="#64748b"
-                  fontSize="9"
+                  fontSize="10"
+                  fontWeight="500"
                 >
                   {d.label.length > 6 ? d.label.slice(0, 6) + "…" : d.label}
                 </text>
-                {bh > 14 && (
-                  <text x={bx + barW / 2} y={barY + 10} textAnchor="middle" fill="white" fontSize="9">
+                {bh > 16 && (
+                  <text
+                    x={bx + barW / 2}
+                    y={barY + 11}
+                    textAnchor="middle"
+                    fill="white"
+                    fontSize="9.5"
+                    fontWeight="600"
+                  >
                     {formatVal(d.value)}
                   </text>
                 )}
@@ -70,10 +86,10 @@ export function SvgBarChart({
         </svg>
       </div>
       {warning && (
-        <p className="mt-2 text-xs text-amber-600">
-          <AlertTriangle className="mr-1 inline h-3 w-3" />
-          {warning}
-        </p>
+        <div className="mt-3 flex items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,var(--or-warning)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-warning-container)_70%,transparent)] px-3 py-2 text-xs text-[var(--or-on-warning)]">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--or-on-warning)]" />
+          <span>{warning}</span>
+        </div>
       )}
     </div>
   );

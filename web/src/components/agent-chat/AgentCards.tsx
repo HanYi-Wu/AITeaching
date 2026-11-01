@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Download, Loader2, Pencil, Play } from "lucide-react";
 import { downloadPlatformBlob } from "../../platform/auth";
 import { formatToolLineLabel } from "./formatTool";
+import "../../ui-redesign/g55/g55.css";
 
 export interface AgentToolCardProps {
   tool_name: string;
@@ -26,30 +27,30 @@ export function AgentToolCard({
 
   if (isPending) {
     return (
-      <div className="ml-6 flex items-center gap-2 rounded border border-dashed border-violet-200 bg-violet-50/50 px-2 py-1.5 text-[11px] text-violet-900">
-        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-violet-500" />
-        <span>{label || formatToolLineLabel(tool_name)}</span>
+      <div className="ml-2 sm:ml-6 flex items-center gap-2 rounded-xl border border-dashed border-or-primary/25 bg-or-primary-container px-3 py-2 text-xs text-or-on-container">
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-or-primary" />
+        <span className="font-medium">{label || formatToolLineLabel(tool_name)}</span>
       </div>
     );
   }
 
   return (
     <div
-      className={`ml-6 rounded border px-2 py-1 text-[11px] ${
+      className={`ml-2 sm:ml-6 rounded-xl border p-3 text-xs ${
         subagent
-          ? "border-indigo-200 bg-indigo-50/90 text-indigo-950"
-          : "border-slate-200 bg-slate-50 text-slate-600"
+          ? "border-or-primary/30 bg-or-primary-container text-or-on-container"
+          : "border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] text-[var(--or-muted)]   "
       }`}
     >
-      <span className="font-medium text-slate-600">
+      <div className="font-semibold text-[var(--or-text)] ">
         {subagent ? t("subtaskPrefix") : ""}
         {formatToolLineLabel(tool_name)}
-      </span>
-      <div className="mt-0.5 text-slate-700">{summary}</div>
+      </div>
+      {summary && <div className="mt-1 leading-relaxed text-[var(--or-muted)] ">{summary}</div>}
       {download_url ? (
         <button
           type="button"
-          className="mt-2 inline-flex items-center gap-1 rounded bg-violet-600 px-2 py-1 font-semibold text-white hover:bg-violet-700"
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-or-primary px-3 py-1.5 text-xs font-semibold text-or-on-primary transition hover:brightness-95"
           onClick={() =>
             void downloadPlatformBlob(download_url).then((blob) => {
               const url = URL.createObjectURL(blob);
@@ -61,7 +62,8 @@ export function AgentToolCard({
             })
           }
         >
-          <Download className="h-3.5 w-3.5" /> 下载已梳理文件
+          <Download className="h-3.5 w-3.5" />
+          <span>下载已梳理文件</span>
         </button>
       ) : null}
     </div>
@@ -88,20 +90,20 @@ export function AgentConfirmCard({
   const { t } = useTranslation("agent");
 
   return (
-    <div className="ml-6 rounded-md border border-orange-200 bg-orange-50 p-2 text-[11px] text-orange-950">
-      <div className="font-medium">{t("needConfirm", { name: tool_name })}</div>
-      <div className="mt-1 text-orange-900">{description}</div>
+    <div className="or-g55-status-warning ml-2 sm:ml-6 rounded-xl p-3 text-xs">
+      <div className="font-semibold">{t("needConfirm", { name: tool_name })}</div>
+      <div className="mt-1 leading-relaxed">{description}</div>
       {resolved ? (
-        <div className="mt-2 font-medium text-orange-900">
+        <div className="mt-2.5 font-medium">
           {resolved === "accepted" ? t("accepted") : t("rejected")}
         </div>
       ) : (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
             disabled={busy}
             onClick={() => void onConfirm(action_id, true)}
-            className="rounded bg-orange-600 px-2 py-1 text-white hover:bg-orange-700 disabled:opacity-50"
+            className="inline-flex h-8 items-center justify-center rounded-lg bg-or-primary px-3.5 text-xs font-semibold text-or-on-primary shadow-sm transition hover:brightness-95 disabled:opacity-50"
           >
             {t("confirmBtn")}
           </button>
@@ -109,7 +111,7 @@ export function AgentConfirmCard({
             type="button"
             disabled={busy}
             onClick={() => void onConfirm(action_id, false)}
-            className="rounded border border-orange-300 bg-white px-2 py-1 hover:bg-orange-100 disabled:opacity-50"
+            className="inline-flex h-8 items-center justify-center rounded-lg border border-or-outline bg-or-card px-3.5 text-xs font-medium text-or-text transition hover:bg-or-block disabled:opacity-50"
           >
             {t("cancelBtn")}
           </button>
@@ -137,15 +139,15 @@ export function AgentPlanCard({
   const { t } = useTranslation("agent");
 
   return (
-    <div className="ml-6 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-[11px] text-emerald-950">
-      <div className="font-medium">{t("planGenerated")}</div>
+    <div className="or-g55-status-success ml-2 sm:ml-6 rounded-xl p-3 text-xs">
+      <div className="font-semibold">{t("planGenerated")}</div>
       {content && (
-        <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-white/60 p-1.5 text-[10px] text-emerald-900">
+        <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-or-card/70 p-2.5 font-mono text-xs text-or-text">
           {content.slice(0, 3000)}
         </pre>
       )}
       {resolved ? (
-        <div className="mt-2 font-medium text-emerald-900">
+        <div className="mt-2.5 font-medium">
           {resolved === "execute"
             ? t("planExecute")
             : resolved === "modify"
@@ -153,28 +155,30 @@ export function AgentPlanCard({
               : t("planCancelled")}
         </div>
       ) : (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
             disabled={busy}
             onClick={() => void onPlanAction("execute", plan_file_path)}
-            className="flex items-center gap-1 rounded bg-emerald-600 px-2 py-1 text-white hover:bg-emerald-700 disabled:opacity-50"
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-or-primary px-3.5 text-xs font-semibold text-or-on-primary shadow-sm transition hover:brightness-95 disabled:opacity-50"
           >
-            <Play className="h-3 w-3" /> {t("execute")}
+            <Play className="h-3 w-3" />
+            <span>{t("execute")}</span>
           </button>
           <button
             type="button"
             disabled={busy}
             onClick={() => void onPlanAction("modify", plan_file_path)}
-            className="flex items-center gap-1 rounded border border-emerald-300 bg-white px-2 py-1 hover:bg-emerald-100 disabled:opacity-50"
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-or-outline bg-or-card px-3.5 text-xs font-medium text-or-text transition hover:bg-or-block disabled:opacity-50"
           >
-            <Pencil className="h-3 w-3" /> {t("modify")}
+            <Pencil className="h-3 w-3" />
+            <span>{t("modify")}</span>
           </button>
           <button
             type="button"
             disabled={busy}
             onClick={() => void onPlanAction("cancel", plan_file_path)}
-            className="rounded border border-emerald-300 bg-white px-2 py-1 hover:bg-emerald-100 disabled:opacity-50"
+            className="inline-flex h-8 items-center justify-center rounded-lg border border-or-outline bg-or-card px-3.5 text-xs font-medium text-or-text transition hover:bg-or-block disabled:opacity-50"
           >
             {t("cancelBtn")}
           </button>

@@ -17,6 +17,7 @@ import "@xyflow/react/dist/style.css";
 import { FlowchartFlowNode } from "./FlowchartFlowNode";
 import { initMermaid } from "../lib/mermaidInit";
 import { serializeFlowchartFromFlow, tryParseFlowchartForReactFlow } from "../lib/mermaidFlowchart";
+import { Select as AppSelect } from "./ui/select";
 
 const DEFAULT_SOURCE = "flowchart TD\n  A[开始] --> B[结束]";
 
@@ -204,67 +205,67 @@ function MermaidFlowInner({ onClose, onConfirm }: Pick<MermaidEditorModalProps, 
 
   return (
     <>
-      <h3 id="mermaid-editor-title" className="text-sm font-semibold text-slate-800">
+      <h3 id="mermaid-editor-title" className="text-base font-semibold text-[var(--or-text)]">
         Mermaid / 流程图
       </h3>
-      <p className="mt-1 text-xs text-slate-500">
+      <p className="mt-1 text-[13px] text-[var(--or-muted)]">
         左侧为源码；右侧为实时预览。下方画布可<strong>拖拽节点</strong>、<strong>从节点边缘拖线到另一节点</strong>
         连线、<strong>双击节点</strong>改文字、选中后按{" "}
-        <kbd className="rounded bg-slate-100 px-1">Delete</kbd> 删除。插入后为 ```mermaid 围栏（导出 PDF 需本机 mmdr）。
+        <kbd className="rounded bg-[var(--or-block)] px-1.5 py-0.5 font-mono text-[13px]">Delete</kbd> 删除。插入后为 ```mermaid 围栏（导出 PDF 需本机 mmdr）。
       </p>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+      <div className="mt-3.5 grid gap-3 lg:grid-cols-2">
         <div>
-          <p className="text-[11px] font-medium text-slate-600">源码</p>
+          <p className="text-sm font-medium text-[var(--or-muted)]">源码</p>
           <textarea
-            className="mt-1 h-48 w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-xs"
+            className="or-input mt-1 h-48 w-full rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-3 font-mono text-sm leading-relaxed text-[var(--or-text)] focus:bg-[var(--or-card)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
             value={source}
             onChange={(e) => setSource(e.target.value)}
             spellCheck={false}
           />
           <button
             type="button"
-            className="mt-2 rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            className="or-button or-pill mt-2 inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-1.5 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors disabled:opacity-40"
             onClick={syncGraphToSource}
           >
             从画布同步到源码
           </button>
         </div>
         <div>
-          <p className="text-[11px] font-medium text-slate-600">实时预览（mermaid.js）</p>
+          <p className="text-sm font-medium text-[var(--or-muted)]">实时预览（mermaid.js）</p>
           <div
             ref={previewRef}
-            className="mt-1 flex min-h-[12rem] items-center justify-center overflow-auto rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-500"
+            className="mt-1 flex min-h-[12rem] items-center justify-center overflow-auto rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_40%,transparent)] p-2.5 text-[13px] text-[var(--or-muted)]"
           />
         </div>
       </div>
 
       <div className="mt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[11px] font-medium text-slate-600">画布（拖拽构建）</p>
+          <p className="text-sm font-medium text-[var(--or-muted)]">画布（拖拽构建）</p>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-1 text-[11px] text-slate-600">
+            <label className="flex items-center gap-1.5 text-sm text-[var(--or-muted)]">
               方向
-              <select
-                className="rounded border border-slate-300 px-1 py-0.5 text-[11px]"
+              <AppSelect
+                className="or-select rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
                 value={flowDirUi}
-                onChange={(e) => onDirChange(e.target.value as "TD" | "LR")}
+                onValueChange={(value) => onDirChange(value as "TD" | "LR")}
               >
                 <option value="TD">上下 TD</option>
                 <option value="LR">左右 LR</option>
-              </select>
+              </AppSelect>
             </label>
             <button
               type="button"
-              className="rounded border border-slate-600 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-800 hover:bg-slate-100"
+              className="or-button or-button-primary or-pill inline-flex items-center justify-center rounded-full bg-[var(--or-primary)] px-3.5 py-1.5 text-sm font-medium text-[var(--or-on-primary)] shadow-xs hover:bg-[var(--or-primary)] active:bg-slate-950 transition-colors"
               onClick={addNode}
             >
               添加节点
             </button>
-            {flowHint && <span className="text-[10px] text-amber-700">{flowHint}</span>}
+            {flowHint && <span className="text-[13px] text-[var(--or-on-warning)]">{flowHint}</span>}
           </div>
         </div>
-        <div className="mt-1 h-72 w-full rounded border border-slate-200">
+        <div className="mt-2 h-56 w-full overflow-hidden rounded-2xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_30%,transparent)] sm:h-72">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -288,17 +289,17 @@ function MermaidFlowInner({ onClose, onConfirm }: Pick<MermaidEditorModalProps, 
         </div>
       </div>
 
-      <div className="mt-4 flex justify-end gap-2">
+      <div className="mt-5 flex justify-end gap-2.5">
         <button
           type="button"
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+          className="inline-flex h-9 items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-4 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
           onClick={onClose}
         >
           取消
         </button>
         <button
           type="button"
-          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+          className="inline-flex h-9 items-center justify-center rounded-full bg-[var(--or-primary)] px-4 text-sm font-medium text-[var(--or-on-primary)] shadow-sm hover:bg-[var(--or-primary)] active:bg-slate-950 transition-colors"
           onClick={handleInsert}
         >
           插入到题目
@@ -323,7 +324,7 @@ export function MermaidEditorModal({ open, onClose, onConfirm }: MermaidEditorMo
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="mermaid-editor-title"
@@ -335,7 +336,7 @@ export function MermaidEditorModal({ open, onClose, onConfirm }: MermaidEditorMo
       }}
     >
       <div
-        className="max-h-[95vh] w-full max-w-4xl overflow-auto rounded-lg border border-slate-200 bg-white p-4 shadow-lg"
+        className="or-dialog or-g48-dialog max-h-[92vh] w-full max-w-4xl overflow-auto rounded-3xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-3.5 shadow-2xl ring-1 ring-black/5 sm:p-5"
         onClick={(e) => e.stopPropagation()}
       >
         <ReactFlowProvider key={reset}>

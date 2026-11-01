@@ -71,11 +71,16 @@ function CircleChordEdgeImpl({
       labelX={labelX}
       labelY={labelY}
       label={label}
-      labelStyle={labelStyle}
+      labelStyle={{ fontSize: 11, fontWeight: 500, ...labelStyle }}
       labelShowBg={labelShowBg}
-      labelBgStyle={labelBgStyle}
-      labelBgPadding={labelBgPadding}
-      labelBgBorderRadius={labelBgBorderRadius}
+      labelBgStyle={{
+        fill: "rgba(255, 255, 255, 0.9)",
+        stroke: "rgba(226, 232, 240, 0.8)",
+        strokeWidth: 1,
+        ...labelBgStyle,
+      }}
+      labelBgPadding={labelBgPadding ?? [4, 8]}
+      labelBgBorderRadius={labelBgBorderRadius ?? 6}
       style={style}
       markerEnd={markerEnd}
       markerStart={markerStart}

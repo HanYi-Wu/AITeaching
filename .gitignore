@@ -18,7 +18,10 @@ node_modules/
 .cache/
 __pycache__/
 .pytest_cache/
+.ruff_cache/
+coverage/
 *.py[cod]
+*.tsbuildinfo
 *$py.class
 *.egg-info/
 src/solaire_education.egg-info/
@@ -78,4 +81,5 @@ src-tauri/runtime/python/*
 /.claude/
 web_sample_project
 /web/public/pdfjs/
+/web/vitest-targeted.json
 /dist-offline/

@@ -1,4 +1,5 @@
 import { Loader2 } from "lucide-react";
+import "../../ui-redesign/g55/g55.css";
 
 export interface AgentContextRingProps {
   used: number | null;
@@ -29,23 +30,23 @@ export function AgentContextRing({
       aria-label={ariaLabel}
     >
       <svg className="h-[18px] w-[18px] -rotate-90" viewBox="0 0 36 36" aria-hidden>
-        <circle cx="18" cy="18" r={r} fill="none" stroke="rgb(226 232 240)" strokeWidth={2} />
+        <circle cx="18" cy="18" r={r} fill="none" stroke="currentColor" strokeWidth={2.5} className="text-[var(--or-text)] " />
         <circle
           cx="18"
           cy="18"
           r={r}
           fill="none"
-          stroke="rgb(139 92 246)"
-          strokeWidth={2}
+          stroke="currentColor"
+          strokeWidth={2.5}
           strokeLinecap="round"
           strokeDasharray={`${dash} ${c}`}
-          className="transition-[stroke-dasharray] duration-300"
+          className="text-or-primary transition-[stroke-dasharray] duration-300"
         />
       </svg>
       {refreshing ? (
         <Loader2
-          className="pointer-events-none absolute h-2 w-2 animate-spin text-violet-500"
-          strokeWidth={1.5}
+          className="pointer-events-none absolute h-2.5 w-2.5 animate-spin text-or-primary"
+          strokeWidth={2}
           aria-hidden
         />
       ) : null}

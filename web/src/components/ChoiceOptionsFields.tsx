@@ -1,5 +1,6 @@
 import { useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { Plus } from "lucide-react";
 import type { EmbedKind } from "../lib/bankEditorEmbedKinds";
 import { LatexRichTextField } from "./LatexRichTextField";
 
@@ -66,14 +67,17 @@ function ChoiceOptionRow({
   const syncId = `${idPrefix}-${optionKey}`;
   return (
     <div className="block">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs font-medium text-slate-600">
-          <span className="font-mono">{optionKey}</span>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-[var(--or-text)]">
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--or-inset)_80%,transparent)] font-mono text-[13px] font-bold text-[var(--or-muted)]">
+            {optionKey}
+          </span>
+          <span className="font-mono sr-only">{optionKey}</span>
         </span>
         {removable && (
           <button
             type="button"
-            className="shrink-0 rounded border border-red-200 px-2 py-0.5 text-[11px] text-red-700 hover:bg-red-50"
+            className="or-button or-button-danger or-pill inline-flex shrink-0 items-center justify-center rounded-full border border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_40%,transparent)] px-3 py-1 text-sm font-medium text-[var(--or-on-error)] hover:bg-[color-mix(in_srgb,var(--or-error-container)_50%,transparent)] active:bg-[var(--or-error-container)] transition-colors"
             onClick={onRemove}
           >
             {t("choiceFields.remove")}
@@ -138,8 +142,8 @@ export function ChoiceOptionsFields({
   }
 
   return (
-    <div className="space-y-2">
-      <p className="text-xs font-medium text-slate-600">{t("choiceFields.optionsLatex")}</p>
+    <div className="space-y-3">
+      <p className="text-sm font-medium text-[var(--or-muted)]">{t("choiceFields.optionsLatex")}</p>
       <div className="space-y-3">
         {keys.map((key) => (
           <ChoiceOptionRow
@@ -159,13 +163,17 @@ export function ChoiceOptionsFields({
           />
         ))}
       </div>
-      <button
-        type="button"
-        className="text-[11px] font-medium text-slate-600 underline decoration-slate-300 hover:text-slate-900"
-        onClick={addOptionKey}
-      >
-        {t("choiceFields.addKey")}
-      </button>
+      <div>
+        <button
+          type="button"
+          className="or-button or-pill or-g48-pill-btn or-g48-pill-dropdown rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-1.5 text-sm font-medium text-[var(--or-muted)] hover:bg-[var(--or-page)] active:bg-[var(--or-block)] transition-colors"
+          onClick={addOptionKey}
+        >
+          <Plus className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="text-center">{t("choiceFields.addKey")}</span>
+          <span className="h-4 w-4 shrink-0" aria-hidden />
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,9 +1,11 @@
 ﻿import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
+import userEvent from "@testing-library/user-event";
 
 import { AgentProvider, useAgentContext } from "../../contexts/AgentContext";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
 import { AnalysisWorkspace } from "./AnalysisWorkspace";
+import { selectOption } from "../../test/selectOption";
 
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
@@ -277,9 +279,13 @@ describe("AnalysisWorkspace", () => {
     view.rerender(wsTree(true, "teacher-b", "project-b"));
     await waitFor(() => expect(mocks.apiAnalysisListFolderScripts).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(mocks.apiAnalysisListTools).toHaveBeenCalledTimes(2));
-    expect(screen.queryByRole("option", { name: "old-project.py" })).not.toBeInTheDocument();
+    expect(screen.queryByText("old-project.py")).not.toBeInTheDocument();
     await act(async () => resolveCurrentScripts({ scripts: [{ path: "current-project.py", name: "current-project.py", updated_at: 2 }] }));
-    expect(await screen.findByRole("option", { name: "current-project.py" })).toBeInTheDocument();
+    const scriptSelect = screen.getAllByRole("combobox").find((trigger) => trigger.textContent?.includes("current-project.py"));
+    expect(scriptSelect).toBeInTheDocument();
+    await userEvent.click(scriptSelect!);
+    expect(screen.getByRole("option", { name: "current-project.py" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "old-project.py" })).not.toBeInTheDocument();
   });
 
   it("shows online and offline papers in one history list and exposes the selected paper to AI", async () => {
@@ -406,7 +412,7 @@ describe("AnalysisWorkspace", () => {
     fireEvent.click(await screen.findByRole("button", { name: /期末考试/ }));
     const runButton = await screen.findByRole("button", { name: "运行选中脚本" });
     await waitFor(() => expect(runButton).toBeEnabled());
-    expect(screen.getByDisplayValue("demo.py")).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox").some((trigger) => trigger.textContent?.includes("demo.py"))).toBe(true);
     fireEvent.click(runButton);
     expect(mocks.apiAnalysisRunFolderScript).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(resolveRun).toBeDefined());
@@ -656,7 +662,7 @@ describe("AnalysisWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: /演示线上答题/ }));
     await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("online-1", undefined, undefined));
 
-    fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "offline" } });
+    await selectOption(screen.getAllByRole("combobox")[1]!, "offline");
     expect(await screen.findByText("暂无考试记录")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("analysis-folder-all"));
     expect(await screen.findByRole("button", { name: /期末考试/ })).toBeInTheDocument();

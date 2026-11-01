@@ -4,7 +4,7 @@
     "close": "Close",
     "save": "Save",
     "tabForm": "Fields",
-    "tabYaml": "File source",
+    "tabYaml": "Source",
     "groupHint": "Groups live in one file; saving writes it back. Id {{id}} is only used for the preview panel.",
     "groupRootId": "Group root id",
     "unified": "Sub-item mode (mixed or same type)",

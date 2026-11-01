@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { Save, Trash2, ArrowRightLeft, Plus } from "lucide-react";
 import { cn } from "../../lib/utils";
 import {
   REL_COLOR,
@@ -7,6 +8,7 @@ import {
   type GraphNodeRow,
   type GraphRelationRow,
 } from "./types";
+import { Select as AppSelect } from "../../components/ui/select";
 
 export interface NodeEditSectionProps {
   selectedNode: GraphNodeRow;
@@ -87,54 +89,55 @@ export function NodeEditSection({
   });
 
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
-        <label className="block min-w-0 text-[11px] font-medium text-slate-600">
-          {t("canonicalName")}
+    <div className="space-y-4">
+      {/* Node basic attributes */}
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block min-w-0 text-xs font-medium text-[var(--or-muted)] ">
+          <span>{t("canonicalName")}</span>
           <input
-            className="mt-1 w-full min-w-0 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+            className="or-g50-input mt-1.5 w-full"
             value={draftName}
             onChange={(e) => setDraftName(e.target.value)}
           />
         </label>
-        <label className="block min-w-0 text-[11px] font-medium text-slate-600">
-          {t("nodeType")}
-          <select
-            className="mt-1 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+        <label className="block min-w-0 text-xs font-medium text-[var(--or-muted)] ">
+          <span>{t("nodeType")}</span>
+          <AppSelect
+            className="or-g50-input mt-1.5 w-full"
             value={draftKind}
-            onChange={(e) => setDraftKind(e.target.value as "concept" | "skill" | "causal")}
+            onValueChange={(value) => setDraftKind(value as "concept" | "skill" | "causal")}
           >
             <option value="concept">{t("nodeKind.concept")}</option>
             <option value="skill">{t("nodeKind.skill")}</option>
             <option value="causal">{t("nodeKind.causal")}</option>
-          </select>
+          </AppSelect>
         </label>
       </div>
 
-      <label className="block text-[11px] font-medium text-slate-600">
-        {t("tags")}
+      <label className="block text-xs font-medium text-[var(--or-muted)] ">
+        <span>{t("tags")}</span>
         <input
-          className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+          className="or-g50-input mt-1.5 w-full"
           value={draftTags}
           onChange={(e) => setDraftTags(e.target.value)}
         />
       </label>
 
-      <label className="block text-[11px] font-medium text-slate-600">
-        {t("aliases")}
+      <label className="block text-xs font-medium text-[var(--or-muted)] ">
+        <span>{t("aliases")}</span>
         <input
-          className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm font-mono"
+          className="or-g50-input mt-1.5 w-full font-mono"
           value={draftAliases}
           onChange={(e) => setDraftAliases(e.target.value)}
         />
       </label>
 
-      <label className="block text-[11px] font-medium text-slate-600">
-        {t("primaryParent")}
-        <select
-          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+      <label className="block text-xs font-medium text-[var(--or-muted)] ">
+        <span>{t("primaryParent")}</span>
+        <AppSelect
+          className="or-g50-input mt-1.5 w-full"
           value={draftPrimaryParent}
-          onChange={(e) => setDraftPrimaryParent(e.target.value)}
+          onValueChange={(value) => setDraftPrimaryParent(value)}
         >
           <option value="">{t("notSelected")}</option>
           {graphNodes
@@ -144,38 +147,45 @@ export function NodeEditSection({
                 {n.canonical_name}
               </option>
             ))}
-        </select>
+        </AppSelect>
       </label>
 
-      <div className="flex flex-wrap gap-2">
+      {/* Main Save / Delete actions */}
+      <div className="flex flex-wrap items-center gap-2.5 pt-1">
         <button
           type="button"
-          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="or-g50-btn or-g50-btn-primary flex-1"
           disabled={busy}
           onClick={() => void saveEdits()}
         >
-          {t("saveChanges")}
+          <Save className="h-4 w-4" />
+          <span>{t("saveChanges")}</span>
         </button>
         <button
           type="button"
-          className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 disabled:opacity-50"
+          className="or-g50-btn or-g50-btn-danger"
           disabled={busy}
           onClick={() => void deleteNode()}
         >
-          {t("delete")}
+          <Trash2 className="h-4 w-4" />
+          <span>{t("delete")}</span>
         </button>
       </div>
 
-      {/* Relations section */}
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
-        <h3 className="text-xs font-semibold text-slate-700">{t("relations")}</h3>
-        <div className="mt-2 grid gap-2">
-          <label className="text-[11px] font-medium text-slate-600">
-            {t("targetNode")}
-            <select
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+      {/* Relations subcard */}
+      <div className="rounded-2xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3.5  ">
+        <h3 className="text-sm font-semibold text-[var(--or-text)] ">
+          {t("relations")}
+        </h3>
+
+        {/* Add relation inputs */}
+        <div className="mt-3 grid gap-2.5">
+          <label className="text-xs font-medium text-[var(--or-muted)] ">
+            <span>{t("targetNode")}</span>
+            <AppSelect
+              className="or-g50-input mt-1 w-full"
               value={relTo}
-              onChange={(e) => setRelTo(e.target.value)}
+              onValueChange={(value) => setRelTo(value)}
             >
               <option value="">{t("selectEllipsis")}</option>
               {relationTargetCandidates.map((n) => (
@@ -183,92 +193,105 @@ export function NodeEditSection({
                   {n.canonical_name}
                 </option>
               ))}
-            </select>
+            </AppSelect>
           </label>
-          <label className="text-[11px] font-medium text-slate-600">
-            {t("relationType")}
-            <select
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+
+          <label className="text-xs font-medium text-[var(--or-muted)] ">
+            <span>{t("relationType")}</span>
+            <AppSelect
+              className="or-g50-input mt-1 w-full"
               value={relType}
-              onChange={(e) => setRelType(e.target.value)}
+              onValueChange={(value) => setRelType(value)}
             >
               {REL_KEYS.map((k) => (
                 <option key={k} value={k}>
                   {t(`edgeKind.${k}`)}
                 </option>
               ))}
-            </select>
+            </AppSelect>
           </label>
+
           <button
             type="button"
-            className="rounded-md bg-slate-900 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-            disabled={busy}
+            className="or-g50-btn or-g50-btn-primary w-full"
+            disabled={busy || !relTo}
             onClick={() => void addRelation()}
           >
-            {t("createRelation")}
+            <Plus className="h-4 w-4" />
+            <span>{t("createRelation")}</span>
           </button>
         </div>
 
-        <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-xs">
+        {/* Relations list with responsive wrapping */}
+        <ul className="mt-3.5 max-h-48 space-y-1.5 overflow-y-auto text-xs">
           {relForSelected.length === 0 ? (
-            <li className="text-slate-500">{t("noRelations")}</li>
+            <li className="py-2 text-center text-[var(--or-muted)] ">
+              {t("noRelations")}
+            </li>
           ) : (
             relForSelected.map((r) => {
               const isHighlighted = r.id === highlightEdgeId;
+              const otherNodeId =
+                r.from_node_id === selectedNode.id ? r.to_node_id : r.from_node_id;
+              const otherNodeName =
+                graphNodes.find((n) => n.id === otherNodeId)?.canonical_name ?? otherNodeId;
+              const directionArrow = r.from_node_id === selectedNode.id ? "→" : "←";
+
               return (
                 <li
                   key={r.id}
                   ref={isHighlighted ? edgeItemRef : null}
                   className={cn(
-                    "flex items-start justify-between gap-2 rounded border p-1.5",
+                    "flex flex-wrap items-center justify-between gap-2 rounded-xl border p-2.5 transition-all",
                     isHighlighted
-                      ? "border-blue-400 bg-blue-50"
-                      : "border-slate-200 bg-white",
+                      ? "border-[var(--or-primary)] bg-[color-mix(in_srgb,var(--or-primary-container)_80%,transparent)] shadow-sm  "
+                      : "border-[var(--or-outline)] bg-[var(--or-card)]  ",
                   )}
                 >
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 flex items-center">
                     <span
-                      className="font-medium"
-                      style={{ color: REL_COLOR[r.relation_type] ?? "#64748b" }}
+                      className="inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-semibold leading-none mr-1.5 shrink-0"
+                      style={{
+                        backgroundColor: `${REL_COLOR[r.relation_type] ?? "#64748b"}20`,
+                        color: REL_COLOR[r.relation_type] ?? "#64748b",
+                      }}
                     >
-                      {t(`edgeKind.${r.relation_type}`, { defaultValue: r.relation_type })}
+                      <span className="inline-block transform translate-y-[0.5px]">
+                        {t(`edgeKind.${r.relation_type}`, { defaultValue: r.relation_type })}
+                      </span>
                     </span>
-                    <span className="mx-1 text-slate-400">·</span>
-                    <span className="text-slate-700">
-                      {r.from_node_id === selectedNode.id ? "→" : "←"}{" "}
-                      {graphNodes.find(
-                        (n) =>
-                          n.id ===
-                          (r.from_node_id === selectedNode.id ? r.to_node_id : r.from_node_id),
-                      )?.canonical_name ??
-                        (r.from_node_id === selectedNode.id ? r.to_node_id : r.from_node_id)}
+                    <span className="text-[var(--or-muted)]  font-medium truncate max-w-[140px] sm:max-w-xs">
+                      {directionArrow} {otherNodeName}
                     </span>
                   </div>
-                  <div className="flex shrink-0 gap-1">
-                    <select
-                      className="rounded border border-slate-200 bg-white px-1 py-0.5 text-[10px]"
+
+                  <div className="flex shrink-0 items-center gap-1.5 ml-auto">
+                    <AppSelect
+                      className="or-g50-input !h-7 !text-xs !py-0 !px-1.5"
                       value={r.relation_type}
                       disabled={busy}
-                      onChange={(e) => void changeRelationType(r.id, e.target.value)}
+                      onValueChange={(value) => void changeRelationType(r.id, value)}
                     >
                       {REL_KEYS.map((k) => (
                         <option key={k} value={k}>
                           {t(`edgeKind.${k}`)}
                         </option>
                       ))}
-                    </select>
+                    </AppSelect>
+
                     <button
                       type="button"
-                      className="rounded border border-slate-200 px-1 py-0.5 text-[10px] text-slate-600 hover:bg-slate-50"
+                      className="or-g50-btn or-g50-btn-secondary !h-7 !w-7 !p-0"
                       title={t("reverseRelation")}
                       disabled={busy}
                       onClick={() => void reverseRelation(r.id)}
                     >
-                      ⇄
+                      <ArrowRightLeft className="h-3 w-3" />
                     </button>
+
                     <button
                       type="button"
-                      className="text-[10px] text-red-600"
+                      className="or-g50-btn or-g50-btn-danger !h-7 !px-2 !text-xs font-medium"
                       disabled={busy}
                       onClick={() => void removeRelation(r.id)}
                     >

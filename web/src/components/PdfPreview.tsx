@@ -96,19 +96,25 @@ export function PdfPreview({ apiPath, className }: Props) {
 
   if (loadError) {
     return (
-      <div className={className}>
-        <p className="text-sm text-red-600" role="alert">
+      <div className={cn("p-4 rounded-xl border border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_90%,transparent)]", className)}>
+        <p className="text-sm font-medium text-[var(--or-on-error)]" role="alert">
           {loadError}
         </p>
-        <button type="button" onClick={() => setRetry((n) => n + 1)} className="mt-2 rounded border px-3 py-1 text-sm">重新加载预览</button>
+        <button
+          type="button"
+          onClick={() => setRetry((n) => n + 1)}
+          className="mt-3 or-g49-btn border border-red-300 bg-[var(--or-card)] text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] text-sm py-1.5 px-3"
+        >
+          重新加载预览
+        </button>
       </div>
     );
   }
 
   if (!fileUrl) {
     return (
-      <div className={className}>
-        <p className="text-sm text-slate-500">{t("common:processing")}</p>
+      <div className={cn("flex items-center justify-center p-8", className)}>
+        <p className="text-sm font-medium text-[var(--or-muted)]">{t("common:processing")}</p>
       </div>
     );
   }
@@ -116,19 +122,53 @@ export function PdfPreview({ apiPath, className }: Props) {
   const pageWidth = Math.round(boxWidth * zoom);
 
   return (
-    <div ref={wrapRef} className={cn("w-full min-w-0 max-w-full overflow-auto", className)}>
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 bg-white p-2 text-sm">
-        <button type="button" onClick={() => setZoom((z) => clampZoom(z / 1.2))} className="rounded border px-2 py-1" aria-label="缩小预览">−</button>
-        <span>{Math.round(zoom * 100)}%</span>
-        <button type="button" onClick={() => setZoom((z) => clampZoom(z * 1.2))} className="rounded border px-2 py-1" aria-label="放大预览">＋</button>
-        <button type="button" onClick={() => setZoom(1)} className="rounded border px-2 py-1">适应宽度</button>
-        <span>{numPages} 页</span>
-        <a href={fileUrl} download="试卷预览.pdf" className="ml-auto underline">下载预览</a>
+    <div ref={wrapRef} className={cn("w-full min-w-0 max-w-full overflow-auto rounded-xl", className)}>
+      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2.5 border-b border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[color-mix(in_srgb,var(--or-card)_95%,transparent)] px-3 py-2 text-sm shadow-xs backdrop-blur-xs">
+        <button
+          type="button"
+          onClick={() => setZoom((z) => clampZoom(z / 1.2))}
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] text-base font-semibold text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
+          aria-label="缩小预览"
+        >
+          −
+        </button>
+        <span className="min-w-12 text-center font-mono text-sm font-semibold text-[var(--or-text)] tabular-nums">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={() => setZoom((z) => clampZoom(z * 1.2))}
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] text-base font-semibold text-[var(--or-muted)] hover:bg-[var(--or-page)] transition-colors"
+          aria-label="放大预览"
+        >
+          ＋
+        </button>
+        <button
+          type="button"
+          onClick={() => setZoom(1)}
+          className="or-g49-btn or-g49-btn-secondary text-sm py-1 px-2.5"
+        >
+          适应宽度
+        </button>
+        <span className="or-g49-pill bg-[var(--or-block)] text-[var(--or-muted)] font-medium text-[13px]">
+          {numPages} 页
+        </span>
+        <a
+          href={fileUrl}
+          download="试卷预览.pdf"
+          className="ml-auto text-sm font-medium text-[var(--or-on-container)] hover:text-[var(--or-on-container)] hover:underline"
+        >
+          下载预览
+        </a>
       </div>
       <Document
         file={fileUrl}
         options={PDF_OPTIONS}
-        loading={<p className="text-sm text-slate-500">{t("common:processing")}</p>}
+        loading={
+          <div className="flex items-center justify-center py-10">
+            <p className="text-sm font-medium text-[var(--or-muted)]">{t("common:processing")}</p>
+          </div>
+        }
         onLoadSuccess={({ numPages: n }) => setNumPages(n)}
         onLoadError={(err) => {
           URL.revokeObjectURL(fileUrl);
@@ -136,12 +176,12 @@ export function PdfPreview({ apiPath, className }: Props) {
           setLoadError(err.message);
         }}
       >
-        <div className="flex flex-col items-center gap-4 pb-4">
+        <div className="flex flex-col items-center gap-5 p-4 pb-6">
           {Array.from({ length: numPages }, (_, i) => (
             <Page
               key={i + 1}
               pageNumber={i + 1}
-              className="shadow-md"
+              className="rounded-sm shadow-md ring-1 ring-black/5"
               width={pageWidth}
               renderTextLayer
               renderAnnotationLayer

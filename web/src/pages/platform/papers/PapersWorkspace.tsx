@@ -1,14 +1,19 @@
 import analysisPrintCss from "./analysisPrint.css?raw";
 import { ChangeEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SelectionIndicator } from "../../../design-system/SelectionIndicator";
 import {
   BarChart3,
   ClipboardList,
   Download,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Upload,
   X,
 } from "lucide-react";
 import { apiDownloadBlob, apiGet } from "../../../api/client";
+import { formatSubjectLabel } from "../../../lib/subjectLabels";
+import { useCollapsedPanelInert } from "../../../hooks/useCollapsedPanelInert";
 import { ContentTags } from "../../../components/ContentTags";
 import {
   analyzePlatformPaper,
@@ -30,6 +35,8 @@ import {
   listPlatformPaperPublications,
   listPlatformPapers,
   listTeacherAssignedClasses,
+  loadSessionToken,
+  LEGACY_SESSION_STORAGE_KEY,
   publishPlatformPaper,
   revokePlatformPaperPublication,
   suggestAiGradesForAttempt,
@@ -67,6 +74,8 @@ import { PaperPublishingSidebar } from "./PaperPublishingSidebar";
 import GradingQuestionCard from "./GradingQuestionCard";
 import { GradingWorkspace } from "./GradingWorkspace";
 import { PaperSubmissionDetail } from "./PaperSubmissionDetail";
+import { G51Pill } from "../../../ui-redesign/g51/PaperUiComponents";
+import "../../../ui-redesign/g51/g51Styles.css";
 import {
   readGradingDraft,
   writeGradingDraft,
@@ -81,10 +90,15 @@ import {
   gradingStatusLabel,
   formatStudentAnswer,
 } from "./paperHelpers";
+import { Select as AppSelect } from "../../../components/ui/select";
 
 export type ProjectScopeProp =
   | { ready: false; value: null }
   | { ready: true; value: string | null };
+
+const EMPTY_PAPERS: PlatformPaperRecord[] = [];
+const EMPTY_CLASSES: TeacherClassRecord[] = [];
+const EMPTY_PAPER_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
 
 type Props = {
   openTarget?: { paperId: string; attemptId: string; title: string } | null;
@@ -97,6 +111,44 @@ type Props = {
   assignStudent?: { classId: string; studentId: string; name: string } | null;
   onAssignStudentConsumed?: () => void;
   projectScope?: ProjectScopeProp;
+};
+
+type AnalysisBusyOwner = {
+  id: number;
+  value: string;
+};
+
+type AnalysisRequestOperation = {
+  requestId: number;
+  ownerKey: string;
+  scopeKey: string;
+  scopeGeneration: number;
+  sessionToken: string | null;
+  sessionGeneration: number;
+  paperId: string;
+  busyOwner: AnalysisBusyOwner;
+};
+
+type AnalysisReportOperation = {
+  id: number;
+  scopeKey: string;
+  scopeGeneration: number;
+  sessionToken: string | null;
+  sessionGeneration: number;
+  busyOwner: AnalysisBusyOwner;
+};
+
+type AnalysisSnapshotState = {
+  ownerKey: string;
+  requestId: number;
+  sessionToken: string | null;
+  analysis: PlatformPaperAnalysis;
+};
+
+type AnalysisFilterSelection = {
+  ownerKey: string;
+  publicationId: string | undefined;
+  classId: string | undefined;
 };
 
 type AcceptedAiSuggestion = {
@@ -113,8 +165,48 @@ function paperHasPublicationHistory(paper: PlatformPaperRecord): boolean {
 }
 
 export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError, assignStudent, onAssignStudentConsumed, projectScope }: Props) {
-  const [papers, setPapers] = useState<PlatformPaperRecord[]>([]);
-  const [paperMeta, setPaperMeta] = useState<PageMeta>({ total: 0, page: 1, pageSize: 10, totalPages: 1 });
+  const sessionToken = loadSessionToken();
+  const [, setSessionStorageRevision] = useState(0);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === LEGACY_SESSION_STORAGE_KEY || event.key === null) {
+        setSessionStorageRevision((current) => current + 1);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  const sessionGenerationRef = useRef({ token: sessionToken, generation: 0 });
+  if (sessionGenerationRef.current.token !== sessionToken) {
+    sessionGenerationRef.current = {
+      token: sessionToken,
+      generation: sessionGenerationRef.current.generation + 1,
+    };
+  }
+  const sessionGeneration = sessionGenerationRef.current.generation;
+  const [accountProfileState, setAccountProfileState] = useState<{
+    sessionToken: string | null;
+    accountId: string | null;
+    subjects: string[];
+    ready: boolean;
+    failed: boolean;
+  }>({ sessionToken: null, accountId: null, subjects: [], ready: false, failed: false });
+  const confirmedProfileRef = useRef(false);
+  const accountProfileReady = accountProfileState.sessionToken === sessionToken && accountProfileState.ready;
+  const accountProfileFailed = accountProfileState.sessionToken === sessionToken && accountProfileState.failed;
+  const gradingAccountId = accountProfileReady ? accountProfileState.accountId : null;
+  const teacherSubjects = accountProfileReady ? accountProfileState.subjects : [];
+  const [paperCollectionState, setPaperCollectionState] = useState<{
+    scopeKey: string;
+    papers: PlatformPaperRecord[];
+    classes: TeacherClassRecord[];
+    meta: PageMeta;
+  }>({
+    scopeKey: "",
+    papers: [],
+    classes: [],
+    meta: { total: 0, page: 1, pageSize: 10, totalPages: 1 },
+  });
   const [paperQuery, setPaperQuery] = useState<PaperQuery>({
     q: "",
     deliveryMode: "all",
@@ -122,9 +214,14 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     page: 1,
     pageSize: 10,
   });
-  const [classes, setClasses] = useState<TeacherClassRecord[]>([]);
-  const [publications, setPublications] = useState<PaperPublicationRecord[]>([]);
-  const [submissions, setSubmissions] = useState<PaperSubmissionRecord[]>([]);
+  const [publicationState, setPublicationState] = useState<{
+    ownerKey: string;
+    publications: PaperPublicationRecord[];
+  }>({ ownerKey: "", publications: [] });
+  const [submissionState, setSubmissionState] = useState<{
+    ownerKey: string;
+    submissions: PaperSubmissionRecord[];
+  }>({ ownerKey: "", submissions: [] });
   const [selectedGradingAttemptId, setSelectedGradingAttemptId] = useState("");
   const [submissionMode, setSubmissionMode] = useState<PaperSubmissionMode>("online");
   const [maxScreenSwitches, setMaxScreenSwitches] = useState(0);
@@ -132,6 +229,9 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const [publishStartAt, setPublishStartAt] = useState("");
   const [publishEndAt, setPublishEndAt] = useState("");
   const [paperDetailView, setPaperDetailView] = useState<"manage" | "grading">("manage");
+  const mobileSegmentRef = useRef<HTMLDivElement>(null);
+  const deliveryModeSegmentRef = useRef<HTMLDivElement>(null);
+  const detailViewSegmentRef = useRef<HTMLDivElement>(null);
   const [gradingDraftState, setGradingDraftState] = useState<{ ownerKey: string; drafts: GradingDrafts }>({ ownerKey: "", drafts: {} });
   const [selectedPaperId, setSelectedPaperId] = useState("");
   const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
@@ -147,17 +247,24 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [studentSearch, setStudentSearch] = useState("");
   const [folderAnalysis, setFolderAnalysis] = useState<Awaited<ReturnType<typeof analyzePaperFolder>> | null>(null);
-  const [teacherSubjects, setTeacherSubjects] = useState<string[]>([]);
   const [selectedSubject, setSelectedSubject] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [analysis, setAnalysis] = useState<PlatformPaperAnalysis | null>(null);
+  const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshotState | null>(null);
+  const [analysisDialogOwnerKey, setAnalysisDialogOwnerKey] = useState<string | null>(null);
+  const [analysisFilterSelection, setAnalysisFilterSelection] = useState<AnalysisFilterSelection | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanImageUrls, setScanImageUrls] = useState<Record<string, string>>({});
   const scanObjectUrlsRef = useRef<string[]>([]);
   const publicationRequestIdRef = useRef(0);
   const submissionRequestIdRef = useRef(0);
-  const [gradingAccountId, setGradingAccountId] = useState<string | null>(null);
+  const analysisRequestIdRef = useRef(0);
+  const activeAnalysisRequestRef = useRef<AnalysisRequestOperation | null>(null);
+  const reportRequestIdRef = useRef(0);
+  const activeAnalysisReportsRef = useRef(new Map<number, AnalysisReportOperation>());
+  const analysisBusyOwnerIdRef = useRef(0);
+  const analysisBusyOwnerRef = useRef<AnalysisBusyOwner | null>(null);
+  const analysisMountedRef = useRef(false);
   const [localGradingProjectId, setLocalGradingProjectId] = useState<string | null>(null);
   const listRequestIdRef = useRef(0);
   const [gradingDraftStorageWarning, setGradingDraftStorageWarning] = useState<{ ownerKey: string; visible: boolean }>({ ownerKey: "", visible: false });
@@ -185,16 +292,39 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   }, []);
 
   useEffect(() => {
+    let active = true;
+    setAccountProfileState({ sessionToken, accountId: null, subjects: [], ready: false, failed: false });
     void getAccountProfile()
       .then(({ profile }) => {
+        if (!active || loadSessionToken() !== sessionToken) return;
+        confirmedProfileRef.current = true;
         const subjects = profile.subjects ?? [];
-        setGradingAccountId(profile.id || null);
-        setTeacherSubjects(subjects);
-        setSelectedSubject((current) => current || (subjects.length === 1 ? subjects[0] : ""));
+        setFolders([]);
+        setTaggedItems({});
+        setClassStudents([]);
+        setAnalysisSnapshot(null);
+        setAnalysisDialogOwnerKey(null);
+        analysisFilterSelectionRef.current = null;
+        setAnalysisFilterSelection(null);
+        setFolderAnalysis(null);
+        setSelectedClassIds([]);
+        setSelectedStudentIds([]);
+        setSelectedSubject(subjects.length === 1 ? subjects[0] : "");
+        setAccountProfileState({
+          sessionToken,
+          accountId: profile.id || null,
+          subjects,
+          ready: true,
+          failed: false,
+        });
       })
-      .catch(reportError);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .catch((error) => {
+        if (!active || loadSessionToken() !== sessionToken) return;
+        setAccountProfileState({ sessionToken, accountId: null, subjects: [], ready: false, failed: true });
+        reportError(error);
+      });
+    return () => { active = false; };
+  }, [sessionToken]);
 
   useEffect(() => {
     if (projectScope !== undefined) return;
@@ -214,9 +344,35 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const gradingProjectId = projectScope !== undefined
     ? (projectScope.ready ? projectScope.value : null)
     : localGradingProjectId;
-  const paperFolderScopeKey = `${gradingAccountId ?? "account-unavailable"}/${gradingProjectId ?? "project-unavailable"}`;
+  const paperFolderScopeKey = [
+    sessionGeneration,
+    accountProfileReady ? gradingAccountId ?? "account-unavailable" : "profile-unconfirmed",
+    gradingProjectId ?? "project-unavailable",
+  ].join("/");
   const paperFolderScopeRef = useRef(paperFolderScopeKey);
   paperFolderScopeRef.current = paperFolderScopeKey;
+  const paperFolderScopeGenerationRef = useRef({ key: paperFolderScopeKey, generation: 0 });
+  if (paperFolderScopeGenerationRef.current.key !== paperFolderScopeKey) {
+    paperFolderScopeGenerationRef.current = {
+      key: paperFolderScopeKey,
+      generation: paperFolderScopeGenerationRef.current.generation + 1,
+    };
+  }
+  const hasCurrentPaperCollection = accountProfileReady && paperCollectionState.scopeKey === paperFolderScopeKey;
+  const papers = hasCurrentPaperCollection ? paperCollectionState.papers : EMPTY_PAPERS;
+  const classes = hasCurrentPaperCollection ? paperCollectionState.classes : EMPTY_CLASSES;
+  const paperMeta = hasCurrentPaperCollection ? paperCollectionState.meta : EMPTY_PAPER_META;
+
+  function updatePapers(
+    update: PlatformPaperRecord[] | ((current: PlatformPaperRecord[]) => PlatformPaperRecord[]),
+  ) {
+    const scopeKey = paperFolderScopeKey;
+    setPaperCollectionState((current) => {
+      if (paperFolderScopeRef.current !== scopeKey || current.scopeKey !== scopeKey) return current;
+      const papers = typeof update === "function" ? update(current.papers) : update;
+      return { ...current, papers };
+    });
+  }
 
   const movablePaperIds = useMemo(
     () => papers.filter((paper) => paper.publication_count === 0).map((paper) => paper.paper_id),
@@ -234,18 +390,45 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   }, [movablePaperIds]);
 
   useEffect(() => {
-    void listContentFolders("paper").then((result) => setFolders(result.folders)).catch(reportError);
-    void listTaggedItems("paper").then((result) => setTaggedItems(result.items)).catch(reportError);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (recipientScope !== "student" || selectedClassIds.length !== 1) { setClassStudents([]); return; }
+    if (!accountProfileReady) {
+      setFolders([]);
+      setTaggedItems({});
+      return;
+    }
     let active = true;
-    void listTeacherClassStudents(selectedClassIds[0]).then((result) => { if (active) setClassStudents(result.students); }).catch(reportError);
+    const requestScope = paperFolderScopeKey;
+    void listContentFolders("paper")
+      .then((result) => {
+        if (active && paperFolderScopeRef.current === requestScope) setFolders(result.folders);
+      })
+      .catch((error) => {
+        if (active && paperFolderScopeRef.current === requestScope) reportError(error);
+      });
+    void listTaggedItems("paper")
+      .then((result) => {
+        if (active && paperFolderScopeRef.current === requestScope) setTaggedItems(result.items);
+      })
+      .catch((error) => {
+        if (active && paperFolderScopeRef.current === requestScope) reportError(error);
+      });
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recipientScope, selectedClassIds.join(",")]);
+  }, [paperFolderScopeKey, accountProfileReady]);
+
+  useEffect(() => {
+    if (!accountProfileReady || recipientScope !== "student" || selectedClassIds.length !== 1) { setClassStudents([]); return; }
+    let active = true;
+    const requestScope = paperFolderScopeKey;
+    void listTeacherClassStudents(selectedClassIds[0])
+      .then((result) => {
+        if (active && paperFolderScopeRef.current === requestScope) setClassStudents(result.students);
+      })
+      .catch((error) => {
+        if (active && paperFolderScopeRef.current === requestScope) reportError(error);
+      });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipientScope, selectedClassIds.join(","), paperFolderScopeKey, accountProfileReady]);
 
   const selectedPaperIdRef = useRef(selectedPaperId);
   selectedPaperIdRef.current = selectedPaperId;
@@ -259,18 +442,148 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     [papers, selectedPaperId],
   );
   const gradingOwnerKey = [gradingAccountId ?? "account-unavailable", gradingProjectId ?? "project-unavailable", selectedPaper?.paper_id ?? selectedPaperId].join("/");
+  const requestOwnerKey = [paperFolderScopeKey, selectedPaper?.paper_id ?? selectedPaperId].join("/");
+  const requestOwnerKeyRef = useRef(requestOwnerKey);
+  requestOwnerKeyRef.current = requestOwnerKey;
+  const accountProfileReadyRef = useRef(accountProfileReady);
+  accountProfileReadyRef.current = accountProfileReady;
+  const paperFolderScopeGeneration = paperFolderScopeGenerationRef.current.generation;
+  const analysis = analysisSnapshot &&
+    analysisSnapshot.ownerKey === requestOwnerKey &&
+    analysisSnapshot.sessionToken === sessionToken &&
+    accountProfileReady &&
+    loadSessionToken() === sessionToken
+    ? analysisSnapshot.analysis
+    : null;
+  const analysisDialogOpen = analysisDialogOwnerKey === requestOwnerKey &&
+    accountProfileReady &&
+    loadSessionToken() === sessionToken;
+  const analysisPending = activeAnalysisRequestRef.current?.requestId === analysisRequestIdRef.current &&
+    activeAnalysisRequestRef.current.ownerKey === requestOwnerKey;
+  const analysisSnapshotIsCurrent = analysisSnapshot?.requestId === analysisRequestIdRef.current;
+  const analysisFilterSelectionRef = useRef(analysisFilterSelection);
+  analysisFilterSelectionRef.current = analysisFilterSelection;
+  function getCurrentAnalysisFilters(): AnalysisFilterSelection {
+    const requested = analysisFilterSelectionRef.current;
+    if (requested?.ownerKey === requestOwnerKey) return requested;
+    return {
+      ownerKey: requestOwnerKey,
+      publicationId: analysis?.publication_id ?? undefined,
+      classId: analysis?.class_id ?? undefined,
+    };
+  }
+
+  function beginAnalysisBusy(value: string): AnalysisBusyOwner {
+    const owner = { id: ++analysisBusyOwnerIdRef.current, value };
+    analysisBusyOwnerRef.current = owner;
+    setBusy(value);
+    return owner;
+  }
+
+  function releaseAnalysisBusy(owner: AnalysisBusyOwner) {
+    if (analysisBusyOwnerRef.current?.id !== owner.id) return;
+    analysisBusyOwnerRef.current = null;
+    setBusy((current) =>
+      current === owner.value && analysisBusyOwnerRef.current === null ? null : current,
+    );
+  }
+
+  function invalidateAnalysisLifecycle() {
+    const activeRequest = activeAnalysisRequestRef.current;
+    analysisRequestIdRef.current += 1;
+    activeAnalysisRequestRef.current = null;
+    setAnalysisSnapshot(null);
+    setAnalysisDialogOwnerKey(null);
+    analysisFilterSelectionRef.current = null;
+    setAnalysisFilterSelection(null);
+    if (activeRequest) releaseAnalysisBusy(activeRequest.busyOwner);
+  }
+
+  function isCurrentAnalysisRequest(operation: AnalysisRequestOperation): boolean {
+    return analysisMountedRef.current &&
+      activeAnalysisRequestRef.current?.requestId === operation.requestId &&
+      analysisRequestIdRef.current === operation.requestId &&
+      requestOwnerKeyRef.current === operation.ownerKey &&
+      paperFolderScopeRef.current === operation.scopeKey &&
+      paperFolderScopeGenerationRef.current.generation === operation.scopeGeneration &&
+      sessionGenerationRef.current.generation === operation.sessionGeneration &&
+      accountProfileReadyRef.current &&
+      loadSessionToken() === operation.sessionToken;
+  }
+
+  function isCurrentAnalysisReport(operation: AnalysisReportOperation): boolean {
+    return analysisMountedRef.current &&
+      activeAnalysisReportsRef.current.get(operation.id) === operation &&
+      paperFolderScopeRef.current === operation.scopeKey &&
+      paperFolderScopeGenerationRef.current.generation === operation.scopeGeneration &&
+      sessionGenerationRef.current.generation === operation.sessionGeneration &&
+      accountProfileReadyRef.current &&
+      loadSessionToken() === operation.sessionToken;
+  }
+
+  useEffect(() => {
+    analysisMountedRef.current = true;
+    return () => {
+      analysisMountedRef.current = false;
+      analysisRequestIdRef.current += 1;
+      activeAnalysisRequestRef.current = null;
+      activeAnalysisReportsRef.current.clear();
+      analysisBusyOwnerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    invalidateAnalysisLifecycle();
+    // requestOwnerKey includes the current session, account, project, and selected paper.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestOwnerKey]);
+
+  useEffect(() => {
+    const activeReports = [...activeAnalysisReportsRef.current.values()];
+    activeAnalysisReportsRef.current.clear();
+    activeReports.forEach((operation) => releaseAnalysisBusy(operation.busyOwner));
+    // paperFolderScopeKey excludes the selected paper so reports may finish after same-scope paper switches.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paperFolderScopeKey]);
+
+  const submissionScopeSeenRef = useRef(requestOwnerKey);
+  const submissionScopeReloadPendingRef = useRef(false);
+  const publicationOwnerKeyRef = useRef(requestOwnerKey);
+  publicationOwnerKeyRef.current = requestOwnerKey;
+  const submissionsOwnerKeyRef = useRef(requestOwnerKey);
+  submissionsOwnerKeyRef.current = requestOwnerKey;
+  const publications = accountProfileReady && publicationState.ownerKey === requestOwnerKey
+    ? publicationState.publications
+    : [];
+  const submissions = accountProfileReady && submissionState.ownerKey === requestOwnerKey
+    ? submissionState.submissions
+    : [];
   const gradingDraftOwnerRef = useRef(gradingOwnerKey);
   if (gradingDraftOwnerRef.current !== gradingOwnerKey) {
     gradingDraftOwnerRef.current = gradingOwnerKey;
+    publicationRequestIdRef.current += 1;
+    submissionRequestIdRef.current += 1;
     gradingDraftSourceVersionsRef.current.clear();
     restoredGradingDraftKeysRef.current.clear();
     pendingGradingDraftRestoreKeysRef.current.clear();
   }
   const gradingDrafts = gradingDraftState.ownerKey === gradingOwnerKey ? gradingDraftState.drafts : {};
-  const gradingRequests = usePaperGrading(gradingOwnerKey);
+  const gradingRequests = usePaperGrading(requestOwnerKey);
   const gradingStorageScope = gradingAccountId && gradingProjectId && selectedPaper
     ? { accountId: gradingAccountId, projectId: gradingProjectId, paperId: selectedPaper.paper_id }
     : null;
+
+  function setSubmissions(
+    update: PaperSubmissionRecord[] | ((current: PaperSubmissionRecord[]) => PaperSubmissionRecord[]),
+  ) {
+    const ownerKey = requestOwnerKey;
+    setSubmissionState((current) => {
+      if (submissionsOwnerKeyRef.current !== ownerKey) return current;
+      const existing = current.ownerKey === ownerKey ? current.submissions : [];
+      const submissions = typeof update === "function" ? update(existing) : update;
+      return { ownerKey, submissions };
+    });
+  }
 
   useEffect(() => {
     if (!gradingStorageScope) return;
@@ -350,17 +663,35 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   }
 
   async function loadPublications(paperId: string) {
+    if (!accountProfileReady) return;
+    const ownerKey = requestOwnerKey;
     const requestId = ++publicationRequestIdRef.current;
     try {
       const data = await listPlatformPaperPublications(paperId);
-      if (publicationRequestIdRef.current === requestId) setPublications(data.publications);
+      if (
+        publicationRequestIdRef.current === requestId &&
+        selectedPaperIdRef.current === paperId &&
+        publicationOwnerKeyRef.current === ownerKey &&
+        paperFolderScopeRef.current === paperFolderScopeKey
+      ) {
+        setPublicationState({ ownerKey, publications: data.publications });
+      }
     } catch (e) {
-      if (publicationRequestIdRef.current === requestId) reportError(e);
+      if (
+        publicationRequestIdRef.current === requestId &&
+        selectedPaperIdRef.current === paperId &&
+        publicationOwnerKeyRef.current === ownerKey &&
+        paperFolderScopeRef.current === paperFolderScopeKey
+      ) {
+        reportError(e);
+      }
     }
   }
 
   async function refresh(targetQuery: PaperQuery = paperQueryRef.current, targetFolderId: string | null = browserFolderIdRef.current) {
+    if (!accountProfileReady) return;
     const requestId = ++listRequestIdRef.current;
+    const ownerScopeKey = paperFolderScopeKey;
     setLoading(true);
     onError?.(null);
     setMessage(null);
@@ -376,34 +707,39 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         }),
         listTeacherAssignedClasses(),
       ]);
-      if (listRequestIdRef.current !== requestId) return;
-      setPapers(paperData.papers);
-      setPaperMeta(mergeMeta(paperData, targetQuery, paperData.papers.length));
-      setClasses(classData.classes);
+      if (listRequestIdRef.current !== requestId || paperFolderScopeRef.current !== ownerScopeKey) return;
+      setPaperCollectionState({
+        scopeKey: ownerScopeKey,
+        papers: paperData.papers,
+        classes: classData.classes,
+        meta: mergeMeta(paperData, targetQuery, paperData.papers.length),
+      });
       const currentSelected = selectedPaperIdRef.current;
       const nextPaperId =
         currentSelected && paperData.papers.some((paper) => paper.paper_id === currentSelected)
           ? currentSelected
           : paperData.papers[0]?.paper_id ?? "";
-      setSelectedPaperId(nextPaperId);
-      if (nextPaperId) {
+      if (selectedPaperIdRef.current !== nextPaperId) {
+        setSelectedPaperId(nextPaperId);
+      } else if (nextPaperId) {
         await loadPublications(nextPaperId);
       } else {
-        setPublications([]);
+        setPublicationState({ ownerKey: requestOwnerKey, publications: [] });
       }
     } catch (e) {
-      if (listRequestIdRef.current === requestId) reportError(e);
+      if (listRequestIdRef.current === requestId && paperFolderScopeRef.current === ownerScopeKey) reportError(e);
     } finally {
-      if (listRequestIdRef.current === requestId) {
+      if (listRequestIdRef.current === requestId && paperFolderScopeRef.current === ownerScopeKey) {
         setLoading(false);
       }
     }
   }
 
   useEffect(() => {
+    if (!accountProfileReady) return;
     void refresh(paperQuery, browserFolderId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize, browserFolderId]);
+  }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize, browserFolderId, paperFolderScopeKey, accountProfileReady]);
 
   useEffect(() => {
     if (!openTarget) return;
@@ -418,11 +754,12 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
   useEffect(() => {
     submissionRequestIdRef.current += 1;
+    publicationRequestIdRef.current += 1;
     setBusy((current) => current?.startsWith("grade:") || current?.startsWith("ai-grade:") || current?.startsWith("submissions:") ? null : current);
     if (selectedPaperId) {
-      void loadPublications(selectedPaperId);
+      if (accountProfileReady) void loadPublications(selectedPaperId);
     } else {
-      setPublications([]);
+      setPublicationState({ ownerKey: requestOwnerKey, publications: [] });
     }
     setSubmissions([]);
     setSelectedGradingAttemptId("");
@@ -433,14 +770,14 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     setSelectedStudentIds(assignStudent && selectedPaperId ? [assignStudent.studentId] : []);
     if (assignStudent && selectedPaperId) { setRecipientScope("student"); onAssignStudentConsumed?.(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPaperId, clearScanObjectUrls]);
+  }, [selectedPaperId, clearScanObjectUrls, paperFolderScopeKey, accountProfileReady]);
 
   async function setDeliveryMode(paper: PlatformPaperRecord, mode: PlatformPaperRecord["delivery_mode"]) {
     setBusy(`mode:${paper.paper_id}`);
     setMessage(null);
     try {
       const updated = await updatePlatformPaperDeliveryMode(paper.paper_id, mode);
-      setPapers((current) =>
+      updatePapers((current) =>
         current.map((item) => (item.paper_id === paper.paper_id ? { ...item, delivery_mode: updated.paper.delivery_mode } : item)),
       );
     } catch (e) {
@@ -498,7 +835,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         time_limit_minutes: timeLimitMinutes > 0 ? timeLimitMinutes : null,
         subject: selectedSubject || teacherSubjects[0] || selectedPaper.subject,
       });
-      setPapers((current) =>
+      updatePapers((current) =>
         current.map((item) =>
           item.paper_id === selectedPaper.paper_id
             ? {
@@ -581,30 +918,84 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   }
 
   async function loadSelectedAnalysis(publicationId?: string, classId?: string) {
-    if (!selectedPaper) return;
-    setBusy(`analysis:${selectedPaper.paper_id}`);
+    if (!selectedPaper || !accountProfileReady) return;
+    const requestId = ++analysisRequestIdRef.current;
+    const busyOwner = beginAnalysisBusy("analysis:" + selectedPaper.paper_id);
+    const operation: AnalysisRequestOperation = {
+      requestId,
+      ownerKey: requestOwnerKey,
+      scopeKey: paperFolderScopeKey,
+      scopeGeneration: paperFolderScopeGeneration,
+      sessionToken,
+      sessionGeneration,
+      paperId: selectedPaper.paper_id,
+      busyOwner,
+    };
+    activeAnalysisRequestRef.current = operation;
+    setAnalysisDialogOwnerKey(operation.ownerKey);
+    const filters: AnalysisFilterSelection = { ownerKey: operation.ownerKey, publicationId, classId };
+    analysisFilterSelectionRef.current = filters;
+    setAnalysisFilterSelection(filters);
     setMessage(null);
     try {
-      const result = await analyzePlatformPaper(selectedPaper.paper_id, publicationId, classId);
-      setAnalysis(result.analysis);
+      const result = await analyzePlatformPaper(operation.paperId, publicationId, classId);
+      if (!isCurrentAnalysisRequest(operation)) return;
+      const resolvedFilters: AnalysisFilterSelection = {
+        ownerKey: operation.ownerKey,
+        publicationId: result.analysis.publication_id ?? undefined,
+        classId: result.analysis.class_id ?? undefined,
+      };
+      analysisFilterSelectionRef.current = resolvedFilters;
+      setAnalysisFilterSelection(resolvedFilters);
+      setAnalysisSnapshot({
+        ownerKey: operation.ownerKey,
+        requestId: operation.requestId,
+        sessionToken: operation.sessionToken,
+        analysis: result.analysis,
+      });
     } catch (e) {
-      reportError(e);
+      if (isCurrentAnalysisRequest(operation)) {
+        setAnalysisSnapshot(null);
+        setAnalysisDialogOwnerKey(null);
+        analysisFilterSelectionRef.current = null;
+        setAnalysisFilterSelection(null);
+        reportError(e);
+      }
     } finally {
-      setBusy(null);
+      if (activeAnalysisRequestRef.current?.requestId === operation.requestId) {
+        activeAnalysisRequestRef.current = null;
+      }
+      releaseAnalysisBusy(operation.busyOwner);
     }
   }
 
   async function downloadSelectedReport(format: "xlsx" | "pdf") {
-    if (!selectedPaper) return;
-    setBusy(`report:${format}:${selectedPaper.paper_id}`);
+    if (!selectedPaper || !analysis || !analysisSnapshotIsCurrent || analysisPending || !accountProfileReady) return;
+    const paperId = selectedPaper.paper_id;
+    const filename = (selectedPaper.title || selectedPaper.exam_id) + "-analysis-report." + format;
+    const publicationId = analysis.publication_id ?? undefined;
+    const classId = analysis.class_id ?? undefined;
+    const operation: AnalysisReportOperation = {
+      id: ++reportRequestIdRef.current,
+      scopeKey: paperFolderScopeKey,
+      scopeGeneration: paperFolderScopeGeneration,
+      sessionToken,
+      sessionGeneration,
+      busyOwner: beginAnalysisBusy("report:" + format + ":" + paperId),
+    };
+    activeAnalysisReportsRef.current.set(operation.id, operation);
     setMessage(null);
     try {
-      const blob = await downloadPaperAnalysisReport(selectedPaper.paper_id, format, analysis?.publication_id ?? undefined, analysis?.class_id ?? undefined);
-      downloadBlob(blob, `${selectedPaper.title || selectedPaper.exam_id}-analysis-report.${format}`);
+      const blob = await downloadPaperAnalysisReport(paperId, format, publicationId, classId);
+      if (!isCurrentAnalysisReport(operation)) return;
+      downloadBlob(blob, filename);
     } catch (e) {
-      reportError(e);
+      if (isCurrentAnalysisReport(operation)) reportError(e);
     } finally {
-      setBusy(null);
+      if (activeAnalysisReportsRef.current.get(operation.id) === operation) {
+        activeAnalysisReportsRef.current.delete(operation.id);
+      }
+      releaseAnalysisBusy(operation.busyOwner);
     }
   }
 
@@ -669,15 +1060,24 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   }
 
   async function loadSelectedSubmissions() {
-    if (!selectedPaper) return;
+    if (!selectedPaper || !accountProfileReady) return;
+    submissionScopeReloadPendingRef.current = false;
+    const targetPaperId = selectedPaper.paper_id;
+    const ownerKey = requestOwnerKey;
     const requestId = ++submissionRequestIdRef.current;
     const gradingRefresh = gradingRequests.beginRefresh();
     clearScanObjectUrls();
-    setBusy(`submissions:${selectedPaper.paper_id}`);
+    setBusy(`submissions:${targetPaperId}`);
     setMessage(null);
     try {
-      const result = await listPaperSubmissions(selectedPaper.paper_id);
-      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) {
+      const result = await listPaperSubmissions(targetPaperId);
+      if (
+        submissionRequestIdRef.current === requestId &&
+        selectedPaperIdRef.current === targetPaperId &&
+        submissionsOwnerKeyRef.current === ownerKey &&
+        paperFolderScopeRef.current === paperFolderScopeKey &&
+        gradingRequests.isCurrentRefresh(gradingRefresh)
+      ) {
         const sources = result.submissions.flatMap((submission) =>
           submission.answers.map((answer) => ({
             key: gradeKey(submission.attempt_id, answer.question_id),
@@ -707,13 +1107,39 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         });
       }
     } catch (e) {
-      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) reportError(e);
+      if (
+        submissionRequestIdRef.current === requestId &&
+        selectedPaperIdRef.current === targetPaperId &&
+        submissionsOwnerKeyRef.current === ownerKey &&
+        paperFolderScopeRef.current === paperFolderScopeKey &&
+        gradingRequests.isCurrentRefresh(gradingRefresh)
+      ) {
+        reportError(e);
+      }
     } finally {
-      if (submissionRequestIdRef.current === requestId && gradingRequests.isCurrentRefresh(gradingRefresh)) {
-        setBusy((current) => current === `submissions:${selectedPaper.paper_id}` ? null : current);
+      if (
+        submissionRequestIdRef.current === requestId &&
+        selectedPaperIdRef.current === targetPaperId &&
+        submissionsOwnerKeyRef.current === ownerKey &&
+        paperFolderScopeRef.current === paperFolderScopeKey &&
+        gradingRequests.isCurrentRefresh(gradingRefresh)
+      ) {
+        setBusy((current) => current === `submissions:${targetPaperId}` ? null : current);
       }
     }
   }
+
+  useEffect(() => {
+    if (submissionScopeSeenRef.current !== requestOwnerKey) {
+      submissionScopeSeenRef.current = requestOwnerKey;
+      submissionScopeReloadPendingRef.current = true;
+    }
+    if (!submissionScopeReloadPendingRef.current || !accountProfileReady || paperDetailView !== "grading" || !selectedPaper) return;
+    submissionScopeReloadPendingRef.current = false;
+    void loadSelectedSubmissions();
+    // Reload the visible grading list after its session, project, or paper scope changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountProfileReady, paperFolderScopeKey, requestOwnerKey, paperDetailView, selectedPaper?.paper_id]);
 
   useEffect(() => {
     if (!openTarget || selectedPaperId !== openTarget.paperId) return;
@@ -1111,156 +1537,244 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const scoresBusy = selectedPaper ? busy === `scores:${selectedPaper.paper_id}` : false;
   const analysisBusy = selectedPaper ? busy === `analysis:${selectedPaper.paper_id}` : false;
   const submissionsBusy = selectedPaper ? busy === `submissions:${selectedPaper.paper_id}` : false;
+  const [mobileTab, setMobileTab] = useState<"list" | "detail">("list");
+  const [listCollapsed, setListCollapsed] = useState(false);
+  const paperListInnerRef = useCollapsedPanelInert(listCollapsed, 1024);
   const selectedGradingSubmission =
     submissions.find((submission) => submission.attempt_id === selectedGradingAttemptId) ?? submissions[0] ?? null;
   const selectedPaperHasPublicationHistory = selectedPaper ? paperHasPublicationHistory(selectedPaper) : false;
   const canPublish =
     Boolean(selectedPaper) && !publishBusy && Number(selectedPaper?.question_count || 0) > 0 && selectedClassIds.length > 0 && Boolean(publishFolderId) && (recipientScope === "class" || selectedStudentIds.length > 0);
 
+  if (!accountProfileReady && (sessionGeneration > 0 || confirmedProfileRef.current || accountProfileFailed)) {
+    return (
+      <div className="flex h-full items-center justify-center bg-[var(--or-page)] text-sm text-[var(--or-muted)]" role="status">
+        {accountProfileFailed ? "当前账号信息加载失败，请刷新重试。" : "正在加载当前账号数据…"}
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col bg-slate-50 text-slate-950">
-      <header className="flex shrink-0 flex-col items-stretch gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
+    <div className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--or-page)] text-[var(--or-text)]">
+      <header className="flex shrink-0 flex-col items-stretch gap-3 border-b border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--or-primary)] text-[var(--or-on-primary)] shadow-sm">
             <ClipboardList className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold">试卷管理</h1>
-            <p className="text-sm text-slate-500">线上发布、线下成绩和分析入口</p>
+            <h1 className="text-xl font-bold tracking-tight text-[var(--or-text)]">试卷管理</h1>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
             data-testid="paper-download-offline-uploader"
             onClick={() => void downloadOfflineUploader()}
             disabled={busy === "offline-uploader"}
-            className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+            className="or-g51-btn or-g51-btn-tonal text-xs sm:text-sm py-2 px-3.5"
           >
-            <Download className="h-4 w-4" />
+            <Download className="h-4 w-4 mr-1" />
             {busy === "offline-uploader" ? "准备下载..." : "下载线下答卷采集器"}
           </button>
           <button
             type="button"
             onClick={() => void refresh()}
             disabled={loading}
-            className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+            className="or-g51-btn or-g51-btn-outline text-xs sm:text-sm py-2 px-3.5"
           >
-            <RefreshCw className="h-4 w-4" />
+            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
             刷新
           </button>
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,390px)_minmax(0,1fr)] overflow-hidden">
-        <PaperListSidebar
-          papers={papers}
-          selectedPaper={selectedPaper}
-          loading={loading}
-          query={paperQuery}
-          meta={paperMeta}
-          folders={folders}
-          selectedFolderId={browserFolderId}
-          taggedItems={taggedItems}
-          onSelectFolder={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }}
-          onFolderCreated={(folder) => setFolders((current) => [...current, folder])}
-          onFolderUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
-          onFolderDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }}
-          onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)}
-          onDropItems={moveSelectedPapersToFolder}
-          selectedPaperIds={selectedPaperIds}
-          movingSelectedPapers={movingSelectedPapers}
-          onTogglePaper={togglePaperSelection}
-          onToggleVisiblePapers={toggleVisiblePaperSelection}
-          onClearSelectedPapers={() => setSelectedPaperIds([])}
-          onMoveSelectedPapers={moveSelectedPapersToFolder}
-          onError={reportError}
-          onAnalyzeFolder={(folderId) => void analyzePaperFolder(folderId).then(setFolderAnalysis).catch(reportError)}
-          onSearchChange={(q) => updatePaperQuery({ q })}
-          onDeliveryModeChange={(deliveryMode) => updatePaperQuery({ deliveryMode })}
-          onStatusChange={(status) => updatePaperQuery({ status })}
-          onSelectPaper={(paper) => { setSelectedPaperId(paper.paper_id); setAnalysis(null); }}
-          onPage={(page) => updatePaperQuery({ page })}
-          onPageSize={(pageSize) => updatePaperQuery({ pageSize })}
-        />
+      {/* Mobile master-detail switcher */}
+      <div className="flex lg:hidden shrink-0 items-center justify-between border-b border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2">
+        <div ref={mobileSegmentRef} className="or-g51-segmented or-g51-segmented-indicator relative isolate w-full">
+          <SelectionIndicator rootRef={mobileSegmentRef} selector={'[data-state="active"]'} />
+          <button
+            type="button"
+            aria-pressed={mobileTab === "list"}
+            data-state={mobileTab === "list" ? "active" : "inactive"}
+            onClick={() => setMobileTab("list")}
+            className={`or-g51-segment-item flex-1 ${mobileTab === "list" ? "active" : ""}`}
+          >
+            试卷列表 ({papers.length})
+          </button>
+          <button
+            type="button"
+            aria-pressed={mobileTab === "detail"}
+            data-state={mobileTab === "detail" ? "active" : "inactive"}
+            onClick={() => setMobileTab("detail")}
+            className={`or-g51-segment-item flex-1 ${mobileTab === "detail" ? "active" : ""}`}
+          >
+            {selectedPaper ? "试卷内容" : "未选试卷"}
+          </button>
+        </div>
+      </div>
 
-        <main className="min-h-0 overflow-auto p-6">
+      <div className="or-g51-papers-workspace flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+        <div className={`or-g51-paper-list-panel min-h-0 flex-col lg:flex ${listCollapsed ? "is-collapsed" : ""} ${mobileTab === "list" ? "flex flex-1" : "hidden"}`}>
+          <div ref={paperListInnerRef} className="or-g51-paper-list-inner">
+            <PaperListSidebar
+              papers={papers}
+              selectedPaper={selectedPaper}
+              loading={loading}
+              query={paperQuery}
+              meta={paperMeta}
+              folders={folders}
+              selectedFolderId={browserFolderId}
+              taggedItems={taggedItems}
+              onSelectFolder={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }}
+              onFolderCreated={(folder) => setFolders((current) => [...current, folder])}
+              onFolderUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
+              onFolderDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }}
+              onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)}
+              onDropItems={moveSelectedPapersToFolder}
+              selectedPaperIds={selectedPaperIds}
+              movingSelectedPapers={movingSelectedPapers}
+              onTogglePaper={togglePaperSelection}
+              onToggleVisiblePapers={toggleVisiblePaperSelection}
+              onClearSelectedPapers={() => setSelectedPaperIds([])}
+              onMoveSelectedPapers={moveSelectedPapersToFolder}
+              onError={reportError}
+              onAnalyzeFolder={(folderId) => void analyzePaperFolder(folderId).then(setFolderAnalysis).catch(reportError)}
+              onSearchChange={(q) => updatePaperQuery({ q })}
+              onDeliveryModeChange={(deliveryMode) => updatePaperQuery({ deliveryMode })}
+              onStatusChange={(status) => updatePaperQuery({ status })}
+              onSelectPaper={(paper) => {
+                invalidateAnalysisLifecycle();
+                setSelectedPaperId(paper.paper_id);
+                setMobileTab("detail");
+              }}
+              onPage={(page) => updatePaperQuery({ page })}
+              onPageSize={(pageSize) => updatePaperQuery({ pageSize })}
+            />
+          </div>
+          <button
+            type="button"
+            className="or-sidebar-toggle or-g51-paper-collapse-btn hidden lg:inline-flex"
+            aria-label={listCollapsed ? "展开试卷列表" : "收起试卷列表"}
+            aria-expanded={!listCollapsed}
+            title={listCollapsed ? "展开试卷列表" : "收起试卷列表"}
+            onClick={() => setListCollapsed((prev) => !prev)}
+          >
+            {listCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+        </div>
+
+        <main className={`min-h-0 overflow-auto p-4 sm:p-6 ${mobileTab === "detail" ? "flex-1 block" : "hidden lg:block flex-1"}`}>
+          {/* Mobile Back to List button */}
+          <div className="mb-3 flex lg:hidden items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setMobileTab("list")}
+              className="or-g51-btn or-g51-btn-outline text-xs py-1.5 px-3"
+            >
+              ← 返回试卷列表
+            </button>
+          </div>
           {selectedPaper ? (
             <div className="mx-auto flex max-w-6xl flex-col gap-5">
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <section className="or-g51-surface p-4 sm:p-6 shadow-sm or-g51-static-card">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-500">{selectedPaper.subject}</p>
-                    <h2 className="mt-1 text-2xl font-semibold text-slate-950">{selectedPaper.title}</h2>
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><ContentTags scope="paper" itemId={selectedPaper.paper_id} onError={(error) => reportError(error)} onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))} /><label>归类 <select aria-label="试卷所在文件夹" disabled={selectedPaperHasPublicationHistory} title={selectedPaperHasPublicationHistory ? "已有发布记录，请移动整个文件夹，以保留答卷和统计关系" : undefined} className="rounded border px-2 py-1" value={selectedPaper.folder_id ?? ""} onChange={(event) => void movePaperToFolder(selectedPaper.paper_id, event.target.value).then(() => refresh()).catch(reportError)}>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label></div>
-                    <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-600">
-                      <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.question_count} 题</span>
-                      <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.section_count} 个题组</span>
-                      <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.submitted_student_count ?? 0} 份已提交</span>
-                      <span className="rounded-md bg-emerald-50 px-2 py-1 text-emerald-700">
+                    <p className="text-sm font-semibold text-[var(--or-on-container)]">{formatSubjectLabel(selectedPaper.subject, "综合学科")}</p>
+                    <h2 className="mt-1 text-2xl font-bold tracking-tight text-[var(--or-text)]">{selectedPaper.title}</h2>
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-xs">
+                      <ContentTags scope="paper" itemId={selectedPaper.paper_id} onError={(error) => reportError(error)} onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))} />
+                      <label className="inline-flex items-center gap-1.5 font-medium text-[var(--or-muted)]">
+                        归类
+                        <AppSelect
+                          aria-label="试卷所在文件夹"
+                          disabled={selectedPaperHasPublicationHistory}
+                          title={selectedPaperHasPublicationHistory ? "已有发布记录，请移动整个文件夹，以保留答卷和统计关系" : undefined}
+                          className="or-g51-select py-1 px-2.5 text-xs"
+                          value={selectedPaper.folder_id ?? ""}
+                          onValueChange={(value) => void movePaperToFolder(selectedPaper.paper_id, value).then(() => refresh()).catch(reportError)}
+                        >
+                          {folders.map((folder) => (
+                            <option key={folder.id} value={folder.id}>
+                              {folder.name}
+                            </option>
+                          ))}
+                        </AppSelect>
+                      </label>
+                    </div>
+                    <div className="mt-3.5 flex flex-wrap gap-2 text-sm">
+                      <G51Pill variant="neutral">{selectedPaper.question_count} 题</G51Pill>
+                      <G51Pill variant="neutral">{selectedPaper.section_count} 个题组</G51Pill>
+                      <G51Pill variant="neutral">{selectedPaper.submitted_student_count ?? 0} 份已提交</G51Pill>
+                      <G51Pill variant="success">
                         {selectedPaper.published_student_count ?? selectedPaper.graded_student_count ?? 0} 份批改并发布
-                      </span>
-                      {selectedPaper.score_batch_count > 0 ? <span className="rounded-md bg-slate-100 px-2 py-1">{selectedPaper.score_batch_count} 批线下成绩</span> : null}
+                      </G51Pill>
+                      {selectedPaper.score_batch_count > 0 ? (
+                        <G51Pill variant="neutral">{selectedPaper.score_batch_count} 批线下成绩</G51Pill>
+                      ) : null}
                       {selectedPaper.status === "published" ? (
-                        <span className="rounded-md bg-emerald-100 px-2 py-1 text-emerald-700">已发布</span>
+                        <G51Pill variant="success">已发布</G51Pill>
                       ) : null}
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button type="button" onClick={() => { setPaperDetailView("grading"); void loadSelectedSubmissions(); }} className="rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-800 hover:bg-violet-100">查看提交与批改{(selectedPaper.submitted_student_count ?? 0) > 0 ? `（${selectedPaper.submitted_student_count}）` : ""}</button>
-                  <div className="inline-flex rounded-md border border-slate-300 bg-slate-100 p-1">
+                  <div className="flex flex-wrap items-center justify-end gap-2.5">
                     <button
                       type="button"
-                      data-testid="paper-mode-offline"
-                      disabled={modeBusy || selectedPaper.delivery_mode === "offline"}
-                      onClick={() => void setDeliveryMode(selectedPaper, "offline")}
-                      className={`rounded px-3 py-1.5 text-sm font-medium ${
-                        selectedPaper.delivery_mode === "offline"
-                          ? "bg-white text-slate-950 shadow-sm"
-                          : "text-slate-600 hover:text-slate-950"
-                      } disabled:opacity-70`}
+                      onClick={() => { setPaperDetailView("grading"); void loadSelectedSubmissions(); }}
+                      className="or-g51-btn or-g51-btn-tonal text-sm font-semibold"
                     >
-                      设为线下
+                      查看提交与批改{(selectedPaper.submitted_student_count ?? 0) > 0 ? `（${selectedPaper.submitted_student_count}）` : ""}
                     </button>
-                    <button
-                      type="button"
-                      data-testid="paper-mode-online"
-                      disabled={modeBusy || selectedPaper.delivery_mode === "online"}
-                      onClick={() => void setDeliveryMode(selectedPaper, "online")}
-                      className={`rounded px-3 py-1.5 text-sm font-medium ${
-                        selectedPaper.delivery_mode === "online"
-                          ? "bg-white text-slate-950 shadow-sm"
-                          : "text-slate-600 hover:text-slate-950"
-                      } disabled:opacity-70`}
-                    >
-                      设为线上
-                    </button>
-                  </div>
+                    <div ref={deliveryModeSegmentRef} className="or-g51-segmented or-g51-segmented-indicator relative isolate">
+                      <SelectionIndicator rootRef={deliveryModeSegmentRef} selector={'[data-state="active"]'} />
+                      <button
+                        type="button"
+                        data-testid="paper-mode-offline"
+                        aria-pressed={selectedPaper.delivery_mode === "offline"}
+                        data-state={selectedPaper.delivery_mode === "offline" ? "active" : "inactive"}
+                        disabled={modeBusy || selectedPaper.delivery_mode === "offline"}
+                        onClick={() => void setDeliveryMode(selectedPaper, "offline")}
+                        className={`or-g51-segment-item ${selectedPaper.delivery_mode === "offline" ? "active" : ""}`}
+                      >
+                        设为线下
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="paper-mode-online"
+                        aria-pressed={selectedPaper.delivery_mode === "online"}
+                        data-state={selectedPaper.delivery_mode === "online" ? "active" : "inactive"}
+                        disabled={modeBusy || selectedPaper.delivery_mode === "online"}
+                        onClick={() => void setDeliveryMode(selectedPaper, "online")}
+                        className={`or-g51-segment-item ${selectedPaper.delivery_mode === "online" ? "active" : ""}`}
+                      >
+                        设为线上
+                      </button>
+                    </div>
                   </div>
                 </div>
               </section>
 
-              <div className="inline-flex w-fit rounded-md border border-slate-300 bg-white p-1 shadow-sm">
+              <div ref={detailViewSegmentRef} className="or-g51-segmented or-g51-segmented-indicator relative isolate w-fit">
+                <SelectionIndicator rootRef={detailViewSegmentRef} selector={'[data-state="active"]'} />
                 <button
                   type="button"
                   data-testid="paper-tab-manage"
+                  aria-pressed={paperDetailView === "manage"}
+                  data-state={paperDetailView === "manage" ? "active" : "inactive"}
                   onClick={() => setPaperDetailView("manage")}
-                  className={`rounded px-3 py-1.5 text-sm font-medium ${
-                    paperDetailView === "manage" ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-950"
-                  }`}
+                  className={`or-g51-segment-item ${paperDetailView === "manage" ? "active" : ""}`}
                 >
                   试卷管理
                 </button>
                 <button
                   type="button"
                   data-testid="paper-tab-grading"
+                  aria-pressed={paperDetailView === "grading"}
+                  data-state={paperDetailView === "grading" ? "active" : "inactive"}
                   onClick={() => {
                     setPaperDetailView("grading");
                     void loadSelectedSubmissions();
                   }}
-                  className={`rounded px-3 py-1.5 text-sm font-medium ${
-                    paperDetailView === "grading" ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-950"
-                  }`}
+                  className={`or-g51-segment-item ${paperDetailView === "grading" ? "active" : ""}`}
                 >
                   提交批改{(selectedPaper.submitted_student_count ?? 0) > 0 ? `（${selectedPaper.submitted_student_count}）` : ""}
                 </button>
@@ -1323,38 +1837,38 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                   onTogglePause={togglePublicationPause}
                   onRevoke={revokePublication}
                 />
-                <aside className="space-y-4">
-                  <Panel title="线下成绩" icon={<Upload className="h-5 w-5 text-slate-600" />}>
-                    <div className="flex flex-col gap-2">
+                <aside className="space-y-5">
+                  <Panel title="线下成绩" icon={<Upload className="h-5 w-5 text-[var(--or-on-container)]" />}>
+                    <div className="flex flex-col gap-2.5">
                       <button
                         type="button"
                         onClick={() => void downloadScoreTemplate()}
-                        className="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        className="or-g51-btn or-g51-btn-outline w-full text-sm font-medium"
                       >
                         下载成绩模板
                       </button>
-                      <label className="inline-flex cursor-pointer items-center justify-center rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+                      <label className="or-g51-btn or-g51-btn-primary w-full text-sm font-semibold cursor-pointer">
                         {scoresBusy ? "上传中..." : "上传成绩"}
                         <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={(event) => void uploadScores(event)} />
                       </label>
                     </div>
                   </Panel>
 
-                  <Panel title="分析" icon={<BarChart3 className="h-5 w-5 text-slate-600" />}>
+                  <Panel title="分析" icon={<BarChart3 className="h-5 w-5 text-[var(--or-on-container)]" />}>
                     <button
                       type="button"
                       data-testid="paper-load-analysis"
                       disabled={analysisBusy}
                       onClick={() => void loadSelectedAnalysis()}
-                      className="inline-flex w-full items-center justify-center rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                      className="or-g51-btn or-g51-btn-primary w-full text-sm font-semibold"
                     >
                       {analysisBusy ? "加载中..." : "查看分析摘要"}
                     </button>
-                    {analysis ? <p className="mt-3 text-xs text-emerald-700">分析已在大窗口中打开</p> : null}
+                    {analysis ? <p className="mt-2.5 text-xs font-medium text-[var(--or-on-success)]">分析已在大窗口中打开</p> : null}
                     <button
                       type="button"
                       onClick={() => onOpenAnalysis?.(selectedPaper.exam_id)}
-                      className="mt-3 inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      className="or-g51-btn or-g51-btn-outline mt-2.5 w-full text-sm font-medium"
                     >
                       打开分析
                     </button>
@@ -1417,14 +1931,14 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                 </GradingWorkspace>
               )}
               {message ? (
-                <div className="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
+                <div className="rounded-md border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-3 text-sm text-[var(--or-muted)] shadow-sm">
                   {message}
                 </div>
               ) : null}
             </div>
           ) : (
             <div className="flex h-full items-start justify-center overflow-auto p-6">
-              {loading ? <p className="py-16 text-sm text-slate-500">正在加载试卷...</p> : (
+              {loading ? <p className="py-16 text-sm text-[var(--or-muted)]">正在加载试卷...</p> : (
                 <div className="w-full max-w-5xl space-y-4">
                   <GettingStartedChecklist
                     description="准备题目和模板后即可组卷、预览并发布到班级"
@@ -1434,49 +1948,173 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                       { label: "生成第一份试卷", complete: false, actionLabel: "开始组卷", onAction: onOpenCompose },
                     ]}
                   />
-                  <p className="text-center text-sm text-slate-500">当前还没有试卷，可从上面的任一步开始。</p>
+                  <p className="text-center text-sm text-[var(--or-muted)]">当前还没有试卷，可从上面的任一步开始。</p>
                 </div>
               )}
             </div>
           )}
         </main>
       </div>
-      {analysis ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="试卷分析">
-          <section className="flex h-[85vh] w-[85vw] min-w-0 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4">
+      {analysisDialogOpen ? (
+        <div className="or-g51-dialog-backdrop" role="dialog" aria-modal="true" aria-label="试卷分析">
+          <section className="or-g51-dialog-window h-[92vh] sm:h-[85vh] w-[95vw] sm:w-[85vw] max-w-5xl min-w-0">
+            <header className="flex shrink-0 items-center justify-between border-b border-[var(--or-outline)] px-4 py-3 sm:px-6 sm:py-4">
               <div>
-                <h2 className="text-lg font-semibold text-slate-950">{analysis.paper.title} · 试卷分析</h2>
-                <p className="mt-1 text-sm text-slate-500">完成情况、题目表现、模块掌握和考试行为数据</p>
+                <h2 className="text-lg font-bold tracking-tight text-[var(--or-text)]">
+                  {analysis ? analysis.paper.title : selectedPaper?.title ?? "试卷"} · 试卷分析
+                </h2>
+                <p className="mt-1 text-sm text-[var(--or-muted)]">完成情况、题目表现、模块掌握和考试行为数据</p>
               </div>
-              <button type="button" aria-label="关闭试卷分析" onClick={() => setAnalysis(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100">
+              <button
+                type="button"
+                aria-label="关闭试卷分析"
+                onClick={invalidateAnalysisLifecycle}
+                className="rounded-lg p-2 text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-text)] transition"
+              >
                 <X className="h-5 w-5" />
               </button>
             </header>
-            <div className="min-h-0 flex-1 overflow-auto p-6">
-              <div className="mb-4 flex flex-wrap gap-2">
-                <button type="button" data-testid="paper-export-report-xlsx" onClick={downloadAnalysisReport} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium">导出 Excel</button>
-                <button type="button" data-testid="paper-export-report-pdf" onClick={() => void printAnalysisReport()} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium">导出 PDF</button>
-              </div>
-              {(analysis.publications?.length ?? 0) > 0 && <label className="block text-sm">发布批次
-                <select aria-label="分析发布批次" disabled={busy !== null} value={analysis.publication_id ?? ""} className="ml-3 max-w-full rounded border p-2"
-                  onChange={(e) => void loadSelectedAnalysis(e.target.value)}>
-                  {analysis.publications?.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.created_at} · {item.id.slice(0, 8)}</option>)}
-                </select>
-              </label>}
-              {(analysis.available_classes?.length ?? 0) > 0 && <label className="ml-3 block text-sm">分析班级
-                <select aria-label="分析班级" disabled={busy !== null} value={analysis.class_id ?? ""} className="ml-3 max-w-full rounded border p-2"
-                  onChange={(e) => void loadSelectedAnalysis(analysis.publication_id ?? undefined, e.target.value || undefined)}>
-                  <option value="">全部班级</option>
-                  {analysis.available_classes?.map((item) => <option key={item.id} value={item.id}>{item.name}{item.grade && !item.name.includes(item.grade) ? ` · ${item.grade}` : ""}</option>)}
-                </select>
-              </label>}
-              <PlatformPaperAnalysisCharts analysis={analysis} />
+            <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
+              {analysis ? (
+                <>
+                  {analysisPending ? (
+                    <p className="mb-3 text-sm font-medium text-[var(--or-muted)]" role="status">正在更新分析结果…</p>
+                  ) : null}
+                  <div className="mb-4 flex flex-wrap gap-2.5">
+                    <button
+                      type="button"
+                      data-testid="paper-export-report-xlsx"
+                      disabled={!analysisSnapshotIsCurrent || analysisPending}
+                      onClick={downloadAnalysisReport}
+                      className="or-g51-btn or-g51-btn-outline text-sm"
+                    >
+                      导出 Excel
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="paper-export-report-pdf"
+                      disabled={!analysisSnapshotIsCurrent || analysisPending}
+                      onClick={() => void printAnalysisReport()}
+                      className="or-g51-btn or-g51-btn-outline text-sm"
+                    >
+                      导出 PDF
+                    </button>
+                  </div>
+                  <div className="mb-4 flex flex-wrap items-center gap-4">
+                    {(analysis.publications?.length ?? 0) > 0 ? (
+                      <label className="flex items-center gap-2 text-sm font-medium text-[var(--or-muted)]">
+                        发布批次
+                        <AppSelect
+                          aria-label="分析发布批次"
+                          disabled={busy !== null && !analysisPending}
+                          value={analysisFilterSelection?.ownerKey === requestOwnerKey ? analysisFilterSelection.publicationId ?? "" : analysis.publication_id ?? ""}
+                          className="or-g51-select text-sm py-1.5 px-3"
+                          onValueChange={(value) => void loadSelectedAnalysis(value || undefined)}
+                        >
+                          {analysis.publications?.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.title} · {item.created_at} · {item.id.slice(0, 8)}
+                            </option>
+                          ))}
+                        </AppSelect>
+                      </label>
+                    ) : null}
+                    {(analysis.available_classes?.length ?? 0) > 0 ? (
+                      <label className="flex items-center gap-2 text-sm font-medium text-[var(--or-muted)]">
+                        分析班级
+                        <AppSelect
+                          aria-label="分析班级"
+                          disabled={busy !== null && !analysisPending}
+                          value={analysisFilterSelection?.ownerKey === requestOwnerKey ? analysisFilterSelection.classId ?? "" : analysis.class_id ?? ""}
+                          className="or-g51-select text-sm py-1.5 px-3"
+                          onValueChange={(value) =>
+                            void loadSelectedAnalysis(
+                              getCurrentAnalysisFilters().publicationId,
+                              value || undefined,
+                            )
+                          }
+                        >
+                          <option value="">全部班级</option>
+                          {analysis.available_classes?.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name}
+                              {item.grade && !item.name.includes(item.grade) ? " · " + item.grade : ""}
+                            </option>
+                          ))}
+                        </AppSelect>
+                      </label>
+                    ) : null}
+                  </div>
+                  <PlatformPaperAnalysisCharts analysis={analysis} />
+                </>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm font-medium text-[var(--or-muted)]" role="status">正在加载试卷分析…</div>
+              )}
             </div>
           </section>
         </div>
       ) : null}
-      {folderAnalysis ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="文件夹分析"><section className="flex h-[85vh] w-[85vw] flex-col overflow-hidden rounded-xl bg-white shadow-xl"><header className="flex items-center justify-between border-b p-4"><div><h2 className="font-semibold">{folderAnalysis.folder.name} · 文件夹分析</h2><p className="text-xs text-slate-500">仅统计实际收到该练习的学生；不计入班级统考平均分。</p></div><button type="button" aria-label="关闭文件夹分析" onClick={() => setFolderAnalysis(null)}><X className="h-5 w-5" /></button></header><div className="overflow-auto p-5"><div className="mb-4 grid gap-2 text-sm sm:grid-cols-5">{[["接收人数", folderAnalysis.summary.assigned_count], ["已提交", folderAnalysis.summary.submitted_count], ["已批改", folderAnalysis.summary.graded_count], ["发布批次", folderAnalysis.summary.publication_count], ["平均得分率", folderAnalysis.summary.average_score_percent == null ? "暂无" : `${folderAnalysis.summary.average_score_percent}%`]].map(([label, value]) => <div key={label} className="rounded border bg-slate-50 p-3"><div className="text-slate-500">{label}</div><b>{value}</b></div>)}</div><div className="space-y-1 text-sm">{folderAnalysis.attempts.map((attempt, index) => <div key={index} className="flex flex-wrap justify-between gap-2 rounded border p-2"><span>{attempt.display_name} · {attempt.student_no}</span><span>{attempt.title} · {attempt.status} · {attempt.score == null ? "未发布成绩" : `${attempt.score}/${attempt.max_score ?? "—"}`}</span></div>)}</div></div></section></div> : null}
+      {folderAnalysis ? (
+        <div className="or-g51-dialog-backdrop" role="dialog" aria-modal="true" aria-label="文件夹分析">
+          <section className="or-g51-dialog-window h-[92vh] sm:h-[85vh] w-[95vw] sm:w-[85vw] max-w-5xl flex-col">
+            <header className="flex items-center justify-between border-b border-[var(--or-outline)] px-4 py-3 sm:px-6 sm:py-4">
+              <div>
+                <h2 className="text-lg font-bold tracking-tight text-[var(--or-text)]">
+                  {folderAnalysis.folder.name} · 文件夹分析
+                </h2>
+                <p className="mt-1 text-xs sm:text-sm text-[var(--or-muted)]">
+                  仅统计实际收到该练习的学生；不计入班级统考平均分。
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭文件夹分析"
+                onClick={() => setFolderAnalysis(null)}
+                className="rounded-lg p-2 text-[var(--or-muted)] hover:bg-[var(--or-block)] hover:text-[var(--or-text)] transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+            <div className="overflow-auto p-4 sm:p-6 space-y-4">
+              <div className="grid gap-2.5 grid-cols-2 sm:grid-cols-5">
+                {[
+                  ["接收人数", folderAnalysis.summary.assigned_count],
+                  ["已提交", folderAnalysis.summary.submitted_count],
+                  ["已批改", folderAnalysis.summary.graded_count],
+                  ["发布批次", folderAnalysis.summary.publication_count],
+                  [
+                    "平均得分率",
+                    folderAnalysis.summary.average_score_percent == null
+                      ? "暂无"
+                      : `${folderAnalysis.summary.average_score_percent}%`,
+                  ],
+                ].map(([label, value]) => (
+                  <div key={label} className="or-g51-static-card rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3.5">
+                    <div className="text-xs font-medium text-[var(--or-muted)]">{label}</div>
+                    <div className="mt-1 text-lg font-bold text-[var(--or-text)]">{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2 text-sm">
+                {folderAnalysis.attempts.map((attempt, index) => (
+                  <div
+                    key={index}
+                    className="or-g51-static-card flex flex-wrap justify-between gap-2 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3 font-medium"
+                  >
+                    <span className="text-[var(--or-text)]">
+                      {attempt.display_name} · {attempt.student_no}
+                    </span>
+                    <span className="text-[var(--or-muted)]">
+                      {attempt.title} · {attempt.status} ·{" "}
+                      {attempt.score == null ? "未发布成绩" : `${attempt.score}/${attempt.max_score ?? "—"}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1534,10 +2172,10 @@ function gradingSaveMessage(fields: Record<"score" | "feedback", boolean>): stri
 
 function Panel({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-center gap-2">
+    <section className="or-g51-surface p-5 shadow-sm space-y-4">
+      <div className="flex items-center gap-2.5">
         {icon}
-        <h3 className="font-semibold">{title}</h3>
+        <h3 className="text-base font-semibold text-[var(--or-text)]">{title}</h3>
       </div>
       {children}
     </section>

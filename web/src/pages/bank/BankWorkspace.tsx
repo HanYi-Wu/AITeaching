@@ -7,9 +7,8 @@ import {
   type ChangeEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import yaml from "js-yaml";
-import { ApiError } from "../../api/errors";
-import { loadSessionToken } from "../../platform/session";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { useCollapsedPanelInert } from "../../hooks/useCollapsedPanelInert";
 import {
   apiDelete,
   apiGet,
@@ -17,6 +16,7 @@ import {
   apiPostFormData,
   apiPut,
 } from "../../api/client";
+import { ApiError } from "../../api/errors";
 import {
   BankQuestionEditorPanel,
   type BankDetailState,
@@ -26,20 +26,21 @@ import {
 } from "../../components/BankQuestionEditorPanel";
 import type { EmbedKind } from "../../lib/bankEditorEmbedKinds";
 import { ContentWithPrimeBrush } from "../../components/ContentWithPrimeBrush";
-import { ContentTags } from '../../components/ContentTags';
+import { ContentTags } from "../../components/ContentTags";
 import { MathInsertOverlay } from "../../components/MathInsertOverlay";
 import { MermaidEditorModal } from "../../components/MermaidEditorModal";
 import { PrimeBrushEditorModal } from "../../components/PrimeBrushEditorModal";
 import { useAgentContext } from "../../contexts/AgentContext";
 import { TabPanel, type TabItem } from "../../components/layout/TabPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { SelectionIndicator } from "../../design-system/SelectionIndicator";
 import i18n from "../../i18n/i18n";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { localeCompareStrings } from "../../lib/locale";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
 import { notifyContentLibraryChanged } from "../../lib/contentEvents";
-import { isImeCompositionActive } from "../../lib/ime";
 import { downloadPlatformBlob, listTaggedItems, type ContentTag } from "../../platform/auth";
+import { loadSessionToken } from "../../platform/session";
 import { isChoiceQuestionType } from "../../lib/questionTypes";
 import { defaultItemsForNewGroup, type BankListItem } from "./bankModel";
 import { pruneStaleSelection } from "./bankOperationModel";
@@ -47,6 +48,8 @@ import { useBankList } from "./useBankList";
 import { BankToolbar } from "./BankToolbar";
 import { BankSidebar } from "./BankSidebar";
 import { useBankImageUpload } from "./bankImageAdapter";
+import { useBankEditSession, useBankImportSession } from "./sessionCore";
+import "../../ui-redesign/g48/g48-bank.css";
 
 export function BankWorkspace({
   onError,
@@ -56,6 +59,16 @@ export function BankWorkspace({
   onOpenGraphNode?: (nodeId: string) => void;
 }) {
   const { t } = useTranslation(["bank", "lib", "common"]);
+  const listErrorRef = useRef<string | null>(null);
+  const bankListRefreshSourceRef = useRef<object>({});
+  const handleBankListError = useCallback(
+    (msg: string | null) => {
+      listErrorRef.current = msg;
+      onError(msg);
+    },
+    [onError]
+  );
+
   const {
     items,
     diagnostics,
@@ -81,23 +94,155 @@ export function BankWorkspace({
     metadataFilterDefinitions,
     filtered,
     bankFilterSummary,
-  } = useBankList({ onError });
+  } = useBankList({
+    onError: handleBankListError,
+    ignoreContentChangeSource: bankListRefreshSourceRef.current,
+  });
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const robustLoadList = useCallback(async () => {
+    listErrorRef.current = null;
+    await loadList();
+    if (listErrorRef.current) {
+      const err = new Error(listErrorRef.current);
+      listErrorRef.current = null;
+      throw err;
+    }
+  }, [loadList]);
+
+  const refreshListAndNotify = useCallback(async () => {
+    const session = loadSessionToken();
+    try {
+      await robustLoadList();
+    } finally {
+      if (session === loadSessionToken()) {
+        notifyContentLibraryChanged("question", bankListRefreshSourceRef.current);
+      }
+    }
+  }, [robustLoadList]);
+
+  const fetchDetail = useCallback(async (qid: string): Promise<BankDetailState> => {
+    const enc = encodeURIComponent(qid);
+    const d = await apiGet<{
+      qualified_id: string;
+      question: QuestionJson | null;
+      question_display?: QuestionJson | null;
+      file_yaml: string;
+      record_yaml?: string;
+      version?: string;
+      storage_path: string;
+      storage_kind: string;
+      question_group?: QuestionGroupJson | null;
+      question_group_preview?: { material: string; items: GroupMemberJson[] } | null;
+    }>(`/api/bank/items/${enc}`);
+    d.file_yaml = d.record_yaml ?? d.file_yaml;
+    let detailState: BankDetailState;
+    if (!d.question && d.question_group) {
+      const ug = d.question_group.unified;
+      const qt = ug === false ? "single_choice" : typeof ug === "string" ? ug : "single_choice";
+      detailState = {
+        ...d,
+        question: {
+          id: `${d.question_group.id}__01`,
+          type: qt,
+          content: "",
+          answer: "",
+          analysis: "",
+          metadata: {},
+          options: isChoiceQuestionType(qt) ? { A: "", B: "", C: "", D: "" } : null,
+          group_material: d.question_group.material,
+        },
+        question_display: undefined,
+      };
+    } else {
+      detailState = {
+        ...(d as BankDetailState),
+        question_display: d.question_display ?? undefined,
+      };
+    }
+    return detailState;
+  }, []);
+
+  const putItemApi = useCallback(
+    async (qid: string, body: unknown, headers?: Record<string, string>) => {
+      const enc = encodeURIComponent(qid);
+      return headers
+        ? apiPut<{ version?: string }>(`/api/bank/items/${enc}`, body, headers)
+        : apiPut<{ version?: string }>(`/api/bank/items/${enc}`, body);
+    },
+    []
+  );
+
+  const {
+    selectedId,
+    setSelectedId,
+    detail,
+    setDetail,
+    rawYaml,
+    setRawYaml,
+    metaRows,
+    setMetaRows,
+    editorTab,
+    setEditorTab,
+    workView,
+    setWorkView,
+    dirty,
+    saving,
+    saveConflict,
+    trySelectQuestion,
+    loadQuestionDetail,
+    saveForm,
+    saveRawYaml,
+    viewLatestConflict,
+    loadLatestConflict,
+    clearSessionDraft,
+    removeBaseline,
+    draftRef,
+  } = useBankEditSession({
+    onError,
+    fetchDetailApi: fetchDetail,
+    putItemApi,
+    refreshListApi: refreshListAndNotify,
+  });
+
+  const {
+    transaction: importTransaction,
+    busy: importBusy,
+    importYaml,
+    setImportYaml,
+    importSubject,
+    setImportSubject,
+    importTarget,
+    importYamlText,
+    importFromFile,
+    retryRefreshOnly,
+  } = useBankImportSession({
+    onError,
+    postImportApi: (body) => apiPost("/api/bank/import", body),
+    postBundleApi: (fd) => apiPostFormData("/api/bank/import-bundle", fd),
+    refreshListApi: refreshListAndNotify,
+    defaultSubject: i18n.t("bank:defaultSubject"),
+    defaultTarget: "默认",
+  });
+
   const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
-  const refreshTags = useCallback(() => { void listTaggedItems("bank").then(({ items }) => setTaggedItems(items)).catch(() => undefined); }, []);
+  const refreshTags = useCallback(() => {
+    void listTaggedItems("bank")
+      .then(({ items }) => setTaggedItems(items))
+      .catch(() => undefined);
+  }, []);
   useEffect(() => refreshTags(), [refreshTags]);
+
   const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
+  const [mobileBankPanel, setMobileBankPanel] = useState<"list" | "editor">("list");
+  const [bankListCollapsed, setBankListCollapsed] = useState(false);
+  const bankListInnerRef = useCollapsedPanelInert(bankListCollapsed, 1024);
+  const mobileBankPanelRef = useRef<HTMLDivElement>(null);
   /** 已打开的题目标签（多窗口编辑） */
   const [openTabs, setOpenTabs] = useState<string[]>([]);
-  /** 中间工作区：字段编辑 / 浏览 / 源文件 */
-  const [workView, setWorkView] = useState<"fields" | "preview" | "source">("fields");
-  const [detail, setDetail] = useState<BankDetailState | null>(null);
-  const [saveConflict, setSaveConflict] = useState<{ qid: string; latest: BankDetailState | null } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [importYaml, setImportYaml] = useState("");
-  const [importSubject, setImportSubject] = useState(() => i18n.t("bank:defaultSubject"));
-  const [importTarget] = useState("默认");
+  const [opBusy, setOpBusy] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
+  const busy = opBusy || imageBusy || saving || importBusy;
+
   const openModalAfterCreateRef = useRef(false);
   const [editorModalOpen, setEditorModalOpen] = useState(false);
   const [bankManageOpen, setBankManageOpen] = useState(false);
@@ -112,16 +257,7 @@ export function BankWorkspace({
   const [newGroupUnified, setNewGroupUnified] = useState<string>("single_choice");
   const [newGroupMaterial, setNewGroupMaterial] = useState("");
   const [pendingDeleteItem, setPendingDeleteItem] = useState<BankListItem | null>(null);
-  const [editorTab, setEditorTab] = useState<"form" | "yaml">("form");
-  const [rawYaml, setRawYaml] = useState("");
-  const [metaRows, setMetaRows] = useState<{ key: string; value: string }[]>([]);
-  const selectedIdRef = useRef(selectedId);
-  selectedIdRef.current = selectedId;
-  const detailRequestSeqRef = useRef(0);
-  useEffect(() => () => { detailRequestSeqRef.current++; }, []);
-  const draftRef = useRef({ selectedId, detail, rawYaml, metaRows });
-  draftRef.current = { selectedId, detail, rawYaml, metaRows };
-  const saveInProgressRef = useRef(false);
+
   const [mathOpen, setMathOpen] = useState(false);
   const [mermaidOpen, setMermaidOpen] = useState(false);
   const [primeBrushOpen, setPrimeBrushOpen] = useState(false);
@@ -138,7 +274,7 @@ export function BankWorkspace({
     useBankImageUpload({
       detail,
       setDetail,
-      setBusy,
+      setBusy: setImageBusy,
       onError,
       contentRef,
       answerRef,
@@ -147,7 +283,6 @@ export function BankWorkspace({
     });
 
   const { setPageContext } = useAgentContext();
-  const baselineRef = useRef<Record<string, { yaml: string; detailJson: string; metaRowsJson: string }>>({});
 
   useEffect(() => {
     if (selectedId && detail) {
@@ -231,138 +366,16 @@ export function BankWorkspace({
     return `${sub} → ${coll}`;
   }, [importSubject, importTarget, t]);
 
-  const fetchDetail = useCallback(async (qid: string): Promise<BankDetailState> => {
-    const enc = encodeURIComponent(qid);
-    const d = await apiGet<{
-      qualified_id: string;
-      question: QuestionJson | null;
-      question_display?: QuestionJson | null;
-      file_yaml: string;
-      record_yaml?: string;
-      version?: string;
-      storage_path: string;
-      storage_kind: string;
-      question_group?: QuestionGroupJson | null;
-      question_group_preview?: { material: string; items: GroupMemberJson[] } | null;
-    }>(`/api/bank/items/${enc}`);
-    d.file_yaml = d.record_yaml ?? d.file_yaml;
-    let detailState: BankDetailState;
-    if (!d.question && d.question_group) {
-      const ug = d.question_group.unified;
-      const t = ug === false ? "single_choice" : typeof ug === "string" ? ug : "single_choice";
-      detailState = {
-        ...d,
-        question: {
-          id: `${d.question_group.id}__01`,
-          type: t,
-          content: "",
-          answer: "",
-          analysis: "",
-          metadata: {},
-          options: isChoiceQuestionType(t) ? { A: "", B: "", C: "", D: "" } : null,
-          group_material: d.question_group.material,
-        },
-        question_display: undefined,
-      };
-    } else {
-      detailState = {
-        ...(d as BankDetailState),
-        question_display: d.question_display ?? undefined,
-      };
-    }
-    return detailState;
-  }, []);
-
-  const detailMetaRows = useCallback((detailState: BankDetailState) => {
-    const m = detailState.question.metadata ?? {};
-    return Object.keys(m).length
-      ? Object.entries(m).map(([k, v]) => ({ key: k, value: String(v) }))
-      : [{ key: "", value: "" }];
-  }, []);
-
-  const setDetailBaseline = useCallback((qid: string, detailState: BankDetailState, rows: { key: string; value: string }[]) => {
-    baselineRef.current[qid] = {
-      yaml: detailState.file_yaml,
-      detailJson: JSON.stringify(detailState),
-      metaRowsJson: JSON.stringify(rows),
-    };
-  }, []);
-
-  const loadDetail = useCallback(
-    async (qid: string) => {
-      const requestSeq = ++detailRequestSeqRef.current;
-      const session = loadSessionToken();
-      onError(null);
-      const detailState = await fetchDetail(qid);
-      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid || session !== loadSessionToken()) {
-        return;
-      }
-      const nextMetaRows = detailMetaRows(detailState);
-      setDetail(detailState);
-      setSaveConflict(null);
-      setRawYaml(detailState.file_yaml);
-      setMetaRows(nextMetaRows);
-      setEditorTab("form");
-      setDetailBaseline(qid, detailState, nextMetaRows);
-    },
-    [onError, fetchDetail, detailMetaRows, setDetailBaseline],
-  );
-
-  const reconcileSavedDetail = useCallback(
-    async (
-      qid: string,
-      submittedDetailJson: string,
-      submittedMetaRowsJson: string,
-      submittedYaml: string,
-      savedVersion?: string,
-    ) => {
-      const requestSeq = detailRequestSeqRef.current;
-      const session = loadSessionToken();
-      const detailState = await fetchDetail(qid);
-      if (requestSeq !== detailRequestSeqRef.current || selectedIdRef.current !== qid || session !== loadSessionToken()) {
-        return;
-      }
-
-      const nextMetaRows = detailMetaRows(detailState);
-      setDetailBaseline(qid, detailState, nextMetaRows);
-
-      const current = draftRef.current;
-      const currentDetailBelongsToQuestion = current.detail?.qualified_id === qid;
-      const formUnchanged =
-        !currentDetailBelongsToQuestion ||
-        (JSON.stringify(current.detail) === submittedDetailJson &&
-          JSON.stringify(current.metaRows) === submittedMetaRowsJson);
-      const yamlUnchanged =
-        !currentDetailBelongsToQuestion || current.rawYaml === submittedYaml;
-
-      if (formUnchanged) {
-        setDetail(detailState);
-        setMetaRows(nextMetaRows);
-      } else if (savedVersion) {
-        setDetail((previous) => previous?.qualified_id === qid ? { ...previous, version: savedVersion } : previous);
-      }
-      if (yamlUnchanged) {
-        setRawYaml(detailState.file_yaml);
-      }
-      if (formUnchanged && yamlUnchanged) {
-        setEditorTab("form");
-      }
-    },
-    [fetchDetail, detailMetaRows, setDetailBaseline],
-  );
-
   useEffect(() => {
     if (!selectedId) {
-      setDetail(null);
-      setRawYaml("");
-      setMetaRows([]);
+      clearSessionDraft();
       setEditorModalOpen(false);
       return;
     }
     let cancelled = false;
     void (async () => {
       try {
-        await loadDetail(selectedId);
+        await loadQuestionDetail(selectedId);
         if (!cancelled && openModalAfterCreateRef.current) {
           openModalAfterCreateRef.current = false;
           setEditorModalOpen(true);
@@ -376,161 +389,10 @@ export function BankWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [selectedId, loadDetail, onError]);
-
-  function buildQuestionFromForm(): QuestionJson {
-    if (!detail) {
-      throw new Error(t("bank:errors.noQuestion"));
-    }
-    const q = { ...detail.question };
-    const meta: Record<string, unknown> = {};
-    for (const row of metaRows) {
-      if (row.key.trim()) {
-        meta[row.key.trim()] = row.value;
-      }
-    }
-    q.metadata = meta;
-    if (isChoiceQuestionType(q.type)) {
-      q.options = { ...(detail.question.options ?? { A: "", B: "", C: "", D: "" }) };
-    } else {
-      q.options = null;
-    }
-    return q;
-  }
-
-  function buildQuestionGroupFromForm(): QuestionGroupJson {
-    if (!detail?.question_group) {
-      throw new Error(t("bank:errors.noGroup"));
-    }
-    const g = detail.question_group;
-    const unified = g.unified === false ? false : g.unified;
-    const items = g.items.map((it) => {
-      let options: Record<string, string> | undefined;
-      const itemType =
-        unified === false ? (it.type ?? "single_choice") : typeof unified === "string" ? unified : "single_choice";
-      if (isChoiceQuestionType(itemType)) {
-        options = { ...(it.options ?? { A: "", B: "", C: "", D: "" }) };
-      }
-      if (unified === false) {
-        return {
-          type: it.type ?? "single_choice",
-          content: it.content,
-          answer: it.answer,
-          analysis: it.analysis ?? "",
-          metadata: (it.metadata ?? {}) as Record<string, unknown>,
-          ...(options ? { options } : {}),
-        };
-      }
-      return {
-        content: it.content,
-        answer: it.answer,
-        analysis: it.analysis ?? "",
-        metadata: (it.metadata ?? {}) as Record<string, unknown>,
-        ...(options ? { options } : {}),
-      };
-    });
-    return {
-      id: g.id,
-      type: "group",
-      material: g.material,
-      unified,
-      items,
-    };
-  }
-
-  async function saveForm() {
-    if (isImeCompositionActive()) return;
-    if (!detail || detail.qualified_id !== selectedId) {
-      return;
-    }
-    if (saveInProgressRef.current) return;
-    const qid = detail.qualified_id;
-    const scope = detailRequestSeqRef.current;
-    const session = loadSessionToken();
-    const isCurrent = () => selectedIdRef.current === qid && scope === detailRequestSeqRef.current && session === loadSessionToken();
-    const submittedDetailJson = JSON.stringify(detail);
-    const submittedMetaRowsJson = JSON.stringify(metaRows);
-    const submittedYaml = rawYaml;
-    saveInProgressRef.current = true;
-    setBusy(true);
-    onError(null);
-    try {
-      const enc = encodeURIComponent(qid);
-      const body = detail.question_group ? buildQuestionGroupFromForm() : buildQuestionFromForm();
-      const result = detail.version
-        ? await apiPut<{ version?: string }>(`/api/bank/items/${enc}`, body, { "If-Match": detail.version })
-        : await apiPut<{ version?: string }>(`/api/bank/items/${enc}`, body);
-      if (!isCurrent()) return;
-      await loadList();
-      if (isCurrent()) {
-        setSaveConflict(null);
-        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml, result?.version);
-      }
-      notifyContentLibraryChanged("question");
-    } catch (e) {
-      if (isCurrent()) {
-        if (e instanceof ApiError && e.status === 409) setSaveConflict({ qid, latest: null });
-        onError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      saveInProgressRef.current = false;
-      setBusy(false);
-    }
-  }
-
-  async function saveRawYaml() {
-    if (isImeCompositionActive()) return;
-    if (!detail || detail.qualified_id !== selectedId) {
-      return;
-    }
-    if (saveInProgressRef.current) return;
-    const qid = detail.qualified_id;
-    const scope = detailRequestSeqRef.current;
-    const session = loadSessionToken();
-    const isCurrent = () => selectedIdRef.current === qid && scope === detailRequestSeqRef.current && session === loadSessionToken();
-    const submittedDetailJson = JSON.stringify(detail);
-    const submittedMetaRowsJson = JSON.stringify(metaRows);
-    const submittedYaml = rawYaml;
-    saveInProgressRef.current = true;
-    setBusy(true);
-    onError(null);
-    try {
-      let savedVersion: string | undefined;
-      {
-        const parsed = yaml.load(rawYaml) as unknown;
-        if (!parsed || typeof parsed !== "object") {
-          throw new Error(t("bank:errors.yamlMustBeObject"));
-        }
-        const obj = parsed as Record<string, unknown>;
-        if (String(obj.id ?? "") !== qid.split("/").at(-1)) {
-          throw new Error("题目 ID 不可在 YAML 中修改；如需更名，请新建题目后迁移内容。");
-        }
-        const enc = encodeURIComponent(qid);
-        const result = detail.version
-          ? await apiPut<{ version?: string }>(`/api/bank/items/${enc}`, obj, { "If-Match": detail.version })
-          : await apiPut<{ version?: string }>(`/api/bank/items/${enc}`, obj);
-        savedVersion = result?.version;
-      }
-      if (!isCurrent()) return;
-      await loadList();
-      if (isCurrent()) {
-        setSaveConflict(null);
-        await reconcileSavedDetail(qid, submittedDetailJson, submittedMetaRowsJson, submittedYaml, savedVersion);
-      }
-      notifyContentLibraryChanged("question");
-    } catch (e) {
-      if (isCurrent()) {
-        if (e instanceof ApiError && e.status === 409) setSaveConflict({ qid, latest: null });
-        onError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      saveInProgressRef.current = false;
-      setBusy(false);
-    }
-  }
+  }, [selectedId, loadQuestionDetail, clearSessionDraft, onError]);
 
   async function createQuestion() {
-    setBusy(true);
+    setOpBusy(true);
     onError(null);
     const subj = newSubject.trim();
     const coll = newCollection.trim();
@@ -539,7 +401,7 @@ export function BankWorkspace({
       let body: { subject: string; collection: string; question: QuestionJson | QuestionGroupJson };
       if (newType === "group") {
         const unified = newGroupUnified === "mixed" ? false : newGroupUnified;
-        const items = defaultItemsForNewGroup(newGroupUnified, t("placeholderSubItem"));
+        const groupItems = defaultItemsForNewGroup(newGroupUnified, t("placeholderSubItem"));
         body = {
           subject: subj,
           collection: coll,
@@ -548,7 +410,7 @@ export function BankWorkspace({
             type: "group",
             material: newGroupMaterial.trim() || t("sharedMaterialDefault"),
             unified,
-            items,
+            items: groupItems,
           },
         };
       } else {
@@ -558,7 +420,7 @@ export function BankWorkspace({
           question: {
             id: qid,
             type: newType,
-            content: t("latexStemPh"),
+            content: "",
             options: isChoiceQuestionType(newType) ? { A: "", B: "", C: "", D: "" } : null,
             answer: "",
             analysis: "",
@@ -571,13 +433,14 @@ export function BankWorkspace({
       notifyContentLibraryChanged("question");
       openModalAfterCreateRef.current = true;
       setOpenTabs((prev) => (prev.includes(r.qualified_id) ? prev : [...prev, r.qualified_id]));
-      selectedIdRef.current = r.qualified_id;
-      setDetail(null);
-      setRawYaml("");
-      setMetaRows([]);
+      clearSessionDraft();
       setSelectedId(r.qualified_id);
       return true;
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        onError(e.message);
+        return false;
+      }
       // The server can finish creating a question after a slow response timed out.
       // Reconcile the intended ID before offering another create attempt.
       const qualifiedId = `${subj}/${coll}/${qid}`;
@@ -594,10 +457,7 @@ export function BankWorkspace({
         await loadList();
         openModalAfterCreateRef.current = true;
         setOpenTabs((prev) => (prev.includes(qualifiedId) ? prev : [...prev, qualifiedId]));
-        selectedIdRef.current = qualifiedId;
-        setDetail(null);
-        setRawYaml("");
-        setMetaRows([]);
+        clearSessionDraft();
         setSelectedId(qualifiedId);
         onError(null);
         return true;
@@ -606,76 +466,20 @@ export function BankWorkspace({
         return false;
       }
     } finally {
-      setBusy(false);
+      setOpBusy(false);
     }
   }
 
-  async function doImport(): Promise<boolean> {
-    setBusy(true);
-    onError(null);
-    try {
-      await apiPost("/api/bank/import", {
-        yaml: importYaml,
-        target_subject: importSubject.trim() || t("defaultTarget"),
-        target_collection: importTarget.trim() || "imported",
-      });
-      setImportYaml("");
-      await loadList();
-      notifyContentLibraryChanged("question");
-      return true;
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
+  const doImport = useCallback(async (): Promise<boolean> => {
+    return importYamlText();
+  }, [importYamlText]);
 
-  async function doImportFromFile(e: ChangeEvent<HTMLInputElement>): Promise<boolean> {
-    const f = e.target.files?.[0];
-    e.target.value = "";
-    if (!f) {
-      return false;
-    }
-    const name = f.name.toLowerCase();
-    setBusy(true);
-    onError(null);
-    try {
-      if (name.endsWith(".zip")) {
-        const fd = new FormData();
-        fd.append("file", f);
-        fd.append("target_subject", importSubject.trim() || t("defaultTarget"));
-        fd.append("target_collection", importTarget.trim() || "imported");
-        const r = await apiPostFormData<{ written: number; warnings?: string[] }>("/api/bank/import-bundle", fd);
-        if (r.warnings?.length) {
-          window.alert(
-            t("importWritten", { n: r.written, warnings: r.warnings.join("\n") }),
-          );
-        }
-        await loadList();
-        notifyContentLibraryChanged("question");
-        return true;
-      } else if (name.endsWith(".yaml") || name.endsWith(".yml")) {
-        const text = await f.text();
-        await apiPost("/api/bank/import", {
-          yaml: text,
-          target_subject: importSubject.trim() || t("defaultTarget"),
-          target_collection: importTarget.trim() || "imported",
-        });
-        await loadList();
-        notifyContentLibraryChanged("question");
-        return true;
-      } else {
-        onError(t("errors.pickYamlZip"));
-        return false;
-      }
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
+  const doImportFromFile = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>): Promise<boolean> => {
+      return importFromFile(e);
+    },
+    [importFromFile]
+  );
 
   async function doExportSelection() {
     if (busy) return;
@@ -698,12 +502,15 @@ export function BankWorkspace({
       return;
     }
 
-    setBusy(true);
+    setOpBusy(true);
     try {
-      const result = await apiPost<{ download_url: string; filename: string; question_count: number }>("/api/bank/export-selection", {
-        qualified_ids: valid,
-        title: "我的题目导出",
-      });
+      const result = await apiPost<{ download_url: string; filename: string; question_count: number }>(
+        "/api/bank/export-selection",
+        {
+          qualified_ids: valid,
+          title: "我的题目导出",
+        }
+      );
       const blob = await downloadPlatformBlob(result.download_url);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -714,7 +521,7 @@ export function BankWorkspace({
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setOpBusy(false);
     }
   }
 
@@ -729,7 +536,7 @@ export function BankWorkspace({
       onError(t("manageNameEmpty"));
       return;
     }
-    setBusy(true);
+    setOpBusy(true);
     onError(null);
     try {
       const r = await apiPost<{ ok: boolean; namespace: string }>("/api/bank/rename-collection", {
@@ -740,15 +547,11 @@ export function BankWorkspace({
       const newNs = r.namespace;
       const prefix = `${oldNs}/`;
       const mapQid = (qid: string) => (qid.startsWith(prefix) ? `${newNs}/${qid.slice(prefix.length)}` : qid);
-      const currentSelectedId = selectedIdRef.current;
+      const currentSelectedId = draftRef.current.selectedId;
       const nextSelectedId = currentSelectedId ? mapQid(currentSelectedId) : null;
       if (nextSelectedId !== currentSelectedId) {
-        detailRequestSeqRef.current++;
-        setDetail(null);
-        setRawYaml("");
-        setMetaRows([]);
+        clearSessionDraft();
       }
-      selectedIdRef.current = nextSelectedId;
       setSelectedId(nextSelectedId);
       setOpenTabs((tabs) => tabs.map(mapQid));
       if (filterCollection === oldNs) {
@@ -759,7 +562,7 @@ export function BankWorkspace({
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setOpBusy(false);
     }
   }
 
@@ -767,26 +570,22 @@ export function BankWorkspace({
     if (!(await confirmDialog(t("manageDeleteConfirm", { name: label })))) {
       return;
     }
-    setBusy(true);
+    setOpBusy(true);
     onError(null);
     try {
       await apiPost("/api/bank/delete-collection", { namespace });
       const prefix = `${namespace}/`;
       setSelectedExportIds((prev) => prev.filter((id) => id !== namespace && !id.startsWith(prefix)));
-      const currentSelectedId = selectedIdRef.current;
+      const currentSelectedId = draftRef.current.selectedId;
       const selectedWasDeleted = Boolean(
-        currentSelectedId && (currentSelectedId.startsWith(prefix) || currentSelectedId === namespace),
+        currentSelectedId && (currentSelectedId.startsWith(prefix) || currentSelectedId === namespace)
       );
       if (selectedWasDeleted) {
-        selectedIdRef.current = null;
-        detailRequestSeqRef.current++;
-        setDetail(null);
-        setRawYaml("");
-        setMetaRows([]);
+        clearSessionDraft();
         setEditorModalOpen(false);
       }
       setSelectedId((current) =>
-        current && (current.startsWith(prefix) || current === namespace) ? null : current,
+        current && (current.startsWith(prefix) || current === namespace) ? null : current
       );
       setOpenTabs((tabs) => tabs.filter((id) => id !== namespace && !id.startsWith(prefix)));
       if (filterCollection === namespace) {
@@ -796,7 +595,7 @@ export function BankWorkspace({
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setOpBusy(false);
     }
   }
 
@@ -809,12 +608,12 @@ export function BankWorkspace({
       !(await confirmDialog(
         isGroup
           ? t("errors.deleteGroup", { id: detail.question_group!.id })
-          : t("errors.deleteQuestion", { id: selectedId }),
+          : t("errors.deleteQuestion", { id: selectedId })
       ))
     ) {
       return;
     }
-    setBusy(true);
+    setOpBusy(true);
     onError(null);
     try {
       const enc = encodeURIComponent(selectedId);
@@ -829,13 +628,11 @@ export function BankWorkspace({
       ]);
       setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
       setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
-      delete baselineRef.current[selectedId];
-      const selectedWasDeleted = Boolean(selectedIdRef.current && removedIds.has(selectedIdRef.current));
+      removeBaseline(selectedId);
+      const currentSelectedId = draftRef.current.selectedId;
+      const selectedWasDeleted = Boolean(currentSelectedId && removedIds.has(currentSelectedId));
       if (selectedWasDeleted) {
-        selectedIdRef.current = null;
-        detailRequestSeqRef.current++;
-        setRawYaml("");
-        setMetaRows([]);
+        clearSessionDraft();
         setEditorModalOpen(false);
       }
       setSelectedId((current) => (current && removedIds.has(current) ? null : current));
@@ -844,12 +641,12 @@ export function BankWorkspace({
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setOpBusy(false);
     }
   }
 
   async function removeQuestionFromList(item: BankListItem) {
-    setBusy(true);
+    setOpBusy(true);
     onError(null);
     try {
       const enc = encodeURIComponent(item.qualified_id);
@@ -863,13 +660,11 @@ export function BankWorkspace({
       ]);
       setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
       setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
-      delete baselineRef.current[item.qualified_id];
-      const selectedWasDeleted = Boolean(selectedIdRef.current && removedIds.has(selectedIdRef.current));
+      removeBaseline(item.qualified_id);
+      const currentSelectedId = draftRef.current.selectedId;
+      const selectedWasDeleted = Boolean(currentSelectedId && removedIds.has(currentSelectedId));
       if (selectedWasDeleted) {
-        selectedIdRef.current = null;
-        detailRequestSeqRef.current++;
-        setRawYaml("");
-        setMetaRows([]);
+        clearSessionDraft();
         setEditorModalOpen(false);
       }
       setSelectedId((current) => (current && removedIds.has(current) ? null : current));
@@ -879,7 +674,7 @@ export function BankWorkspace({
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setOpBusy(false);
     }
   }
 
@@ -897,52 +692,21 @@ export function BankWorkspace({
     return { ...g, material: p.material, items: p.items };
   }, [detail]);
 
-  const dirty = useMemo(() => {
-    if (!selectedId || !detail || detail.qualified_id !== selectedId) return false;
-    const b = baselineRef.current[selectedId];
-    if (!b) return false;
-    const yamlDirty = rawYaml !== b.yaml;
-    const formDirty = JSON.stringify(detail) !== b.detailJson;
-    const metaRowsDirty = JSON.stringify(metaRows) !== b.metaRowsJson;
-    return yamlDirty || formDirty || metaRowsDirty;
-  }, [selectedId, detail, rawYaml, metaRows]);
-
-  const translateRef = useRef(t);
-  translateRef.current = t;
-  const trySelectId = useCallback((qid: string | null) => {
-    const currentSelectedId = selectedIdRef.current;
-    const currentDraft = draftRef.current;
-    if (qid === currentSelectedId) return true;
-
-    const baseline = currentSelectedId ? baselineRef.current[currentSelectedId] : undefined;
-    const currentDraftIsDirty = Boolean(
-      currentSelectedId &&
-      currentDraft.selectedId === currentSelectedId &&
-      currentDraft.detail?.qualified_id === currentSelectedId &&
-      baseline &&
-      (currentDraft.rawYaml !== baseline.yaml ||
-        JSON.stringify(currentDraft.detail) !== baseline.detailJson ||
-        JSON.stringify(currentDraft.metaRows) !== baseline.metaRowsJson),
-    );
-    if (currentDraftIsDirty && !window.confirm(translateRef.current("switchTabDiscard"))) {
-      return false;
-    }
-    detailRequestSeqRef.current++;
-    selectedIdRef.current = qid;
-    setDetail(null);
-    setRawYaml("");
-    setMetaRows([]);
-    setSelectedId(qid);
-    return true;
-  }, []);
+  const trySelectId = useCallback(
+    (qid: string | null) => {
+      return trySelectQuestion(qid, t("switchTabDiscard"));
+    },
+    [trySelectQuestion, t]
+  );
 
   const openOrFocusTab = useCallback(
-    (qid: string) => {
-      if (!trySelectId(qid)) return;
+    (qid: string): boolean => {
+      if (!trySelectId(qid)) return false;
       setOpenTabs((prev) => (prev.includes(qid) ? prev : [...prev, qid]));
       setEditorModalOpen(false);
+      return true;
     },
-    [trySelectId],
+    [trySelectId]
   );
 
   const closeTab = useCallback(
@@ -954,18 +718,14 @@ export function BankWorkspace({
         const next = prev.filter((x) => x !== qid);
         if (selectedId === qid) {
           const fallback = next[next.length - 1] ?? null;
-          detailRequestSeqRef.current++;
-          selectedIdRef.current = fallback;
-          setDetail(null);
-          setRawYaml("");
-          setMetaRows([]);
+          clearSessionDraft();
           setSelectedId(fallback);
         }
         return next;
       });
-      delete baselineRef.current[qid];
+      removeBaseline(qid);
     },
-    [selectedId, dirty, t],
+    [selectedId, dirty, t, clearSessionDraft, setSelectedId, removeBaseline]
   );
 
   const saveFormRef = useRef(saveForm);
@@ -974,12 +734,12 @@ export function BankWorkspace({
   saveRawYamlRef.current = saveRawYaml;
 
   const handleToolbarSave = useCallback(() => {
-    if (workView === "source") {
+    if (editorModalOpen ? editorTab === "yaml" : workView === "source") {
       void saveRawYamlRef.current();
     } else {
       void saveFormRef.current();
     }
-  }, [workView]);
+  }, [workView, editorModalOpen, editorTab]);
 
   useEffect(() => {
     if (workView === "source") {
@@ -987,12 +747,12 @@ export function BankWorkspace({
     } else if (workView === "fields") {
       setEditorTab("form");
     }
-  }, [workView]);
+  }, [workView, setEditorTab]);
 
   useEffect(() => {
     const onSave = () => {
       if (!selectedId || !detail || !dirty) return;
-      if (workView === "source") {
+      if (editorModalOpen ? editorTab === "yaml" : workView === "source") {
         void saveRawYamlRef.current();
       } else {
         void saveFormRef.current();
@@ -1000,7 +760,7 @@ export function BankWorkspace({
     };
     window.addEventListener(SOLAIRE_SAVE_EVENT, onSave);
     return () => window.removeEventListener(SOLAIRE_SAVE_EVENT, onSave);
-  }, [selectedId, detail, dirty, workView]);
+  }, [selectedId, detail, dirty, workView, editorModalOpen, editorTab]);
 
   const tabItems: TabItem[] = useMemo(
     () =>
@@ -1008,17 +768,17 @@ export function BankWorkspace({
         const short = id.includes("/") ? id.split("/").pop() ?? id : id;
         return { id, label: short, dirty: id === selectedId && dirty, closable: true };
       }),
-    [openTabs, selectedId, dirty],
+    [openTabs, selectedId, dirty]
   );
 
   const previewBlock =
     !previewQ && !previewGroup ? (
-      <p className="mt-4 text-sm text-slate-500">{t("previewEmpty")}</p>
+      <p className="mt-4 text-sm text-[var(--or-muted)]">{t("previewEmpty")}</p>
     ) : previewGroup ? (
-      <div className="mt-3 space-y-4 text-sm">
+      <div className="mt-3 space-y-4 text-sm leading-relaxed">
         <div>
-          <p className="text-[11px] font-medium text-slate-500">{t("sharedMaterialLabel")}</p>
-          <ContentWithPrimeBrush text={previewGroup.material} className="mt-1 text-slate-900" />
+          <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("sharedMaterialLabel")}</p>
+          <ContentWithPrimeBrush text={previewGroup.material} className="mt-1 text-[var(--or-text)]" />
         </div>
         {previewGroup.items.map((it, i) => {
           const rowIsChoice =
@@ -1026,13 +786,13 @@ export function BankWorkspace({
               ? isChoiceQuestionType(it.type ?? "single_choice")
               : typeof previewGroup.unified === "string" && isChoiceQuestionType(previewGroup.unified);
           return (
-            <div key={i} className="border-t border-slate-100 pt-3">
-              <p className="text-[11px] font-medium text-slate-500">{t("subItemIndex", { n: i + 1 })}</p>
-              <ContentWithPrimeBrush text={it.content} className="mt-1 text-slate-900" />
+            <div key={i} className="border-t border-[var(--or-outline)] pt-3">
+              <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("subItemIndex", { n: i + 1 })}</p>
+              <ContentWithPrimeBrush text={it.content} className="mt-1 text-[var(--or-text)]" />
               {rowIsChoice && (
-                <div>
-                  <p className="text-[11px] font-medium text-slate-500">{t("options")}</p>
-                  <ul className="mt-1 list-inside list-disc text-slate-700">
+                <div className="mt-2">
+                  <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("options")}</p>
+                  <ul className="mt-1 list-inside list-disc text-[var(--or-muted)]">
                     {Object.entries(it.options ?? { A: "", B: "", C: "", D: "" }).map(([k, v]) => (
                       <li key={k}>
                         <strong>{k}</strong>{" "}
@@ -1044,12 +804,12 @@ export function BankWorkspace({
                   </ul>
                 </div>
               )}
-              <details>
-                <summary className="cursor-pointer text-xs text-slate-600">{t("answer")}</summary>
+              <details className="mt-2 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
+                <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("answer")}</summary>
                 <ContentWithPrimeBrush text={it.answer} className="mt-1" />
               </details>
-              <details>
-                <summary className="cursor-pointer text-xs text-slate-600">{t("analysis")}</summary>
+              <details className="mt-1.5 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
+                <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("analysis")}</summary>
                 <ContentWithPrimeBrush text={it.analysis || ""} className="mt-1" />
               </details>
             </div>
@@ -1057,15 +817,15 @@ export function BankWorkspace({
         })}
       </div>
     ) : (
-      <div className="mt-3 space-y-4 text-sm">
+      <div className="mt-3 space-y-4 text-sm leading-relaxed">
         <div>
-          <p className="text-[11px] font-medium text-slate-500">{t("stem")}</p>
-          <ContentWithPrimeBrush text={previewQ!.content} className="mt-1 text-slate-900" />
+          <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("stem")}</p>
+          <ContentWithPrimeBrush text={previewQ!.content} className="mt-1 text-[var(--or-text)]" />
         </div>
         {isChoiceQuestionType(previewQ!.type) && previewQ!.options && (
           <div>
-            <p className="text-[11px] font-medium text-slate-500">{t("options")}</p>
-            <ul className="mt-1 list-inside list-disc text-slate-700">
+            <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("options")}</p>
+            <ul className="mt-1 list-inside list-disc text-[var(--or-muted)]">
               {Object.entries(previewQ!.options).map(([k, v]) => (
                 <li key={k}>
                   <strong>{k}</strong>{" "}
@@ -1077,16 +837,34 @@ export function BankWorkspace({
             </ul>
           </div>
         )}
-        <details>
-          <summary className="cursor-pointer text-xs text-slate-600">{t("answer")}</summary>
+        <details className="mt-2 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
+          <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("answer")}</summary>
           <ContentWithPrimeBrush text={previewQ!.answer} className="mt-1" />
         </details>
-        <details>
-          <summary className="cursor-pointer text-xs text-slate-600">{t("analysis")}</summary>
+        <details className="mt-1.5 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
+          <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("analysis")}</summary>
           <ContentWithPrimeBrush text={previewQ!.analysis || ""} className="mt-1" />
         </details>
       </div>
     );
+
+  const saveConflictBanner = saveConflict?.qid === selectedId && detail ? (
+    <div role="alert" className="mb-3 rounded-xl border border-amber-300 bg-[var(--or-warning-container)] p-3.5 text-sm">
+      <p className="font-medium text-[var(--or-on-warning)]">{t("saveConflict")}</p>
+      <p className="mt-1 break-words text-[13px] text-[var(--or-on-warning)]">{saveConflict.message}</p>
+      <button type="button" className="mt-2 text-sm font-semibold text-[var(--or-on-container)] underline" onClick={() => void viewLatestConflict()}>
+        {t("viewLatest")}
+      </button>
+      {saveConflict.latest ? (
+        <div>
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[var(--or-warning)] bg-[var(--or-card)] p-3 font-mono text-[13px]">{saveConflict.latest.file_yaml}</pre>
+          <button type="button" className="mt-2 text-sm font-semibold text-[var(--or-on-container)] underline" onClick={() => void loadLatestConflict(t("loadLatestConfirm"))}>
+            {t("loadLatest")}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  ) : null;
 
   return (
     <>
@@ -1123,7 +901,11 @@ export function BankWorkspace({
         setNewGroupUnified={setNewGroupUnified}
         newGroupMaterial={newGroupMaterial}
         setNewGroupMaterial={setNewGroupMaterial}
-        onCreateQuestion={createQuestion}
+        onCreateQuestion={async () => {
+          const created = await createQuestion();
+          if (created) setMobileBankPanel("editor");
+          return created;
+        }}
         importSubject={importSubject}
         setImportSubject={setImportSubject}
         importSubjectSelectValue={importSubjectSelectValue}
@@ -1132,431 +914,489 @@ export function BankWorkspace({
         setImportYaml={setImportYaml}
         onImportFile={doImportFromFile}
         onImportYaml={doImport}
+        importTransaction={importTransaction}
+        onRetryRefreshOnly={retryRefreshOnly}
         selectedId={selectedId}
         hasDetail={Boolean(detail)}
         dirty={dirty}
         onSave={handleToolbarSave}
       />
-    <div className="flex h-full min-h-0 flex-col md:flex-row">
-      {/* 左：筛选 + 列表 + 导入 */}
-      <BankSidebar
-        folders={folders}
-        setFolders={setFolders}
-        filteredItems={filtered}
-        allItems={items}
-        selectedExportIds={selectedExportIds}
-        onSelectExportIds={setSelectedExportIds}
-        selectedId={selectedId}
-        onOpenItem={openOrFocusTab}
-        onRefresh={loadList}
-        onError={onError}
-        busy={busy}
-        graphLinkIndex={graphLinkIndex}
-        taggedItems={taggedItems}
-        onOpenGraphNode={onOpenGraphNode}
-        onRequestDelete={setPendingDeleteItem}
-      />
-
-      {/* 中：多标签 + 字段 / 浏览 / 源文件 */}
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden border-slate-200 bg-slate-50 lg:border-r">
-        {diagnostics.length > 0 && (
-          <details className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
-            <summary className="cursor-pointer font-medium">{t("fileIssues", { count: diagnostics.length })}</summary>
-            <p className="mt-2 text-xs">{t("fileIssuesHelp")}</p>
-            <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-xs">
-              {diagnostics.map((diagnostic, index) => (
-                <li key={`${diagnostic.storage_path}:${diagnostic.code}:${index}`} className="break-words">
-                  <span className="font-medium">{diagnostic.storage_path}</span>：{diagnostic.message}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-        <TabPanel
-          tabs={tabItems}
-          activeId={selectedId}
-          onSelect={(id) => {
-            if (trySelectId(id)) {
-              setEditorModalOpen(false);
-            }
-          }}
-          onClose={closeTab}
-          onCloseOthers={() => {
-            if (!selectedId) return;
-            const keep = selectedId;
-            setOpenTabs([keep]);
-            setSelectedId(keep);
-          }}
-        />
-        <div className="min-h-0 flex-1 overflow-auto p-4">
-          {saveConflict?.qid === selectedId && detail ? (
-            <div role="alert" className="mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
-              <p>{t("saveConflict")}</p>
-              <button type="button" className="mt-2 underline" onClick={async () => {
-                const qid = detail.qualified_id;
-                const sequence = ++detailRequestSeqRef.current;
-                const session = loadSessionToken();
-                try {
-                  const latest = await fetchDetail(qid);
-                  if (sequence === detailRequestSeqRef.current && selectedIdRef.current === qid && session === loadSessionToken()) {
-                    setSaveConflict({ qid, latest });
-                  }
-                } catch (error) {
-                  if (sequence === detailRequestSeqRef.current && session === loadSessionToken()) onError(error instanceof Error ? error.message : String(error));
-                }
-              }}>{t("viewLatest")}</button>
-              {saveConflict.latest ? (
-                <div>
-                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-white p-2">{saveConflict.latest.file_yaml}</pre>
-                  <button type="button" className="mt-2 underline" onClick={() => {
-                    if (window.confirm(t("loadLatestConfirm"))) {
-                      void loadDetail(detail.qualified_id).catch((error) => onError(error instanceof Error ? error.message : String(error)));
-                    }
-                  }}>{t("loadLatest")}</button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {selectedId ? <div className="mb-2 rounded border bg-white p-2 text-xs"><ContentTags scope="bank" itemId={selectedId} onError={onError} onChange={refreshTags} /></div> : null}
-          {!detail ? (
-            <p className="text-sm text-slate-500">{t("selectLeft")}</p>
-          ) : editorModalOpen ? (
-            <p className="text-sm text-slate-600">{t("editingInModal")}</p>
-          ) : (
-            <>
-              {graphLinkIndex[detail.qualified_id]?.length ? (
-                <div className="mb-3 rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2">
-                  <p className="text-[11px] font-medium text-sky-900">{t("linkedNodes")}</p>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {graphLinkIndex[detail.qualified_id]!.map((n) => (
-                      <button
-                        key={n.id}
-                        type="button"
-                        className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-sky-800 shadow-sm ring-1 ring-sky-200 hover:bg-sky-100"
-                        onClick={() => onOpenGraphNode?.(n.id)}
-                      >
-                        {n.canonical_name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              <Tabs value={workView} onValueChange={(v) => setWorkView(v as "fields" | "preview" | "source")}>
-                <TabsList className="mb-3 grid w-full max-w-md grid-cols-3">
-                  <TabsTrigger value="fields">{t("workViewFields")}</TabsTrigger>
-                  <TabsTrigger value="preview">{t("workViewPreview")}</TabsTrigger>
-                  <TabsTrigger value="source">{t("workViewSource")}</TabsTrigger>
-                </TabsList>
-                <TabsContent value="fields" className="mt-0">
-                  <BankQuestionEditorPanel
-                    embedded
-                    panelMode="form"
-                    detail={detail}
-                    setDetail={setDetail}
-                    busy={busy}
-                    editorTab="form"
-                    setEditorTab={setEditorTab}
-                    rawYaml={rawYaml}
-                    setRawYaml={setRawYaml}
-                    metaRows={metaRows}
-                    setMetaRows={setMetaRows}
-                    contentRef={contentRef}
-                    answerRef={answerRef}
-                    analysisRef={analysisRef}
-                    materialGroupRef={materialGroupRef}
-                    imageInputRef={imageInputRef}
-                    beginMathEmbed={beginMathEmbed}
-                    beginMermaidEmbed={beginMermaidEmbed}
-                    beginPrimeBrushEmbed={beginPrimeBrushEmbed}
-                    beginImageEmbed={beginImageEmbed}
-                    onImageFileSelected={onImageFileSelected}
-                    onRemove={removeQuestion}
-                    onSave={saveForm}
-                    onSaveYaml={saveRawYaml}
-                    removeLabel={detail.question_group ? t("removeGroup") : t("remove")}
-                  />
-                </TabsContent>
-                <TabsContent value="preview" className="mt-0 rounded-xl border border-slate-200 bg-white p-4">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("livePreview")}</h3>
-                  {previewBlock}
-                </TabsContent>
-                <TabsContent value="source" className="mt-0">
-                  <BankQuestionEditorPanel
-                    embedded
-                    panelMode="yaml"
-                    detail={detail}
-                    setDetail={setDetail}
-                    busy={busy}
-                    editorTab="yaml"
-                    setEditorTab={setEditorTab}
-                    rawYaml={rawYaml}
-                    setRawYaml={setRawYaml}
-                    metaRows={metaRows}
-                    setMetaRows={setMetaRows}
-                    contentRef={contentRef}
-                    answerRef={answerRef}
-                    analysisRef={analysisRef}
-                    materialGroupRef={materialGroupRef}
-                    imageInputRef={imageInputRef}
-                    beginMathEmbed={beginMathEmbed}
-                    beginMermaidEmbed={beginMermaidEmbed}
-                    beginPrimeBrushEmbed={beginPrimeBrushEmbed}
-                    beginImageEmbed={beginImageEmbed}
-                    onImageFileSelected={onImageFileSelected}
-                    onRemove={removeQuestion}
-                    onSave={saveForm}
-                    onSaveYaml={saveRawYaml}
-                    removeLabel={detail.question_group ? t("removeGroup") : t("remove")}
-                  />
-                </TabsContent>
-              </Tabs>
-            </>
-          )}
-        </div>
-      </section>
-    </div>
-    {detail && editorModalOpen && (
-      <div
-        className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4"
-        onClick={() => setEditorModalOpen(false)}
-        role="presentation"
-      >
+      <div className="or-g48-bank-workspace" data-active-panel={mobileBankPanel}>
         <div
-          className="mt-4 w-full max-w-3xl max-h-[min(92vh,100%)] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2 shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
+          ref={mobileBankPanelRef}
+          className="or-g48-bank-panel-switcher"
+          role="group"
+          aria-label={t("mobilePanelLabel")}
+        >
+          <SelectionIndicator
+            rootRef={mobileBankPanelRef}
+            selector={'[data-state="active"]'}
+            className="or-g48-bank-panel-indicator"
+          />
+          <button
+            type="button"
+            aria-pressed={mobileBankPanel === "list"}
+            data-state={mobileBankPanel === "list" ? "active" : "inactive"}
+            onClick={() => setMobileBankPanel("list")}
+            className="or-g48-bank-panel-button"
+          >
+            {t("mobileViewList")}
+          </button>
+          <button
+            type="button"
+            aria-pressed={mobileBankPanel === "editor"}
+            data-state={mobileBankPanel === "editor" ? "active" : "inactive"}
+            onClick={() => setMobileBankPanel("editor")}
+            className="or-g48-bank-panel-button"
+          >
+            {t("mobileViewEditor")}
+          </button>
+        </div>
+        <div className={`or-g48-bank-list-panel${bankListCollapsed ? " is-collapsed" : ""}`}>
+          <div ref={bankListInnerRef} className="or-g48-bank-list-inner">
+            {/* 左：筛选 + 列表 + 导入 */}
+            <BankSidebar
+              folders={folders}
+              setFolders={setFolders}
+              filteredItems={filtered}
+              allItems={items}
+              selectedExportIds={selectedExportIds}
+              onSelectExportIds={setSelectedExportIds}
+              selectedId={selectedId}
+              onOpenItem={(id) => {
+                if (openOrFocusTab(id)) setMobileBankPanel("editor");
+              }}
+              onRefresh={loadList}
+              onError={onError}
+              busy={busy}
+              graphLinkIndex={graphLinkIndex}
+              taggedItems={taggedItems}
+              onOpenGraphNode={onOpenGraphNode}
+              onRequestDelete={setPendingDeleteItem}
+            />
+          </div>
+          <button
+            type="button"
+            className="or-sidebar-toggle or-g48-bank-collapse-btn hidden lg:inline-flex"
+            aria-label={bankListCollapsed ? "展开题库列表" : "收起题库列表"}
+            aria-expanded={!bankListCollapsed}
+            title={bankListCollapsed ? "展开题库列表" : "收起题库列表"}
+            onClick={() => setBankListCollapsed((prev) => !prev)}
+          >
+            {bankListCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+        </div>
+
+        {/* 中：多标签 + 字段 / 浏览 / 源文件 */}
+        <div className="or-g48-bank-editor-panel">
+        <section className="flex min-h-[260px] min-w-0 flex-1 flex-col overflow-hidden border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] lg:border-r">
+          {diagnostics.length > 0 && (
+            <details className="shrink-0 border-b border-[var(--or-warning)] bg-[color-mix(in_srgb,var(--or-warning-container)_90%,transparent)] px-4 py-2.5 text-sm text-[var(--or-on-warning)]">
+              <summary className="cursor-pointer font-semibold">{t("fileIssues", { count: diagnostics.length })}</summary>
+              <p className="mt-1 text-[13px] text-[var(--or-on-warning)]">{t("fileIssuesHelp")}</p>
+              <ul className="mt-2 max-h-40 space-y-1.5 overflow-auto text-[13px]">
+                {diagnostics.map((diagnostic, index) => {
+                  const pathParts = diagnostic.storage_path.split(/[\\/]/).filter(Boolean);
+                  const visibleName = pathParts[pathParts.length - 1] ?? "";
+                  return (
+                    <li key={`${diagnostic.storage_path}:${diagnostic.code}:${index}`} className="break-words">
+                      <span className="font-semibold">{visibleName}</span>：{diagnostic.message}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
+          <TabPanel
+            className="or-g48-tabpanel"
+            tabs={tabItems}
+            activeId={selectedId}
+            onSelect={(id) => {
+              if (trySelectId(id)) {
+                setEditorModalOpen(false);
+                setMobileBankPanel("editor");
+              }
+            }}
+            onClose={closeTab}
+            onCloseOthers={() => {
+              if (!selectedId) return;
+              const keep = selectedId;
+              setOpenTabs([keep]);
+              setSelectedId(keep);
+            }}
+          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto p-3 sm:p-4">
+            {importTransaction.stage === "refresh_failed" && (
+              <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-[var(--or-warning-container)] p-3.5 text-sm text-[var(--or-on-warning)]">
+                <div>
+                  <p className="font-semibold">导入已写入服务端，但刷新题目列表失败</p>
+                  <p className="text-[13px] text-[var(--or-on-warning)] mt-1">
+                    已写入 {importTransaction.result?.written ?? 0} 题至 {importTransaction.result?.namespace ?? ""}。题目已安全保存，无需重新导入。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="or-button or-button-primary or-g48-pill-btn or-g48-pill-btn-primary px-3.5 py-1.5 text-sm"
+                  onClick={() => void retryRefreshOnly()}
+                >
+                  仅重试刷新列表
+                </button>
+              </div>
+            )}
+            {!editorModalOpen ? saveConflictBanner : null}
+            {selectedId ? (
+              <div className="or-surface or-g48-card or-g48-tags mb-3 p-3">
+                <ContentTags scope="bank" itemId={selectedId} onError={onError} onChange={refreshTags} />
+              </div>
+            ) : null}
+            {!detail ? (
+              <div className="flex min-h-64 flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--or-outline)] bg-[var(--or-card)] p-6 text-center">
+                <p className="text-sm font-medium text-[var(--or-muted)]">{t("selectLeft")}</p>
+              </div>
+            ) : editorModalOpen ? (
+              <div className="flex min-h-64 flex-1 flex-col items-center justify-center rounded-2xl border border-[var(--or-outline)] bg-[var(--or-card)] p-6 text-center">
+                <p className="text-sm font-medium text-[var(--or-muted)]">{t("editingInModal")}</p>
+              </div>
+            ) : (
+              <>
+                {graphLinkIndex[detail.qualified_id]?.length ? (
+                  <div className="mb-3.5 rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-primary-container)_70%,transparent)] px-3.5 py-2.5">
+                    <p className="text-[13px] font-semibold text-[var(--or-on-container)]">{t("linkedNodes")}</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {graphLinkIndex[detail.qualified_id]!.map((n) => (
+                        <button
+                          key={n.id}
+                          type="button"
+                          className="or-button or-pill inline-flex items-center justify-center rounded-full bg-[var(--or-card)] px-3 py-1 text-sm font-medium text-[var(--or-on-container)] shadow-2xs border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] hover:bg-[var(--or-primary-container)] transition-colors"
+                          onClick={() => onOpenGraphNode?.(n.id)}
+                        >
+                          {n.canonical_name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <Tabs value={workView} onValueChange={(v) => setWorkView(v as "fields" | "preview" | "source")}>
+                  <TabsList className="or-tabs or-g48-tabs mb-3.5 inline-flex rounded-full bg-[color-mix(in_srgb,var(--or-inset)_60%,transparent)] p-1 w-full max-w-sm">
+                    <TabsTrigger value="fields" className="or-tab rounded-full flex-1 py-1.5 text-sm font-semibold data-[state=active]:bg-[var(--or-card)] data-[state=active]:text-[var(--or-text)] data-[state=active]:shadow-2xs">{t("workViewFields")}</TabsTrigger>
+                    <TabsTrigger value="preview" className="or-tab rounded-full flex-1 py-1.5 text-sm font-semibold data-[state=active]:bg-[var(--or-card)] data-[state=active]:text-[var(--or-text)] data-[state=active]:shadow-2xs">{t("workViewPreview")}</TabsTrigger>
+                    <TabsTrigger value="source" className="or-tab rounded-full flex-1 py-1.5 text-sm font-semibold data-[state=active]:bg-[var(--or-card)] data-[state=active]:text-[var(--or-text)] data-[state=active]:shadow-2xs">{t("workViewSource")}</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="fields" className="mt-0">
+                    <BankQuestionEditorPanel
+                      embedded
+                      panelMode="form"
+                      detail={detail}
+                      setDetail={setDetail}
+                      busy={busy}
+                      editorTab="form"
+                      setEditorTab={setEditorTab}
+                      rawYaml={rawYaml}
+                      setRawYaml={setRawYaml}
+                      metaRows={metaRows}
+                      setMetaRows={setMetaRows}
+                      contentRef={contentRef}
+                      answerRef={answerRef}
+                      analysisRef={analysisRef}
+                      materialGroupRef={materialGroupRef}
+                      imageInputRef={imageInputRef}
+                      beginMathEmbed={beginMathEmbed}
+                      beginMermaidEmbed={beginMermaidEmbed}
+                      beginPrimeBrushEmbed={beginPrimeBrushEmbed}
+                      beginImageEmbed={beginImageEmbed}
+                      onImageFileSelected={onImageFileSelected}
+                      onRemove={removeQuestion}
+                      onSave={saveForm}
+                      onSaveYaml={saveRawYaml}
+                      removeLabel={detail.question_group ? t("removeGroup") : t("remove")}
+                    />
+                  </TabsContent>
+                  <TabsContent value="preview" className="or-surface or-g48-card mt-0 p-5">
+                    <h3 className="text-sm font-semibold text-[var(--or-muted)]">{t("livePreview")}</h3>
+                    {previewBlock}
+                  </TabsContent>
+                  <TabsContent value="source" className="mt-0">
+                    <BankQuestionEditorPanel
+                      embedded
+                      panelMode="yaml"
+                      detail={detail}
+                      setDetail={setDetail}
+                      busy={busy}
+                      editorTab="yaml"
+                      setEditorTab={setEditorTab}
+                      rawYaml={rawYaml}
+                      setRawYaml={setRawYaml}
+                      metaRows={metaRows}
+                      setMetaRows={setMetaRows}
+                      contentRef={contentRef}
+                      answerRef={answerRef}
+                      analysisRef={analysisRef}
+                      materialGroupRef={materialGroupRef}
+                      imageInputRef={imageInputRef}
+                      beginMathEmbed={beginMathEmbed}
+                      beginMermaidEmbed={beginMermaidEmbed}
+                      beginPrimeBrushEmbed={beginPrimeBrushEmbed}
+                      beginImageEmbed={beginImageEmbed}
+                      onImageFileSelected={onImageFileSelected}
+                      onRemove={removeQuestion}
+                      onSave={saveForm}
+                      onSaveYaml={saveRawYaml}
+                      removeLabel={detail.question_group ? t("removeGroup") : t("remove")}
+                    />
+                  </TabsContent>
+                </Tabs>
+              </>
+            )}
+          </div>
+        </section>
+        </div>
+      </div>
+
+      {detail && editorModalOpen && (
+        <div
+          className="or-dialog-backdrop fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 backdrop-blur-xs p-4"
+          onClick={() => setEditorModalOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="or-dialog or-g48-dialog mt-4 w-full max-w-3xl max-h-[min(92vh,100%)] overflow-y-auto p-4"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            {saveConflictBanner}
+            <BankQuestionEditorPanel
+              detail={detail}
+              setDetail={setDetail}
+              busy={busy}
+              editorTab={editorTab}
+              setEditorTab={setEditorTab}
+              rawYaml={rawYaml}
+              setRawYaml={setRawYaml}
+              metaRows={metaRows}
+              setMetaRows={setMetaRows}
+              contentRef={contentRef}
+              answerRef={answerRef}
+              analysisRef={analysisRef}
+              materialGroupRef={materialGroupRef}
+              imageInputRef={imageInputRef}
+              beginMathEmbed={beginMathEmbed}
+              beginMermaidEmbed={beginMermaidEmbed}
+              beginPrimeBrushEmbed={beginPrimeBrushEmbed}
+              beginImageEmbed={beginImageEmbed}
+              onImageFileSelected={onImageFileSelected}
+              onRemove={removeQuestion}
+              onSave={saveForm}
+              onSaveYaml={saveRawYaml}
+              onClose={() => setEditorModalOpen(false)}
+              removeLabel={detail.question_group ? t("removeGroup") : t("remove")}
+            />
+          </div>
+        </div>
+      )}
+
+      {bankManageOpen ? (
+        <div
+          className="or-dialog-backdrop fixed inset-0 z-[90] flex items-center justify-center bg-[color-mix(in_srgb,var(--or-primary)_40%,transparent)] backdrop-blur-xs p-4"
           role="dialog"
           aria-modal="true"
+          aria-labelledby="bank-manage-title"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setBankManageOpen(false);
+              setManageEditId(null);
+            }
+          }}
         >
-          <BankQuestionEditorPanel
-            detail={detail}
-            setDetail={setDetail}
-            busy={busy}
-            editorTab={editorTab}
-            setEditorTab={setEditorTab}
-            rawYaml={rawYaml}
-            setRawYaml={setRawYaml}
-            metaRows={metaRows}
-            setMetaRows={setMetaRows}
-            contentRef={contentRef}
-            answerRef={answerRef}
-            analysisRef={analysisRef}
-            materialGroupRef={materialGroupRef}
-            imageInputRef={imageInputRef}
-            beginMathEmbed={beginMathEmbed}
-            beginMermaidEmbed={beginMermaidEmbed}
-            beginPrimeBrushEmbed={beginPrimeBrushEmbed}
-            beginImageEmbed={beginImageEmbed}
-            onImageFileSelected={onImageFileSelected}
-            onRemove={removeQuestion}
-            onSave={saveForm}
-            onSaveYaml={saveRawYaml}
-            onClose={() => setEditorModalOpen(false)}
-            removeLabel={detail.question_group ? t("removeGroup") : t("remove")}
-          />
+          <div
+            className="or-dialog or-g48-dialog flex max-h-[min(90vh,40rem)] w-full max-w-lg flex-col p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-center justify-between border-b border-[var(--or-outline)] pb-3">
+              <h2 id="bank-manage-title" className="text-base font-semibold text-[var(--or-text)]">
+                {t("manageModalTitle")}
+              </h2>
+              <button
+                type="button"
+                className="or-button or-pill or-g48-pill-btn px-3 py-1 text-sm"
+                onClick={() => {
+                  setBankManageOpen(false);
+                  setManageEditId(null);
+                }}
+              >
+                {t("common:close")}
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto pt-3">
+              <p className="text-[13px] leading-relaxed text-[var(--or-muted)]">{t("manageModalHint")}</p>
+              {collections.filter((c) => c.id !== "main").length === 0 ? (
+                <p className="mt-4 text-center text-sm text-[var(--or-muted)]">{t("manageEmpty")}</p>
+              ) : null}
+              <ul className="mt-3 space-y-2">
+                {collections
+                  .filter((c) => c.id !== "main")
+                  .map((c) => (
+                    <li key={c.id} className="rounded-xl border border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_60%,transparent)] p-3">
+                      {manageEditId === c.id ? (
+                        <div className="space-y-2.5">
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <label className="text-sm font-medium text-[var(--or-muted)]">
+                              {t("subject")}
+                              <input
+                                className="or-input or-g48-input mt-1 w-full bg-[var(--or-card)] py-1.5 text-sm"
+                                value={manageDraftSubject}
+                                onChange={(e) => setManageDraftSubject(e.target.value)}
+                              />
+                            </label>
+                            <label className="text-sm font-medium text-[var(--or-muted)]">
+                              {t("collectionName")}
+                              <input
+                                className="or-input or-g48-input mt-1 w-full bg-[var(--or-card)] py-1.5 text-sm"
+                                value={manageDraftCollection}
+                                onChange={(e) => setManageDraftCollection(e.target.value)}
+                              />
+                            </label>
+                          </div>
+                          <div className="flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              className="or-button or-pill or-g48-pill-btn px-3.5 py-1.5 text-sm"
+                              onClick={() => setManageEditId(null)}
+                            >
+                              {t("common:cancel")}
+                            </button>
+                            <button
+                              type="button"
+                              className="or-button or-button-primary or-g48-pill-btn or-g48-pill-btn-primary px-3.5 py-1.5 text-sm"
+                              disabled={busy}
+                              onClick={applyManageRename}
+                            >
+                              {t("manageSave")}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-sm text-[var(--or-text)]">{c.label}</p>
+                            <p className="font-mono text-[13px] text-[var(--or-muted)]">{c.id}</p>
+                          </div>
+                          <div className="flex shrink-0 gap-1.5">
+                            <button
+                              type="button"
+                              className="or-button or-pill or-g48-pill-btn px-3 py-1 text-sm"
+                              onClick={() => {
+                                setManageEditId(c.id);
+                                const parts = c.id.split("/");
+                                if (parts.length >= 2) {
+                                  setManageDraftSubject(parts[0]);
+                                  setManageDraftCollection(parts.slice(1).join("/"));
+                                } else {
+                                  setManageDraftSubject(c.id);
+                                  setManageDraftCollection("");
+                                }
+                              }}
+                            >
+                              {t("common:rename")}
+                            </button>
+                            <button
+                              type="button"
+                              className="or-button or-button-danger or-g48-pill-btn or-g48-pill-btn-danger px-3 py-1 text-sm"
+                              onClick={() => removeCollectionRow(c.id, c.label)}
+                            >
+                              {t("common:delete")}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          </div>
         </div>
-      </div>
-    )}
-    {bankManageOpen ? (
-      <div
-        className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/40 p-4"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="bank-manage-title"
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) {
-            setBankManageOpen(false);
-            setManageEditId(null);
-          }
-        }}
-      >
+      ) : null}
+
+      {pendingDeleteItem ? (
         <div
-          className="flex max-h-[min(90vh,40rem)] w-full max-w-lg flex-col rounded-lg border border-slate-200 bg-white shadow-xl"
-          onMouseDown={(e) => e.stopPropagation()}
+          className="or-dialog-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-[color-mix(in_srgb,var(--or-primary)_40%,transparent)] backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-delete-title"
         >
-          <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-2.5">
-            <h2 id="bank-manage-title" className="text-sm font-semibold text-slate-900">
-              {t("manageModalTitle")}
+          <div className="or-dialog or-g48-dialog w-full max-w-sm p-5">
+            <h2 id="confirm-delete-title" className="text-base font-semibold text-[var(--or-text)]">
+              {t("deleteQuestionTitle")}
             </h2>
-            <button
-              type="button"
-              className="rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
-              onClick={() => {
-                setBankManageOpen(false);
-                setManageEditId(null);
-              }}
-            >
-              {t("common:close")}
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <p className="text-xs leading-relaxed text-slate-500">{t("manageModalHint")}</p>
-            {collections.filter((c) => c.id !== "main").length === 0 ? (
-              <p className="mt-4 text-center text-sm text-slate-500">{t("manageEmpty")}</p>
-            ) : null}
-            <ul className="mt-3 space-y-2">
-              {collections
-                .filter((c) => c.id !== "main")
-                .map((c) => (
-                  <li key={c.id} className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
-                    {manageEditId === c.id ? (
-                      <div className="space-y-2">
-                        <label className="block text-[11px] font-medium text-slate-600">
-                          {t("manageSubjectField")}
-                          <input
-                            className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                            value={manageDraftSubject}
-                            onChange={(e) => setManageDraftSubject(e.target.value)}
-                          />
-                        </label>
-                        <label className="block text-[11px] font-medium text-slate-600">
-                          {t("manageCollectionField")}
-                          <input
-                            className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                            value={manageDraftCollection}
-                            onChange={(e) => setManageDraftCollection(e.target.value)}
-                          />
-                        </label>
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          <button
-                            type="button"
-                            className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
-                            disabled={busy}
-                            onClick={() => void applyManageRename()}
-                          >
-                            {t("manageSave")}
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50"
-                            disabled={busy}
-                            onClick={() => setManageEditId(null)}
-                          >
-                            {t("manageCancel")}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-medium text-slate-800">{c.label}</p>
-                          <p className="mt-0.5 break-all font-mono text-[10px] text-slate-500">{c.id}</p>
-                        </div>
-                        <div className="flex shrink-0 flex-wrap gap-1.5">
-                          <button
-                            type="button"
-                            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50"
-                            disabled={busy}
-                            onClick={() => {
-                              setManageEditId(c.id);
-                              setManageDraftSubject(c.subject);
-                              setManageDraftCollection(c.collection);
-                            }}
-                          >
-                            {t("manageEdit")}
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-medium text-red-800 hover:bg-red-50 disabled:opacity-50"
-                            disabled={busy}
-                            onClick={() => void removeCollectionRow(c.id, c.label)}
-                          >
-                            {t("manageDelete")}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </li>
-                ))}
-            </ul>
+            <p className="mt-2 text-sm leading-relaxed text-[var(--or-muted)]">
+              {t("deleteQuestionConfirm", { id: pendingDeleteItem.qualified_id })}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="or-button or-pill or-g48-pill-btn px-3.5 py-1.5 text-sm font-medium"
+                onClick={() => setPendingDeleteItem(null)}
+              >
+                {t("common:cancel")}
+              </button>
+              <button
+                type="button"
+                className="or-button or-button-danger or-g48-pill-btn or-g48-pill-btn-danger bg-red-600 text-white hover:bg-red-700 px-3.5 py-1.5 text-sm font-medium disabled:opacity-50"
+                disabled={busy}
+                onClick={() => void removeQuestionFromList(pendingDeleteItem)}
+              >
+                {t("common:delete")}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-    ) : null}
-    {pendingDeleteItem ? (
-      <div
-        className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/40 p-4"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="bank-delete-question-title"
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget && !busy) {
-            setPendingDeleteItem(null);
-          }
+      ) : null}
+
+      <MathInsertOverlay
+        open={mathOpen}
+        onClose={() => {
+          setMathOpen(false);
+          embedKindRef.current = null;
+          embedSelectionRef.current = null;
         }}
-      >
-        <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-2xl">
-          <h2 id="bank-delete-question-title" className="text-sm font-semibold text-slate-900">
-            {t("deleteQuestionTitle")}
-          </h2>
-          <p className="mt-2 break-all text-sm leading-relaxed text-slate-600">
-            {t("errors.deleteQuestion", { id: pendingDeleteItem.qualified_id })}
-          </p>
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="button"
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              disabled={busy}
-              onClick={() => setPendingDeleteItem(null)}
-            >
-              {t("manageCancel")}
-            </button>
-            <button
-              type="button"
-              className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
-              disabled={busy}
-              onClick={() => void removeQuestionFromList(pendingDeleteItem)}
-            >
-              {t("remove")}
-            </button>
-          </div>
-        </div>
-      </div>
-    ) : null}
-    <MathInsertOverlay
-      open={mathOpen}
-      onClose={() => {
-        setMathOpen(false);
-        embedKindRef.current = null;
-        embedSelectionRef.current = null;
-      }}
-      onConfirm={(snippet) => {
-        const k = embedKindRef.current;
-        const sel = embedSelectionRef.current;
-        embedKindRef.current = null;
-        embedSelectionRef.current = null;
-        if (k) insertSnippet(snippet, k, sel);
-      }}
-    />
-    <PrimeBrushEditorModal
-      open={primeBrushOpen}
-      onClose={() => {
-        setPrimeBrushOpen(false);
-        embedKindRef.current = null;
-        embedSelectionRef.current = null;
-      }}
-      onConfirm={(fencedBlock) => {
-        const k = embedKindRef.current;
-        const sel = embedSelectionRef.current;
-        embedKindRef.current = null;
-        embedSelectionRef.current = null;
-        if (k) insertSnippet(fencedBlock, k, sel);
-      }}
-    />
-    <MermaidEditorModal
-      open={mermaidOpen}
-      onClose={() => {
-        setMermaidOpen(false);
-        embedKindRef.current = null;
-        embedSelectionRef.current = null;
-      }}
-      onConfirm={(fencedBlock) => {
-        const k = embedKindRef.current;
-        const sel = embedSelectionRef.current;
-        embedKindRef.current = null;
-        embedSelectionRef.current = null;
-        if (k) insertSnippet(fencedBlock, k, sel);
-      }}
-    />
+        onConfirm={(snippet) => {
+          const kind = embedKindRef.current;
+          const selection = embedSelectionRef.current;
+          embedKindRef.current = null;
+          embedSelectionRef.current = null;
+          if (kind) insertSnippet(snippet, kind, selection);
+        }}
+      />
+      <PrimeBrushEditorModal
+        open={primeBrushOpen}
+        onClose={() => {
+          setPrimeBrushOpen(false);
+          embedKindRef.current = null;
+          embedSelectionRef.current = null;
+        }}
+        onConfirm={(fencedBlock) => {
+          const kind = embedKindRef.current;
+          const selection = embedSelectionRef.current;
+          embedKindRef.current = null;
+          embedSelectionRef.current = null;
+          if (kind) insertSnippet(fencedBlock, kind, selection);
+        }}
+      />
+      <MermaidEditorModal
+        open={mermaidOpen}
+        onClose={() => {
+          setMermaidOpen(false);
+          embedKindRef.current = null;
+          embedSelectionRef.current = null;
+        }}
+        onConfirm={(fencedBlock) => {
+          const kind = embedKindRef.current;
+          const selection = embedSelectionRef.current;
+          embedKindRef.current = null;
+          embedSelectionRef.current = null;
+          if (kind) insertSnippet(fencedBlock, kind, selection);
+        }}
+      />
     </>
   );
 }

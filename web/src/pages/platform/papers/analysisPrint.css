@@ -1,7 +1,123 @@
-body{font-family:Arial,sans-serif;margin:32px;color:#0f172a}
-h1,h2{margin:0 0 12px}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}
-.metric{border:1px solid #e2e8f0;padding:12px;border-radius:8px}
-table{width:100%;border-collapse:collapse;margin-top:12px}
-th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:12px}
-th{background:#f8fafc}
+/* ==========================================================================
+   Analysis Print & Report Export Stylesheet
+   Optimized for A4 paper, PDF export, clear typography, and crisp tables.
+   ========================================================================== */
+
+@page {
+  size: A4 portrait;
+  margin: 15mm 15mm 15mm 15mm;
+}
+
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  h1, h2, h3 {
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+  }
+
+  .grid, .metric, table {
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tbody {
+    display: table-row-group !important;
+  }
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  margin: 24px;
+  color: #0f172a;
+  line-height: 1.5;
+  background-color: #ffffff;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 4px;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+p {
+  margin: 0 0 16px;
+  color: #475569;
+  font-size: 13px;
+}
+
+h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 22px 0 8px;
+  color: #1e293b;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 6px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 16px 0 20px;
+}
+
+.metric {
+  border: 1px solid #cbd5e1;
+  background-color: #f8fafc;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.metric strong {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-top: 4px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  margin-bottom: 18px;
+  font-size: 13px;
+}
+
+th, td {
+  border: 1px solid #cbd5e1;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 12.5px;
+  vertical-align: middle;
+}
+
+th {
+  background-color: #f1f5f9;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+tr:nth-child(even) td {
+  background-color: #fafafa;
+}

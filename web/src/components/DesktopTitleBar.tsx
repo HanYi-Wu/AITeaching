@@ -7,7 +7,7 @@ import { isTauriShell } from "../lib/tauriEnv";
 
 function titleBarButtonClass(extra?: string) {
   return cn(
-    "inline-flex h-full w-11 items-center justify-center text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100",
+    "inline-flex h-full w-[46px] items-center justify-center text-[var(--or-muted)] transition-colors duration-100 hover:bg-[var(--or-block)] hover:text-[var(--or-text)]",
     "[-webkit-app-region:no-drag] [app-region:no-drag]",
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-slate-500",
     extra,
@@ -50,7 +50,7 @@ export function DesktopTitleBar({ menu }: { menu?: ReactNode } = {}) {
 
   return (
     <header
-      className="flex h-8 shrink-0 select-none items-stretch border-b border-slate-800 bg-slate-900"
+      className="flex h-8 shrink-0 select-none items-stretch border-b border-[var(--or-outline)] bg-[var(--or-sidebar)] text-[var(--or-text)]"
       role="banner"
     >
       <div
@@ -60,7 +60,7 @@ export function DesktopTitleBar({ menu }: { menu?: ReactNode } = {}) {
           void appWindow.toggleMaximize();
         }}
       >
-        <span className="shrink-0 truncate text-xs font-semibold tracking-tight text-slate-200">{t("app:brand")}</span>
+        <span className="shrink-0 truncate text-xs font-semibold tracking-tight text-[var(--or-text)]">{t("app:brand")}</span>
         {menu ? (
           <div className="flex min-w-0 items-center" data-tauri-drag-region="false">
             {menu}
@@ -92,7 +92,7 @@ export function DesktopTitleBar({ menu }: { menu?: ReactNode } = {}) {
         </button>
         <button
           type="button"
-          className={titleBarButtonClass("hover:bg-red-700 hover:text-white")}
+          className={titleBarButtonClass("hover:bg-[#e81123] hover:text-white")}
           title={t("app:titleBar.close")}
           aria-label={t("app:titleBar.close")}
           onClick={() => void appWindow.close()}

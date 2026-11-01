@@ -5,15 +5,13 @@ import { readStoredLocale, resolveInitialLocale, tauriGetLocale, writeStoredLoca
 import { installGlobalLogging } from "./lib/appLog";
 import { isTauriShell } from "./lib/tauriEnv";
 import "./index.css";
+import "./design-system/mobile-navigation.css";
+import { applyAppearance } from "./design-system/appearance";
 
 if (typeof document !== "undefined" && isTauriShell()) {
   document.documentElement.classList.add("tauri-shell");
 }
-if (typeof document !== "undefined") {
-  const theme = localStorage.getItem("eh-theme") || "classic";
-  document.documentElement.dataset.ehTheme = theme;
-  document.documentElement.dataset.ehDensity = "comfortable";
-}
+applyAppearance();
 
 installGlobalLogging();
 

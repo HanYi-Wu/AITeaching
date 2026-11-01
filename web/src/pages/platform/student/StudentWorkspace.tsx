@@ -10,6 +10,9 @@ import {
   Save,
   UserCog,
 } from "lucide-react";
+import { AppearanceFields } from "../../../design-system/AppearanceFields";
+import { SelectionIndicator } from "../../../design-system/SelectionIndicator";
+import { applyAppearance, appearanceTheme, installAppearance, readAppearance, saveAppearance, saveLoginAppearance, type Appearance } from "../../../design-system/appearance";
 import { formatLocaleDateTime } from "../../../lib/locale";
 import {
   updateAccountProfile,
@@ -22,11 +25,14 @@ import {
   type StudentResultRecord,
 } from "../../../platform/auth";
 import { loadSessionToken } from "../../../platform/session";
+import { formatSubjectLabel } from "../../../lib/subjectLabels";
 import { PlatformShell } from "../PlatformShell";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import { StudentNavButton, StudentAnalysisVisual, StudentResultDetails } from "./StudentPanels";
 import { StudentExamPanel } from "./StudentExamPanel";
 import { useStudentExam } from "./useStudentExam";
+import "../../../ui-redesign/g54/g54.css";
+import { Select as AppSelect } from "../../../components/ui/select";
 
 type Props = {
   user: PlatformUser;
@@ -65,7 +71,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [resultSearch, setResultSearch] = useState("");
   const [resultSubjectFilter, setResultSubjectFilter] = useState("");
   const [resultStatusFilter, setResultStatusFilter] = useState("");
-  const [theme, setTheme] = useState(profile.preferences?.theme ?? "classic");
+  const [appearance, setAppearance] = useState(() => readAppearance(user));
   const [density, setDensity] = useState(profile.preferences?.density ?? "comfortable");
   const [fontScale, setFontScale] = useState(Number(profile.preferences?.font_scale ?? 1));
   const [message, setMessage] = useState<string | null>(null);
@@ -73,6 +79,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   const [papers, setPapers] = useState<StudentPaperRecord[]>([]);
   const [results, setResults] = useState<StudentResultRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const studentNavigationRef = useRef<HTMLElement>(null);
   const navigationEpochRef = useRef(0);
   const accountIdRef = useRef(user.id);
   const renderedAccountRef = useRef(user.id);
@@ -144,17 +151,12 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     setResultSearch("");
     setResultSubjectFilter("");
     setResultStatusFilter("");
-    setTheme(user.preferences?.theme ?? "classic");
+    setAppearance(readAppearance(user));
     setDensity(user.preferences?.density ?? "comfortable");
     setFontScale(Number(user.preferences?.font_scale ?? 1));
   }, [user]);
 
-  useEffect(() => {
-    const preferences = profile.id === user.id ? profile.preferences : user.preferences;
-    document.documentElement.dataset.ehTheme = preferences?.theme ?? "classic";
-    document.documentElement.dataset.ehDensity = preferences?.density === "compact" ? "compact" : "comfortable";
-    document.documentElement.style.fontSize = `${Number(preferences?.font_scale ?? 1) * 100}%`;
-  }, [profile.id, profile.preferences, user.id, user.preferences]);
+  useEffect(() => installAppearance(profile.id === user.id ? profile : user), [profile.id, profile.preferences, user.id, user.preferences]);
 
   useEffect(() => {
     void refresh();
@@ -241,21 +243,179 @@ export function StudentWorkspace({ user, onLogout }: Props) {
     }
   }
 
-  async function savePersonalization() {
-    setBusy("personalization");
-    try {
-      const result = await updateAccountProfile({ preferences: { theme, density, font_scale: fontScale } });
-      setProfile((current) => ({ ...current, ...result.profile }));
-      document.documentElement.dataset.ehTheme = theme;
-      document.documentElement.dataset.ehDensity = density === "compact" ? "compact" : "comfortable";
-      document.documentElement.style.fontSize = `${fontScale * 100}%`;
-      localStorage.setItem("eh-theme", theme);
-      setMessage("个性化设置已保存");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
+  const personalizationDirtyRef = useRef(false);
+  const personalizationRevisionRef = useRef(0);
+  const personalizationSaveWorkerRef = useRef<Promise<void> | null>(null);
+  const personalizationMountedRef = useRef(false);
+  const personalizationFeedbackRef = useRef(false);
+  const personalizationUnmountFlushRef = useRef(false);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionToken = loadSessionToken();
+  const latestPersonalizationRef = useRef({ profile, appearance, density, fontScale, userId: user.id, sessionToken });
+  if (latestPersonalizationRef.current.userId !== user.id || latestPersonalizationRef.current.sessionToken !== sessionToken) {
+    personalizationRevisionRef.current += 1;
+    personalizationDirtyRef.current = false;
+    personalizationFeedbackRef.current = false;
+    personalizationUnmountFlushRef.current = false;
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
     }
+  }
+  latestPersonalizationRef.current = { profile, appearance, density, fontScale, userId: user.id, sessionToken };
+
+  const persistPersonalization = useCallback(async (options?: { silent?: boolean; unmounting?: boolean }) => {
+    const silent = options?.silent ?? false;
+    const unmounting = options?.unmounting ?? false;
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    if (!silent && !unmounting) {
+      personalizationFeedbackRef.current = true;
+      if (personalizationMountedRef.current) setBusy("personalization");
+    }
+
+    if (personalizationSaveWorkerRef.current) {
+      await personalizationSaveWorkerRef.current;
+      return;
+    }
+
+    const worker = (async () => {
+      while (personalizationDirtyRef.current) {
+        const revision = personalizationRevisionRef.current;
+        const current = latestPersonalizationRef.current;
+        personalizationDirtyRef.current = false;
+        if (current.profile.id !== current.userId || current.sessionToken !== loadSessionToken()) {
+          break;
+        }
+        try {
+          const result = await updateAccountProfile({ preferences: { theme: appearanceTheme(current.appearance), density: current.density, font_scale: current.fontScale } });
+          const sessionChanged = current.sessionToken !== loadSessionToken();
+          if (revision !== personalizationRevisionRef.current || sessionChanged) {
+            if (revision === personalizationRevisionRef.current && sessionChanged) {
+              personalizationRevisionRef.current += 1;
+              personalizationDirtyRef.current = false;
+              personalizationFeedbackRef.current = false;
+              personalizationUnmountFlushRef.current = false;
+            }
+            continue;
+          }
+          personalizationUnmountFlushRef.current = false;
+          const stored = saveAppearance(result.profile.id, current.appearance);
+          const loginAppearanceStored = saveLoginAppearance(current.appearance);
+          if (personalizationMountedRef.current && !unmounting) {
+            setProfile((prev) => ({ ...prev, ...result.profile }));
+            applyAppearance(result.profile);
+            if (personalizationFeedbackRef.current) {
+              setMessage(stored && loginAppearanceStored ? "个性化设置已保存" : "设置已保存，当前外观在本次会话中生效");
+              setBusy(null);
+              personalizationFeedbackRef.current = false;
+            }
+          }
+        } catch (error) {
+          if (revision !== personalizationRevisionRef.current) {
+            continue;
+          }
+          personalizationDirtyRef.current = true;
+          if (personalizationUnmountFlushRef.current && current.sessionToken === loadSessionToken()) {
+            personalizationUnmountFlushRef.current = false;
+            continue;
+          }
+          if (personalizationMountedRef.current && !unmounting) {
+            setMessage(error instanceof Error ? error.message : String(error));
+            if (personalizationFeedbackRef.current) setBusy(null);
+            personalizationFeedbackRef.current = false;
+          }
+          break;
+        }
+      }
+
+      if (personalizationMountedRef.current && !unmounting && personalizationFeedbackRef.current) {
+        setBusy(null);
+        personalizationFeedbackRef.current = false;
+      }
+    })();
+    personalizationSaveWorkerRef.current = worker;
+    try {
+      await worker;
+    } finally {
+      if (personalizationSaveWorkerRef.current === worker) {
+        personalizationSaveWorkerRef.current = null;
+      }
+    }
+  }, []);
+
+  const scheduleAutoSavePersonalization = useCallback((delayMs = 450) => {
+    personalizationRevisionRef.current += 1;
+    personalizationDirtyRef.current = true;
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      if (personalizationDirtyRef.current) {
+        void persistPersonalization({ silent: true });
+      }
+    }, delayMs);
+  }, [persistPersonalization]);
+
+  useEffect(() => {
+    personalizationMountedRef.current = true;
+    return () => {
+      personalizationMountedRef.current = false;
+      if (personalizationDirtyRef.current || personalizationSaveWorkerRef.current) {
+        personalizationUnmountFlushRef.current = true;
+      }
+      if (autoSaveTimerRef.current !== null) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      if (personalizationDirtyRef.current) {
+        void persistPersonalization({ silent: true, unmounting: true });
+      }
+    };
+  }, [persistPersonalization]);
+
+  const handleAppearanceChange = useCallback((nextAppearance: Appearance) => {
+    setAppearance(nextAppearance);
+    const current = latestPersonalizationRef.current;
+    latestPersonalizationRef.current = { ...current, appearance: nextAppearance };
+    if (current.profile?.id) {
+      saveAppearance(current.profile.id, nextAppearance);
+    }
+    saveLoginAppearance(nextAppearance);
+    applyAppearance({
+      id: current.profile?.id ?? "preview",
+      preferences: {
+        ...current.profile?.preferences,
+        theme: appearanceTheme(nextAppearance),
+        density: current.density,
+        font_scale: current.fontScale,
+      },
+    });
+    scheduleAutoSavePersonalization(450);
+  }, [scheduleAutoSavePersonalization]);
+
+  const handleDensityChange = useCallback((nextDensity: string) => {
+    setDensity(nextDensity);
+    latestPersonalizationRef.current = { ...latestPersonalizationRef.current, density: nextDensity };
+    document.documentElement.dataset.ehDensity = nextDensity === "compact" ? "compact" : "comfortable";
+    scheduleAutoSavePersonalization(450);
+  }, [scheduleAutoSavePersonalization]);
+
+  const handleFontScaleChange = useCallback((nextScale: number) => {
+    setFontScale(nextScale);
+    latestPersonalizationRef.current = { ...latestPersonalizationRef.current, fontScale: nextScale };
+    document.documentElement.style.setProperty("--or-font-scale", String(nextScale));
+    document.documentElement.style.fontSize = `${nextScale * 100}%`;
+    scheduleAutoSavePersonalization(450);
+  }, [scheduleAutoSavePersonalization]);
+
+  async function savePersonalization() {
+    personalizationRevisionRef.current += 1;
+    personalizationDirtyRef.current = true;
+    await persistPersonalization({ silent: false });
   }
 
   async function startPaper(paper: StudentPaperRecord) {
@@ -277,6 +437,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   if (activeView === "exam" && exam.activeAttempt) {
     return <StudentExamPanel controller={exam} userName={profile.username} message={message} />;
   }
+
   return (
     <PlatformShell
       roleLabel="学生端"
@@ -286,7 +447,15 @@ export function StudentWorkspace({ user, onLogout }: Props) {
       compactMobile
     >
       <div className="space-y-5">
-        <nav className="grid grid-cols-4 gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+        <nav
+          ref={studentNavigationRef}
+          className="or-g54-student-nav relative isolate grid grid-cols-4 gap-2 rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[color-mix(in_srgb,var(--or-block)_70%,transparent)] p-2 shadow-sm"
+        >
+          <SelectionIndicator
+            rootRef={studentNavigationRef}
+            selector={'[data-state="active"]'}
+            className="or-g54-student-nav-indicator"
+          />
           <StudentNavButton
             testId="student-page-home"
             selected={activeView === "home"}
@@ -321,95 +490,118 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         </nav>
 
         {message ? (
-          <div className="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
+          <div className="rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-3 text-sm text-[var(--or-text)] shadow-sm">
             {message}
           </div>
         ) : null}
 
+        <div className="or-workspace-content min-w-0">
         {activeView === "home" && !mustChangePassword ? (
           <>
-          <GettingStartedChecklist
-            description="完成改密、查看待答试卷并提交第一份答卷"
-            steps={[
-              { label: "完成首次改密", complete: !mustChangePassword, actionLabel: "前往设置", onAction: () => setActiveView("account") },
-              { label: "查看待答试卷", complete: papers.length > 0, actionLabel: "查看试卷", onAction: () => setActiveView("papers") },
-              { label: "提交第一份答卷", complete: results.length > 0, actionLabel: "开始答题", onAction: () => setActiveView("papers") },
-            ]}
-          />
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <h2 className="text-base font-semibold text-slate-950">主页</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  待答 {pendingPapers.length} 份 · 成绩 {results.length} 份
-                </p>
+            <GettingStartedChecklist
+              description="完成改密、查看待答试卷并提交第一份答卷"
+              steps={[
+                { label: "完成首次改密", complete: !mustChangePassword, actionLabel: "前往设置", onAction: () => setActiveView("account") },
+                { label: "查看待答试卷", complete: papers.length > 0, actionLabel: "查看试卷", onAction: () => setActiveView("papers") },
+                { label: "提交第一份答卷", complete: results.length > 0, actionLabel: "开始答题", onAction: () => setActiveView("papers") },
+              ]}
+            />
+            <section className="rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-5 shadow-sm sm:p-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold tracking-tight text-[var(--or-text)]">主页</h2>
+                  <p className="mt-1 text-sm text-[var(--or-muted)]">
+                    待答 {pendingPapers.length} 份 · 成绩 {results.length} 份
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refresh()}
+                  disabled={loading}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-2 text-sm font-semibold text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-60 transition-colors"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  刷新
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => void refresh()}
-                disabled={loading}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                <RefreshCw className="h-4 w-4" />
-                刷新
-              </button>
-            </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                disabled={mustChangePassword}
-                onClick={() => setActiveView("papers")}
-                className="rounded-md border border-slate-200 bg-slate-50 p-4 text-left hover:border-slate-300 disabled:opacity-60"
-              >
-                <p className="text-sm font-semibold text-slate-950">待答试卷</p>
-                <p className="mt-1 text-2xl font-semibold text-slate-900">{pendingPapers.length}</p>
-              </button>
-              <button
-                type="button"
-                disabled={mustChangePassword}
-                onClick={() => setActiveView("results")}
-                className="rounded-md border border-slate-200 bg-slate-50 p-4 text-left hover:border-slate-300 disabled:opacity-60"
-              >
-                <p className="text-sm font-semibold text-slate-950">成绩分析</p>
-                <p className="mt-1 text-2xl font-semibold text-slate-900">{latestResult?.score_percent ?? "-"}%</p>
-              </button>
-            </div>
-          </section>
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                <button
+                  type="button"
+                  disabled={mustChangePassword}
+                  onClick={() => setActiveView("papers")}
+                  className="group rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-5 text-left hover:border-[var(--or-outline)] hover:bg-[color-mix(in_srgb,var(--or-block)_70%,transparent)] active:scale-[0.99] transition-all disabled:opacity-60"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-[var(--or-text)]">待答试卷</p>
+                    <ClipboardList className="h-5 w-5 text-[var(--or-muted)] group-hover:text-[var(--or-muted)] transition-colors" />
+                  </div>
+                  <p className="mt-2 text-3xl font-semibold tracking-tight text-[var(--or-text)] font-mono">
+                    {pendingPapers.length}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  disabled={mustChangePassword}
+                  onClick={() => setActiveView("results")}
+                  className="group rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-5 text-left hover:border-[var(--or-outline)] hover:bg-[color-mix(in_srgb,var(--or-block)_70%,transparent)] active:scale-[0.99] transition-all disabled:opacity-60"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-[var(--or-text)]">成绩分析</p>
+                    <BarChart3 className="h-5 w-5 text-[var(--or-muted)] group-hover:text-[var(--or-muted)] transition-colors" />
+                  </div>
+                  <p className="mt-2 text-3xl font-semibold tracking-tight text-[var(--or-text)] font-mono">
+                    {latestResult?.score_percent ?? "-"}%
+                  </p>
+                </button>
+              </div>
+            </section>
           </>
         ) : null}
 
         {activeView === "papers" && !mustChangePassword ? (
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <section className="rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-5 shadow-sm sm:p-6">
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="font-semibold text-slate-950">待答试卷</h2>
-                <p className="mt-1 text-sm text-slate-500">班级试卷和专门布置给你的练习会显示在这里。</p>
+                <h2 className="text-lg font-semibold tracking-tight text-[var(--or-text)]">待答试卷</h2>
+                <p className="mt-1 text-sm text-[var(--or-muted)]">班级试卷和专门布置给你的练习会显示在这里。</p>
               </div>
               <button
                 type="button"
                 onClick={() => void refresh()}
                 disabled={loading}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-2 text-sm font-semibold text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-60 transition-colors"
               >
                 <RefreshCw className="h-4 w-4" />
                 刷新
               </button>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-3.5">
               {pendingPapers.map((paper) => (
-                <div key={paper.publication_id} className="rounded-lg border border-slate-200 p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div key={paper.publication_id} className="rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-5 transition-colors hover:border-[var(--or-outline)]">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
-                      <p className="break-words font-medium text-slate-950">{paper.title}</p>
-                      {paper.recipient_scope === "student" ? <span className="mt-1 inline-block rounded bg-violet-100 px-2 py-0.5 text-xs text-violet-700">个人练习</span> : null}
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                        <span>{paper.subject || "未分科"}</span>
-                        <span>{paper.question_count} 题</span>
-                        <span>总分 {paper.paper_max_score ?? "-"} 分</span>
-                        <span>{paper.time_limit_minutes ? `限时 ${paper.time_limit_minutes} 分钟` : "不限时"}</span>
-                        <span>{paper.end_at ? `截止 ${formatLocaleDateTime(paper.end_at)}` : "无截止时间"}</span>
-                        <span>{statusLabel(paper.status)}</span>
-                        {paper.can_answer === false ? <span>暂不可答</span> : null}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="break-words text-base font-semibold text-[var(--or-text)]">{paper.title}</p>
+                        {paper.recipient_scope === "student" ? (
+                          <span className="or-g54-pill bg-violet-100 px-2.5 py-0.5 text-xs font-semibold text-violet-700">
+                            个人练习
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--or-muted)]">
+                        <span className="or-g54-pill bg-[var(--or-block)] text-[var(--or-muted)]">{formatSubjectLabel(paper.subject, "未分科")}</span>
+                        <span className="or-g54-pill bg-[var(--or-block)] text-[var(--or-muted)]">{paper.question_count} 题</span>
+                        <span className="or-g54-pill bg-[var(--or-block)] text-[var(--or-muted)]">总分 {paper.paper_max_score ?? "-"} 分</span>
+                        <span className="or-g54-pill bg-[var(--or-block)] text-[var(--or-muted)]">
+                          {paper.time_limit_minutes ? `限时 ${paper.time_limit_minutes} 分钟` : "不限时"}
+                        </span>
+                        <span className="or-g54-pill bg-[var(--or-block)] text-[var(--or-muted)]">
+                          {paper.end_at ? `截止 ${formatLocaleDateTime(paper.end_at)}` : "无截止时间"}
+                        </span>
+                        <span className="or-g54-pill bg-[var(--or-block)] text-[var(--or-muted)]">{statusLabel(paper.status)}</span>
+                        {paper.can_answer === false ? (
+                          <span className="or-g54-pill bg-[var(--or-error-container)] text-[var(--or-on-error)] font-semibold">暂不可答</span>
+                        ) : null}
                       </div>
                     </div>
                     <button
@@ -417,7 +609,7 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                       data-testid={`student-start-${paper.publication_id}`}
                       disabled={busy === `start:${paper.publication_id}` || paper.can_answer === false}
                       onClick={() => void startPaper(paper)}
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60 sm:w-auto"
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--or-primary)] px-4 py-2.5 text-sm font-semibold text-[var(--or-on-primary)] hover:bg-[var(--or-primary)] disabled:opacity-60 transition-colors sm:w-auto shrink-0"
                     >
                       <CheckCircle2 className="h-4 w-4" />
                       {paper.status === "in_progress" ? "继续答题" : "开始答题"}
@@ -426,7 +618,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                 </div>
               ))}
               {!loading && pendingPapers.length === 0 ? (
-                <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">暂无待答试卷</p>
+                <p className="rounded-2xl border border-dashed border-[var(--or-outline)] p-6 text-center text-sm text-[var(--or-muted)]">
+                  暂无待答试卷
+                </p>
               ) : null}
             </div>
           </section>
@@ -434,29 +628,71 @@ export function StudentWorkspace({ user, onLogout }: Props) {
 
         {activeView === "results" && !mustChangePassword ? (
           <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-              {Object.entries(exam.unconfirmedTexts).map(([key, entry]) => <details key={key} className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
-                <summary>查看未确认的本机文本：{entry.title}</summary>
-                {entry.issue === "too_large" && !Object.keys(entry.answers).length ? <p className="mt-2">标签页未确认文本暂存达到上限，本条答案未能继续保留；请检查服务器答卷。</p> : null}
-                {entry.issue && !(entry.issue === "too_large" && !Object.keys(entry.answers).length) ? <p className="mt-2">本机存储暂不可用，请在离开本页前复制以下文本。</p> : null}
-                <pre className="mt-2 whitespace-pre-wrap break-words">{Object.entries(entry.answers).map(([id, value]) => `${id}: ${value || "（空答案）"}`).join("\n")}</pre>
-              </details>)}
-              {Object.entries(exam.unconfirmedImages).map(([key, entry]) => <details key={key} className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
-                <summary>查看未确认的本机图片：{entry.title}</summary>
-                {entry.issue === "too_large" && !Object.keys(entry.images).length ? <p className="mt-2">标签页未确认图片暂存达到上限，本条图片未能继续保留；请检查服务器答卷或重新选择图片。</p> : null}
-                {entry.issue && !(entry.issue === "too_large" && !Object.keys(entry.images).length) ? <p className="mt-2">本机图片存储结果未能确认或提交未确认，请检查下面保留的图片。</p> : null}
-                <div className="mt-2 space-y-3">
-                  {Object.entries(entry.images).flatMap(([id, images]) => images.length ? images.map((image, index) => (
-                    <div key={`${id}:${index}`}><p>{id} · {image.name}</p><img src={image.data_url} alt={`${id} 未确认的答题图片`} className="mt-1 max-h-48 max-w-full rounded border border-amber-200 object-contain" /></div>
-                  )) : [<p key={id}>{id} · 图片已移除，尚未确认</p>])}
-                </div>
-              </details>)}
-              <div className="mb-3 flex items-center gap-2">
-                <BarChart3 className="h-5 w-5 text-slate-600" />
-                <h2 className="font-semibold text-slate-950">成绩与分析</h2>
+            <div className="rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-5 shadow-sm sm:p-6">
+              {Object.entries(exam.unconfirmedTexts).map(([key, entry]) => (
+                <details key={key} className="mb-4 rounded-xl border border-[var(--or-warning)] bg-[color-mix(in_srgb,var(--or-warning-container)_80%,transparent)] p-4 text-sm">
+                  <summary className="font-semibold text-[var(--or-on-warning)] cursor-pointer">
+                    查看未确认的本机文本：{entry.title}
+                  </summary>
+                  {entry.issue === "too_large" && !Object.keys(entry.answers).length ? (
+                    <p className="mt-2 text-[var(--or-on-warning)]">
+                      标签页未确认文本暂存达到上限，本条答案未能继续保留；请检查服务器答卷。
+                    </p>
+                  ) : null}
+                  {entry.issue && !(entry.issue === "too_large" && !Object.keys(entry.answers).length) ? (
+                    <p className="mt-2 text-[var(--or-on-warning)]">
+                      本机存储暂不可用，请在离开本页前复制以下文本。
+                    </p>
+                  ) : null}
+                  <pre className="mt-2.5 whitespace-pre-wrap break-words rounded-lg bg-[color-mix(in_srgb,var(--or-warning-container)_70%,transparent)] p-3 font-mono text-xs text-[var(--or-on-warning)]">
+                    {Object.entries(entry.answers).map(([id, value]) => `${id}: ${value || "（空答案）"}`).join("\n")}
+                  </pre>
+                </details>
+              ))}
+
+              {Object.entries(exam.unconfirmedImages).map(([key, entry]) => (
+                <details key={key} className="mb-4 rounded-xl border border-[var(--or-warning)] bg-[color-mix(in_srgb,var(--or-warning-container)_80%,transparent)] p-4 text-sm">
+                  <summary className="font-semibold text-[var(--or-on-warning)] cursor-pointer">
+                    查看未确认的本机图片：{entry.title}
+                  </summary>
+                  {entry.issue === "too_large" && !Object.keys(entry.images).length ? (
+                    <p className="mt-2 text-[var(--or-on-warning)]">
+                      标签页未确认图片暂存达到上限，本条图片未能继续保留；请检查服务器答卷或重新选择图片。
+                    </p>
+                  ) : null}
+                  {entry.issue && !(entry.issue === "too_large" && !Object.keys(entry.images).length) ? (
+                    <p className="mt-2 text-[var(--or-on-warning)]">
+                      本机图片存储结果未能确认或提交未确认，请检查下面保留的图片。
+                    </p>
+                  ) : null}
+                  <div className="mt-3 space-y-3">
+                    {Object.entries(entry.images).flatMap(([id, images]) =>
+                      images.length ? (
+                        images.map((image, index) => (
+                          <div key={`${id}:${index}`} className="rounded-lg border border-[color-mix(in_srgb,var(--or-warning)_80%,transparent)] bg-[var(--or-card)] p-2.5">
+                            <p className="text-xs font-medium text-[var(--or-text)]">{id} · {image.name}</p>
+                            <img
+                              src={image.data_url}
+                              alt={`${id} 未确认的答题图片`}
+                              className="mt-1.5 max-h-48 max-w-full rounded border border-[var(--or-warning)] object-contain"
+                            />
+                          </div>
+                        ))
+                      ) : (
+                        [<p key={id} className="text-xs text-[var(--or-muted)]">{id} · 图片已移除，尚未确认</p>]
+                      )
+                    )}
+                  </div>
+                </details>
+              ))}
+
+              <div className="mb-4 flex items-center gap-2">
+                <BarChart3 className="h-5 w-5 text-[var(--or-muted)]" />
+                <h2 className="text-lg font-semibold tracking-tight text-[var(--or-text)]">成绩与分析</h2>
               </div>
-              <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] xl:items-end">
-                <label className="block text-sm text-slate-700" htmlFor="student-results-search">
+
+              <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] xl:items-end">
+                <label className="block text-sm font-medium text-[var(--or-muted)]" htmlFor="student-results-search">
                   搜索成绩
                   <input
                     id="student-results-search"
@@ -465,101 +701,145 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                     value={resultSearch}
                     onChange={(event) => setResultSearch(event.target.value)}
                     placeholder="按考试名称、科目或编号搜索"
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
                   />
                 </label>
-                <label className="block text-sm text-slate-700" htmlFor="student-results-subject-filter">
+                <label className="block text-sm font-medium text-[var(--or-muted)]" htmlFor="student-results-subject-filter">
                   科目
-                  <select
+                  <AppSelect
                     id="student-results-subject-filter"
                     data-testid="student-results-subject-filter"
                     value={resultSubjectFilter}
-                    onChange={(event) => setResultSubjectFilter(event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    onValueChange={(value) => setResultSubjectFilter(value)}
+                    className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
                   >
                     <option value="">全部科目</option>
-                    {resultSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                  </select>
+                    {resultSubjects.map((subject) => (
+                      <option key={subject} value={subject}>{formatSubjectLabel(subject)}</option>
+                    ))}
+                  </AppSelect>
                 </label>
-                <label className="block text-sm text-slate-700" htmlFor="student-results-status-filter">
+                <label className="block text-sm font-medium text-[var(--or-muted)]" htmlFor="student-results-status-filter">
                   状态
-                  <select
+                  <AppSelect
                     id="student-results-status-filter"
                     data-testid="student-results-status-filter"
                     value={resultStatusFilter}
-                    onChange={(event) => setResultStatusFilter(event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    onValueChange={(value) => setResultStatusFilter(value)}
+                    className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
                   >
                     <option value="">全部状态</option>
                     <option value="submitted">已提交</option>
                     <option value="in_progress">答题中</option>
                     <option value="pending">待作答</option>
-                  </select>
+                  </AppSelect>
                 </label>
                 <button
                   data-testid="student-results-clear"
                   type="button"
-                  onClick={() => { setResultSearch(""); setResultSubjectFilter(""); setResultStatusFilter(""); }}
+                  onClick={() => {
+                    setResultSearch("");
+                    setResultSubjectFilter("");
+                    setResultStatusFilter("");
+                  }}
                   disabled={!resultSearch && !resultSubjectFilter && !resultStatusFilter}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-2 text-sm font-semibold text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
                 >
                   清空筛选
                 </button>
               </div>
-              <div className="space-y-3">
+
+              <div className="space-y-4">
                 {filteredResults.map((result) => (
-                  <article key={result.attempt_id} data-testid={`student-result-${result.attempt_id}`} className="rounded-md border border-slate-200 p-3">
+                  <article
+                    key={result.attempt_id}
+                    data-testid={`student-result-${result.attempt_id}`}
+                    className="rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-4 sm:p-5 transition-colors"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="break-words text-sm font-medium text-slate-950">{result.title}</p>
-                        <p className="mt-1 text-xs text-slate-500">{result.subject || "未分科"}</p>
+                        <p className="break-words text-base font-semibold text-[var(--or-text)]">{result.title}</p>
+                        <p className="mt-1 text-xs text-[var(--or-muted)]">{formatSubjectLabel(result.subject, "未分科")}</p>
                       </div>
-                      <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-800">
+                      <span className="or-g54-pill bg-[var(--or-block)] text-[var(--or-text)] text-xs font-semibold px-3 py-1">
                         {result.show_results ? `${result.score_percent ?? "-"}%` : "待教师批改"}
                       </span>
                     </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                      <div className="rounded bg-slate-50 p-2">
-                        <p className="text-slate-500">得分</p>
-                        <p className="mt-1 font-semibold text-slate-950">{scoreText(result.score, result.max_score)}</p>
+
+                    <div className="mt-3.5 grid grid-cols-3 gap-2.5 text-center text-xs">
+                      <div className="rounded-xl bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] border border-[var(--or-outline)] p-2.5">
+                        <p className="text-[var(--or-muted)]">得分</p>
+                        <p className="mt-1 font-mono font-semibold text-sm text-[var(--or-text)]">
+                          {scoreText(result.score, result.max_score)}
+                        </p>
                       </div>
-                      <div className="rounded bg-slate-50 p-2">
-                        <p className="text-slate-500">正确</p>
-                        <p className="mt-1 font-semibold text-slate-950">{result.analysis?.correct_count ?? "-"}</p>
+                      <div className="rounded-xl bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] border border-[var(--or-outline)] p-2.5">
+                        <p className="text-[var(--or-muted)]">正确</p>
+                        <p className="mt-1 font-mono font-semibold text-sm text-[var(--or-text)]">
+                          {result.analysis?.correct_count ?? "-"}
+                        </p>
                       </div>
-                      <div className="rounded bg-slate-50 p-2">
-                        <p className="text-slate-500">错误</p>
-                        <p className="mt-1 font-semibold text-slate-950">{result.analysis?.wrong_count ?? "-"}</p>
+                      <div className="rounded-xl bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] border border-[var(--or-outline)] p-2.5">
+                        <p className="text-[var(--or-muted)]">错误</p>
+                        <p className="mt-1 font-mono font-semibold text-sm text-[var(--or-text)]">
+                          {result.analysis?.wrong_count ?? "-"}
+                        </p>
                       </div>
                     </div>
+
                     {result.show_results ? (
                       <>
                         <StudentAnalysisVisual result={result} />
                         <StudentResultDetails result={result} />
                       </>
                     ) : (
-                      <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">老师完成整份批改并发布后，这里会显示分数、错题、逐题反馈和模块数据。</p>
+                      <p className="mt-3.5 rounded-xl border border-[color-mix(in_srgb,var(--or-warning)_70%,transparent)] bg-[color-mix(in_srgb,var(--or-warning-container)_60%,transparent)] px-3.5 py-2.5 text-xs text-[var(--or-on-warning)]">
+                        老师完成整份批改并发布后，这里会显示分数、错题、逐题反馈和模块数据。
+                      </p>
                     )}
                   </article>
                 ))}
-                {!loading && results.length === 0 ? <p className="text-sm text-slate-500">暂无历史成绩</p> : null}
+
+                {!loading && results.length === 0 ? (
+                  <p className="text-sm text-[var(--or-muted)]">暂无历史成绩</p>
+                ) : null}
+
                 {!loading && results.length > 0 && filteredResults.length === 0 ? (
-                  <p className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                  <p className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-dashed border-[var(--or-outline)] p-5 text-sm text-[var(--or-muted)]">
                     <span>没有符合条件的成绩。</span>
-                    <button type="button" onClick={() => { setResultSearch(""); setResultSubjectFilter(""); setResultStatusFilter(""); }} className="font-medium text-slate-800 underline underline-offset-2">清空筛选</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setResultSearch("");
+                        setResultSubjectFilter("");
+                        setResultStatusFilter("");
+                      }}
+                      className="font-semibold text-[var(--or-text)] underline underline-offset-2"
+                    >
+                      清空筛选
+                    </button>
                   </p>
                 ) : null}
               </div>
             </div>
 
             {latestResult ? (
-              <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <h2 className="text-sm font-semibold text-slate-950">最近一次分析</h2>
-                <p className="mt-2 text-sm text-slate-600">{latestResult.title}</p>
-                <div className="mt-3 space-y-2 text-sm text-slate-600">
-                  <p>答题数：{latestResult.analysis?.answered_count ?? 0}</p>
-                  <p>错题数：{latestResult.analysis?.wrong_count ?? "-"}</p>
-                  <p>用时：{Math.round(Number(latestResult.time_spent_seconds || 0) / 60)} 分钟</p>
+              <section className="or-g54-card-static rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-5 shadow-sm">
+                <h2 className="text-base font-semibold tracking-tight text-[var(--or-text)]">最近一次分析</h2>
+                <p className="mt-2 text-sm font-medium text-[var(--or-muted)]">{latestResult.title}</p>
+                <div className="mt-3.5 space-y-2.5 text-sm text-[var(--or-muted)] border-t border-[var(--or-outline)] pt-3">
+                  <p className="flex justify-between">
+                    <span className="text-[var(--or-muted)]">答题数：</span>
+                    <span className="font-mono font-semibold text-[var(--or-text)]">{latestResult.analysis?.answered_count ?? 0}</span>
+                  </p>
+                  <p className="flex justify-between">
+                    <span className="text-[var(--or-muted)]">错题数：</span>
+                    <span className="font-mono font-semibold text-[var(--or-text)]">{latestResult.analysis?.wrong_count ?? "-"}</span>
+                  </p>
+                  <p className="flex justify-between">
+                    <span className="text-[var(--or-muted)]">用时：</span>
+                    <span className="font-mono font-semibold text-[var(--or-text)]">{Math.round(Number(latestResult.time_spent_seconds || 0) / 60)} 分钟</span>
+                  </p>
                 </div>
               </section>
             ) : null}
@@ -567,69 +847,101 @@ export function StudentWorkspace({ user, onLogout }: Props) {
         ) : null}
 
         {activeView === "account" ? (
-          <section className="mx-auto w-full max-w-5xl rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <h2 className="mb-4 text-center text-base font-semibold text-slate-950">账号设置</h2>
+          <section className="mx-auto w-full max-w-5xl rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-5 shadow-sm sm:p-6">
+            <h2 className="mb-5 text-center text-lg font-semibold tracking-tight text-[var(--or-text)]">账号设置</h2>
             {mustChangePassword ? (
-              <p className="mx-auto mb-4 max-w-xl rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <p className="mx-auto mb-5 max-w-xl rounded-xl border border-[var(--or-warning)] bg-[var(--or-warning-container)] px-4 py-3 text-sm text-[var(--or-on-warning)]">
                 首次登录必须先修改密码，完成后才能进入答题和成绩页面。
               </p>
             ) : null}
             <div className="grid gap-4 md:grid-cols-2">
-              <section className={`rounded-md border border-slate-200 p-4 ${mustChangePassword ? "mx-auto w-full md:col-span-2 md:max-w-xl" : ""}`}>
-                <h3 className="mb-3 text-sm font-semibold text-slate-900">修改密码</h3>
-                <form onSubmit={(event) => void submitPasswordChange(event)} className="space-y-3">
-                  <label className="block text-sm text-slate-700">当前密码
+              <section className={`rounded-xl border border-[var(--or-outline)] p-5 ${mustChangePassword ? "mx-auto w-full md:col-span-2 md:max-w-xl" : ""}`}>
+                <h3 className="mb-3 text-sm font-semibold text-[var(--or-text)]">修改密码</h3>
+                <form onSubmit={(event) => void submitPasswordChange(event)} className="space-y-3.5">
+                  <label className="block text-sm font-medium text-[var(--or-muted)]">
+                    当前密码
                     <input
                       data-testid="student-account-current-password"
                       autoComplete="current-password"
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
                       type={showAccountPasswords ? "text" : "password"}
                       value={passwordCurrentPassword}
                       onChange={(event) => setPasswordCurrentPassword(event.target.value)}
                       required
                     />
                   </label>
-                  <label className="block text-sm text-slate-700">新密码
-                    <input data-testid="student-account-new-password" autoComplete="new-password" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" type={showAccountPasswords ? "text" : "password"} minLength={6} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+                  <label className="block text-sm font-medium text-[var(--or-muted)]">
+                    新密码
+                    <input
+                      data-testid="student-account-new-password"
+                      autoComplete="new-password"
+                      className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
+                      type={showAccountPasswords ? "text" : "password"}
+                      minLength={6}
+                      value={newPassword}
+                      onChange={(event) => setNewPassword(event.target.value)}
+                      required
+                    />
                   </label>
-                  <label className="block text-sm text-slate-700">确认新密码
-                    <input data-testid="student-account-confirm-password" autoComplete="new-password" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" type={showAccountPasswords ? "text" : "password"} minLength={6} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+                  <label className="block text-sm font-medium text-[var(--or-muted)]">
+                    确认新密码
+                    <input
+                      data-testid="student-account-confirm-password"
+                      autoComplete="new-password"
+                      className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
+                      type={showAccountPasswords ? "text" : "password"}
+                      minLength={6}
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                      required
+                    />
                   </label>
-                  <p className="text-xs text-slate-500">密码至少 6 位，建议同时包含字母和数字，且不要与其他网站共用。</p>
-                  <button type="button" onClick={() => setShowAccountPasswords((value) => !value)} className="inline-flex items-center gap-2 text-xs font-medium text-slate-600">
-                    {showAccountPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{showAccountPasswords ? "隐藏密码" : "显示密码"}
+                  <p className="text-xs text-[var(--or-muted)]">
+                    密码至少 6 位，建议同时包含字母和数字，且不要与其他网站共用。
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowAccountPasswords((value) => !value)}
+                    className="inline-flex items-center gap-2 text-xs font-semibold text-[var(--or-muted)] hover:text-[var(--or-text)] transition-colors"
+                  >
+                    {showAccountPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {showAccountPasswords ? "隐藏密码" : "显示密码"}
                   </button>
                   <button
                     data-testid="student-account-password-save"
                     type="submit"
                     disabled={busy === "account"}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--or-primary)] px-4 py-2.5 text-sm font-semibold text-[var(--or-on-primary)] hover:bg-[var(--or-primary)] disabled:opacity-60 transition-colors"
                   >
-                    <Save className="h-4 w-4" />保存密码
+                    <Save className="h-4 w-4" />
+                    保存密码
                   </button>
                 </form>
               </section>
+
               {!mustChangePassword ? (
-                <section className="rounded-md border border-slate-200 p-4">
-                  <h3 className="mb-1 text-sm font-semibold text-slate-900">修改用户名</h3>
-                  <p className="mb-3 text-xs text-slate-500">当前用户名：{profile.username}</p>
-                  <form onSubmit={(event) => void submitUsernameChange(event)} className="space-y-3">
-                    <label className="block text-sm text-slate-700" htmlFor="student-account-username">新用户名
+                <section className="rounded-xl border border-[var(--or-outline)] p-5">
+                  <h3 className="mb-1 text-sm font-semibold text-[var(--or-text)]">修改用户名</h3>
+                  <p className="mb-3 text-xs text-[var(--or-muted)]">当前用户名：{profile.username}</p>
+                  <form onSubmit={(event) => void submitUsernameChange(event)} className="space-y-3.5">
+                    <label className="block text-sm font-medium text-[var(--or-muted)]" htmlFor="student-account-username">
+                      新用户名
                       <input
                         id="student-account-username"
                         data-testid="student-account-username"
                         autoComplete="username"
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
                         value={username}
                         onChange={(event) => setUsername(event.target.value)}
                         required
                       />
                     </label>
-                    <label className="block text-sm text-slate-700">当前密码
+                    <label className="block text-sm font-medium text-[var(--or-muted)]">
+                      当前密码
                       <input
                         data-testid="student-account-username-current-password"
                         autoComplete="current-password"
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
                         type="password"
                         value={usernameCurrentPassword}
                         onChange={(event) => setUsernameCurrentPassword(event.target.value)}
@@ -640,27 +952,58 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                       data-testid="student-account-username-save"
                       type="submit"
                       disabled={busy === "account"}
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--or-primary)] px-4 py-2.5 text-sm font-semibold text-[var(--or-on-primary)] hover:bg-[var(--or-primary)] disabled:opacity-60 transition-colors"
                     >
-                      <Save className="h-4 w-4" />保存用户名
+                      <Save className="h-4 w-4" />
+                      保存用户名
                     </button>
                   </form>
                 </section>
               ) : null}
             </div>
+
             {!mustChangePassword ? (
-              <div className="mx-auto mt-6 max-w-3xl border-t border-slate-200 pt-5">
-                <h3 className="text-center text-sm font-semibold text-slate-900">界面个性化</h3>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <label className="text-sm text-slate-700">皮肤<select value={theme} onChange={(event) => setTheme(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"><option value="classic">经典明亮</option><option value="ocean">海洋蓝</option><option value="forest">森林绿</option><option value="warm">暖阳橙</option><option value="night">深色夜间</option></select></label>
-                  <label className="text-sm text-slate-700">界面密度<select value={density} onChange={(event) => setDensity(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"><option value="comfortable">舒适</option><option value="compact">紧凑</option></select></label>
-                  <label className="text-sm text-slate-700 sm:col-span-2">字号比例<input type="range" min="0.85" max="1.2" step="0.05" value={fontScale} onChange={(event) => setFontScale(Number(event.target.value))} className="mt-2 w-full" /></label>
+              <div className="mx-auto mt-6 max-w-3xl border-t border-[var(--or-outline)] pt-5">
+                <h3 className="text-center text-sm font-semibold text-[var(--or-text)]">界面个性化</h3>
+                <div className="mt-3.5 grid gap-3.5 sm:grid-cols-2">
+                  <div className="sm:col-span-2"><AppearanceFields value={appearance} onChange={handleAppearanceChange} /></div>
+                  <label className="text-sm font-medium text-[var(--or-muted)]">
+                    界面密度
+                    <AppSelect
+                      value={density}
+                      onValueChange={(value) => handleDensityChange(value)}
+                      className="mt-1.5 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)] transition-colors"
+                    >
+                      <option value="comfortable">舒适</option>
+                      <option value="compact">紧凑</option>
+                    </AppSelect>
+                  </label>
+                  <label className="text-sm font-medium text-[var(--or-muted)] sm:col-span-2">
+                    字号比例
+                    <input
+                      type="range"
+                      min="0.85"
+                      max="1.2"
+                      step="0.05"
+                      value={fontScale}
+                      onChange={(event) => handleFontScaleChange(Number(event.target.value))}
+                      className="mt-2.5 w-full accent-[var(--or-primary)]"
+                    />
+                  </label>
                 </div>
-                <button type="button" disabled={busy === "personalization"} onClick={() => void savePersonalization()} className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold">保存个性化设置</button>
+                <button
+                  type="button"
+                  disabled={busy === "personalization"}
+                  onClick={() => void savePersonalization()}
+                  className="mt-4 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-2.5 text-sm font-semibold text-[var(--or-muted)] hover:bg-[var(--or-page)] disabled:opacity-50 transition-colors"
+                >
+                  保存个性化设置
+                </button>
               </div>
             ) : null}
           </section>
         ) : null}
+        </div>
       </div>
     </PlatformShell>
   );

@@ -97,10 +97,10 @@ export function NewProjectDialog({ open, onOpenChange, onProjectReady, onError }
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[100] bg-black/55 backdrop-blur-[2px]" />
+        <Dialog.Overlay className="or-dialog-backdrop fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm" />
         <Dialog.Content
           className={cn(
-            "fixed left-1/2 top-1/2 z-[101] w-[min(100vw-2rem,28rem)] max-h-[min(90vh,40rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-600 bg-slate-900 p-6 text-slate-100 shadow-2xl outline-none",
+            "or-dialog fixed left-1/2 top-1/2 z-[101] w-[min(100vw-2rem,30rem)] max-h-[min(90vh,42rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[20px] sm:rounded-[24px] border border-[var(--or-outline)] bg-[var(--or-card)] p-5 sm:p-7 text-[var(--or-text)] shadow-2xl outline-none",
           )}
           onPointerDownOutside={(e) => {
             if (submitting) e.preventDefault();
@@ -110,42 +110,42 @@ export function NewProjectDialog({ open, onOpenChange, onProjectReady, onError }
           }}
         >
           <div className="mb-4 flex items-start justify-between gap-3">
-            <Dialog.Title className="text-lg font-semibold leading-tight text-white">
+            <Dialog.Title className="text-lg sm:text-xl font-semibold leading-tight text-[var(--or-text)]">
               {t("welcome:newProjectDialogTitle")}
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
                 type="button"
                 disabled={submitting}
-                className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-800 hover:text-slate-200 disabled:opacity-40"
+                className="rounded-full p-1.5 text-[var(--or-muted)] transition hover:bg-[var(--or-block)] hover:text-[var(--or-text)] disabled:opacity-40"
                 aria-label={t("welcome:newProjectDialogClose")}
               >
                 <X className="h-5 w-5" />
               </button>
             </Dialog.Close>
           </div>
-          <Dialog.Description className="mb-5 text-sm text-slate-400">
+          <Dialog.Description className="mb-5 text-sm text-[var(--or-muted)] leading-relaxed">
             {t("welcome:newProjectDialogIntro")}
           </Dialog.Description>
 
           <div className="space-y-5">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">
+              <label className="mb-1.5 block text-xs sm:text-[13px] font-medium text-[var(--or-muted)]">
                 {t("welcome:newProjectLocationLabel")}
               </label>
               <div className="flex flex-wrap gap-2">
-                <div className="min-h-[2.5rem] min-w-0 flex-1 rounded-lg border border-slate-600 bg-slate-950/80 px-3 py-2 text-xs text-slate-300">
+                <div className="min-h-[2.5rem] min-w-0 flex-1 rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-block)] px-3.5 py-2 text-xs sm:text-[13px] text-[var(--or-text)] flex items-center">
                   {parentPath ? (
                     <span className="break-all">{parentPath}</span>
                   ) : (
-                    <span className="text-slate-500">{t("welcome:newProjectLocationPlaceholder")}</span>
+                    <span className="text-[var(--or-muted)]">{t("welcome:newProjectLocationPlaceholder")}</span>
                   )}
                 </div>
                 <button
                   type="button"
                   disabled={submitting}
                   onClick={() => void pickParent()}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-500 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 transition hover:bg-slate-700 disabled:opacity-50"
+                  className="or-button or-button-outline inline-flex shrink-0 items-center gap-1.5 rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm font-medium text-[var(--or-text)] hover:bg-[var(--or-block)] disabled:opacity-50"
                 >
                   <FolderOpen className="h-4 w-4" />
                   {t("welcome:browseFolder")}
@@ -154,7 +154,7 @@ export function NewProjectDialog({ open, onOpenChange, onProjectReady, onError }
             </div>
 
             <div>
-              <label htmlFor="new-project-name" className="mb-1.5 block text-xs font-medium text-slate-300">
+              <label htmlFor="new-project-name" className="mb-1.5 block text-xs sm:text-[13px] font-medium text-[var(--or-muted)]">
                 {t("welcome:newProjectNameLabel")}
               </label>
               <input
@@ -164,27 +164,29 @@ export function NewProjectDialog({ open, onOpenChange, onProjectReady, onError }
                 onChange={(e) => setName(e.target.value)}
                 disabled={submitting}
                 autoComplete="off"
-                className="w-full rounded-lg border border-slate-600 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                className="or-input or-field w-full rounded-[10px] border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2 text-sm text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-focus)] focus:outline-none disabled:opacity-50"
                 placeholder={t("welcome:newProjectNamePlaceholder")}
               />
             </div>
 
             <fieldset>
-              <legend className="mb-2 text-xs font-medium text-slate-300">{t("welcome:templateLabel")}</legend>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <legend className="mb-2 text-xs sm:text-[13px] font-medium text-[var(--or-muted)]">
+                {t("welcome:templateLabel")}
+              </legend>
+              <div className="grid gap-2.5 sm:grid-cols-2">
                 <button
                   type="button"
                   disabled={submitting}
                   onClick={() => setTemplate("empty")}
                   className={cn(
-                    "rounded-lg border px-3 py-3 text-left text-sm transition",
+                    "rounded-[14px] border p-3.5 text-left text-sm transition-all duration-150",
                     template === "empty"
-                      ? "border-indigo-500 bg-indigo-950/50 text-white ring-1 ring-indigo-500/40"
-                      : "border-slate-600 bg-slate-950/40 text-slate-200 hover:border-slate-500",
+                      ? "border-[var(--or-primary)] bg-[var(--or-primary-container)]/30 text-[var(--or-text)] ring-1 ring-[var(--or-primary)]/50"
+                      : "border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-text)] hover:bg-[var(--or-block)]",
                   )}
                 >
-                  <span className="font-medium">{t("welcome:templateEmpty")}</span>
-                  <span className="mt-1 block text-xs font-normal text-slate-400">
+                  <span className="font-semibold text-[var(--or-text)]">{t("welcome:templateEmpty")}</span>
+                  <span className="mt-1 block text-xs sm:text-[13px] text-[var(--or-muted)] leading-relaxed">
                     {t("welcome:templateEmptyDesc")}
                   </span>
                 </button>
@@ -193,14 +195,14 @@ export function NewProjectDialog({ open, onOpenChange, onProjectReady, onError }
                   disabled={submitting}
                   onClick={() => setTemplate("math")}
                   className={cn(
-                    "rounded-lg border px-3 py-3 text-left text-sm transition",
+                    "rounded-[14px] border p-3.5 text-left text-sm transition-all duration-150",
                     template === "math"
-                      ? "border-indigo-500 bg-indigo-950/50 text-white ring-1 ring-indigo-500/40"
-                      : "border-slate-600 bg-slate-950/40 text-slate-200 hover:border-slate-500",
+                      ? "border-[var(--or-primary)] bg-[var(--or-primary-container)]/30 text-[var(--or-text)] ring-1 ring-[var(--or-primary)]/50"
+                      : "border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-text)] hover:bg-[var(--or-block)]",
                   )}
                 >
-                  <span className="font-medium">{t("welcome:templateMath")}</span>
-                  <span className="mt-1 block text-xs font-normal text-slate-400">
+                  <span className="font-semibold text-[var(--or-text)]">{t("welcome:templateMath")}</span>
+                  <span className="mt-1 block text-xs sm:text-[13px] text-[var(--or-muted)] leading-relaxed">
                     {t("welcome:templateMathDesc")}
                   </span>
                 </button>
@@ -208,12 +210,12 @@ export function NewProjectDialog({ open, onOpenChange, onProjectReady, onError }
             </fieldset>
           </div>
 
-          <div className="mt-6 flex flex-wrap justify-end gap-2 border-t border-slate-700/80 pt-4">
+          <div className="mt-6 flex flex-wrap justify-end gap-2.5 border-t border-[var(--or-outline)] pt-4">
             <Dialog.Close asChild>
               <button
                 type="button"
                 disabled={submitting}
-                className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-slate-800 disabled:opacity-50"
+                className="or-button or-button-outline max-sm:flex-1 rounded-[10px] px-4 py-2 text-sm font-medium disabled:opacity-50"
               >
                 {t("welcome:newProjectCancel")}
               </button>
@@ -222,7 +224,7 @@ export function NewProjectDialog({ open, onOpenChange, onProjectReady, onError }
               type="button"
               disabled={submitting}
               onClick={() => void handleSubmit()}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-900/30 transition hover:bg-indigo-500 disabled:opacity-50"
+              className="or-button or-button-primary max-sm:flex-1 rounded-[10px] px-4 py-2 text-sm font-semibold disabled:opacity-50"
             >
               {submitting ? t("welcome:newProjectCreating") : t("welcome:newProjectConfirm")}
             </button>

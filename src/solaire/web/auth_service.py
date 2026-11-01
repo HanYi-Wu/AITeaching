@@ -90,13 +90,16 @@ def update_user_profile(
     *,
     user: dict[str, object],
     avatar_data_url: str | None,
+    avatar_data_url_provided: bool,
     preferences: dict[str, object],
     subjects: list[str] | None,
 ) -> dict[str, object]:
     init_platform_db(root)
-    clean_avatar = str(avatar_data_url or "").strip() or None
-    if clean_avatar and (not clean_avatar.startswith("data:image/") or len(clean_avatar) > 2_000_000):
-        raise ValueError("头像必须是小于约 1.5MB 的图片")
+    clean_avatar = None
+    if avatar_data_url_provided:
+        clean_avatar = str(avatar_data_url or "").strip() or None
+        if clean_avatar and (not clean_avatar.startswith("data:image/") or len(clean_avatar) > 2_000_000):
+            raise ValueError("头像必须是小于约 1.5MB 的图片")
     allowed_themes = {"classic", "ocean", "forest", "warm", "night"}
     clean_preferences = {
         "theme": str(preferences.get("theme") or "classic") if str(preferences.get("theme") or "classic") in allowed_themes else "classic",
@@ -105,10 +108,16 @@ def update_user_profile(
     }
     user_id = str(user.get("id") or "")
     with closing(connect(root)) as con, con:
-        con.execute(
-            "UPDATE users SET avatar_data_url = ?, preferences_json = ?, updated_at = ? WHERE id = ?",
-            (clean_avatar, json.dumps(clean_preferences, ensure_ascii=False), utc_now(), user_id),
-        )
+        if avatar_data_url_provided:
+            con.execute(
+                "UPDATE users SET avatar_data_url = ?, preferences_json = ?, updated_at = ? WHERE id = ?",
+                (clean_avatar, json.dumps(clean_preferences, ensure_ascii=False), utc_now(), user_id),
+            )
+        else:
+            con.execute(
+                "UPDATE users SET preferences_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(clean_preferences, ensure_ascii=False), utc_now(), user_id),
+            )
         if user.get("role") == "teacher" and subjects is not None:
             clean_subjects = list(dict.fromkeys(str(item).strip() for item in subjects if str(item).strip()))[:20]
             if not clean_subjects:

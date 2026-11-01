@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/utils";
 import type {
   GraphNodeRow,
@@ -62,8 +63,8 @@ export function GraphNodePanel({
 
   if (!selectedNode) {
     return (
-      <div className="flex h-full flex-col items-center justify-center p-4 text-xs text-slate-400">
-        {t("pickNodeFirst")}
+      <div className="flex h-full flex-col items-center justify-center p-6 text-center text-sm text-[var(--or-muted)] ">
+        <p>{t("pickNodeFirst")}</p>
       </div>
     );
   }
@@ -76,36 +77,41 @@ export function GraphNodePanel({
   ];
 
   return (
-    <aside className="flex h-full w-full shrink-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white lg:w-[380px] lg:max-w-[380px] xl:w-[420px] xl:max-w-[420px]">
+    <aside className="or-g50-panel flex h-full w-full flex-col overflow-hidden">
       {/* Panel header with tab switcher */}
-      <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-        <div className="flex gap-0.5">
+      <div className="flex items-center justify-between border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_95%,transparent)] px-3 py-2.5 backdrop-blur-sm   gap-2">
+        <div className="flex items-center gap-1 rounded-xl bg-[var(--or-block)] p-1  overflow-x-auto scrollbar-none min-w-0">
           {TABS.map((tb) => (
             <button
               key={tb.id}
               type="button"
               className={cn(
-                "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                "inline-flex items-center justify-center rounded-lg px-2.5 py-1 text-xs font-semibold transition-all shrink-0 whitespace-nowrap",
                 tab === tb.id
-                  ? "bg-slate-900 text-white"
-                  : "text-slate-600 hover:bg-slate-100",
+                  ? "bg-[var(--or-card)] text-[var(--or-text)] shadow-sm  "
+                  : "text-[var(--or-muted)] hover:text-[var(--or-text)]  dark:hover:text-[var(--or-text)]",
               )}
               onClick={() => onTabChange(tb.id)}
             >
-              {tb.label}
+              <span className="inline-block transform translate-y-[0.5px]">
+                {tb.label}
+              </span>
             </button>
           ))}
         </div>
+
         <button
           type="button"
-          className="rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
+          className="or-g50-btn or-g50-btn-secondary !h-7 !px-2 !text-xs font-medium shrink-0"
           onClick={onClose}
+          title={t("collapse")}
         >
-          {t("collapse")}
+          <span>{t("collapse")}</span>
+          <ChevronRight className="h-3 w-3" />
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {/* Tab 1: Node edit + Relations */}
         {tab === "edit" && (
           <NodeEditSection

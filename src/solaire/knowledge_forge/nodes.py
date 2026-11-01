@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from solaire.knowledge_forge.storage import _save_subject_states
-
 from typing import Any
 from solaire.knowledge_forge.models import ConceptNode
 from solaire.knowledge_forge.models import GraphState
 from solaire.knowledge_forge.models import NodeRelation
 from pathlib import Path
 from solaire.knowledge_forge.models import _ALLOWED_NODE_KINDS
-from solaire.knowledge_forge.node_index import _collect_node_ids_and_kinds
 from solaire.knowledge_forge.node_index import _find_node_slug
 from solaire.knowledge_forge.paths import _legacy_state_path
 from solaire.knowledge_forge.storage import _load_meta
@@ -18,12 +15,9 @@ from solaire.knowledge_forge.storage import _load_subject_state
 from solaire.knowledge_forge.migration import _migrate_legacy_graph_state
 from solaire.knowledge_forge.models import _now_utc
 from solaire.knowledge_forge.node_index import _resolve_target_subject_slug
-from solaire.knowledge_forge.storage import _save_subject_state
-from solaire.knowledge_forge.paths import _slugify_name
 from solaire.knowledge_forge.migration import ensure_graph_layout
-from solaire.knowledge_forge.node_index import generate_unique_node_id
-from solaire.knowledge_forge.concurrency import graph_lock
 from solaire.knowledge_forge.concurrency import graph_mutation
+from solaire.knowledge_forge.mutation_session import GraphMutationSession
 import uuid
 import yaml
 
@@ -118,16 +112,16 @@ def create_concept_node(
     graph: str | None = None,
 ) -> str:
     ensure_graph_layout(project_root)
-    node = ConceptNode.model_validate(payload)
+    node = ConceptNode.model_validate(payload).model_copy(deep=True)
     target_slug = _resolve_target_subject_slug(project_root, graph=graph, subject_name=node.subject)
 
-    with graph_lock(project_root, target_slug):
-        state = _load_subject_state(project_root, target_slug)
-        all_ids, _ = _collect_node_ids_and_kinds(project_root)
+    with GraphMutationSession(project_root) as session:
+        state = session.state(target_slug)
+        all_ids, _ = session.node_index()
         if node.id in all_ids:
             raise ValueError(f"Node already exists: {node.id}")
         state.nodes.append(node)
-        _save_subject_state(project_root, target_slug, state)
+        session.save(target_slug)
     return node.id
 
 
@@ -143,75 +137,73 @@ def create_concept_nodes_batch(
     if not isinstance(nodes, list) or not nodes:
         raise ValueError("nodes 须为非空列表")
 
-    all_existing_ids, _ = _collect_node_ids_and_kinds(project_root)
-    working_ids = set(all_existing_ids)
+    with GraphMutationSession(project_root) as session:
+        all_existing_ids, _ = session.node_index()
+        working_ids = set(all_existing_ids)
 
-    validated_nodes: list[ConceptNode] = []
-    validated_relations: list[NodeRelation] = []
-    created_ids: list[str] = []
+        validated_nodes: list[ConceptNode] = []
+        validated_relations: list[NodeRelation] = []
+        created_ids: list[str] = []
 
-    # 1. 结构与引用整批预校验（全通过或全失败，绝不部分写入）
-    for i, item in enumerate(nodes):
-        if not isinstance(item, dict):
-            raise ValueError(f"条目 #{i} 须为对象")
-        canonical_name = str(item.get("canonical_name") or "").strip()
-        if not canonical_name:
-            raise ValueError(f"条目 #{i} canonical_name 必填")
-        node_id = str(item.get("id") or "").strip() or None
-        parent = str(item.get("parent_node_id") or "").strip() or None
+        # 1. 结构与引用整批预校验（全通过或全失败，绝不部分写入）
+        for i, item in enumerate(nodes):
+            if not isinstance(item, dict):
+                raise ValueError(f"条目 #{i} 须为对象")
+            canonical_name = str(item.get("canonical_name") or "").strip()
+            if not canonical_name:
+                raise ValueError(f"条目 #{i} canonical_name 必填")
+            node_id = str(item.get("id") or "").strip() or None
+            parent = str(item.get("parent_node_id") or "").strip() or None
 
-        if not node_id:
-            if not parent:
-                raise ValueError(f"条目 #{i} 需提供 parent_node_id 或 id")
-            if parent not in working_ids:
-                raise ValueError(f"条目 #{i} 所引用的父节点不存在: {parent}")
-            nid = generate_unique_node_id(project_root, parent, canonical_name)
-            while nid in working_ids:
-                cand = f"{parent}/{_slugify_name(canonical_name)}-{uuid.uuid4().hex[:6]}"
-                if cand not in working_ids:
-                    nid = cand
-                    break
-        else:
-            nid = node_id
-            if nid in working_ids:
-                raise ValueError(f"条目 #{i} 节点标识已存在或在批次中重复: {nid}")
-            if parent and parent not in working_ids:
-                raise ValueError(f"条目 #{i} 所引用的父节点不存在: {parent}")
+            if not node_id:
+                if not parent:
+                    raise ValueError(f"条目 #{i} 需提供 parent_node_id 或 id")
+                if parent not in working_ids:
+                    raise ValueError(f"条目 #{i} 所引用的父节点不存在: {parent}")
+                nid = session.generate_unique_node_id(
+                    parent, canonical_name, reserved_ids=working_ids
+                )
+            else:
+                nid = node_id
+                if nid in working_ids:
+                    raise ValueError(f"条目 #{i} 节点标识已存在或在批次中重复: {nid}")
+                if parent and parent not in working_ids:
+                    raise ValueError(f"条目 #{i} 所引用的父节点不存在: {parent}")
 
-        body = {k: v for k, v in item.items() if k not in ("parent_node_id", "graph")}
-        body["id"] = nid
-        if parent and "primary_parent_id" not in body:
-            body["primary_parent_id"] = parent
+            body = {k: v for k, v in item.items() if k not in ("parent_node_id", "graph")}
+            body["id"] = nid
+            if parent and "primary_parent_id" not in body:
+                body["primary_parent_id"] = parent
 
-        node = ConceptNode.model_validate(body)
-        validated_nodes.append(node)
-        working_ids.add(nid)
-        created_ids.append(nid)
+            node = ConceptNode.model_validate(body).model_copy(deep=True)
+            validated_nodes.append(node)
+            working_ids.add(nid)
+            created_ids.append(nid)
 
-        if parent:
-            rel = NodeRelation(
-                id=uuid.uuid4().hex,
-                from_node_id=nid,
-                to_node_id=parent,
-                relation_type="part_of",
-            )
-            validated_relations.append(rel)
+            if parent:
+                rel = NodeRelation(
+                    id=uuid.uuid4().hex,
+                    from_node_id=nid,
+                    to_node_id=parent,
+                    relation_type="part_of",
+                )
+                validated_relations.append(rel)
 
-    # 2. 一致性落盘：在排他锁下原子更新
-    for node in validated_nodes:
-        if node.primary_parent_id and node.primary_parent_id not in working_ids:
-            raise ValueError(f"父节点不存在: {node.primary_parent_id}")
-    states = {}
-    targets = {}
-    for node in validated_nodes:
-        target = _resolve_target_subject_slug(project_root, graph=graph, subject_name=node.subject)
-        targets[node.id] = target
-        if target not in states:
-            states[target] = _load_subject_state(project_root, target)
-        states[target].nodes.append(node)
-    for relation in validated_relations:
-        states[targets[relation.from_node_id]].relations.append(relation)
-    _save_subject_states(project_root, states)
+        # 2. 一致性落盘：事务在项目级排他锁内统一提交。
+        for node in validated_nodes:
+            if node.primary_parent_id and node.primary_parent_id not in working_ids:
+                raise ValueError(f"父节点不存在: {node.primary_parent_id}")
+        targets = {}
+        for node in validated_nodes:
+            target = _resolve_target_subject_slug(project_root, graph=graph, subject_name=node.subject)
+            targets[node.id] = target
+            state = session.state(target)
+            state.nodes.append(node)
+            session.save(target)
+        for relation in validated_relations:
+            target = targets[relation.from_node_id]
+            session.state(target).relations.append(relation)
+            session.save(target)
 
     return created_ids
 
@@ -225,18 +217,18 @@ def update_concept_node(
     graph: str | None = None,
 ) -> None:
     ensure_graph_layout(project_root)
-    slug = graph or _find_node_slug(project_root, node_id)
-    if slug is None:
-        raise FileNotFoundError(f"Node not found: {node_id}")
+    with GraphMutationSession(project_root) as session:
+        slug = graph or session.find_node_slug(node_id)
+        if slug is None:
+            raise FileNotFoundError(f"Node not found: {node_id}")
 
-    with graph_lock(project_root, slug):
-        state = _load_subject_state(project_root, slug)
+        state = session.state(slug)
         if not any(n.id == node_id for n in state.nodes):
             raise FileNotFoundError(f"Node not found: {node_id}")
 
         data = dict(payload)
         data["id"] = node_id
-        updated = ConceptNode.model_validate(data)
+        updated = ConceptNode.model_validate(data).model_copy(deep=True)
 
         for i, n in enumerate(state.nodes):
             if n.id == node_id:
@@ -245,7 +237,7 @@ def update_concept_node(
                 state.nodes[i] = updated
                 break
 
-        _save_subject_state(project_root, slug, state)
+        session.save_node_update(slug, node_id)
 
 
 @graph_mutation
@@ -257,12 +249,12 @@ def delete_concept_node(
 ) -> dict[str, Any]:
     """删除节点；返回被删节点与涉及的关系（供撤销/前端增量同步）。"""
     ensure_graph_layout(project_root)
-    slug = graph or _find_node_slug(project_root, node_id)
-    if slug is None:
-        return {"deleted_node": None, "deleted_relations": []}
+    with GraphMutationSession(project_root) as session:
+        slug = graph or session.find_node_slug(node_id)
+        if slug is None:
+            return {"deleted_node": None, "deleted_relations": []}
 
-    with graph_lock(project_root, slug):
-        state = _load_subject_state(project_root, slug)
+        state = session.state(slug)
         removed_node: dict[str, Any] | None = None
         for n in state.nodes:
             if n.id == node_id:
@@ -279,5 +271,5 @@ def delete_concept_node(
         ]
         state.bindings = [b for b in state.bindings if b.node_id != node_id]
         state.file_links = [l for l in state.file_links if l.node_id != node_id]
-        _save_subject_state(project_root, slug, state)
-    return {"deleted_node": removed_node, "deleted_relations": removed_rels}
+        session.save(slug)
+        return {"deleted_node": removed_node, "deleted_relations": removed_rels}

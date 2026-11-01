@@ -1,6 +1,6 @@
 import type { MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Redo2, Undo2 } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Redo2, Undo2 } from "lucide-react";
 import { ContentTags } from "../../components/ContentTags";
 import { KatexPlainPreview } from "../../components/KatexText";
 import { QuestionHoverDetails } from "../../components/QuestionHoverDetails";
@@ -18,6 +18,7 @@ import type {
 import { sectionTypeToFilter } from "./composeHelpers";
 import { OverwriteExportDialog } from "./ComposeDialogs";
 import { getSectionRequiredCount, isSectionSatisfied } from "./composeModel";
+import { Select as AppSelect } from "../../components/ui/select";
 
 export type ComposePaperEditorPanelProps = {
   busy: boolean;
@@ -127,12 +128,12 @@ export function ComposePaperEditorPanel({
   const canMoveRight = Boolean(selectedRight && selectedRight.qids.length > 0);
 
   return (
-    <>
-      <div className="flex w-full shrink-0 flex-row items-center justify-center gap-2 border-y border-slate-200 bg-slate-100/90 py-2 md:w-11 md:flex-col md:justify-start md:gap-3 md:border-x md:border-y-0 md:py-4">
+    <div className="or-g49-compose-paper-content">
+      <div className="or-g49-compose-actions flex w-full shrink-0 flex-row flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-y border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-block)_70%,transparent)] px-2 py-2.5 touch-pan-x">
         <button
           type="button"
           disabled={!selectedTpl}
-          className="rounded border bg-white p-1 text-xs"
+          className="or-g49-btn or-g49-btn-secondary px-2 py-1 text-xs font-medium"
           title="按当前筛选题目补齐各大题空缺；保留已选题目，不重复添加"
           onClick={onFillSectionGaps}
         >
@@ -141,18 +142,22 @@ export function ComposePaperEditorPanel({
         <button
           type="button"
           title={t("compose:addToSection")}
+          aria-label={t("compose:addToSection")}
           onClick={onAddFromLeft}
-          className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50"
+          className="or-g49-add-from-left flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-2 text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)]"
         >
-          <ChevronRight className="h-5 w-5" />
+          <ChevronRight className="h-4 w-4 shrink-0" />
+          <span className="or-g49-compose-action-label whitespace-nowrap text-xs">{t("compose:addToSection")}</span>
         </button>
         <button
           type="button"
           title={t("compose:removeFromPaper")}
+          aria-label={t("compose:removeFromPaper")}
           onClick={onRemoveFromRight}
-          className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50"
+          className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-2 text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)]"
         >
-          <ChevronLeft className="h-5 w-5" />
+          <ChevronLeft className="h-4 w-4 shrink-0" />
+          <span className="or-g49-compose-action-label whitespace-nowrap text-xs">{t("compose:removeFromPaper")}</span>
         </button>
         <button
           type="button"
@@ -160,7 +165,7 @@ export function ComposePaperEditorPanel({
           aria-label={t("compose:moveUp")}
           disabled={!canMoveRight}
           onClick={() => onMoveSelectedRight("up")}
-          className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-40"
+          className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-40"
         >
           <ArrowUp className="h-4 w-4" />
         </button>
@@ -170,21 +175,21 @@ export function ComposePaperEditorPanel({
           aria-label={t("compose:moveDown")}
           disabled={!canMoveRight}
           onClick={() => onMoveSelectedRight("down")}
-          className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-40"
+          className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-40"
         >
           <ArrowDown className="h-4 w-4" />
         </button>
       </div>
 
-      <section className="min-h-0 min-w-0 flex-1 basis-0 overflow-auto bg-slate-50 p-4 lg:min-w-0">
+      <section className="or-g49-compose-paper-body min-h-0 min-w-0 flex-1 basis-0 overflow-auto bg-[color-mix(in_srgb,var(--or-page)_60%,transparent)] p-4">
         {currentExamId ? (
-          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-white p-2 text-xs">
-            <span>当前试卷归类</span>
-            <select
+          <div className="mb-3.5 flex flex-wrap items-center gap-2.5 rounded-xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-3 text-sm">
+            <span className="font-medium text-[var(--or-muted)]">当前试卷归类</span>
+            <AppSelect
               aria-label="组卷所在文件夹"
               value={composeFolderItems[currentExamId] ?? ""}
-              onChange={(event) => onAssignCurrentExamFolder(currentExamId, event.target.value)}
-              className="rounded border px-2 py-1"
+              onValueChange={(value) => onAssignCurrentExamFolder(currentExamId, value)}
+              className="or-g49-input py-1 text-sm"
             >
               <option value="">未归类</option>
               {composeFolders.map((folder) => (
@@ -192,7 +197,7 @@ export function ComposePaperEditorPanel({
                   {folder.name}
                 </option>
               ))}
-            </select>
+            </AppSelect>
             <ContentTags
               scope="compose"
               itemId={currentExamId}
@@ -214,15 +219,15 @@ export function ComposePaperEditorPanel({
             role="region"
             aria-label={t("compose:draftRecoveryTitle")}
             data-testid="compose-draft-recovery-banner"
-            className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950"
+            className="mb-3.5 flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-amber-300 bg-[color-mix(in_srgb,var(--or-warning-container)_90%,transparent)] px-4 py-2.5 text-sm text-[var(--or-on-warning)]"
           >
-            <span>{t("compose:draftRecoveryBanner")}</span>
+            <span className="font-medium">{t("compose:draftRecoveryBanner")}</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 disabled={busy}
                 onClick={onRestoreLocalDraft}
-                className="rounded-md bg-amber-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                className="or-g49-btn bg-amber-700 text-white hover:bg-amber-800 disabled:opacity-50 text-sm px-3 py-1.5"
               >
                 {t("compose:restoreLocalDraft")}
               </button>
@@ -230,7 +235,7 @@ export function ComposePaperEditorPanel({
                 type="button"
                 disabled={busy}
                 onClick={onDiscardLocalDraft}
-                className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                className="or-g49-btn border border-amber-300 bg-[var(--or-card)] text-[var(--or-on-warning)] hover:bg-[var(--or-warning-container)] disabled:opacity-50 text-sm px-3 py-1.5"
               >
                 {t("compose:discardLocalDraft")}
               </button>
@@ -241,36 +246,36 @@ export function ComposePaperEditorPanel({
         {draftStorageStatus === "corrupted_cleared" ? (
           <div
             data-testid="compose-draft-storage-warning"
-            className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-900"
+            className="mb-3.5 rounded-xl border border-[var(--or-warning)] bg-[color-mix(in_srgb,var(--or-warning-container)_90%,transparent)] px-3.5 py-2 text-sm text-[var(--or-on-warning)]"
           >
             {t("compose:draftCorruptedNotice")}
           </div>
         ) : draftStorageStatus === "quota_exceeded" || draftStorageStatus === "storage_error" ? (
           <div
             data-testid="compose-draft-storage-warning"
-            className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-900"
+            className="mb-3.5 rounded-xl border border-[var(--or-warning)] bg-[color-mix(in_srgb,var(--or-warning-container)_90%,transparent)] px-3.5 py-2 text-sm text-[var(--or-on-warning)]"
           >
             {t("compose:draftQuotaNotice")}
           </div>
         ) : !draftScopeReady && isDirty ? (
           <div
             data-testid="compose-draft-scope-notice"
-            className="mb-3 rounded-lg border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-slate-600"
+            className="mb-3.5 rounded-xl border border-[var(--or-outline)] bg-[var(--or-block)] px-3.5 py-2 text-sm text-[var(--or-muted)]"
           >
             {t("compose:draftScopeUnavailableHint")}
           </div>
         ) : null}
 
-        <div className="mb-4 space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
-            <div className="flex items-center gap-1.5">
+        <div className="or-g49-static-card mb-4 rounded-2xl border border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] bg-[var(--or-card)] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--or-outline)] pb-3">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 disabled={busy || !canUndo}
                 onClick={onUndo}
                 title={t("compose:undoShortcutTitle")}
                 aria-label={t("compose:undo")}
-                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+                className="or-g49-btn or-g49-btn-secondary py-1 px-2.5 text-sm font-medium disabled:opacity-40"
               >
                 <Undo2 className="h-3.5 w-3.5" />
                 {t("compose:undo")}
@@ -281,7 +286,7 @@ export function ComposePaperEditorPanel({
                 onClick={onRedo}
                 title={t("compose:redoShortcutTitle")}
                 aria-label={t("compose:redo")}
-                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+                className="or-g49-btn or-g49-btn-secondary py-1 px-2.5 text-sm font-medium disabled:opacity-40"
               >
                 <Redo2 className="h-3.5 w-3.5" />
                 {t("compose:redo")}
@@ -289,42 +294,44 @@ export function ComposePaperEditorPanel({
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="min-w-0">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+              <p className="text-[13px] font-medium text-[var(--or-muted)]">
                 {t("compose:examLabel")}
               </p>
-              <p title={exportLabel.trim() || undefined} className="mt-0.5 truncate text-sm font-medium text-slate-900">
+              <p title={exportLabel.trim() || undefined} className="mt-0.5 truncate text-[15px] font-semibold text-[var(--or-text)]">
                 {exportLabel.trim() || "—"}
               </p>
             </div>
             <div className="min-w-0">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+              <p className="text-[13px] font-medium text-[var(--or-muted)]">
                 {t("compose:subjectPdf")}
               </p>
-              <p title={subject.trim() || undefined} className="mt-0.5 truncate text-sm font-medium text-slate-900">{subject.trim() || "—"}</p>
+              <p title={subject.trim() || undefined} className="mt-0.5 truncate text-[15px] font-semibold text-[var(--or-text)]">
+                {subject.trim() || "—"}
+              </p>
             </div>
             <div className="min-w-0">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+              <p className="text-[13px] font-medium text-[var(--or-muted)]">
                 {t("compose:template")}
               </p>
-              <p title={selectedTpl?.id} className="mt-0.5 truncate text-sm font-medium text-slate-900">
+              <p title={selectedTpl?.id} className="mt-0.5 truncate text-[15px] font-semibold text-[var(--or-text)]">
                 {selectedTpl?.id ?? "—"}
               </p>
             </div>
             <div>
-              <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+              <p className="text-[13px] font-medium text-[var(--or-muted)]">
                 {t("compose:totalScoreLabel")}
               </p>
-              <p className="mt-0.5 text-lg font-semibold text-slate-900">{totalScore}</p>
+              <p className="mt-0.5 text-2xl font-bold tracking-tight text-[var(--or-text)]">{totalScore}</p>
             </div>
           </div>
-          <div className="border-t border-slate-100 pt-3">
-            <p className="text-xs font-medium text-slate-700">
+          <div className="mt-3 border-t border-[var(--or-outline)] pt-3">
+            <p className="text-sm font-medium text-[var(--or-muted)]">
               {t("compose:knowledgeDistributionTitle")}
             </p>
             {knowledgeDistributionRows.length === 0 ? (
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-sm text-[var(--or-muted)]">
                 {t("compose:knowledgeDistributionEmpty")}
               </p>
             ) : (
@@ -332,10 +339,10 @@ export function ComposePaperEditorPanel({
                 {knowledgeDistributionRows.map(([name, n]) => (
                   <li
                     key={name}
-                    className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-800"
+                    className="or-g49-pill bg-[var(--or-block)] text-[var(--or-text)]"
                   >
-                    {name === "__unassigned__" ? t("compose:knowledgeUnassigned") : name}
-                    <span className="text-slate-500"> · {n}</span>
+                    <span>{name === "__unassigned__" ? t("compose:knowledgeUnassigned") : name}</span>
+                    <span className="ml-1 text-[var(--or-muted)]">· {n}</span>
                   </li>
                 ))}
               </ul>
@@ -345,17 +352,25 @@ export function ComposePaperEditorPanel({
 
         {contentSyncing ? null : (
           templatesCount === 0 && (
-            <p className="text-sm text-red-600">{t("compose:templatesMissing")}</p>
+            <div role="status" className="mb-3.5 flex shrink-0 items-start gap-2.5 border-y border-[var(--or-warning)] bg-[var(--or-warning-container)] px-3.5 py-3 text-sm leading-relaxed text-[var(--or-on-warning)]">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p className="min-w-0 font-medium">{t("compose:templatesMissing")}</p>
+            </div>
           )
         )}
 
         <div className="space-y-4">
-          <p className="text-xs text-slate-500">
-            {t("compose:activeSection")}
-            <select
-              className="ml-2 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
+          <div className="grid w-full min-w-0 grid-cols-1 gap-2 sm:w-fit sm:grid-cols-[auto_minmax(18rem,1fr)] sm:items-center sm:gap-3">
+            <label htmlFor="compose-active-section" className="min-w-0 text-sm font-medium text-[var(--or-muted)]">
+              {t("compose:activeSection")}
+            </label>
+            <AppSelect
+              id="compose-active-section"
+              aria-label={t("compose:activeSection")}
+              title={selectedTpl?.sections.find((section) => section.section_id === activeSection)?.section_id ?? ""}
+              className="or-g49-input min-h-11 w-full min-w-0 px-3 py-2 text-sm sm:min-w-[18rem] sm:max-w-[36rem]"
               value={activeSection ?? ""}
-              onChange={(e) => onActiveSectionChange(e.target.value || null)}
+              onValueChange={(value) => onActiveSectionChange(value || null)}
             >
               {selectedTpl?.sections.map((s) => (
                 <option key={s.section_id} value={s.section_id}>
@@ -369,11 +384,8 @@ export function ComposePaperEditorPanel({
                         })}
                 </option>
               ))}
-            </select>
-          </p>
-          <p className="text-[10px] leading-snug text-slate-500">
-            拖回左侧题库可从试卷移除；点击题目可多选后用箭头移除。
-          </p>
+            </AppSelect>
+          </div>
 
           {selectedTpl?.sections.map((s) => {
             const n = bySection[s.section_id]?.length ?? 0;
@@ -382,6 +394,8 @@ export function ComposePaperEditorPanel({
             const ok = isSectionSatisfied(s, bySection, countBySection);
             const sectionBaseScore = scoreBySection[s.section_id] ?? s.score_per_item;
             const slots = clusterAdjacentGroupSlots(bySection[s.section_id] ?? [], new Map(questionMap));
+            const isActive = activeSection === s.section_id;
+
             return (
               <div
                 key={s.section_id}
@@ -418,55 +432,65 @@ export function ComposePaperEditorPanel({
                   }
                 }}
                 className={cn(
-                  "rounded-xl border bg-white shadow-sm transition-shadow",
-                  activeSection === s.section_id
-                    ? "border-slate-900 ring-1 ring-slate-900/10"
-                    : "border-slate-200 hover:border-slate-300",
+                  "rounded-2xl border bg-[var(--or-card)] p-4 transition-all duration-150",
+                  isActive
+                    ? "border-[var(--or-primary)] shadow-sm ring-1 ring-[color-mix(in_srgb,var(--or-focus)_20%,transparent)]"
+                    : "border-[color-mix(in_srgb,var(--or-outline)_90%,transparent)] hover:border-[var(--or-outline)]",
                 )}
               >
-                <div className="border-b border-slate-100 px-3 py-2">
+                <div className="border-b border-[var(--or-outline)] pb-3">
                   <div className="min-w-0">
-                    <h3 className="text-sm font-semibold text-slate-900">{s.section_id}</h3>
-                    <p className="text-[11px] text-slate-500">
-                      {isText ? (
-                        <>
-                          {t("compose:textSectionLine")}
-                          {ok && (
-                            <span className="ml-2 text-emerald-600">
-                              {t("compose:configured")}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-base font-semibold text-[var(--or-text)]">{s.section_id}</h3>
+                      <div className="flex items-center gap-2">
+                        {isText ? (
+                          <>
+                            <span className="text-sm text-[var(--or-muted)]">{t("compose:textSectionLine")}</span>
+                            {ok && (
+                              <span className="or-g49-pill bg-[var(--or-success-container)] text-[var(--or-on-success)]">
+                                {t("compose:configured")}
+                              </span>
+                            )}
+                          </>
+                        ) : isPractice ? (
+                          <>
+                            <span className="text-sm text-[var(--or-muted)]">{t("compose:practicePickedCount", { n })}</span>
+                            {ok && (
+                              <span className="or-g49-pill bg-[var(--or-success-container)] text-[var(--or-on-success)]">
+                                {t("compose:satisfied")}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-sm text-[var(--or-muted)]">
+                              {t("compose:pickedCount", {
+                                n,
+                                need: getSectionRequiredCount(s, countBySection),
+                              })}
                             </span>
-                          )}
-                        </>
-                      ) : isPractice ? (
-                        <>
-                          {t("compose:practicePickedCount", { n })}
-                          {ok && (
-                            <span className="ml-2 text-emerald-600">{t("compose:satisfied")}</span>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          {t("compose:pickedCount", {
-                            n,
-                            need: getSectionRequiredCount(s, countBySection),
-                          })}
-                          {ok && (
-                            <span className="ml-2 text-emerald-600">{t("compose:satisfied")}</span>
-                          )}
-                        </>
-                      )}
-                    </p>
+                            {ok && (
+                              <span className="or-g49-pill bg-[var(--or-success-container)] text-[var(--or-on-success)]">
+                                {t("compose:satisfied")}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+
                     {s.describe ? (
-                      <p className="mt-1 line-clamp-3 text-[11px] text-slate-600">{s.describe}</p>
+                      <p className="mt-1 line-clamp-3 text-sm text-[var(--or-muted)]">{s.describe}</p>
                     ) : null}
+
                     {!isText ? (
                       <div
-                        className="mt-2 flex flex-wrap items-center gap-3 border-t border-slate-50 pt-2"
+                        className="mt-3 flex flex-wrap items-center gap-3 border-t border-[var(--or-outline)] pt-2.5"
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => e.stopPropagation()}
                       >
                         {s.type !== "practice" ? (
-                          <label className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
+                          <label className="flex items-center gap-1.5 text-sm font-medium text-[var(--or-muted)]">
                             题目数量
                             <input
                               aria-label={`${s.section_id}题目数量`}
@@ -477,27 +501,27 @@ export function ComposePaperEditorPanel({
                               onChange={(event) =>
                                 onSectionRequiredCountChange(s.section_id, event.target.value)
                               }
-                              className="w-16 rounded-md border border-slate-300 px-1.5 py-1 text-sm"
+                              className="or-g49-input w-20 py-1 text-sm tabular-nums"
                             />
                           </label>
                         ) : null}
-                        <label className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-[var(--or-muted)]">
                           {t("compose:scorePerItem")}
                           <input
                             type="number"
                             min={0}
                             step={0.5}
-                            className="w-20 rounded-md border border-slate-300 px-1.5 py-1 text-sm"
+                            className="or-g49-input w-20 py-1 text-sm tabular-nums"
                             value={scoreBySection[s.section_id] ?? s.score_per_item}
                             onChange={(e) =>
                               onSectionScorePerItemChange(s.section_id, e.target.value)
                             }
                           />
                         </label>
-                        <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-600">
+                        <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--or-muted)]">
                           <input
                             type="checkbox"
-                            className="rounded border-slate-300"
+                            className="h-4 w-4 rounded border-[var(--or-outline)] text-[var(--or-on-container)] focus:ring-[var(--or-focus)]"
                             checked={perQuestionMode[s.section_id] ?? false}
                             onChange={(e) =>
                               onPerQuestionModeChange(s.section_id, e.target.checked)
@@ -509,9 +533,9 @@ export function ComposePaperEditorPanel({
                     ) : null}
                   </div>
                 </div>
-                <ul className="space-y-1 p-3">
+                <ul className="space-y-2 pt-3">
                   {isText ? (
-                    <li className="text-center text-xs text-slate-500">
+                    <li className="py-2 text-center text-sm text-[var(--or-muted)]">
                       {t("compose:textSectionNoPickHere")}
                     </li>
                   ) : (
@@ -539,32 +563,34 @@ export function ComposePaperEditorPanel({
                                   onRightPaperSlotClick(s.section_id, slots, si, slot, e);
                                 }}
                                 className={cn(
-                                  "w-full rounded-md border px-2 py-2 text-left text-sm",
+                                  "w-full rounded-xl border p-2.5 text-left text-sm transition-all duration-150",
                                   selectedHere
-                                    ? "border-slate-900 bg-slate-100"
-                                    : "border-slate-100 bg-slate-50 hover:bg-white",
+                                    ? "border-[var(--or-primary)] bg-[var(--or-block)] shadow-sm"
+                                    : "border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] hover:border-[var(--or-outline)] hover:bg-[var(--or-card)]",
                                 )}
                               >
-                                <span title={qid} className="font-mono text-xs text-slate-800 [overflow-wrap:anywhere]">{qid}</span>
+                                <span title={qid} className="font-mono text-[13px] font-medium text-[var(--or-text)] [overflow-wrap:anywhere]">
+                                  {qid}
+                                </span>
                                 <QuestionHoverDetails id={qid}>
                                   <KatexPlainPreview
                                     text={questionMap.get(qid)?.content_preview ?? ""}
-                                    className="line-clamp-2 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
+                                    className="line-clamp-2 text-sm leading-relaxed text-[var(--or-muted)] [&_.katex]:text-[0.95em]"
                                   />
                                 </QuestionHoverDetails>
                                 {perQuestionMode[s.section_id] ? (
                                   <div
-                                    className="mt-1 flex items-center gap-1 border-t border-slate-100 pt-1"
+                                    className="mt-2 flex items-center gap-2 border-t border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] pt-1.5"
                                     onClick={(e) => e.stopPropagation()}
                                   >
-                                    <span className="text-[10px] text-slate-500">
+                                    <span className="text-[13px] font-medium text-[var(--or-muted)]">
                                       {t("compose:scoreThisQuestion")}
                                     </span>
                                     <input
                                       type="number"
                                       min={0}
                                       step={0.5}
-                                      className="w-16 rounded border border-slate-200 px-1 py-0.5 text-xs"
+                                      className="or-g49-input w-20 py-0.5 text-sm tabular-nums"
                                       value={
                                         scoreOverrides[s.section_id]?.[qid] !== undefined
                                           ? scoreOverrides[s.section_id]![qid]
@@ -602,42 +628,42 @@ export function ComposePaperEditorPanel({
                                 onRightPaperSlotClick(s.section_id, slots, si, slot, e);
                               }}
                               className={cn(
-                                "w-full rounded-md border px-2 py-2 text-left text-sm",
+                                "w-full rounded-xl border p-2.5 text-left text-sm transition-all duration-150",
                                 selectedHere
-                                  ? "border-slate-900 bg-slate-100"
-                                  : "border-slate-100 bg-slate-50 hover:bg-white",
+                                  ? "border-[var(--or-primary)] bg-[var(--or-block)] shadow-sm"
+                                  : "border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] hover:border-[var(--or-outline)] hover:bg-[var(--or-card)]",
                               )}
                             >
-                              <div className="flex flex-wrap items-center gap-1">
-                                <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-900">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="or-g49-pill bg-[var(--or-success-container)] text-[var(--or-on-success)] font-medium">
                                   {t("compose:groupBadge", { count: slot.qids.length })}
                                 </span>
-                                <span className="font-mono text-[11px] text-slate-800 [overflow-wrap:anywhere]">
+                                <span className="font-mono text-[13px] text-[var(--or-text)] [overflow-wrap:anywhere]">
                                   {slot.rep.group_id}
                                 </span>
                               </div>
-                              <p className="mt-0.5 font-mono text-[10px] leading-tight text-slate-500 [overflow-wrap:anywhere]">
+                              <p className="mt-1 font-mono text-[13px] leading-normal text-[var(--or-muted)] [overflow-wrap:anywhere]">
                                 {slot.qids.join(" · ")}
                               </p>
                               <QuestionHoverDetails id={headQid}>
                                 <KatexPlainPreview
                                   text={prevText ?? ""}
-                                  className="line-clamp-2 text-xs leading-snug text-slate-600 [&_.katex]:text-[0.92em]"
+                                  className="line-clamp-2 text-sm leading-relaxed text-[var(--or-muted)] [&_.katex]:text-[0.95em]"
                                 />
                               </QuestionHoverDetails>
                               {perQuestionMode[s.section_id] ? (
                                 <div
-                                  className="mt-1 flex items-center gap-1 border-t border-slate-100 pt-1"
+                                  className="mt-2 flex items-center gap-2 border-t border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] pt-1.5"
                                   onClick={(e) => e.stopPropagation()}
                                 >
-                                  <span className="text-[10px] text-slate-500">
+                                  <span className="text-[13px] font-medium text-[var(--or-muted)]">
                                     {t("compose:groupScore")}
                                   </span>
                                   <input
                                     type="number"
                                     min={0}
                                     step={0.5}
-                                    className="w-16 rounded border border-slate-200 px-1 py-0.5 text-xs"
+                                    className="or-g49-input w-20 py-0.5 text-sm tabular-nums"
                                     value={
                                       scoreOverrides[s.section_id]?.[headQid] !== undefined
                                         ? scoreOverrides[s.section_id]![headQid]
@@ -659,7 +685,7 @@ export function ComposePaperEditorPanel({
                         );
                       })}
                       {(bySection[s.section_id] ?? []).length === 0 && (
-                        <li className="text-center text-xs text-slate-400">
+                        <li className="py-3 text-center text-sm text-[var(--or-muted)]">
                           {t("compose:emptySlotHint")}
                         </li>
                       )}
@@ -672,9 +698,9 @@ export function ComposePaperEditorPanel({
         </div>
 
         {!countsOk && selectedTpl && (
-          <p className="mt-2 text-xs text-slate-500">{t("compose:exportWhenReady")}</p>
+          <p className="mt-3 text-sm text-[var(--or-muted)]">{t("compose:exportWhenReady")}</p>
         )}
       </section>
-    </>
+    </div>
   );
 }

@@ -5,6 +5,7 @@ import { createRef, useState } from "react";
 
 import { setupTestI18n, TestI18nProvider } from "../test/i18nTestUtils";
 import { BankQuestionEditorPanel } from "./BankQuestionEditorPanel";
+import { selectOption } from "../test/selectOption";
 import type { BankDetailState, BankQuestionEditorPanelProps, MetaRow } from "./bankEditorTypes";
 
 vi.mock("mathlive", () => ({
@@ -135,10 +136,12 @@ describe("BankQuestionEditorPanel User Journeys", () => {
   });
 
   describe("Single Question Mode", () => {
-    it("renders question details, storage information and mode switch toggle", () => {
-      render(<Wrapper initialDetail={singleDetail} />);
+    it("renders question details and mode switch without exposing its storage path", () => {
+      render(<Wrapper initialDetail={{ ...singleDetail, storage_path: "resource/__teachers/private-hash/questions/q1.yaml" }} />);
 
       expect(screen.getByText("test:q1")).toBeInTheDocument();
+      expect(screen.queryByText(/存储位置/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/private-hash/)).not.toBeInTheDocument();
       expect(screen.getByText("简单编辑模式")).toBeInTheDocument();
 
       const toggleBtn = screen.getByText("展开公式与绘图工具");
@@ -147,22 +150,36 @@ describe("BankQuestionEditorPanel User Journeys", () => {
       expect(screen.getByText("返回简单模式")).toBeInTheDocument();
     });
 
-    it("allows switching question type from choice to essay and back", () => {
+    it("keeps a new question stem empty and shows the stem hint as a placeholder", () => {
+      const blankDetail = {
+        ...singleDetail,
+        question: { ...singleDetail.question, content: "" },
+      };
+      const { container } = render(<Wrapper initialDetail={blankDetail} />);
+
+      expect(blankDetail.question.content).toBe("");
+      expect(container.querySelector("[data-placeholder]")).toHaveAttribute(
+        "data-placeholder",
+        "（题干，支持公式）",
+      );
+    });
+
+    it("allows switching question type from choice to essay and back", async () => {
       render(<Wrapper initialDetail={singleDetail} />);
 
-      const typeSelect = screen.getByDisplayValue("单选题");
+      const typeSelect = screen.getByRole("combobox", { name: "题型" });
       expect(typeSelect).toBeInTheDocument();
 
       // Options should be visible for single_choice
       expect(screen.getAllByText("选项A").length).toBeGreaterThan(0);
 
       // Switch to essay (问答题/简答题)
-      fireEvent.change(typeSelect, { target: { value: "essay" } });
+      await selectOption(typeSelect, "essay");
       // Options should no longer be displayed
       expect(screen.queryByText("选项A")).not.toBeInTheDocument();
 
       // Switch back to single_choice
-      fireEvent.change(typeSelect, { target: { value: "single_choice" } });
+      await selectOption(typeSelect, "single_choice");
       // Default option keys A, B, C, D should be restored
       expect(screen.getAllByText("A").length).toBeGreaterThan(0);
       expect(screen.getAllByText("B").length).toBeGreaterThan(0);
@@ -198,7 +215,7 @@ describe("BankQuestionEditorPanel User Journeys", () => {
       expect(onSaveYaml).not.toHaveBeenCalled();
 
       // Switch to YAML tab using userEvent click
-      const yamlTabTrigger = screen.getByRole("tab", { name: "文件原文" });
+      const yamlTabTrigger = screen.getByRole("tab", { name: "源文件" });
       await user.click(yamlTabTrigger);
 
       // Now clicking save calls onSaveYaml
@@ -247,15 +264,16 @@ describe("BankQuestionEditorPanel User Journeys", () => {
       expect(screen.queryByText("删除最后一个小题")).not.toBeInTheDocument();
     });
 
-    it("supports switching unified type to mixed mode with per-subitem type selection", () => {
+    it("supports switching unified type to mixed mode with per-subitem type selection", async () => {
       render(<Wrapper initialDetail={groupDetail} />);
 
-      const unifiedSelect = screen.getByDisplayValue("单选题");
-      fireEvent.change(unifiedSelect, { target: { value: "mixed" } });
+      const unifiedSelect = screen.getByRole("combobox", { name: "小题模式（混编或同型）" });
+      await selectOption(unifiedSelect, "mixed");
 
       // In mixed mode, each subitem shows its own type selector
-      const subTypeSelects = screen.getAllByDisplayValue("单选题");
+      const subTypeSelects = screen.getAllByRole("combobox", { name: "题型" });
       expect(subTypeSelects.length).toBeGreaterThan(1);
+      expect(subTypeSelects[0]).toHaveTextContent("单选题");
     });
 
     it("dispatches onSave for question group correctly when save button is clicked", () => {
