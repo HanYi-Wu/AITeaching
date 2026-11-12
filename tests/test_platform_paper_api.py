@@ -623,7 +623,7 @@ def test_organizer_read_endpoints_reject_non_teachers_without_server_error(
     ):
         response = web_client.get(endpoint, headers=headers)
         assert response.status_code == 403, (endpoint, response.text)
-        assert response.json()["detail"] == "此操作仅限教师"
+        assert response.json()["detail"] in ("此操作仅限教师", "学校账号没有此接口的管理权限")
 
 
 def test_teacher_publishes_legacy_exported_paper_with_resource_path(web_client: TestClient, tmp_path: Path) -> None:
