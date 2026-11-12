@@ -1,0 +1,81 @@
+.platform-analysis-charts .analysis-chart-fill {
+  transition: width 720ms cubic-bezier(0.16, 1, 0.3, 1), height 720ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.platform-analysis-charts .analysis-chart-segment {
+  transition: width 680ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.platform-analysis-charts .analysis-radar-shape {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  transition: transform 720ms cubic-bezier(0.16, 1, 0.3, 1), opacity 420ms ease-out;
+}
+
+.platform-analysis-charts .analysis-radar-shape[data-ready="false"] {
+  transform: scale(0.01);
+  opacity: 0;
+}
+
+.platform-analysis-charts .analysis-radar-shape[data-ready="true"] {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.platform-analysis-charts .analysis-chart-fill[data-ready="false"],
+.platform-analysis-charts .analysis-chart-segment[data-ready="false"],
+.platform-analysis-charts .analysis-radar-shape[data-ready="false"] {
+  transition: none !important;
+}
+
+.platform-analysis-charts .analysis-class-mean-bar {
+  border-top: 1px solid color-mix(in srgb, var(--or-primary) 90%, white);
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--or-primary) 3%, transparent) 0%,
+    color-mix(in srgb, var(--or-primary) 26%, transparent) 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .platform-analysis-charts .analysis-chart-fill,
+  .platform-analysis-charts .analysis-chart-segment,
+  .platform-analysis-charts .analysis-radar-shape {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+}
+
+@media print {
+  .platform-analysis-charts .analysis-chart-fill {
+    width: var(--analysis-chart-target-width, auto) !important;
+    transition: none !important;
+  }
+
+  .platform-analysis-charts .analysis-chart-segment {
+    width: var(--analysis-chart-target-width, auto) !important;
+    transition: none !important;
+  }
+
+  .platform-analysis-charts .analysis-class-mean-bar {
+    height: var(--analysis-chart-target-height, 0%) !important;
+  }
+
+  .platform-analysis-charts .analysis-radar-shape {
+    transform: scale(1) !important;
+    opacity: 1 !important;
+    transition: none !important;
+  }
+
+  .platform-analysis-charts .analysis-number {
+    position: relative;
+    visibility: hidden;
+  }
+
+  .platform-analysis-charts .analysis-number::after {
+    position: absolute;
+    inset: 0;
+    content: attr(data-final-value);
+    visibility: visible;
+  }
+}

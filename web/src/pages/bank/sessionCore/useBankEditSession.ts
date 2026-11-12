@@ -1,9 +1,9 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
+  type SetStateAction,
 } from "react";
 import { isImeCompositionActive } from "../../../lib/ime";
 import { loadSessionToken } from "../../../platform/session";
@@ -11,6 +11,7 @@ import { ApiError } from "../../../api/errors";
 import type {
   BankDetailState,
 } from "../../../components/BankQuestionEditorPanel";
+import { BankEditorDraftStore } from "../../../components/bankEditorDraftStore";
 import type {
   BankBaselines,
   BankEditorTab,
@@ -27,6 +28,14 @@ import {
   reconcileSavedDetail,
   validateAndParseYamlPayload,
 } from "./bankEditSessionCore";
+
+const DIRTY_RECHECK_DELAY_MS = 250;
+
+function resolveSetStateAction<T>(action: SetStateAction<T>, current: T): T {
+  return typeof action === "function"
+    ? (action as (previous: T) => T)(current)
+    : action;
+}
 
 export interface UseBankEditSessionOptions {
   onError: (msg: string | null) => void;
@@ -47,15 +56,18 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
     refreshListApi,
   } = options;
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<BankDetailState | null>(null);
-  const [rawYaml, setRawYaml] = useState("");
-  const [metaRows, setMetaRows] = useState<MetaRow[]>([]);
+  const [selectedId, setSelectedIdState] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
   const [editorTab, setEditorTab] = useState<BankEditorTab>("form");
   const [workView, setWorkView] = useState<BankWorkView>("fields");
   const [saveConflict, setSaveConflict] = useState<BankSaveConflict | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+
+  const draftStoreRef = useRef<BankEditorDraftStore | null>(null);
+  if (!draftStoreRef.current) draftStoreRef.current = new BankEditorDraftStore();
+  const draftStore = draftStoreRef.current;
+  const { detail, rawYaml, metaRows } = draftStore.getSnapshot();
 
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
@@ -64,22 +76,86 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
   const detailRequestSeqRef = useRef(0);
   const saveInProgressRef = useRef(false);
   const mountedRef = useRef(false);
+  const dirtyTimerRef = useRef<number | null>(null);
 
   const draftRef = useRef({ selectedId, detail, rawYaml, metaRows });
-  draftRef.current = { selectedId, detail, rawYaml, metaRows };
+  draftRef.current = { selectedId, ...draftStore.getSnapshot() };
+
+  const cancelDirtyRefresh = useCallback(() => {
+    if (dirtyTimerRef.current === null) return;
+    window.clearTimeout(dirtyTimerRef.current);
+    dirtyTimerRef.current = null;
+  }, []);
+
+  const isCurrentDraftDirty = useCallback(() => {
+    const current = draftStore.getSnapshot();
+    return isSessionDirty(
+      selectedIdRef.current,
+      current.detail,
+      current.rawYaml,
+      current.metaRows,
+      baselinesRef.current,
+    );
+  }, [draftStore]);
+
+  const refreshDirtyNow = useCallback(() => {
+    cancelDirtyRefresh();
+    const next = isCurrentDraftDirty();
+    if (mountedRef.current) setDirty(next);
+    return next;
+  }, [cancelDirtyRefresh, isCurrentDraftDirty]);
+
+  const scheduleDirtyRefresh = useCallback(() => {
+    setDirty(true);
+    cancelDirtyRefresh();
+    dirtyTimerRef.current = window.setTimeout(() => {
+      dirtyTimerRef.current = null;
+      if (mountedRef.current) refreshDirtyNow();
+    }, DIRTY_RECHECK_DELAY_MS);
+  }, [cancelDirtyRefresh, refreshDirtyNow]);
+
+  const setSelectedId = useCallback((action: SetStateAction<string | null>) => {
+    const next = resolveSetStateAction(action, selectedIdRef.current);
+    selectedIdRef.current = next;
+    draftRef.current = { ...draftRef.current, selectedId: next };
+    setSelectedIdState(next);
+  }, []);
+
+  const setDetail = useCallback((action: SetStateAction<BankDetailState | null>) => {
+    const current = draftStore.getSnapshot().detail;
+    const next = resolveSetStateAction(action, current);
+    if (Object.is(current, next)) return;
+    draftRef.current = { ...draftRef.current, detail: next };
+    draftStore.setDetail(next);
+    scheduleDirtyRefresh();
+  }, [draftStore, scheduleDirtyRefresh]);
+
+  const setRawYaml = useCallback((action: SetStateAction<string>) => {
+    const current = draftStore.getSnapshot().rawYaml;
+    const next = resolveSetStateAction(action, current);
+    if (Object.is(current, next)) return;
+    draftRef.current = { ...draftRef.current, rawYaml: next };
+    draftStore.setRawYaml(next);
+    scheduleDirtyRefresh();
+  }, [draftStore, scheduleDirtyRefresh]);
+
+  const setMetaRows = useCallback((action: SetStateAction<MetaRow[]>) => {
+    const current = draftStore.getSnapshot().metaRows;
+    const next = resolveSetStateAction(action, current);
+    if (Object.is(current, next)) return;
+    draftRef.current = { ...draftRef.current, metaRows: next };
+    draftStore.setMetaRows(next);
+    scheduleDirtyRefresh();
+  }, [draftStore, scheduleDirtyRefresh]);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       detailRequestSeqRef.current++;
+      cancelDirtyRefresh();
     };
-  }, []);
-
-  // Compute dirty flag based on baseline
-  const dirty = useMemo(() => {
-    return isSessionDirty(selectedId, detail, rawYaml, metaRows, baselinesRef.current);
-  }, [selectedId, detail, rawYaml, metaRows]);
+  }, [cancelDirtyRefresh]);
 
   const setDetailBaseline = useCallback(
     (qid: string, detailState: BankDetailState, rows: MetaRow[]) => {
@@ -94,47 +170,34 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
 
   const clearSessionDraft = useCallback(() => {
     detailRequestSeqRef.current++;
-    selectedIdRef.current = null;
     setSelectedId(null);
     setDetail(null);
     setRawYaml("");
     setMetaRows([]);
     setSaveConflict(null);
-  }, []);
+    refreshDirtyNow();
+  }, [refreshDirtyNow, setDetail, setMetaRows, setRawYaml, setSelectedId]);
 
   const trySelectQuestion = useCallback(
     (nextQid: string | null, confirmDiscardText: string): boolean => {
       const currentSelectedId = selectedIdRef.current;
-      const currentDraft = draftRef.current;
       if (nextQid === currentSelectedId) {
         return true;
       }
-
-      const baseline = currentSelectedId ? baselinesRef.current[currentSelectedId] : undefined;
-      const currentDraftIsDirty = Boolean(
-        currentSelectedId &&
-          currentDraft.selectedId === currentSelectedId &&
-          currentDraft.detail?.qualified_id === currentSelectedId &&
-          baseline &&
-          (currentDraft.rawYaml !== baseline.yaml ||
-            JSON.stringify(currentDraft.detail) !== baseline.detailJson ||
-            JSON.stringify(currentDraft.metaRows) !== baseline.metaRowsJson)
-      );
-
-      if (currentDraftIsDirty && !window.confirm(confirmDiscardText)) {
+      if (isCurrentDraftDirty() && !window.confirm(confirmDiscardText)) {
         return false;
       }
 
       detailRequestSeqRef.current++;
-      selectedIdRef.current = nextQid;
       setDetail(null);
       setRawYaml("");
       setMetaRows([]);
       setSaveConflict(null);
       setSelectedId(nextQid);
+      refreshDirtyNow();
       return true;
     },
-    []
+    [isCurrentDraftDirty, refreshDirtyNow, setDetail, setMetaRows, setRawYaml, setSelectedId]
   );
 
   const loadQuestionDetail = useCallback(
@@ -165,6 +228,7 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
         setMetaRows(nextMetaRows);
         setEditorTab("form");
         setDetailBaseline(qid, detailState, nextMetaRows);
+        refreshDirtyNow();
       } catch (err) {
         const isCurrent = checkStaleRequestFencing({
           requestSeq,
@@ -183,18 +247,29 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
         }
       }
     },
-    [fetchDetailApi, onError, setDetailBaseline]
+    [fetchDetailApi, onError, refreshDirtyNow, setDetail, setMetaRows, setRawYaml, setDetailBaseline]
   );
 
   const saveActiveEditor = useCallback(async (source: BankEditorTab): Promise<boolean> => {
     if (!mountedRef.current || isImeCompositionActive()) {
       return false;
     }
-    const currentDetail = detail;
+    const submittedDraft = draftStore.getSnapshot();
+    const currentDetail = submittedDraft.detail;
     if (!currentDetail || currentDetail.qualified_id !== selectedIdRef.current) {
       return false;
     }
     if (saveInProgressRef.current) {
+      return false;
+    }
+    if (!isSessionDirty(
+      selectedIdRef.current,
+      currentDetail,
+      submittedDraft.rawYaml,
+      submittedDraft.metaRows,
+      baselinesRef.current,
+    )) {
+      refreshDirtyNow();
       return false;
     }
 
@@ -212,8 +287,8 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
       });
 
     const submittedDetailJson = JSON.stringify(currentDetail);
-    const submittedMetaRowsJson = JSON.stringify(metaRows);
-    const submittedYaml = rawYaml;
+    const submittedMetaRowsJson = JSON.stringify(submittedDraft.metaRows);
+    const submittedYaml = submittedDraft.rawYaml;
 
     saveInProgressRef.current = true;
     setSaving(true);
@@ -237,8 +312,8 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
 
     try {
       const body = source === "yaml"
-        ? validateAndParseYamlPayload(rawYaml, qid)
-        : buildSavePayload(currentDetail, metaRows);
+        ? validateAndParseYamlPayload(submittedDraft.rawYaml, qid)
+        : buildSavePayload(currentDetail, submittedDraft.metaRows);
       const headers = currentDetail.version ? { "If-Match": currentDetail.version } : undefined;
       saveResult = await putItemApi(qid, body, headers);
       committed = true;
@@ -289,6 +364,7 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
       if (reconciled.nextEditorTab) {
         setEditorTab(reconciled.nextEditorTab);
       }
+      refreshDirtyNow();
 
       try {
         await refreshListApi();
@@ -327,14 +403,16 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
       }
     }
   }, [
-    detail,
-    metaRows,
-    rawYaml,
+    draftStore,
     putItemApi,
     refreshListApi,
     fetchDetailApi,
     onError,
     setDetailBaseline,
+    refreshDirtyNow,
+    setDetail,
+    setMetaRows,
+    setRawYaml,
   ]);
 
   const saveForm = useCallback(() => saveActiveEditor("form"), [saveActiveEditor]);
@@ -342,8 +420,9 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
   const saveRawYaml = useCallback(() => saveActiveEditor("yaml"), [saveActiveEditor]);
 
   const viewLatestConflict = useCallback(async () => {
-    if (!detail) return;
-    const qid = detail.qualified_id;
+    const currentDetail = draftStore.getSnapshot().detail;
+    if (!currentDetail) return;
+    const qid = currentDetail.qualified_id;
     const requestSeq = ++detailRequestSeqRef.current;
     const session = loadSessionToken();
 
@@ -375,15 +454,16 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
         onError(err instanceof Error ? err.message : String(err));
       }
     }
-  }, [detail, fetchDetailApi, onError]);
+  }, [draftStore, fetchDetailApi, onError]);
 
   const loadLatestConflict = useCallback(
     async (confirmText: string) => {
-      if (!detail) return;
+      const currentDetail = draftStore.getSnapshot().detail;
+      if (!currentDetail) return;
       if (!window.confirm(confirmText)) return;
-      await loadQuestionDetail(detail.qualified_id);
+      await loadQuestionDetail(currentDetail.qualified_id);
     },
-    [detail, loadQuestionDetail]
+    [draftStore, loadQuestionDetail]
   );
 
   return {
@@ -391,6 +471,7 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
     setSelectedId,
     detail,
     setDetail,
+    draftStore,
     rawYaml,
     setRawYaml,
     metaRows,
@@ -400,6 +481,7 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
     workView,
     setWorkView,
     dirty,
+    isCurrentDraftDirty,
     saving,
     loadingDetail,
     saveConflict,

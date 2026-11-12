@@ -1,11 +1,11 @@
 import { resolveApiUrl } from "../api/address";
 import { loadSessionToken } from "./session";
-import { buildQuery, platformRequest } from "./platformRequest";
+import { buildQuery, downloadAuthorizedBlob, platformRequest } from "./platformRequest";
 import type {
   ClassRecord,
   ListQuery,
   PagedResult,
-  SchoolAiCapability,
+  SchoolAccountRecord,
   SchoolAiImportResponse,
   SchoolAiImportReviewResponse,
   SchoolAiResponse,
@@ -37,11 +37,47 @@ export function createSchool(payload: { name: string }): Promise<{ school: Schoo
 export function createSchoolUser(
   schoolId: string,
   payload: { username: string; password: string; display_name: string; email?: string | null },
-): Promise<{ user: { id: string; school_id: string; username: string; display_name: string; status: string } }> {
+): Promise<{ user: SchoolAccountRecord }> {
   return platformRequest(`/api/schools/${encodeURIComponent(schoolId)}/school-users`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function listSchoolUsers(
+  schoolId: string,
+  params: ListQuery = {},
+): Promise<{ users: SchoolAccountRecord[] } & PagedResult> {
+  return platformRequest(
+    `/api/schools/${encodeURIComponent(schoolId)}/school-users${buildQuery({
+      q: params.q ?? null,
+      status: params.status ?? null,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  );
+}
+
+export function updateSchoolUser(
+  schoolId: string,
+  userId: string,
+  payload: { username?: string; display_name?: string; email?: string | null; status?: string },
+): Promise<{ user: SchoolAccountRecord }> {
+  return platformRequest(
+    `/api/schools/${encodeURIComponent(schoolId)}/school-users/${encodeURIComponent(userId)}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+  );
+}
+
+export function resetSchoolUserPassword(
+  schoolId: string,
+  userId: string,
+  password: string,
+): Promise<{ user: SchoolAccountRecord }> {
+  return platformRequest(
+    `/api/schools/${encodeURIComponent(schoolId)}/school-users/${encodeURIComponent(userId)}/reset-password`,
+    { method: "POST", body: JSON.stringify({ password }) },
+  );
 }
 
 export function getSchoolAiSettings(): Promise<SchoolAiSettings> {
@@ -55,7 +91,7 @@ export function updateSchoolAiSettings(ai_enabled: boolean): Promise<SchoolAiSet
   });
 }
 
-export function getSchoolAiCapabilities(): Promise<SchoolAiSettings & { capabilities: SchoolAiCapability[] }> {
+export function getSchoolAiCapabilities(): Promise<SchoolAiResponse> {
   return platformRequest("/api/school/ai/capabilities");
 }
 
@@ -281,9 +317,9 @@ export function resetStudentPassword(
   });
 }
 
-export async function exportStudentAccounts(): Promise<Blob> {
+export async function exportStudentAccounts(classId?: string): Promise<Blob> {
   const token = loadSessionToken();
-  const url = await resolveApiUrl("/api/school/students/export.xlsx");
+  const url = await resolveApiUrl(`/api/school/students/export.xlsx${buildQuery({ class_id: classId })}`);
   const response = await fetch(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
@@ -291,6 +327,21 @@ export async function exportStudentAccounts(): Promise<Blob> {
     throw new Error(`Export failed: ${response.statusText}`);
   }
   return response.blob();
+}
+
+export function exportTeachers(params: ListQuery = {}): Promise<Blob> {
+  return downloadAuthorizedBlob(
+    `/api/school/teachers/export.xlsx${buildQuery({ q: params.q, status: params.status })}`,
+  );
+}
+
+export type SchoolPaperExportOption = {
+  id: string; title: string; status: string; created_at: string;
+  classes: Array<{ id: string; name: string; grade?: string | null }>;
+};
+
+export function getSchoolPaperExportOptions(paperId: string): Promise<{ publications: SchoolPaperExportOption[] }> {
+  return platformRequest(`/api/school/papers/${encodeURIComponent(paperId)}/export-options`);
 }
 
 export async function downloadSchoolImportTemplate(kind: SchoolImportKind): Promise<Blob> {

@@ -136,6 +136,7 @@
   "currentDraft": "当前草稿：{{id}}",
   "templatesMissing": "未找到试卷模板文件，请将模板放入内容目录的 templates/ 目录。",
   "activeSection": "当前小节（加入题目目标）：",
+  "sectionOptionsEmpty": "暂无可选小节",
   "sectionOptionText": " · 说明",
   "sectionOptionPractice": " · 练习",
   "sectionOptionNeed": " · 需 {{n}}",

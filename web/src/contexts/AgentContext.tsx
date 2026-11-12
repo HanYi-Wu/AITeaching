@@ -52,6 +52,12 @@ export type AgentContextValue = {
 };
 
 const AgentContext = createContext<AgentContextValue | null>(null);
+type AgentActions = Pick<AgentContextValue,
+  "setSidebarOpen" | "toggleSidebar" | "setPageContext" | "requestAgentPrefill" | "resetAgentContext" | "notifyAgentBackground"
+>;
+type AgentSidebarState = Pick<AgentContextValue, "sidebarOpen" | "setSidebarOpen" | "toggleSidebar" | "resetAgentContext">;
+const AgentActionsContext = createContext<AgentActions | null>(null);
+const AgentSidebarContext = createContext<AgentSidebarState | null>(null);
 
 function AgentToastLayer({
   toasts,
@@ -109,11 +115,22 @@ function AgentToastLayer({
 
 export function AgentProvider({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [pageContext, setPageContext] = useState<AgentPageContextPayload | null>(null);
+  const [pageContext, updatePageContext] = useState<AgentPageContextPayload | null>(null);
   const [prefillRequest, setPrefillRequest] = useState<AgentPrefillRequest | null>(null);
   const [toasts, setToasts] = useState<AgentToast[]>([]);
   const toastSeq = useRef(0);
   const prefillSeq = useRef(0);
+
+  const setPageContext = useCallback((next: AgentPageContextPayload | null) => {
+    updatePageContext((previous) => {
+      if (previous === next) return previous;
+      if (previous && next && previous.current_page === next.current_page
+        && previous.selected_resource_type === next.selected_resource_type
+        && previous.selected_resource_id === next.selected_resource_id
+        && previous.summary === next.summary) return previous;
+      return next;
+    });
+  }, []);
 
   const dismissToast = useCallback((id: number) => {
     setToasts((t) => t.filter((x) => x.id !== id));
@@ -144,8 +161,16 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setPageContext(null);
     setPrefillRequest(null);
     setToasts([]);
-  }, []);
+  }, [setPageContext]);
 
+  // Pages publishing assistant context need stable actions, without subscribing
+  // to drawer visibility, streamed prefills, or another page's selection.
+  const actions = useMemo<AgentActions>(() => ({
+    setSidebarOpen, toggleSidebar, setPageContext, requestAgentPrefill, resetAgentContext, notifyAgentBackground,
+  }), [toggleSidebar, setPageContext, requestAgentPrefill, resetAgentContext, notifyAgentBackground]);
+  const sidebar = useMemo<AgentSidebarState>(() => ({
+    sidebarOpen, setSidebarOpen, toggleSidebar, resetAgentContext,
+  }), [sidebarOpen, toggleSidebar, resetAgentContext]);
   const value = useMemo(
     () => ({
       sidebarOpen,
@@ -158,19 +183,35 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       resetAgentContext,
       notifyAgentBackground,
     }),
-    [sidebarOpen, toggleSidebar, pageContext, prefillRequest, requestAgentPrefill, resetAgentContext, notifyAgentBackground],
+    [sidebarOpen, toggleSidebar, pageContext, setPageContext, prefillRequest, requestAgentPrefill, resetAgentContext, notifyAgentBackground],
   );
 
   return (
     <AgentContext.Provider value={value}>
+      <AgentActionsContext.Provider value={actions}>
+      <AgentSidebarContext.Provider value={sidebar}>
       {children}
       <AgentToastLayer
         toasts={toasts}
         dismissToast={dismissToast}
         onOpenSidebar={() => setSidebarOpen(true)}
       />
+      </AgentSidebarContext.Provider>
+      </AgentActionsContext.Provider>
     </AgentContext.Provider>
   );
+}
+
+export function useAgentActions(): AgentActions {
+  const value = useContext(AgentActionsContext);
+  if (!value) throw new Error("useAgentActions 须在 AgentProvider 内使用");
+  return value;
+}
+
+export function useAgentSidebar(): AgentSidebarState {
+  const value = useContext(AgentSidebarContext);
+  if (!value) throw new Error("useAgentSidebar 须在 AgentProvider 内使用");
+  return value;
 }
 
 export function useAgentContext(): AgentContextValue {

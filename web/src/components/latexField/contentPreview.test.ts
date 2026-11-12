@@ -8,6 +8,7 @@ import {
   createTableWidget,
   escapeHtml,
   getSerializedCaretOffset,
+  isCollapsedCaretAtEditorEnd,
   isWidget,
   renderMathHtml,
   renderTableCellHtml,
@@ -125,5 +126,69 @@ describe("contentPreview", () => {
     r2.collapse(true);
     // prefix (7) + $x+y$ (5) + ' s' (2) = 14
     expect(getSerializedCaretOffset(root, r2)).toBe(14);
+  });
+
+  it("recognizes only a collapsed caret at the serialized end across nested blocks, formulas, and trailing breaks", () => {
+    const root = document.createElement("div");
+    const block = document.createElement("div");
+    const prefix = document.createTextNode("题干");
+    const formula = createMathWidget("x^2");
+    const tail = document.createElement("span");
+    const tailText = document.createTextNode("正文");
+    tail.appendChild(tailText);
+    block.append(prefix, formula, tail);
+    root.appendChild(block);
+
+    const atNestedEnd = document.createRange();
+    atNestedEnd.setStart(tailText, tailText.length);
+    atNestedEnd.collapse(true);
+    expect(isCollapsedCaretAtEditorEnd(root, atNestedEnd)).toBe(true);
+    expect(getSerializedCaretOffset(root, atNestedEnd)).toBe(serializeEditor(root).length);
+
+    const trailingBreak = document.createElement("br");
+    block.appendChild(trailingBreak);
+    const beforeTrailingBreak = document.createRange();
+    beforeTrailingBreak.setStart(tailText, tailText.length);
+    beforeTrailingBreak.collapse(true);
+    expect(isCollapsedCaretAtEditorEnd(root, beforeTrailingBreak)).toBe(false);
+    expect(getSerializedCaretOffset(root, beforeTrailingBreak)).toBe(serializeEditor(root).length - 1);
+
+    const afterTrailingBreak = document.createRange();
+    afterTrailingBreak.setStart(block, block.childNodes.length);
+    afterTrailingBreak.collapse(true);
+    expect(serializeEditor(root).endsWith("\n")).toBe(true);
+    expect(isCollapsedCaretAtEditorEnd(root, afterTrailingBreak)).toBe(true);
+    expect(getSerializedCaretOffset(root, afterTrailingBreak)).toBe(serializeEditor(root).length);
+
+    const formulaText = formula.querySelector("span")?.firstChild;
+    expect(formulaText).not.toBeNull();
+    const insideFormula = document.createRange();
+    insideFormula.setStart(formulaText!, formulaText!.textContent?.length ?? 0);
+    insideFormula.collapse(true);
+    expect(isCollapsedCaretAtEditorEnd(root, insideFormula)).toBe(false);
+
+    const nonCollapsed = document.createRange();
+    nonCollapsed.setStart(tailText, 0);
+    nonCollapsed.setEnd(tailText, 1);
+    expect(isCollapsedCaretAtEditorEnd(root, nonCollapsed)).toBe(false);
+
+    const emptyWidgetRoot = document.createElement("div");
+    const emptyWidget = createMathWidget("");
+    emptyWidget.replaceChildren();
+    emptyWidgetRoot.appendChild(emptyWidget);
+    const atEmptyWidget = document.createRange();
+    atEmptyWidget.setStart(emptyWidget, 0);
+    atEmptyWidget.collapse(true);
+    expect(isCollapsedCaretAtEditorEnd(emptyWidgetRoot, atEmptyWidget)).toBe(false);
+    expect(getSerializedCaretOffset(emptyWidgetRoot, atEmptyWidget)).toBe(0);
+
+    const breakRoot = document.createElement("div");
+    const finalBreak = document.createElement("br");
+    breakRoot.appendChild(finalBreak);
+    const atFinalBreak = document.createRange();
+    atFinalBreak.setStart(finalBreak, 0);
+    atFinalBreak.collapse(true);
+    expect(isCollapsedCaretAtEditorEnd(breakRoot, atFinalBreak)).toBe(false);
+    expect(getSerializedCaretOffset(breakRoot, atFinalBreak)).toBe(0);
   });
 });

@@ -10,8 +10,8 @@ import {
   listTaggedItems,
   type ContentTag,
 } from "../../platform/auth";
-import { useAgentContext } from "../../contexts/AgentContext";
-import { useToolBar } from "../../contexts/ToolBarContext";
+import { useAgentActions } from "../../contexts/AgentContext";
+import { useToolBarActions } from "../../contexts/ToolBarContext";
 import { useCollapsedPanelInert } from "../../hooks/useCollapsedPanelInert";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
 import { notifyContentLibraryChanged } from "../../lib/contentEvents";
@@ -41,8 +41,8 @@ export { applyTemplatePreset } from "./templateModel";
 
 export function TemplateWorkspace({ onError }: { onError: (s: string | null) => void }) {
   const { t } = useTranslation("template");
-  const { setPageContext } = useAgentContext();
-  const { setToolBar, clearToolBar } = useToolBar();
+  const { setPageContext } = useAgentActions();
+  const { setToolBar, clearToolBar } = useToolBarActions();
   const [templates, setTemplates] = useState<TemplateListRow[]>([]);
   const [taggedItems, setTaggedItems] = useState<Record<string, ContentTag[]>>({});
   const [path, setPath] = useState("");

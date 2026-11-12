@@ -114,7 +114,7 @@ describe("ExtensionsPanel", () => {
 
     render(<TestI18nProvider><ExtensionsPanel onError={vi.fn()} /></TestI18nProvider>);
 
-    expect(await screen.findByText(/Web 端无法打开后端服务器上的原生文件选择窗口/)).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("服务器上的程序文件完整路径")).toBeInTheDocument();
     const pathField = screen.getByRole("textbox", { name: "文档转换 选择程序文件" });
     await userEvent.type(pathField, "C:\\server\\bin\\pandoc.exe");
     await userEvent.click(screen.getAllByRole("button", { name: "保存路径" })[0]);

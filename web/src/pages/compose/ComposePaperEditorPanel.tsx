@@ -15,6 +15,7 @@ import type {
   RightSelection,
   TemplateRow,
 } from "../../types/compose";
+import type { DuplicateQuestionReport } from "../../types/autoCompose";
 import { sectionTypeToFilter } from "./composeHelpers";
 import { OverwriteExportDialog } from "./ComposeDialogs";
 import { getSectionRequiredCount, isSectionSatisfied } from "./composeModel";
@@ -34,6 +35,7 @@ export type ComposePaperEditorPanelProps = {
   knowledgeDistributionRows: [string, number][];
   questionMap: ReadonlyMap<string, QuestionRow>;
   selectedRight: RightSelection | null;
+  showBankTools?: boolean;
   onFillSectionGaps: () => void;
   onAddFromLeft: () => void;
   onRemoveFromRight: () => void;
@@ -69,6 +71,11 @@ export type ComposePaperEditorPanelProps = {
   onCancelConflictOverwrite: () => void;
   onConfirmConflictOverwrite: () => void;
   onError: (msg: string | null) => void;
+  onOpenAutoCompose?: () => void;
+  onOpenDuplicateReport?: () => void;
+  duplicateReportStale?: boolean;
+  duplicateFlaggedCount?: number;
+  duplicateQuestionMap?: ReadonlyMap<string, DuplicateQuestionReport>;
 };
 
 export function ComposePaperEditorPanel({
@@ -85,6 +92,7 @@ export function ComposePaperEditorPanel({
   knowledgeDistributionRows,
   questionMap,
   selectedRight,
+  showBankTools = true,
   onFillSectionGaps,
   onAddFromLeft,
   onRemoveFromRight,
@@ -114,6 +122,11 @@ export function ComposePaperEditorPanel({
   onCancelConflictOverwrite,
   onConfirmConflictOverwrite,
   onError,
+  onOpenAutoCompose,
+  onOpenDuplicateReport,
+  duplicateReportStale = false,
+  duplicateFlaggedCount = 0,
+  duplicateQuestionMap,
 }: ComposePaperEditorPanelProps) {
   const { t } = useTranslation(["compose", "common"]);
   const {
@@ -132,23 +145,46 @@ export function ComposePaperEditorPanel({
       <div className="or-g49-compose-actions flex w-full shrink-0 flex-row flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-y border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-block)_70%,transparent)] px-2 py-2.5 touch-pan-x">
         <button
           type="button"
-          disabled={!selectedTpl}
-          className="or-g49-btn or-g49-btn-secondary px-2 py-1 text-xs font-medium"
-          title="按当前筛选题目补齐各大题空缺；保留已选题目，不重复添加"
-          onClick={onFillSectionGaps}
+          disabled={busy || !selectedTpl}
+          onClick={onOpenAutoCompose}
+          className="or-g49-btn inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-2 text-xs font-semibold disabled:opacity-50"
         >
-          补齐空缺
+          按目标组卷
         </button>
         <button
           type="button"
-          title={t("compose:addToSection")}
-          aria-label={t("compose:addToSection")}
-          onClick={onAddFromLeft}
-          className="or-g49-add-from-left flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-2 text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)]"
+          disabled={busy || Object.values(bySection).every((ids) => ids.length === 0)}
+          onClick={onOpenDuplicateReport}
+          aria-label={`查重${duplicateReportStale ? "，报告已失效" : ""}${duplicateFlaggedCount ? `，涉及 ${duplicateFlaggedCount} 题` : ""}`}
+          className="inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 text-xs font-medium text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-50"
         >
-          <ChevronRight className="h-4 w-4 shrink-0" />
-          <span className="or-g49-compose-action-label whitespace-nowrap text-xs">{t("compose:addToSection")}</span>
+          查重
+          {duplicateFlaggedCount > 0 ? <span className="rounded-full bg-[var(--or-warning-container)] px-1.5 py-0.5 text-[var(--or-on-warning)]">{duplicateFlaggedCount}</span> : null}
+          {duplicateReportStale ? <span className="text-[var(--or-on-warning)]">已失效</span> : null}
         </button>
+        {showBankTools ? (
+          <>
+            <button
+              type="button"
+              disabled={!selectedTpl}
+              className="or-g49-btn or-g49-btn-secondary px-2 py-1 text-xs font-medium"
+              title="按当前筛选题目补齐各大题空缺；保留已选题目，不重复添加"
+              onClick={onFillSectionGaps}
+            >
+              补齐空缺
+            </button>
+            <button
+              type="button"
+              title={t("compose:addToSection")}
+              aria-label={t("compose:addToSection")}
+              onClick={onAddFromLeft}
+              className="or-g49-add-from-left flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-2 text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)]"
+            >
+              <ChevronRight className="h-4 w-4 shrink-0" />
+              <span className="or-g49-compose-action-label whitespace-nowrap text-xs">{t("compose:addToSection")}</span>
+            </button>
+          </>
+        ) : null}
         <button
           type="button"
           title={t("compose:removeFromPaper")}
@@ -370,6 +406,7 @@ export function ComposePaperEditorPanel({
               title={selectedTpl?.sections.find((section) => section.section_id === activeSection)?.section_id ?? ""}
               className="or-g49-input min-h-11 w-full min-w-0 px-3 py-2 text-sm sm:min-w-[18rem] sm:max-w-[36rem]"
               value={activeSection ?? ""}
+              emptyLabel={t("compose:sectionOptionsEmpty")}
               onValueChange={(value) => onActiveSectionChange(value || null)}
             >
               {selectedTpl?.sections.map((s) => (
@@ -572,6 +609,7 @@ export function ComposePaperEditorPanel({
                                 <span title={qid} className="font-mono text-[13px] font-medium text-[var(--or-text)] [overflow-wrap:anywhere]">
                                   {qid}
                                 </span>
+                              {duplicateQuestionMap?.get(qid) ? <DuplicateBadge report={duplicateQuestionMap.get(qid)!} /> : null}
                                 <QuestionHoverDetails id={qid}>
                                   <KatexPlainPreview
                                     text={questionMap.get(qid)?.content_preview ?? ""}
@@ -645,6 +683,9 @@ export function ComposePaperEditorPanel({
                               <p className="mt-1 font-mono text-[13px] leading-normal text-[var(--or-muted)] [overflow-wrap:anywhere]">
                                 {slot.qids.join(" · ")}
                               </p>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {slot.qids.map((qid) => duplicateQuestionMap?.get(qid) ? <DuplicateBadge key={qid} report={duplicateQuestionMap.get(qid)!} /> : null)}
+                              </div>
                               <QuestionHoverDetails id={headQid}>
                                 <KatexPlainPreview
                                   text={prevText ?? ""}
@@ -702,5 +743,21 @@ export function ComposePaperEditorPanel({
         )}
       </section>
     </div>
+  );
+}
+
+function DuplicateBadge({ report }: { report: DuplicateQuestionReport }) {
+  const count = report.match_count || report.matches.length;
+  const sourceLabels = { bank: "题库", history: "历史试卷", paper: "本卷" };
+  const sources = [...new Set(report.matches.map((match) => `${sourceLabels[match.source]} ${Math.round(match.similarity * 100)}%`))].join("、");
+  return (
+    <span
+      title={`查重：${count} 处匹配${sources ? `；来源及相似度：${sources}` : ""}`}
+      aria-label={`查重发现 ${count} 处匹配${sources ? `，${sources}` : ""}`}
+      role="note"
+      className="inline-flex rounded-full border border-[var(--or-warning)] bg-[var(--or-warning-container)] px-1.5 py-0.5 text-[10px] font-medium leading-none text-[var(--or-on-warning)]"
+    >
+      重复 {count}
+    </span>
   );
 }

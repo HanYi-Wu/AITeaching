@@ -208,11 +208,11 @@ export function StudentTransferDialog({ student, scopeKey, onClose, onTransferre
               </p>
               {preview.legacy_attempt_count > 0 ? (
                 <p className="or-g53-warning-surface rounded-xl p-3.5 text-sm leading-6">
-                  有 {preview.legacy_attempt_count} 份旧考试记录没有冻结的原始班级快照。转班会保留这些记录目前可见的班级关联，不会推断未知的更早历史。
+                  有 {preview.legacy_attempt_count} 份旧记录无原始班级快照；转班仅保留当前可见关联。
                 </p>
               ) : null}
               <p className="text-sm text-or-muted">
-                请核对上述当前归属与目标班级。确认后将移除该学生的其他当前班级关联。
+                确认后将移除该学生的其他当前班级关联。
               </p>
               {selectedClass ? (
                 <div className="or-g53-accent-surface rounded-xl p-3 font-medium text-sm">

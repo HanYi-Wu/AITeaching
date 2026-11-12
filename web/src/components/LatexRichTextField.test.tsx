@@ -1,8 +1,9 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRef } from "react";
+import { createRef, useRef, useState } from "react";
 
 import { LatexRichTextField } from "./LatexRichTextField";
+import { serializeEditor } from "./latexField/contentPreview";
 
 vi.mock("mathlive", () => ({
   MathfieldElement: class MockMathfieldElement extends HTMLElement {
@@ -39,7 +40,13 @@ function renderField(value: string, onChange = vi.fn(), hideToolbar = false) {
     />,
   );
   const editor = view.container.querySelector("[contenteditable='true']") as HTMLDivElement;
-  return { ...view, editor, onChange };
+  return { ...view, editor, onChange, textAreaRef };
+}
+
+function ControlledLintField() {
+  const [value, setValue] = useState("题干");
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  return <LatexRichTextField value={value} onChange={setValue} textAreaRef={textAreaRef} />;
 }
 
 describe("LatexRichTextField widget deletion", () => {
@@ -73,6 +80,18 @@ describe("LatexRichTextField widget deletion", () => {
     const { editor, queryByTitle } = renderField("普通题干", vi.fn(), true);
     expect(editor).toBeInTheDocument();
     expect(queryByTitle("分数")).not.toBeInTheDocument();
+  });
+
+  it("waits for typing to pause before linting the updated content", async () => {
+    const { container, queryByRole, findByRole } = render(<ControlledLintField />);
+    const editor = container.querySelector("[contenteditable='true']") as HTMLDivElement;
+
+    editor.focus();
+    editor.textContent = "题干%正文";
+    fireEvent.input(editor, { inputType: "insertText", data: "%正文" });
+
+    expect(queryByRole("alert")).not.toBeInTheDocument();
+    expect(await findByRole("alert")).toHaveTextContent("未转义的 `%`");
   });
 
   it("deletes an inline math widget through the native undoable edit command", async () => {
@@ -179,5 +198,46 @@ describe("LatexRichTextField widget deletion", () => {
 
     expect(textAreaRef.current?.selectionStart).toBe(4);
     expect(textAreaRef.current?.selectionEnd).toBe(8);
+  });
+
+  it("uses the serialized length at a collapsed nested editor end and falls back before a trailing break", () => {
+    const { editor, textAreaRef } = renderField("初始值");
+    const block = document.createElement("div");
+    const prefix = document.createTextNode("题干");
+    const formula = document.createElement("span");
+    formula.className = "lrt-math-widget";
+    formula.dataset.latex = "x^2";
+    formula.contentEditable = "false";
+    const tail = document.createTextNode("正文");
+    block.append(prefix, formula, tail);
+    editor.replaceChildren(block);
+
+    const setSelectionRange = vi.spyOn(textAreaRef.current!, "setSelectionRange");
+    const select = (node: Node, offset: number) => {
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    };
+
+    select(tail, tail.length);
+    fireEvent.input(editor, { inputType: "insertText", data: "" });
+    const serializedBeforeBreak = serializeEditor(editor);
+    expect(setSelectionRange).toHaveBeenLastCalledWith(
+      serializedBeforeBreak.length,
+      serializedBeforeBreak.length,
+    );
+
+    block.appendChild(document.createElement("br"));
+    select(tail, tail.length);
+    fireEvent.input(editor, { inputType: "insertText", data: "" });
+    const serializedWithBreak = serializeEditor(editor);
+    expect(serializedWithBreak).toBe(`${serializedBeforeBreak}\n`);
+    expect(setSelectionRange).toHaveBeenLastCalledWith(
+      serializedWithBreak.length - 1,
+      serializedWithBreak.length - 1,
+    );
   });
 });

@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from solaire.common.answer_logic import display as display_answer
 from solaire.exam_compiler.loaders.questions import LoadedQuestions
+from solaire.exam_compiler.models import is_choice_type
 from solaire.exam_compiler.paths import exam_parent_dir, work_dir_for_exam
 from solaire.exam_compiler.pipeline.hydrate import HydratedExam, HydratedQuestion, hydrate
 from solaire.exam_compiler.pipeline.prepare import PreparedExam, prepare_exam
+from solaire.exam_compiler.pipeline.question_groups import iter_question_runs
+from solaire.exam_compiler.qualified_id import namespace_of_qualified
 from solaire.web.extension_registry import resolve_exe
 from . import docx_markdown as _docx_markdown
 from . import docx_resources as _docx_resources
@@ -165,6 +170,61 @@ def _render_docx_markdown(
     )
 
 
+def _render_docx_markdown_pair(
+    hydrated: HydratedExam,
+    loaded: LoadedQuestions,
+    media_dir: Path,
+    *,
+    context: _docx_resources.DocxResourceContext | None = None,
+) -> tuple[str, str]:
+    def bound_render_text(
+        text: str,
+        hq: HydratedQuestion,
+        loaded_qs: LoadedQuestions,
+        md_dir: Path,
+    ) -> str:
+        return _render_text(text, hq, loaded_qs, md_dir, context=context)
+
+    return _docx_markdown.render_docx_markdown_pair(
+        hydrated,
+        loaded,
+        media_dir,
+        render_text=bound_render_text,
+        clean_text=_clean_latex_for_markdown,
+    )
+
+
+def _docx_mermaid_requests(
+    hydrated: HydratedExam,
+    loaded: LoadedQuestions,
+):
+    """Yield only the question fields used by the student/teacher DOCX pair."""
+    for section in hydrated.sections:
+        for run in iter_question_runs(section.questions):
+            for row_index, hq in enumerate(run.questions):
+                library_root = loaded.library_roots.get(
+                    namespace_of_qualified(hq.qualified_id)
+                )
+                if library_root is None:
+                    continue
+                image_dir = library_root / "image"
+                if run.grouped and row_index == 0:
+                    yield from _docx_resources.iter_mermaid_render_requests(
+                        hq.item.group_material or "", image_dir
+                    )
+                q = hq.item
+                yield from _docx_resources.iter_mermaid_render_requests(q.content, image_dir)
+                if q.options and is_choice_type(q.type):
+                    for value in q.options.values():
+                        yield from _docx_resources.iter_mermaid_render_requests(value, image_dir)
+                yield from _docx_resources.iter_mermaid_render_requests(
+                    display_answer(q.answer), image_dir
+                )
+                yield from _docx_resources.iter_mermaid_render_requests(
+                    q.analysis or "", image_dir
+                )
+
+
 _w = _docx_process._w
 _decode_process_output = _docx_process._decode_process_output
 _ensure_child = _docx_process._ensure_child
@@ -233,7 +293,7 @@ def build_exam_docx(
     if not exam_yaml.is_file():
         raise FileNotFoundError(exam_yaml)
 
-    prepared = prepared or prepare_exam(exam_yaml)
+    prepared = prepared or prepare_exam(exam_yaml, selected_questions_only=True)
     prepared.check_source(exam_yaml)
     exam, loaded, template = prepared.exam, prepared.loaded, prepared.template
     if not exam.question_libraries:
@@ -253,32 +313,29 @@ def build_exam_docx(
     media_dir.mkdir(parents=True, exist_ok=True)
 
     resource_context = _docx_resources.DocxResourceContext()
+    _docx_resources.prewarm_mermaid_render_batch(
+        _docx_mermaid_requests(hydrated, loaded),
+        resource_context._diagram_render_context,
+        write_png=True,
+    )
 
     student_md = docx_work / "student_paper.md"
     teacher_md = docx_work / "teacher_paper.md"
-    student_md.write_text(
-        _render_docx_markdown(
-            hydrated,
-            loaded,
-            media_dir,
-            show_answers=False,
-            context=resource_context,
-        ),
-        encoding="utf-8",
+    student_text, teacher_text = _render_docx_markdown_pair(
+        hydrated,
+        loaded,
+        media_dir,
+        context=resource_context,
     )
-    teacher_md.write_text(
-        _render_docx_markdown(
-            hydrated,
-            loaded,
-            media_dir,
-            show_answers=True,
-            context=resource_context,
-        ),
-        encoding="utf-8",
-    )
+    student_md.write_text(student_text, encoding="utf-8")
+    teacher_md.write_text(teacher_text, encoding="utf-8")
 
-    _run_pandoc(student_md, docx_work / "student_paper.docx")
-    _run_pandoc(teacher_md, docx_work / "teacher_paper.docx")
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="docx-pandoc") as pool:
+        student_future = pool.submit(_run_pandoc, student_md, docx_work / "student_paper.docx")
+        teacher_future = pool.submit(_run_pandoc, teacher_md, docx_work / "teacher_paper.docx")
+        # Drain both conversions before publishing either final document.
+        student_future.result()
+        teacher_future.result()
 
     dest = out_dir if out_dir is not None else exam_parent_dir(exam_yaml)
     dest = dest.resolve()

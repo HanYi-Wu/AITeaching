@@ -57,9 +57,13 @@ export function LoginHandoff({ onFinished }: { onFinished: () => void }) {
       svg.setAttribute("viewBox", `0 0 390 ${canvasHeight}`);
       svg.dataset.device = "mobile";
       host.dataset.device = "mobile";
+      host.dataset.curtain = "covering";
       const drawMobile = (progress: number) => {
         const eased = 1 - Math.pow(1 - progress, 4);
         const offset = (canvasHeight + 40) * (1 - eased) - 380 * eased;
+        if (66 + offset <= 60 && host.dataset.curtain) {
+          delete host.dataset.curtain;
+        }
         mobilePathRef.current?.setAttribute(
           "d",
           `M 0 -1000 H 390 V ${66 + offset} Q 185 ${330 + offset * 1.08} 0 ${176 + offset} Z`,
@@ -104,6 +108,7 @@ export function LoginHandoff({ onFinished }: { onFinished: () => void }) {
 
   return (
     <div ref={hostRef} className="or-login-handoff" aria-hidden="true">
+      <div className="or-login-handoff-top" />
       <svg ref={svgRef} preserveAspectRatio="none">
         <defs>
           <linearGradient id="orHandoffBlackCastShadow" gradientUnits="userSpaceOnUse" x1="500" y1="500" x2="580.7" y2="514.5">

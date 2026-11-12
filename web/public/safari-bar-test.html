@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Safari 系统栏颜色测试</title>
+  <script>
+    // 根据 ?mode= 在首帧前写入样式，测试 Safari 在页面加载时取色的行为。
+    var mode = new URLSearchParams(location.search).get("mode") || "home";
+    document.documentElement.dataset.mode = mode;
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; font: 16px/1.5 -apple-system, "PingFang SC", sans-serif; color: #111; }
+    html, body { background: #e0e0e0; }
+    .lock, .lock body { height: 100%; overflow: hidden; }
+    .app { height: 100dvh; overflow: auto; padding: 24px 18px; background: #e0e0e0; }
+    h1 { font-size: 20px; margin: 8px 0 4px; }
+    p { margin: 6px 0; }
+    .btns { display: grid; gap: 10px; margin-top: 14px; }
+    .btns a { display: block; padding: 12px 14px; border-radius: 12px; background: #fff; color: #111; text-decoration: none; border: 1px solid #ccc; }
+    .btns a b { display: inline-block; min-width: 1.6em; }
+    .tall { height: 220vh; }
+    .shim { position: fixed; left: 0; right: 0; z-index: 10; }
+
+    html[data-mode="1"], html[data-mode="1"] body { background: #ff2d2d; }
+    html[data-mode="2"], html[data-mode="2"] body { background: #ff2d2d; }
+    html:is([data-mode="8"],[data-mode="9"],[data-mode="10"],[data-mode="11"],[data-mode="12"]),
+    html:is([data-mode="8"],[data-mode="9"],[data-mode="10"],[data-mode="11"],[data-mode="12"]) body { background: #ff2d2d; }
+    .flex-app { display: flex; flex-direction: column; height: 100dvh; }
+    .flex-app .app { flex: 1; height: auto; min-height: 0; }
+    .sticky-nav { position: sticky; bottom: 0; height: 60px; flex-shrink: 0; background: #ff8a00; display: flex; align-items: center; justify-content: center; color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <h1>Safari 上下两条颜色测试</h1>
+    <p id="current"></p>
+    <p>依次点下面每一项，页面会重新加载。请看<b>顶部灵动岛那条</b>和<b>底部地址栏那条</b>有没有变色，把结果告诉我（例如“1 顶红底红，3 都没变”）。</p>
+    <div class="btns">
+      <a href="?mode=1"><b>1</b> body 红色（页面不滚动，与网站相同结构）</a>
+      <a href="?mode=2"><b>2</b> body 红色 + 页面本身可以滚动</a>
+      <a href="?mode=3"><b>3</b> 顶部 60px 绿色固定栏 + 底部 60px 橙色固定栏</a>
+      <a href="?mode=4"><b>4</b> 顶部/底部 5px 绿色/橙色固定细条</a>
+      <a href="?mode=5"><b>5</b> 加载 2 秒后，body 才变成红色</a>
+      <a href="?mode=6"><b>6</b> 加载 2 秒后，才出现顶部绿色/底部橙色固定栏</a>
+      <a href="?mode=7"><b>7</b> 整页蓝色固定层（铺满全屏 inset:0）</a>
+      <a href="?mode=8"><b>8</b> body 红色 + 上下 5px 固定细条</a>
+      <a href="?mode=9"><b>9</b> body 红色 + 底部 24px 橙色固定条（不可点击）</a>
+      <a href="?mode=10"><b>10</b> body 红色 + 底部 44px 橙色固定条（不可点击）</a>
+      <a href="?mode=11"><b>11</b> body 红色 + 底部 60px 橙色固定条（不可点击）</a>
+      <a href="?mode=12"><b>12</b> body 红色 + 底部橙色导航栏（sticky，非 fixed）</a>
+      <a href="?"><b>↩</b> 返回（无任何着色）</a>
+    </div>
+    <div id="extra"></div>
+  </div>
+  <script>
+    var root = document.documentElement;
+    var labels = {
+      home: "当前：未着色（对照组）",
+      "1": "当前：1 body 红色，页面不滚动",
+      "2": "当前：2 body 红色，页面可滚动（可以上下滑动试试）",
+      "3": "当前：3 顶部绿色 / 底部橙色 60px 固定栏",
+      "4": "当前：4 顶部绿色 / 底部橙色 5px 固定细条",
+      "5": "当前：5 等 2 秒 body 变红",
+      "6": "当前：6 等 2 秒出现固定栏",
+      "7": "当前：7 整页蓝色固定层",
+    };
+    document.getElementById("current").textContent = labels[mode] || mode;
+    if (mode !== "2") root.classList.add("lock");
+    if (mode === "2") {
+      var tall = document.createElement("div");
+      tall.className = "tall";
+      tall.textContent = "↓ 可滚动区域";
+      document.getElementById("extra").appendChild(tall);
+      document.getElementById("app").style.height = "auto";
+      document.getElementById("app").style.overflow = "visible";
+      document.getElementById("app").style.background = "transparent";
+    }
+    function addBars(height) {
+      var top = document.createElement("div");
+      top.className = "shim";
+      top.style.cssText += ";top:0;height:" + height + "px;background:#18c43a;";
+      var bottom = document.createElement("div");
+      bottom.className = "shim";
+      bottom.style.cssText += ";bottom:0;height:" + height + "px;background:#ff8a00;";
+      document.body.append(top, bottom);
+    }
+    if (mode === "3") addBars(60);
+    if (mode === "4") addBars(5);
+    if (mode === "5") setTimeout(function () {
+      root.style.background = "#ff2d2d";
+      document.body.style.background = "#ff2d2d";
+      document.getElementById("current").textContent += " —— 已变红";
+    }, 2000);
+    if (mode === "6") setTimeout(function () {
+      addBars(60);
+      document.getElementById("current").textContent += " —— 已出现";
+    }, 2000);
+    if (mode === "7") {
+      var layer = document.createElement("div");
+      layer.style.cssText = "position:fixed;inset:0;background:#1e6bff;z-index:-1;";
+      document.body.appendChild(layer);
+      document.getElementById("app").style.background = "transparent";
+    }
+    if (mode === "8") addBars(5);
+    function addBottom(height) {
+      var bar = document.createElement("div");
+      bar.className = "shim";
+      bar.style.cssText += ";bottom:0;height:" + height + "px;background:#ff8a00;pointer-events:none;";
+      document.body.appendChild(bar);
+    }
+    if (mode === "9") addBottom(24);
+    if (mode === "10") addBottom(44);
+    if (mode === "11") addBottom(60);
+    if (mode === "12") {
+      var wrap = document.createElement("div");
+      wrap.className = "flex-app";
+      var app = document.getElementById("app");
+      app.parentNode.insertBefore(wrap, app);
+      wrap.appendChild(app);
+      var nav = document.createElement("nav");
+      nav.className = "sticky-nav";
+      nav.textContent = "底部导航（sticky）";
+      wrap.appendChild(nav);
+    }
+    if (Number(mode) >= 8) document.getElementById("current").textContent = "当前：" + mode + "（看底部那条是红色还是橙色）";
+  </script>
+</body>
+</html>

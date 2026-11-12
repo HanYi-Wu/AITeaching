@@ -136,6 +136,7 @@
   "currentDraft": "Current draft: {{id}}",
   "templatesMissing": "No template files found. Add templates under the project templates/ folder.",
   "activeSection": "Target section for adding questions:",
+  "sectionOptionsEmpty": "No sections available",
   "sectionOptionText": " · instructions",
   "sectionOptionPractice": " · practice",
   "sectionOptionNeed": " · needs {{n}}",

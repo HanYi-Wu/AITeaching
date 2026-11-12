@@ -1,0 +1,318 @@
+.management-activity {
+  --activity-zero: color-mix(in srgb, var(--or-block, #eef2f7) 78%, var(--or-card, white));
+  --activity-low: color-mix(in srgb, var(--or-primary, #287a65) 14%, var(--or-card, white));
+  --activity-mid: color-mix(in srgb, var(--or-primary, #287a65) 32%, var(--or-card, white));
+  --activity-high: color-mix(in srgb, var(--or-primary, #287a65) 58%, var(--or-card, white));
+  --activity-peak: var(--or-primary, #287a65);
+  --activity-day-width: 3.5rem;
+  --activity-school-width: 11rem;
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+  padding: clamp(1rem, 2vw, 1.5rem);
+}
+
+.management-activity__header,
+.management-activity .management-activity__heatmap-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.management-activity__header h2,
+.management-activity .management-activity__heatmap-heading h3 {
+  margin: 0;
+  color: var(--or-text, #1c2833);
+}
+
+.management-activity__header h2 {
+  font-size: 1.4rem;
+  letter-spacing: -.025em;
+}
+
+.management-activity .management-activity__heatmap-heading h3 {
+  font-size: 1rem;
+}
+
+.management-activity__eyebrow {
+  margin: 0 0 .35rem;
+  color: var(--or-primary, #287a65);
+  font-size: .75rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+}
+
+.management-activity__description,
+.management-activity__coverage {
+  margin: .45rem 0 0;
+  color: var(--or-muted, #62717e);
+  font-size: .875rem;
+  line-height: 1.55;
+}
+
+.management-activity__filters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: .75rem;
+}
+
+.management-activity__filters label {
+  display: grid;
+  gap: .35rem;
+  color: var(--or-muted, #62717e);
+  font-size: .75rem;
+  font-weight: 600;
+}
+
+.management-activity__filters select {
+  min-height: 2.5rem;
+  min-width: 9rem;
+  border: 1px solid var(--or-outline, #d7dee5);
+  border-radius: .6rem;
+  padding: 0 .7rem;
+  color: var(--or-text, #1c2833);
+  background: var(--or-card, white);
+  font: inherit;
+}
+
+.management-activity__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .75rem;
+}
+
+.management-activity__summary article {
+  display: grid;
+  gap: .45rem;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--or-outline, #d7dee5) 80%, transparent);
+  border-radius: .85rem;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--or-block, #eef2f7) 35%, var(--or-card, white));
+}
+
+.management-activity__summary article span {
+  color: var(--or-muted, #62717e);
+  font-size: .8rem;
+}
+
+.management-activity__summary article strong {
+  color: var(--or-text, #1c2833);
+  font-size: clamp(1.35rem, 2.2vw, 1.8rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.management-activity__empty,
+.management-activity__empty-schools,
+.management-activity__state {
+  margin: 0;
+  border-radius: .75rem;
+  padding: .85rem 1rem;
+  color: var(--or-muted, #62717e);
+  background: color-mix(in srgb, var(--or-block, #eef2f7) 58%, var(--or-card, white));
+  font-size: .875rem;
+}
+
+.management-activity__state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  min-height: 3rem;
+}
+
+.management-activity__state--error {
+  color: var(--or-error, #a34242);
+  background: color-mix(in srgb, var(--or-error, #a34242) 8%, var(--or-card, white));
+}
+
+.management-activity__state button {
+  min-height: 2.25rem;
+  border: 1px solid currentColor;
+  border-radius: .55rem;
+  padding: 0 .85rem;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.management-activity__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem;
+  color: var(--or-muted, #62717e);
+  font-size: .75rem;
+}
+
+.management-activity__legend-swatch {
+  width: .85rem;
+  height: .85rem;
+  border: 1px solid color-mix(in srgb, var(--or-outline, #d7dee5) 80%, transparent);
+  border-radius: .2rem;
+}
+
+.management-activity .management-activity__heatmap-wrap {
+  display: grid;
+  gap: .5rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.management-activity .management-activity__heatmap-pages {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: .65rem;
+  color: var(--or-muted, #62717e);
+  font-size: .75rem;
+}
+
+.management-activity .management-activity__heatmap-pages > div {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+}
+
+.management-activity .management-activity__heatmap-pages button {
+  min-height: 2rem;
+  border: 1px solid var(--or-outline, #d7dee5);
+  border-radius: .5rem;
+  padding: 0 .65rem;
+  color: var(--or-text, #1c2833);
+  background: var(--or-card, white);
+  font: inherit;
+  cursor: pointer;
+}
+
+.management-activity .management-activity__heatmap-pages button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.management-activity__table-scroll {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--or-outline, #d7dee5) 80%, transparent);
+  border-radius: .75rem;
+  background: var(--or-card, white);
+  scrollbar-width: thin;
+}
+
+.management-activity .management-activity__heatmap {
+  table-layout: fixed;
+  width: 100%;
+  min-width: max-content;
+  border-spacing: 0;
+  border-collapse: separate;
+  color: var(--or-text, #1c2833);
+  font-size: .75rem;
+}
+
+.management-activity .management-activity__heatmap th,
+.management-activity .management-activity__heatmap td {
+  border-right: 1px solid color-mix(in srgb, var(--or-outline, #d7dee5) 55%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--or-outline, #d7dee5) 55%, transparent);
+  text-align: center;
+}
+
+.management-activity .management-activity__heatmap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-width: var(--activity-day-width);
+  padding: .75rem .5rem;
+  color: var(--or-muted, #62717e);
+  background: var(--or-card, white);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.management-activity .management-activity__heatmap time {
+  display: block;
+  white-space: nowrap;
+}
+
+.management-activity .management-activity__heatmap .management-activity__school-heading {
+  width: var(--activity-school-width);
+  left: 0;
+  z-index: 2;
+  min-width: 8rem;
+  text-align: left;
+}
+
+.management-activity .management-activity__heatmap tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  max-width: 15rem;
+  min-width: 8rem;
+  padding: .5rem .7rem;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--or-card, white);
+  font-weight: 600;
+}
+
+.management-activity .management-activity__heatmap td {
+  width: var(--activity-day-width);
+  min-width: var(--activity-day-width);
+  height: 2.5rem;
+  padding: .375rem .5rem;
+  color: var(--or-text, #1c2833);
+  font-variant-numeric: tabular-nums;
+  outline-offset: -2px;
+}
+
+.management-activity .management-activity__heatmap td:focus-visible,
+.management-activity__filters select:focus-visible,
+.management-activity__state button:focus-visible {
+  outline: 2px solid var(--or-primary, #287a65);
+}
+
+.management-activity__cell--0 { background: var(--activity-zero); }
+.management-activity__cell--1 { background: var(--activity-low); }
+.management-activity__cell--2 { background: var(--activity-mid); }
+.management-activity__cell--3 { background: var(--activity-high); }
+.management-activity__cell--4 { color: var(--or-on-primary) !important; background: var(--activity-peak); }
+
+.management-activity__empty-schools {
+  margin: .75rem;
+}
+
+@media (max-width: 720px) {
+  .management-activity__header {
+    flex-direction: column;
+  }
+
+  .management-activity__filters {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .management-activity__summary {
+    gap: .5rem;
+  }
+
+  .management-activity__summary article {
+    padding: .75rem .6rem;
+  }
+
+  .management-activity__summary article span {
+    font-size: .68rem;
+  }
+
+  .management-activity__summary article strong {
+    font-size: 1.2rem;
+  }
+}

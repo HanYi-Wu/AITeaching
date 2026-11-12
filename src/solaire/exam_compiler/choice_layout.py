@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any
 
 # 粗略「视觉单位」阈值，按正文宽度约一行 80–90 单位调参（非精确排版）
@@ -30,9 +31,9 @@ _SPACE_CMDS = frozenset({",", ";", ":", "!", "quad", "qquad"})
 _SINGLE_CHAR_CMD_DELIMS = frozenset({"(", ")", "[", "]", "{", "}"})
 
 
-def _read_command_name(s: str, i: int) -> tuple[str, int]:
+def _read_command_name(s: str, i: int, end: int | None = None) -> tuple[str, int]:
     r"""反斜杠已跳过，从 s[i] 起读命令名；`\{` 等返回单字符。"""
-    n = len(s)
+    n = len(s) if end is None else min(end, len(s))
     if i >= n:
         return "", i
     c = s[i]
@@ -87,27 +88,82 @@ def _skip_optional_square(s: str, i: int) -> int:
     return j
 
 
-def _segment_weight(s: str, start: int, end: int) -> float:
-    """对 s[start:end] 求视觉权重（不含数学模式外壳 `$`）。"""
+def _paired_delimiters(s: str) -> tuple[dict[int, int], dict[int, int]]:
+    """Index escaped-aware brace and optional-argument pairs in one pass."""
+    braces: dict[int, int] = {}
+    squares: dict[int, int] = {}
+    brace_stack: list[int] = []
+    square_stack: list[int] = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "{":
+            brace_stack.append(i)
+        elif c == "}" and brace_stack:
+            braces[brace_stack.pop()] = i
+        elif c == "[":
+            square_stack.append(i)
+        elif c == "]" and square_stack:
+            squares[square_stack.pop()] = i
+        i += 1
+    return braces, squares
+
+
+def _braced_range(
+    s: str, i: int, end: int, brace_pairs: dict[int, int]
+) -> tuple[int, int, int]:
+    """Return the inner range and resume index for a brace argument."""
+    if i >= end or s[i] != "{":
+        return i, i, i
+    closing = brace_pairs.get(i)
+    if closing is None or closing >= end:
+        return i + 1, end, end
+    return i + 1, closing, closing + 1
+
+
+def _skip_square_range(
+    s: str, i: int, end: int, square_pairs: dict[int, int]
+) -> int:
+    if i >= end or s[i] != "[":
+        return i
+    closing = square_pairs.get(i)
+    return end if closing is None or closing >= end else closing + 1
+
+
+def _weight_range(
+    s: str,
+    start: int,
+    end: int,
+    brace_pairs: dict[int, int],
+    square_pairs: dict[int, int],
+) -> float:
+    """Measure a source range without copying nested brace contents."""
     w = 0.0
     i = start
     n = min(end, len(s))
     while i < n:
         c = s[i]
         if c == "\\":
-            cmd, j = _read_command_name(s, i + 1)
+            cmd, j = _read_command_name(s, i + 1, n)
             if cmd in _CMD_FRAC:
-                k = _skip_optional_square(s, j)
-                a, k = _read_braced(s, k)
-                b, k = _read_braced(s, k)
-                w += _FRAC_OVERHEAD + _weight_core(a) + _weight_core(b)
+                k = _skip_square_range(s, j, n, square_pairs)
+                a_start, a_end, k = _braced_range(s, k, n, brace_pairs)
+                b_start, b_end, k = _braced_range(s, k, n, brace_pairs)
+                w += _FRAC_OVERHEAD
+                w += _weight_range(s, a_start, a_end, brace_pairs, square_pairs)
+                w += _weight_range(s, b_start, b_end, brace_pairs, square_pairs)
                 i = k
                 continue
             if cmd == "sqrt":
-                k = _skip_optional_square(s, j)
+                k = _skip_square_range(s, j, n, square_pairs)
                 if k < n and s[k] == "{":
-                    inner, k = _read_braced(s, k)
-                    w += _SQRT_OVERHEAD + _weight_core(inner)
+                    inner_start, inner_end, k = _braced_range(s, k, n, brace_pairs)
+                    w += _SQRT_OVERHEAD + _weight_range(
+                        s, inner_start, inner_end, brace_pairs, square_pairs
+                    )
                 else:
                     w += _SQRT_OVERHEAD + 0.55
                     k = k + 1 if k < n else k
@@ -116,8 +172,10 @@ def _segment_weight(s: str, start: int, end: int) -> float:
             if cmd in _TEXT_WRAPPERS:
                 k = j
                 if k < n and s[k] == "{":
-                    inner, k = _read_braced(s, k)
-                    w += _TEXT_WRAPPER_SKIN + _weight_core(inner)
+                    inner_start, inner_end, k = _braced_range(s, k, n, brace_pairs)
+                    w += _TEXT_WRAPPER_SKIN + _weight_range(
+                        s, inner_start, inner_end, brace_pairs, square_pairs
+                    )
                 else:
                     w += _GENERIC_CMD
                 i = k
@@ -138,8 +196,10 @@ def _segment_weight(s: str, start: int, end: int) -> float:
             i = j
             continue
         if c == "{":
-            inner, j = _read_braced(s, i)
-            w += _GROUP_SKIN * 2 + _weight_core(inner)
+            inner_start, inner_end, j = _braced_range(s, i, n, brace_pairs)
+            w += _GROUP_SKIN * 2 + _weight_range(
+                s, inner_start, inner_end, brace_pairs, square_pairs
+            )
             i = j
             continue
         if c in "()[]":
@@ -150,8 +210,8 @@ def _segment_weight(s: str, start: int, end: int) -> float:
             w += 0.32
             i += 1
             if i < n and s[i] == "{":
-                inner, i = _read_braced(s, i)
-                w += _weight_core(inner)
+                inner_start, inner_end, i = _braced_range(s, i, n, brace_pairs)
+                w += _weight_range(s, inner_start, inner_end, brace_pairs, square_pairs)
             elif i < n:
                 w += 0.48
                 i += 1
@@ -173,11 +233,108 @@ def _segment_weight(s: str, start: int, end: int) -> float:
     return w
 
 
+def _legacy_segment_weight(s: str, start: int, end: int) -> float:
+    """Keep the original parser for escaped delimiters consumed as operands."""
+    w = 0.0
+    i = start
+    n = min(end, len(s))
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            cmd, j = _read_command_name(s, i + 1, n)
+            if cmd in _CMD_FRAC:
+                k = _skip_optional_square(s, j)
+                a, k = _read_braced(s, k)
+                b, k = _read_braced(s, k)
+                w += _FRAC_OVERHEAD + _legacy_weight_core(a) + _legacy_weight_core(b)
+                i = k
+                continue
+            if cmd == "sqrt":
+                k = _skip_optional_square(s, j)
+                if k < n and s[k] == "{":
+                    inner, k = _read_braced(s, k)
+                    w += _SQRT_OVERHEAD + _legacy_weight_core(inner)
+                else:
+                    w += _SQRT_OVERHEAD + 0.55
+                    k = k + 1 if k < n else k
+                i = k
+                continue
+            if cmd in _TEXT_WRAPPERS:
+                k = j
+                if k < n and s[k] == "{":
+                    inner, k = _read_braced(s, k)
+                    w += _TEXT_WRAPPER_SKIN + _legacy_weight_core(inner)
+                else:
+                    w += _GENERIC_CMD
+                i = k
+                continue
+            if cmd in _SPACE_CMDS:
+                w += _SPACE_CMD_WEIGHT
+                i = j
+                continue
+            if cmd in _SINGLE_CHAR_CMD_DELIMS or cmd in ("lvert", "rvert", "Vert"):
+                w += _DELIM
+                i = j
+                continue
+            if cmd == "," and j == i + 1:
+                w += _SPACE_CMD_WEIGHT
+                i = j
+                continue
+            w += _GENERIC_CMD
+            i = j
+            continue
+        if c == "{":
+            inner, j = _read_braced(s, i)
+            w += _GROUP_SKIN * 2 + _legacy_weight_core(inner)
+            i = j
+            continue
+        if c in "()[]":
+            w += _DELIM
+            i += 1
+            continue
+        if c in "^_":
+            w += 0.32
+            i += 1
+            if i < n and s[i] == "{":
+                inner, i = _read_braced(s, i)
+                w += _legacy_weight_core(inner)
+            elif i < n:
+                w += 0.48
+                i += 1
+            continue
+        if c.isspace():
+            w += 0.18
+            i += 1
+            continue
+        o = ord(c)
+        if o > 126:
+            w += 2.0
+        elif c.isdigit():
+            w += 0.52
+        elif c in ",.;:":
+            w += 0.32
+        else:
+            w += 1.0
+        i += 1
+    return w
+
+
+def _legacy_weight_core(s: str) -> float:
+    return _legacy_segment_weight(s, 0, len(s))
+
+
+def _segment_weight(s: str, start: int, end: int) -> float:
+    """对 s[start:end] 求视觉权重（不含数学模式外壳 `$`）。"""
+    brace_pairs, square_pairs = _paired_delimiters(s)
+    return _weight_range(s, start, end, brace_pairs, square_pairs)
+
+
 def _weight_core(s: str) -> float:
-    return _segment_weight(s, 0, len(s))
+    brace_pairs, square_pairs = _paired_delimiters(s)
+    return _weight_range(s, 0, len(s), brace_pairs, square_pairs)
 
 
-def option_visual_weight(s: str) -> float:
+def _measure_option(s: str) -> float:
     """
     估计选项在试卷一行中的占用（相对单位）。
 
@@ -185,13 +342,27 @@ def option_visual_weight(s: str) -> float:
     - 分组 ``{...}`` 主要计内部，外壳几乎不计。
     - 容器命令 ``\\frac`` ``\\dfrac``、``\\sqrt{...}``、``\\mathrm{...}`` 等按内部子内容累计，外加很小常数。
     """
-    t = s.strip()
-    if len(t) >= 2 and t[0] == "$" and t[-1] == "$":
-        return _weight_core(t[1:-1])
-    return _weight_core(t)
+    trimmed = s.strip()
+    body = trimmed[1:-1] if len(trimmed) >= 2 and trimmed[0] == "$" and trimmed[-1] == "$" else trimmed
+    if "\\{" in body or "\\}" in body:
+        if "^" in body or "_" in body or r"\sqrt" in body:
+            return _legacy_weight_core(body)
+    brace_pairs, square_pairs = _paired_delimiters(body)
+    return _weight_range(body, 0, len(body), brace_pairs, square_pairs)
 
 
-def infer_choice_layout(options: dict[str, str]) -> str:
+@lru_cache(maxsize=4096)
+def _cached_option_weight(s: str) -> float:
+    return _measure_option(s)
+
+
+def option_visual_weight(s: str) -> float:
+    if len(s) <= 4096:
+        return _cached_option_weight(s)
+    return _measure_option(s)
+
+
+def _infer_choice_layout_items(items: tuple[tuple[str, str], ...]) -> str:
     """
     返回 ``inline_one_line`` | ``grid_two_rows`` | ``stack``。
 
@@ -199,11 +370,10 @@ def infer_choice_layout(options: dict[str, str]) -> str:
     - **grid_two_rows**：双行两列表格（四选典型为 2×2；三选为 AB / C）。
     - **stack**：传统 ``enumerate``，一项一行。
     """
-    if not options:
+    if not items:
         return "stack"
-    letters = [k for k, _ in sorted(options.items())]
-    texts = [options[k] for k in letters]
-    m = len(letters)
+    texts = [text for _, text in items]
+    m = len(items)
     widths = [option_visual_weight(t) for t in texts]
     max_w = max(widths)
     sep = 4.0
@@ -240,6 +410,20 @@ def infer_choice_layout(options: dict[str, str]) -> str:
         return "stack"
 
     return "stack"
+
+
+@lru_cache(maxsize=1024)
+def _cached_choice_layout(items: tuple[tuple[str, str], ...]) -> str:
+    return _infer_choice_layout_items(items)
+
+
+def infer_choice_layout(options: dict[str, str]) -> str:
+    if not options:
+        return "stack"
+    items = tuple(sorted(options.items()))
+    if sum(len(key) + len(value) for key, value in items) <= 32768:
+        return _cached_choice_layout(items)
+    return _infer_choice_layout_items(items)
 
 
 _VALID_FORCED_LAYOUTS = frozenset({"inline_one_line", "grid_two_rows", "stack"})

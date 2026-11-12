@@ -1,9 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
 import type { GraphNodeRow, GraphRelationRow } from "../useGraphStore";
 import { selectOption } from "../../test/selectOption";
+import type { LayoutWorkerRequest, LayoutWorkerResponse } from "./layoutWorker";
 
 type MockNode = {
   id: string;
@@ -14,6 +15,27 @@ type MockNode = {
 };
 
 type MockEdge = { id: string; source: string; target: string };
+
+class WorkerStub {
+  onmessage: ((event: MessageEvent<LayoutWorkerResponse>) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  messages: LayoutWorkerRequest[] = [];
+  terminated = false;
+
+  constructor(_url: URL, _options: WorkerOptions) {}
+
+  postMessage(message: LayoutWorkerRequest) {
+    this.messages.push(message);
+  }
+
+  terminate() {
+    this.terminated = true;
+  }
+
+  emit(response: LayoutWorkerResponse) {
+    this.onmessage?.({ data: response } as MessageEvent<LayoutWorkerResponse>);
+  }
+}
 
 const flowMock = vi.hoisted(() => ({
   nodes: [] as MockNode[],
@@ -155,6 +177,7 @@ describe("GraphCanvas geometry invalidation", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     flowMock.nodes = [];
     flowMock.edges = [];
   });
@@ -260,5 +283,49 @@ describe("GraphCanvas geometry invalidation", () => {
     await waitFor(() => expect(flowMock.nodes).toEqual([]));
     mounted.rerender(view(canvasProps()));
     await waitFor(() => expect(dagre).toHaveBeenCalledTimes(2));
+  });
+
+  it("solves large graphs in a worker and clears stale nodes on scope changes", async () => {
+    const workers: WorkerStub[] = [];
+    class TestWorker extends WorkerStub {
+      constructor(url: URL, options: WorkerOptions) {
+        super(url, options);
+        workers.push(this);
+      }
+    }
+    vi.stubGlobal("Worker", TestWorker);
+    const graphNodes: GraphNodeRow[] = Array.from({ length: 40 }, (_, index) => ({
+      id: `node-${index}`,
+      canonical_name: `节点${index}`,
+      node_kind: "concept",
+      file_link_count: 0,
+    }));
+    const relations: GraphRelationRow[] = Array.from({ length: 39 }, (_, index) => ({
+      id: `edge-${index}`,
+      from_node_id: `node-${index}`,
+      to_node_id: `node-${index + 1}`,
+      relation_type: "related",
+    }));
+    const mounted = render(view(canvasProps({ graphScope: "scope-a", graphNodes, relations })));
+
+    await waitFor(() => expect(workers).toHaveLength(1));
+    const firstTask = workers[0].messages.find((message) => message.type === "layout");
+    expect(firstTask?.type).toBe("layout");
+    if (!firstTask || firstTask.type !== "layout") throw new Error("large graph was not sent to worker");
+    await act(async () => {
+      workers[0].emit({
+        type: "result",
+        requestId: firstTask.requestId,
+        result: { nodes: firstTask.input.nodes, edges: firstTask.input.edges },
+      });
+    });
+    await waitFor(() => expect(flowMock.nodes).toHaveLength(40));
+
+    mounted.rerender(view(canvasProps({ graphScope: "scope-b", graphNodes, relations })));
+    await waitFor(() => expect(flowMock.nodes).toEqual([]));
+    expect(workers[0].terminated).toBe(false);
+    expect(workers).toHaveLength(1);
+    expect(workers[0].messages.filter((message) => message.type === "layout")).toHaveLength(2);
+    vi.unstubAllGlobals();
   });
 });

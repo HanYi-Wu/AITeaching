@@ -137,7 +137,6 @@ describe("SettingsWorkspace role gating", () => {
         preferences: { density: "compact" },
       },
     });
-    const user = userEvent.setup();
     renderSettings("teacher");
 
     const density = await screen.findByLabelText("界面密度");
@@ -146,7 +145,7 @@ describe("SettingsWorkspace role gating", () => {
 
     await selectOption(density, "comfortable");
     expect(density).toHaveTextContent("舒适");
-    await user.click(screen.getByRole("button", { name: "保存个性化设置" }));
+    expect(screen.queryByRole("button", { name: "保存个性化设置" })).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.updateAccountProfile).toHaveBeenCalledWith(expect.objectContaining({
       preferences: expect.objectContaining({ density: "comfortable" }),
     })));
@@ -161,7 +160,6 @@ describe("SettingsWorkspace role gating", () => {
     renderSettings("teacher");
 
     await user.click(await screen.findByRole("radio", { name: "黑色" }));
-    await user.click(screen.getByRole("button", { name: "保存个性化设置" }));
 
     await waitFor(() => expect(mocks.updateAccountProfile).toHaveBeenCalledWith(expect.objectContaining({
       preferences: expect.objectContaining({ theme: "classic" }),

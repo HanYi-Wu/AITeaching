@@ -1,0 +1,962 @@
+/* ============================================================
+   PermissionExplorer · 权限全景星图与角色矩阵
+   严格贴合项目 or-g53 设计语言（--or-card / --or-block / --or-text / --or-primary）：
+   零花哨彩色文字 · 大字号高可读 · 全部节点可点击 · 归属清晰可直达
+   ============================================================ */
+
+.permission-explorer {
+  display: grid;
+  gap: 12px;
+}
+
+/* ── 舞台容器：贴合项目浅色 / 夜间色彩体系 ── */
+.pst {
+  container-type: inline-size;
+  container-name: permission-stage;
+  --pe-user: 0, 122, 255;
+  --pe-role: 0, 122, 255;
+  --pe-menu: 0, 122, 255;
+  --pe-permission: 0, 122, 255;
+  --pe-ink: 32, 32, 36;
+  --pe-accent: 0, 122, 255;
+  --pe-danger: 186, 44, 59;
+  --pe-paper: 255, 251, 255;
+  --pe-orb-1: 255, 255, 255;
+  --pe-orb-2: 241, 238, 243;
+  --pe-orb-3: 220, 216, 224;
+  --pe-stage-bg:
+    radial-gradient(600px 400px at 50% 52%, rgba(0, 122, 255, 0.045), transparent 72%),
+    radial-gradient(rgba(32, 32, 36, 0.07) 1px, transparent 1px),
+    linear-gradient(180deg, var(--or-card, #fffbff) 0%, var(--or-block, #f1eef3) 100%);
+
+  position: relative;
+  width: 100%;
+  height: clamp(520px, calc(100vh - 290px), 640px);
+  min-height: 520px;
+  border-radius: 18px;
+  border: 1px solid var(--or-outline, #dcd8e0);
+  background-image: var(--pe-stage-bg);
+  background-size: 100% 100%, 24px 24px, 100% 100%;
+  overflow: hidden;
+  outline: none;
+  user-select: none;
+}
+
+html[data-eh-theme="night"] .pst {
+  --pe-user: 64, 156, 255;
+  --pe-role: 64, 156, 255;
+  --pe-menu: 64, 156, 255;
+  --pe-permission: 64, 156, 255;
+  --pe-ink: 230, 233, 239;
+  --pe-accent: 64, 156, 255;
+  --pe-danger: 244, 98, 90;
+  --pe-paper: 28, 32, 41;
+  --pe-orb-1: 62, 70, 86;
+  --pe-orb-2: 38, 44, 56;
+  --pe-orb-3: 24, 28, 36;
+  --pe-stage-bg:
+    radial-gradient(600px 400px at 50% 52%, rgba(64, 156, 255, 0.075), transparent 72%),
+    radial-gradient(rgba(230, 233, 239, 0.06) 1px, transparent 1px),
+    linear-gradient(180deg, var(--or-card, #1c2029) 0%, var(--or-page, #111318) 100%);
+}
+
+/* ── 底层 Canvas 与前景交互层 ── */
+.pst-canvas,
+.pst-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ── 节点锚点：由弹簧引擎驱动 translate3d(x, y, 0) scale(s) ── */
+.pst-node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 36px;
+  height: 36px;
+  margin-left: -18px;
+  margin-top: -18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--or-text, #202024);
+  font: inherit;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform, opacity;
+  outline: none;
+}
+
+.pst-node.is-static {
+  cursor: default;
+}
+
+.pst-node.is-ghost {
+  pointer-events: none;
+}
+
+.pst-node.is-dim .pst-below,
+.pst-node.is-dim .pst-dial-face,
+.pst-node.is-dim .pst-pill {
+  opacity: 0.45;
+}
+
+/* 中心球与表盘的点击热区 / 读数面 */
+.pst-hit,
+.pst-dial-face {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.pst-node.is-hub:hover .pst-dial-face,
+.pst-node.is-core:not(.is-static):hover .pst-hit {
+  transform: translate(-50%, -50%) scale(1.04);
+}
+
+.pst-dial-ico {
+  width: 16px;
+  height: 16px;
+  color: var(--or-primary, #007aff);
+  opacity: 0.9;
+}
+
+.pst-dial-num {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: var(--or-text, #202024);
+  font-variant-numeric: tabular-nums;
+}
+
+.pst-node.is-hub[style*="68px"] .pst-dial-num {
+  font-size: 17px;
+}
+
+/* 球体与表盘下方的清晰标题（去掉多余小字） */
+.pst-below {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.pst-below .pst-title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--or-text, #202024);
+  letter-spacing: -0.01em;
+}
+
+/* ── 条目胶囊节点（全景卫星、模块列表、三列溯源统一大字号高可读样式） ── */
+.pst-pill {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px 8px 11px;
+  border-radius: 12px;
+  background: var(--or-card, #fffbff);
+  border: 1px solid var(--or-outline, #dcd8e0);
+  box-shadow: 0 4px 14px -6px rgba(15, 23, 42, 0.14);
+  white-space: nowrap;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, opacity 0.2s ease;
+}
+
+.pst-node.align-left .pst-pill {
+  left: calc(50% - 10px);
+  transform: translate(0, -50%);
+}
+
+.pst-node.align-right .pst-pill {
+  left: calc(50% + 10px);
+  transform: translate(-100%, -50%);
+}
+
+.pst-ring {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  border: 2px solid var(--or-primary, #007aff);
+  background: var(--or-card, #fffbff);
+  transition: background 0.16s ease;
+}
+
+.pst-node.tone-danger .pst-ring {
+  border-color: var(--or-error, #ba2c3b);
+}
+
+.pst-pill-txt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.28;
+}
+
+.pst-pill-txt .pst-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--or-text, #202024);
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pst-pill-txt .pst-sub {
+  font-size: 12.5px;
+  color: var(--or-muted, #64636c);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pst-badge {
+  margin-left: 2px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--or-muted, #64636c);
+  background: var(--or-block, #f1eef3);
+}
+
+.pst-node.tone-off .pst-pill {
+  opacity: 0.56;
+}
+
+.pst-node.is-item:hover .pst-pill,
+.pst-node.is-item:focus-visible .pst-pill,
+.pst-node.is-item.is-active .pst-pill {
+  border-color: var(--or-primary, #007aff);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+}
+
+.pst-node.is-item.is-active .pst-ring,
+.pst-node.is-item:hover .pst-ring {
+  background: var(--or-primary, #007aff);
+}
+
+/* ── 左上角悬浮面包屑胶囊（统一中性色阶，无彩色字） ── */
+.pst-crumbs {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 12px;
+  background: var(--or-card, #fffbff);
+  border: 1px solid var(--or-outline, #dcd8e0);
+  box-shadow: 0 4px 12px -4px rgba(15, 23, 42, 0.1);
+  font-size: 13.5px;
+}
+
+.pst-back {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--or-block, #f1eef3);
+  color: var(--or-text, #202024);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.pst-back:hover {
+  background: var(--or-inset, #e7e4e9);
+}
+
+.pst-back svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pst-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: var(--or-muted, #64636c);
+  font-size: 13.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.pst-crumb.is-current {
+  color: var(--or-text, #202024);
+  font-weight: 650;
+}
+
+.pst-crumb:hover {
+  color: var(--or-text, #202024);
+  background: var(--or-block, #f1eef3);
+}
+
+.pst-sep {
+  color: var(--or-muted, #64636c);
+  opacity: 0.45;
+  padding: 0 2px;
+}
+
+.pst-crumb-leaf {
+  padding: 2px 6px;
+  color: var(--or-text, #202024);
+  font-size: 13.5px;
+  font-weight: 650;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 第 3 层三列标头（干净中性色，无花哨彩色字） ── */
+.pst-trace-cols {
+  position: absolute;
+  top: 62px;
+  left: 0;
+  right: 380px;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  text-align: center;
+  padding: 0 10%;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--or-muted, #64636c);
+  pointer-events: none;
+}
+
+/* ── 右上角悬浮快速分类切换胶囊 ── */
+.pst-legend {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--or-card, #fffbff);
+  border: 1px solid var(--or-outline, #dcd8e0);
+  box-shadow: 0 4px 12px -4px rgba(15, 23, 42, 0.1);
+}
+
+.pst-legend-cell {
+  border: 0;
+  background: none;
+  padding: 6px 12px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.pst-legend-cell:hover {
+  background: var(--or-block, #f1eef3);
+}
+
+.pst-legend-cell.is-active {
+  background: var(--or-block, #f1eef3);
+}
+
+.pst-legend-cell span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--or-muted, #64636c);
+  white-space: nowrap;
+}
+
+.pst-legend-cell.is-active span {
+  color: var(--or-text, #202024);
+}
+
+.pst-legend-cell b {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--or-text, #202024);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 左下角悬浮检索与分页坞站 ── */
+.pst-dock {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pst-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 12px;
+  background: var(--or-card, #fffbff);
+  border: 1px solid var(--or-outline, #dcd8e0);
+  box-shadow: 0 4px 12px -4px rgba(15, 23, 42, 0.1);
+}
+
+.pst-search-ico {
+  width: 15px;
+  height: 15px;
+  color: var(--or-muted, #64636c);
+  flex-shrink: 0;
+}
+
+.pst-search input {
+  width: 210px;
+  border: 0;
+  background: transparent;
+  color: var(--or-text, #202024);
+  font-size: 13.5px;
+  outline: none;
+}
+
+.pst-search input::placeholder {
+  color: var(--or-muted, #64636c);
+}
+
+.pst-search-clear {
+  border: 0;
+  background: var(--or-block, #f1eef3);
+  color: var(--or-text, #202024);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pst-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: var(--or-card, #fffbff);
+  border: 1px solid var(--or-outline, #dcd8e0);
+  box-shadow: 0 4px 12px -4px rgba(15, 23, 42, 0.1);
+  font-size: 13px;
+  color: var(--or-muted, #64636c);
+}
+
+.pst-pager button {
+  border: 0;
+  background: var(--or-block, #f1eef3);
+  color: var(--or-text, #202024);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pst-pager button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── 右侧归属详情与可执行跳转面板（大字号、可点击、贴合项目卡片语言） ── */
+.pst-insight {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  bottom: 14px;
+  width: 360px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border-radius: 16px;
+  background: var(--or-card, #fffbff);
+  border: 1px solid var(--or-outline, #dcd8e0);
+  box-shadow: -8px 0 28px -12px rgba(15, 23, 42, 0.18);
+  overflow-y: auto;
+  user-select: text;
+  animation: pst-insight-in 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes pst-insight-in {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.pst-insight-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pst-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--or-muted, #64636c);
+  background: var(--or-block, #f1eef3);
+}
+
+.pst-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--or-block, #f1eef3);
+  color: var(--or-text, #202024);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pst-close:hover {
+  background: var(--or-inset, #e7e4e9);
+}
+
+.pst-insight-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--or-text, #202024);
+  letter-spacing: -0.02em;
+}
+
+.pst-insight-sub {
+  margin: -8px 0 0;
+  font-size: 13.5px;
+  color: var(--or-muted, #64636c);
+}
+
+/* 顶部快捷操作按钮栏（直达对应页面或权限配置） */
+.pst-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pst-actions button {
+  flex: 1 1 auto;
+  justify-content: center;
+  padding: 9px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* 关联实体归属列表 */
+.pst-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pst-group-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--or-muted, #64636c);
+}
+
+.pst-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.pst-item-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.pst-chip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--or-outline, #dcd8e0);
+  background: var(--or-block, #f1eef3);
+  color: var(--or-text, #202024);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.pst-chip:hover {
+  border-color: var(--or-primary, #007aff);
+  background: var(--or-inset, #e7e4e9);
+}
+
+.pst-chip-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pst-chip-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--or-text, #202024);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pst-chip-sub {
+  font-style: normal;
+  font-size: 12.5px;
+  color: var(--or-muted, #64636c);
+}
+
+.pst-chip-badge {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--or-muted, #64636c);
+  background: var(--or-card, #fffbff);
+  border: 1px solid var(--or-outline, #dcd8e0);
+}
+
+.pst-chip-badge.is-manage {
+  color: var(--or-primary, #007aff);
+  border-color: color-mix(in srgb, var(--or-primary, #007aff) 38%, var(--or-outline, #dcd8e0));
+}
+
+.pst-row-jump {
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--or-outline, #dcd8e0);
+  background: var(--or-card, #fffbff);
+  color: var(--or-text, #202024);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.pst-row-jump:hover {
+  border-color: var(--or-primary, #007aff);
+  background: var(--or-block, #f1eef3);
+}
+
+.pst-empty {
+  font-size: 13.5px;
+  color: var(--or-muted, #64636c);
+  padding: 6px 0;
+}
+
+/* ── 角色 × 页面 矩阵视图样式 ── */
+.permission-matrix-wrap {
+  display: grid;
+  gap: 12px;
+}
+
+.permission-matrix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--or-outline, #dcd8e0);
+  background: var(--or-card, #fffbff);
+  font-size: 13px;
+  color: var(--or-muted, #64636c);
+}
+
+.permission-matrix-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--or-text, #202024);
+}
+
+.permission-matrix-legend__item i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.permission-matrix-legend__item.is-explicit i {
+  background: var(--or-primary, #007aff);
+}
+.permission-matrix-legend__item.is-implied i {
+  background: var(--or-text, #202024);
+  opacity: 0.65;
+}
+.permission-matrix-legend__item.is-builtin i {
+  background: var(--or-success, #24813b);
+}
+.permission-matrix-legend__item.is-none i {
+  background: var(--or-outline, #dcd8e0);
+}
+
+.permission-matrix-legend__hint {
+  margin-left: auto;
+}
+
+.permission-matrix__group-row td {
+  background: var(--or-block, #f1eef3);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--or-muted, #64636c);
+}
+
+.permission-matrix__role,
+.permission-matrix__menu {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  color: var(--or-text, #202024);
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.permission-matrix__role span,
+.permission-matrix__menu span {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--or-muted, #64636c);
+}
+
+.permission-cell {
+  min-height: 32px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--or-outline, #dcd8e0);
+  background: transparent;
+  color: var(--or-muted, #64636c);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.permission-cell:hover {
+  border-color: var(--or-primary, #007aff);
+}
+
+.permission-cell--explicit {
+  color: var(--or-primary, #007aff);
+  border-color: color-mix(in srgb, var(--or-primary, #007aff) 42%, var(--or-outline, #dcd8e0));
+  background: color-mix(in srgb, var(--or-primary, #007aff) 10%, transparent);
+}
+
+.permission-cell--implied {
+  color: var(--or-text, #202024);
+  border-color: var(--or-outline, #dcd8e0);
+  background: var(--or-block, #f1eef3);
+}
+
+.permission-cell--builtin {
+  color: var(--or-success, #24813b);
+  border-color: color-mix(in srgb, var(--or-success, #24813b) 38%, var(--or-outline, #dcd8e0));
+  background: color-mix(in srgb, var(--or-success, #24813b) 10%, transparent);
+}
+
+/* ── 响应式适配 ── */
+@media (max-width: 900px) {
+  .pst {
+    height: 680px;
+  }
+
+  .pst-trace-cols {
+    display: none;
+  }
+
+  .pst-insight {
+    top: auto;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    max-height: 50%;
+  }
+}
+
+/* Compact module view: keep the real choice cards inside the stage. */
+@container permission-stage (max-width: 760px) {
+  .pst.is-module .pst-node.is-item {
+    width: calc(100% - 24px);
+    margin-left: calc(-50% + 12px);
+  }
+
+  .pst.is-module .pst-node.is-item .pst-pill {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .pst.is-module .pst-pill-txt {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .pst.is-module .pst-badge {
+    max-width: 28%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pst.is-module .pst-legend {
+    top: 58px;
+    left: 12px;
+    right: 12px;
+    justify-content: space-around;
+  }
+}
+
+/* Entity rows use three equal, centered hit areas on narrow stages. Margins
+   are calculated from the containing stage width because these buttons are
+   absolutely positioned. */
+@container permission-stage (max-width: 860px) {
+  .pst.is-entity .pst-node.is-item {
+    width: calc(33.333% - 16px);
+    margin-left: calc(-16.666% + 8px);
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-pill {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-pill-txt {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-badge {
+    max-width: 35%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* In the desktop detail-panel range, the stage occupies width - 368px. */
+@container permission-stage (min-width: 861px) and (max-width: 900px) {
+  .pst.is-entity .pst-node.is-item {
+    width: calc((100% - 368px) / 3 - 16px);
+    margin-left: calc(-16.666% + 69.333px);
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-pill {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-pill-txt {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-badge {
+    max-width: 35%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* The mobile entity graph sits above the scrollable detail drawer. */
+@container permission-stage (max-width: 900px) {
+  .pst.is-entity .pst-node.is-item .pst-pill {
+    gap: 2px;
+    padding: 0 3px;
+    border-radius: 8px;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-pill-txt {
+    gap: 0;
+    line-height: 1.05;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-title {
+    max-width: 100%;
+    font-size: 12.5px;
+    line-height: 1.05;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-sub {
+    max-width: 100%;
+    font-size: 10px;
+    line-height: 1.05;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-badge {
+    max-width: 35%;
+    padding: 0 3px;
+    font-size: 9.5px;
+    line-height: 1;
+  }
+}
+
+@container permission-stage (max-width: 600px) {
+  .pst.is-entity .pst-node.is-item .pst-sub,
+  .pst.is-entity .pst-node.is-item .pst-badge {
+    display: none;
+  }
+
+  .pst.is-entity .pst-node.is-item .pst-title {
+    font-size: 13px;
+  }
+}

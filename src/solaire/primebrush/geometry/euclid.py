@@ -21,6 +21,25 @@ def intersect_lines_infinite(
     d: np.ndarray,
 ) -> np.ndarray | None:
     """Intersection of infinite lines AB and CD. None if parallel."""
+    if (
+        type(a) is np.ndarray
+        and type(b) is np.ndarray
+        and type(c) is np.ndarray
+        and type(d) is np.ndarray
+        and a.shape == b.shape == c.shape == d.shape == (2,)
+        and a.dtype == b.dtype == c.dtype == d.dtype == np.dtype(np.float64)
+    ):
+        ab_x, ab_y = b[0] - a[0], b[1] - a[1]
+        cd_x, cd_y = d[0] - c[0], d[1] - c[1]
+        det = float(ab_x * cd_y - ab_y * cd_x)
+        if abs(det) < 1e-12:
+            return None
+        ac_x, ac_y = c[0] - a[0], c[1] - a[1]
+        t = float((ac_x * cd_y - ac_y * cd_x) / det)
+        return np.array(
+            [a[0] + t * ab_x, a[1] + t * ab_y], dtype=np.float64
+        )
+
     ab = b - a
     cd = d - c
     det = float(ab[0] * cd[1] - ab[1] * cd[0])
@@ -33,6 +52,23 @@ def intersect_lines_infinite(
 
 def foot_on_line(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Orthogonal projection of P onto line AB (infinite)."""
+    if (
+        type(p) is np.ndarray
+        and type(a) is np.ndarray
+        and type(b) is np.ndarray
+        and p.shape == a.shape == b.shape == (2,)
+        and p.dtype == a.dtype == b.dtype == np.dtype(np.float64)
+    ):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        denom = float(dx * dx + dy * dy)
+        if denom < 1e-18:
+            return a.copy()
+        px, py = p[0] - a[0], p[1] - a[1]
+        t = float((px * dx + py * dy) / denom)
+        return np.array(
+            [a[0] + t * dx, a[1] + t * dy], dtype=np.float64
+        )
+
     ab = b - a
     denom = float(np.dot(ab, ab))
     if denom < 1e-18:

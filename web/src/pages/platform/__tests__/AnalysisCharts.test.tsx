@@ -44,4 +44,30 @@ describe("PlatformPaperAnalysisCharts", () => {
     expect(screen.queryByText("七年级一班七年级")).not.toBeInTheDocument();
     expect(screen.getByText(/风险等级说明/)).toBeInTheDocument();
   });
+
+  it("plots current class mean values and handles classes without scores", () => {
+    const chartAnalysis = {
+      ...analysis,
+      classes: [
+        { ...analysis.classes[0], class_id: "c1", class_name: "七年级一班", average_score: 88 },
+        { ...analysis.classes[0], class_id: "c2", class_name: "七年级二班", average_score: null },
+      ],
+    };
+    const { rerender } = render(<PlatformPaperAnalysisCharts analysis={chartAnalysis as never} />);
+
+    const classMeans = screen.getByTestId("paper-analysis-class-means");
+    expect(within(classMeans).getByText("七年级一班")).toBeInTheDocument();
+    expect(within(classMeans).getByText("七年级二班")).toBeInTheDocument();
+    const bars = classMeans.querySelectorAll(".analysis-class-mean-bar");
+    expect(bars).toHaveLength(2);
+    expect(bars[0]?.getAttribute("style")).toContain("--analysis-chart-target-height: 88%");
+    expect(bars[1]?.getAttribute("style")).toContain("--analysis-chart-target-height: 0%");
+
+    rerender(
+      <PlatformPaperAnalysisCharts
+        analysis={{ ...chartAnalysis, classes: [{ ...chartAnalysis.classes[0], average_score: null }] } as never}
+      />,
+    );
+    expect(screen.getByText("暂无班级平均分数据")).toBeInTheDocument();
+  });
 });

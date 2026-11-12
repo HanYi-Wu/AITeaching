@@ -81,6 +81,17 @@ html[data-eh-density="compact"] { --or-space: 0.75rem; }
   }
 }
 
+/* 手机端无登录会话冷启动时保持纯黑底色，避免进入登录开屏动画前闪出白底 */
+html[data-or-boot-login="true"],
+html[data-or-boot-login="true"] body,
+html[data-or-boot-login="true"] #root,
+html[data-or-boot-login="true"] .or-app {
+  background-color: var(--or-login-accent-color, #000000);
+}
+html[data-or-boot-login="true"] .or-app {
+  color: transparent;
+}
+
 /* 桌面壳透明窗口：四角透出桌面，由内层圆角 + overflow 画出与 Win11 相近的圆角 */
 html.tauri-shell,
 html.tauri-shell body {
@@ -362,8 +373,83 @@ html.tauri-shell #root {
 
 /* 手机端 (< 768px) 响应式布局与触控适配 */
 @media (max-width: 767px) {
-  .or-app {
-    overflow-x: hidden;
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  #root > .or-app {
+    width: 100%;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  .or-workspace-content {
+    overscroll-behavior: contain;
+  }
+
+  .or-workspace-content :is([class~="overflow-auto"], [class~="overflow-y-auto"]) {
+    overscroll-behavior-y: contain;
+  }
+
+  .or-workspace-content :is([class~="overflow-auto"], [class~="overflow-x-auto"]) {
+    overscroll-behavior-x: contain;
+  }
+
+  .or-assistant-backdrop {
+    touch-action: none;
+  }
+
+  .or-assistant-drawer :is([class~="overflow-auto"], [class~="overflow-y-auto"]) {
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .or-mobile-more-sheet {
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .or-dialog {
+    overscroll-behavior-y: contain;
+  }
+
+  .or-dialog:not([class~="overflow-hidden"]) {
+    overflow-y: auto;
+  }
+
+  .or-g49-dialog-surface,
+  .or-g53-dialog,
+  .or-g51-dialog-window {
+    max-height: min(
+      100%,
+      calc(100dvh - max(0.75rem, env(safe-area-inset-top, 0px)) - max(0.75rem, env(safe-area-inset-bottom, 0px))
+    ));
+    overscroll-behavior-y: contain;
+  }
+
+  .or-dialog {
+    max-height: min(
+      100%,
+      calc(100dvh - max(0.75rem, env(safe-area-inset-top, 0px)) - max(0.75rem, env(safe-area-inset-bottom, 0px))
+    ));
+  }
+
+  .or-g49-dialog-surface {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .or-g51-dialog-backdrop {
+    padding-top: max(6px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
   }
 
   .or-mobile-nav {

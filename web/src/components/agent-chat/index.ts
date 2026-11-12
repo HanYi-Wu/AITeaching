@@ -4,6 +4,7 @@ export * from "./AgentContextRing";
 export * from "./AgentCards";
 export * from "./AgentMessageItem";
 export * from "./AgentAttachmentList";
+export * from "./AgentChatComposer";
 export * from "./AgentMemoryDrawer";
 export * from "./AgentSessionHistoryMenu";
 export * from "./useAgentChatStream";

@@ -55,6 +55,7 @@ export function BankFolderExplorer<T extends Item>({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [exploring, setExploring] = useState(false);
+  const [dialogPortalContainer, setDialogPortalContainer] = useState<HTMLDivElement | null>(null);
   const [focusedFolder, setFocusedFolder] = useState('');
   const [clipboard, setClipboard] = useState<{ ids?: string[]; folder?: string } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; folder: string | null; id?: string } | null>(null);
@@ -562,165 +563,171 @@ export function BankFolderExplorer<T extends Item>({
         <Dialog.Root open={exploring} onOpenChange={setExploring}>
           <Dialog.Portal>
             <Dialog.Overlay className="or-dialog-backdrop fixed inset-0 z-50 bg-black/40 backdrop-blur-xs" />
-            <Dialog.Content
-              aria-label="题库文件管理器"
-              aria-describedby={undefined}
-              className="or-dialog or-g48-dialog fixed inset-2 z-50 flex flex-col p-3.5 sm:inset-[5%] sm:p-5"
-            >
-              <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[var(--or-outline)] pb-3">
-                <Dialog.Title asChild>
-                  <h2 className="mr-auto text-base font-semibold text-[var(--or-text)]">
-                    题库文件管理器 · {selectedFolder || '根目录'}
-                  </h2>
-                </Dialog.Title>
-                <button
-                  className={buttonClass}
-                  onClick={() => { setSelectedFolder(''); setName(''); }}
-                >
-                  返回根目录
-                </button>
-                <button
-                  className={`${buttonClass} or-g48-pill-dropdown`}
-                  disabled={!selectedFolder}
-                  onClick={() => {
-                    setSelectedFolder(selectedFolder.split('/').slice(0, -1).join('/'));
-                    setFocusedFolder('');
-                  }}
-                >
-                  <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden />
-                  <span className="text-center">上一级</span>
-                  <span className="h-4 w-4 shrink-0" aria-hidden />
-                </button>
-                <button
-                  className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3.5 py-1.5 text-sm font-medium"
-                  onClick={() => toggleAll(selectedFolder)}
-                >
-                  全选 / 取消全选
-                </button>
-                <AppSelect
-                  aria-label="文件管理器移动目标"
-                  value={destination}
-                  onValueChange={value => setDestination(value)}
-                  className="or-select or-g48-input max-w-48 py-1.5 text-sm bg-[var(--or-card)]"
-                >
-                  <option value="">根目录</option>
-                  {data.folders.map(path => <option key={path} value={path}>{path}</option>)}
-                </AppSelect>
-                <button
-                  className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3.5 py-1.5 text-sm font-medium"
-                  disabled={busy || !selectedIds.length}
-                  onClick={() => void act('move')}
-                >
-                  移动已选 {selectedIds.length} 题
-                </button>
-                <button
-                  className={buttonClass}
-                  disabled={!focusedFolder && !selectedIds.length}
-                  onClick={() => cut()}
-                >
-                  剪切
-                </button>
-                <button
-                  className="or-button or-button-primary or-pill or-g48-pill-btn or-g48-pill-btn-primary px-3.5 py-1.5 text-sm font-medium"
-                  disabled={busy || !clipboard}
-                  onClick={() => paste()}
-                >
-                  粘贴到当前目录
-                </button>
-                <button
-                  className="or-button or-pill or-g48-pill-btn or-g48-pill-dropdown px-3.5 py-1.5 text-sm"
-                  onClick={() => setExploring(false)}
-                >
-                  <X className="h-4 w-4 shrink-0" aria-hidden />
-                  <span className="text-center">关闭</span>
-                  <span className="h-4 w-4 shrink-0" aria-hidden />
-                </button>
-              </div>
-              <p className="mb-2 text-[13px] text-[var(--or-muted)]">
-                空白取消选择；Ctrl多选、Shift范围选择、空白框选；双击打开；拖到目录移动；右键菜单支持剪切粘贴。
-              </p>
-              {message ? (
-                <p role="status" className="mb-2 text-[13px] font-medium text-[var(--or-on-success)]">
-                  {message}
+            <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center overflow-y-auto px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-[5vw] sm:py-[5vh]">
+              <Dialog.Content
+                ref={setDialogPortalContainer}
+                aria-label="题库文件管理器"
+                aria-describedby={undefined}
+                className="pointer-events-auto relative h-full max-h-full min-h-0 w-full outline-none"
+              >
+              <div className="or-g48-dialog flex h-full max-h-full min-h-0 w-full flex-col p-3.5 sm:p-5">
+                <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[var(--or-outline)] pb-3">
+                  <Dialog.Title asChild>
+                    <h2 className="mr-auto text-base font-semibold text-[var(--or-text)]">
+                      题库文件管理器 · {selectedFolder || '根目录'}
+                    </h2>
+                  </Dialog.Title>
+                  <button
+                    className={buttonClass}
+                    onClick={() => { setSelectedFolder(''); setName(''); }}
+                  >
+                    返回根目录
+                  </button>
+                  <button
+                    className={`${buttonClass} or-g48-pill-dropdown`}
+                    disabled={!selectedFolder}
+                    onClick={() => {
+                      setSelectedFolder(selectedFolder.split('/').slice(0, -1).join('/'));
+                      setFocusedFolder('');
+                    }}
+                  >
+                    <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden />
+                    <span className="text-center">上一级</span>
+                    <span className="h-4 w-4 shrink-0" aria-hidden />
+                  </button>
+                  <button
+                    className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3.5 py-1.5 text-sm font-medium"
+                    onClick={() => toggleAll(selectedFolder)}
+                  >
+                    全选 / 取消全选
+                  </button>
+                  <AppSelect
+                    portalContainer={dialogPortalContainer}
+                    aria-label="文件管理器移动目标"
+                    value={destination}
+                    onValueChange={value => setDestination(value)}
+                    className="or-select or-g48-input max-w-48 py-1.5 text-sm bg-[var(--or-card)]"
+                  >
+                    <option value="">根目录</option>
+                    {data.folders.map(path => <option key={path} value={path}>{path}</option>)}
+                  </AppSelect>
+                  <button
+                    className="or-button or-button-tonal or-pill or-g48-pill-btn or-g48-pill-btn-tonal px-3.5 py-1.5 text-sm font-medium"
+                    disabled={busy || !selectedIds.length}
+                    onClick={() => void act('move')}
+                  >
+                    移动已选 {selectedIds.length} 题
+                  </button>
+                  <button
+                    className={buttonClass}
+                    disabled={!focusedFolder && !selectedIds.length}
+                    onClick={() => cut()}
+                  >
+                    剪切
+                  </button>
+                  <button
+                    className="or-button or-button-primary or-pill or-g48-pill-btn or-g48-pill-btn-primary px-3.5 py-1.5 text-sm font-medium"
+                    disabled={busy || !clipboard}
+                    onClick={() => paste()}
+                  >
+                    粘贴到当前目录
+                  </button>
+                  <button
+                    className="or-button or-pill or-g48-pill-btn or-g48-pill-dropdown px-3.5 py-1.5 text-sm"
+                    onClick={() => setExploring(false)}
+                  >
+                    <X className="h-4 w-4 shrink-0" aria-hidden />
+                    <span className="text-center">关闭</span>
+                    <span className="h-4 w-4 shrink-0" aria-hidden />
+                  </button>
+                </div>
+                <p className="mb-2 text-[13px] text-[var(--or-muted)]">
+                  空白取消选择；Ctrl多选、Shift范围选择、空白框选；双击打开；拖到目录移动；右键菜单支持剪切粘贴。
                 </p>
-              ) : null}
-              {shareCode ? (
-                <label className="mb-2 flex flex-wrap items-center gap-2 text-sm text-[var(--or-muted)]">
-                  邀请CDK（7天有效）
-                  <input
-                    readOnly
-                    value={shareCode}
-                    aria-label="文件管理器邀请码"
-                    onFocus={e => e.target.select()}
-                    className="or-input or-g48-input min-w-0 flex-1 py-1 text-sm font-mono sm:flex-none"
-                  />
-                </label>
-              ) : null}
-              {editing ? (
-                <form
-                  className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_70%,transparent)] p-2.5"
-                  onSubmit={e => {
-                    e.preventDefault();
-                    void perform(
-                      editing.action === 'create'
-                        ? { action: 'create', path: editing.value.trim() }
-                        : { action: 'rename', path: editing.path, target: editing.value.trim() },
-                    );
-                  }}
-                >
-                  <label className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-[var(--or-text)]">
-                    {editing.action === 'create' ? '新目录路径' : '新路径'}
+                {message ? (
+                  <p role="status" className="mb-2 text-[13px] font-medium text-[var(--or-on-success)]">
+                    {message}
+                  </p>
+                ) : null}
+                {shareCode ? (
+                  <label className="mb-2 flex flex-wrap items-center gap-2 text-sm text-[var(--or-muted)]">
+                    邀请CDK（7天有效）
                     <input
-                      autoFocus
-                      aria-label="文件管理器目录路径"
-                      value={editing.value}
-                      onChange={e => setEditing({ ...editing, value: e.target.value })}
-                      className="or-input or-g48-input min-w-0 flex-1 py-1 text-sm sm:flex-none"
+                      readOnly
+                      value={shareCode}
+                      aria-label="文件管理器邀请码"
+                      onFocus={e => e.target.select()}
+                      className="or-input or-g48-input min-w-0 flex-1 py-1 text-sm font-mono sm:flex-none"
                     />
                   </label>
-                  <button className="or-button or-button-primary or-pill or-g48-pill-btn or-g48-pill-btn-primary px-3.5 py-1.5 text-sm font-medium" disabled={busy || !editing.value.trim()}>
-                    保存目录
-                  </button>
-                  <button type="button" className={buttonClass} onClick={() => setEditing(null)}>
-                    取消
-                  </button>
-                </form>
-              ) : null}
-              <BankFileGrid
-                folders={index.children.get(selectedFolder) ?? []}
-                questions={index.questions.get(selectedFolder) ?? []}
-                selectedFolder={selectedFolder}
-                focusedFolder={focusedFolder}
-                dropHighlight={dropHighlight}
-                selectedIds={selectedIds}
-                busy={busy}
-                clipboard={clipboard}
-                onSelectIds={onSelectIds}
-                onSetFocusedFolder={setFocusedFolder}
-                onOpenFolder={(path) => {
-                  setSelectedFolder(path);
-                  setName(path);
-                  setFocusedFolder('');
-                }}
-                onOpenItem={(id) => {
-                  onOpenItem?.(id);
-                  setExploring(false);
-                }}
-                onContextMenu={(info) => setMenu(info)}
-                onStartDrag={startDrag}
-                onDrop={drop}
-                onCut={() => cut()}
-                onPaste={() => paste()}
-                onToggleAll={toggleAll}
-                onClearSelection={() => {
-                  onSelectIds?.([]);
-                  setFocusedFolder('');
-                  setMenu(null);
-                  setClipboard(null);
-                }}
-              />
-              {menu ? contextMenu() : null}
-            </Dialog.Content>
+                ) : null}
+                {editing ? (
+                  <form
+                    className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_70%,transparent)] p-2.5"
+                    onSubmit={e => {
+                      e.preventDefault();
+                      void perform(
+                        editing.action === 'create'
+                          ? { action: 'create', path: editing.value.trim() }
+                          : { action: 'rename', path: editing.path, target: editing.value.trim() },
+                      );
+                    }}
+                  >
+                    <label className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-[var(--or-text)]">
+                      {editing.action === 'create' ? '新目录路径' : '新路径'}
+                      <input
+                        autoFocus
+                        aria-label="文件管理器目录路径"
+                        value={editing.value}
+                        onChange={e => setEditing({ ...editing, value: e.target.value })}
+                        className="or-input or-g48-input min-w-0 flex-1 py-1 text-sm sm:flex-none"
+                      />
+                    </label>
+                    <button className="or-button or-button-primary or-pill or-g48-pill-btn or-g48-pill-btn-primary px-3.5 py-1.5 text-sm font-medium" disabled={busy || !editing.value.trim()}>
+                      保存目录
+                    </button>
+                    <button type="button" className={buttonClass} onClick={() => setEditing(null)}>
+                      取消
+                    </button>
+                  </form>
+                ) : null}
+                <BankFileGrid
+                  folders={index.children.get(selectedFolder) ?? []}
+                  questions={index.questions.get(selectedFolder) ?? []}
+                  selectedFolder={selectedFolder}
+                  focusedFolder={focusedFolder}
+                  dropHighlight={dropHighlight}
+                  selectedIds={selectedIds}
+                  busy={busy}
+                  clipboard={clipboard}
+                  onSelectIds={onSelectIds}
+                  onSetFocusedFolder={setFocusedFolder}
+                  onOpenFolder={(path) => {
+                    setSelectedFolder(path);
+                    setName(path);
+                    setFocusedFolder('');
+                  }}
+                  onOpenItem={(id) => {
+                    onOpenItem?.(id);
+                    setExploring(false);
+                  }}
+                  onContextMenu={(info) => setMenu(info)}
+                  onStartDrag={startDrag}
+                  onDrop={drop}
+                  onCut={() => cut()}
+                  onPaste={() => paste()}
+                  onToggleAll={toggleAll}
+                  onClearSelection={() => {
+                    onSelectIds?.([]);
+                    setFocusedFolder('');
+                    setMenu(null);
+                    setClipboard(null);
+                  }}
+                />
+                {menu ? contextMenu() : null}
+              </div>
+              </Dialog.Content>
+            </div>
           </Dialog.Portal>
         </Dialog.Root>
       ) : null}
@@ -733,10 +740,10 @@ export function BankFolderExplorer<T extends Item>({
       <div
         role="menu"
         aria-label="题库文件操作"
-        className="or-dialog or-g48-dialog fixed z-[60] grid min-w-44 gap-1 p-2"
+        className="or-g48-dialog fixed z-[60] grid min-w-44 max-h-[calc(100dvh-1rem)] max-w-[calc(100vw-1rem)] gap-1 overflow-y-auto p-2"
         style={{
-          left: Math.min(menu!.x, window.innerWidth - 210),
-          top: Math.min(menu!.y, window.innerHeight - 310),
+          left: Math.max(8, Math.min(menu!.x, window.innerWidth - 210)),
+          top: Math.max(8, Math.min(menu!.y, window.innerHeight - 310)),
         }}
         onClick={e => e.stopPropagation()}
       >

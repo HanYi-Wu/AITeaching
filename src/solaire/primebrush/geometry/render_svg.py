@@ -22,6 +22,7 @@ def render_geometry_svg(
     sw = style.stroke_width or 1.0
     fs = style.font_size or 12.0
     ff = style.font_family or "sans-serif"
+    ff_svg = escape_text(ff)
 
     result = solve_geometry(model.constructions, width, height, rng)
     pts = result.points
@@ -31,11 +32,18 @@ def render_geometry_svg(
 
     tri_nodes: list[str] = []
     in_line_ids: set[str] = set()
+    line_items: list[dict] = []
+    point_items: list[tuple[str, dict]] = []
     for item in constructions:
-        if item.get("op") == "triangle":
+        op = item.get("op")
+        if op == "triangle":
             tri_nodes = [str(x) for x in item["nodes"]]
-        elif item.get("op") == "in_line":
+            point_items.append((op, item))
+        elif op == "in_line":
             in_line_ids.add(str(item["id"]))
+            point_items.append((op, item))
+        elif op == "line":
+            line_items.append(item)
 
     # Draw triangle edges if we have A,B,C from first triangle
     if tri_nodes and len(tri_nodes) == 3:
@@ -48,9 +56,7 @@ def render_geometry_svg(
             )
 
     # Draw construction lines (classic line op)
-    for item in constructions:
-        if item.get("op") != "line":
-            continue
+    for item in line_items:
         src = [str(x) for x in item["source"]]
         st = (item.get("style") or "solid").lower()
         dash = ' stroke-dasharray="6,4"' if st == "dashed" else ""
@@ -66,7 +72,7 @@ def render_geometry_svg(
             mx = x1 + pos * (x2 - x1)
             my = y1 + pos * (y2 - y1)
             parts.append(
-                f'<text x="{mx:.2f}" y="{my:.2f}" font-size="{fs:.1f}" font-family="{escape_text(ff)}" '
+                f'<text x="{mx:.2f}" y="{my:.2f}" font-size="{fs:.1f}" font-family="{ff_svg}" '
                 f'fill="#111" text-anchor="middle" dominant-baseline="middle">{escape_text(t)}</text>'
             )
 
@@ -87,7 +93,7 @@ def render_geometry_svg(
                 mx = x1 + pos * (x2 - x1)
                 my = y1 + pos * (y2 - y1)
                 parts.append(
-                    f'<text x="{mx:.2f}" y="{my:.2f}" font-size="{fs * 0.95:.1f}" font-family="{escape_text(ff)}" '
+                    f'<text x="{mx:.2f}" y="{my:.2f}" font-size="{fs * 0.95:.1f}" font-family="{ff_svg}" '
                     f'fill="#1b4332" text-anchor="middle" dominant-baseline="middle">{escape_text(t)}</text>'
                 )
         elif kind == "circle":
@@ -112,8 +118,8 @@ def render_geometry_svg(
             )
 
     # Vertices and in_line points: small circles + optional labels
-    for item in constructions:
-        if item.get("op") == "triangle":
+    for op, item in point_items:
+        if op == "triangle":
             for n in item["nodes"]:
                 n = str(n)
                 x, y = pts[n]
@@ -125,12 +131,12 @@ def render_geometry_svg(
                     ox, oy = _label_offset(str(hint), 14)
                     parts.append(
                         f'<text x="{x + ox:.2f}" y="{y + oy:.2f}" font-size="{fs:.1f}" '
-                        f'font-family="{escape_text(ff)}" fill="#111">{escape_text(n)}</text>'
+                        f'font-family="{ff_svg}" fill="#111">{escape_text(n)}</text>'
                     )
                 else:
                     parts.append(
                         f'<text x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="{fs:.1f}" '
-                        f'font-family="{escape_text(ff)}" fill="#111">{escape_text(n)}</text>'
+                        f'font-family="{ff_svg}" fill="#111">{escape_text(n)}</text>'
                     )
         elif item.get("op") == "in_line":
             pid = str(item["id"])
@@ -142,7 +148,7 @@ def render_geometry_svg(
             if lab:
                 parts.append(
                     f'<text x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="{fs:.1f}" '
-                    f'font-family="{escape_text(ff)}" fill="#111">{escape_text(str(lab))}</text>'
+                    f'font-family="{ff_svg}" fill="#111">{escape_text(str(lab))}</text>'
                 )
 
     # Other constructed points (交点、垂足等)
@@ -155,7 +161,7 @@ def render_geometry_svg(
         )
         parts.append(
             f'<text x="{x + 7:.2f}" y="{y - 7:.2f}" font-size="{fs * 0.9:.1f}" '
-            f'font-family="{escape_text(ff)}" fill="#111">{escape_text(name)}</text>'
+            f'font-family="{ff_svg}" fill="#111">{escape_text(name)}</text>'
         )
 
     inner = "\n".join(parts)

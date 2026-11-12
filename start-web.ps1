@@ -10,7 +10,10 @@ Set-Location $repoRoot
 $srcDir = Join-Path $repoRoot "src"
 
 $uvicornLine = $null
-if (Get-Command py -ErrorAction SilentlyContinue) {
+$venvPy = Join-Path $repoRoot ".venv\Scripts\python.exe"
+if (Test-Path $venvPy) {
+  $uvicornLine = "Set-Location '$repoRoot'; & `"$venvPy`" -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 0.0.0.0 --port 8000 --reload --reload-dir `"$srcDir`""
+} elseif (Get-Command py -ErrorAction SilentlyContinue) {
   $uvicornLine = "Set-Location '$repoRoot'; py -3.12 -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 127.0.0.1 --port 8000 --reload --reload-dir `"$srcDir`""
 } elseif (Get-Command python -ErrorAction SilentlyContinue) {
   $uvicornLine = "Set-Location '$repoRoot'; python -m uvicorn solaire.web.app:app --app-dir `"$srcDir`" --host 127.0.0.1 --port 8000 --reload --reload-dir `"$srcDir`""
@@ -22,13 +25,14 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
 
 Write-Host "仓库: $repoRoot"
 Write-Host "启动 FastAPI（--app-dir src）→ http://127.0.0.1:8000"
-Start-Process pwsh -ArgumentList "-NoExit", "-Command", $uvicornLine
+$psExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
+Start-Process $psExe -ArgumentList "-NoExit", "-Command", $uvicornLine
 
 Start-Sleep -Seconds 2
 
 $viteLine = "Set-Location '$repoRoot\web'; npm run dev -- --host 0.0.0.0 --port 5173 --strictPort"
 Write-Host "启动 Vite → http://0.0.0.0:5173"
-Start-Process pwsh -ArgumentList "-NoExit", "-Command", $viteLine
+Start-Process $psExe -ArgumentList "-NoExit", "-Command", $viteLine
 
 Write-Host "已打开两个终端窗口。浏览器访问 http://127.0.0.1:5173 或本机局域网 IP:5173"
 Write-Host "若草稿目录仍为长串十六进制，请访问 http://127.0.0.1:8000/api/health 确认含 exam_workspace_layout=two_level。"

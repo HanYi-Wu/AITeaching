@@ -1,23 +1,26 @@
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Handle, Position, useEdges, type NodeProps } from "@xyflow/react";
 
 /** React Flow node with draggable connection handles (TD: top/bottom, LR: left/right). */
-export function FlowchartFlowNode({ data }: NodeProps) {
+export function FlowchartFlowNode({ data, id }: NodeProps) {
   const dir = (data as { dir?: "TD" | "LR" }).dir ?? "TD";
   const isLR = dir === "LR";
   const label = String((data as { label?: string }).label ?? "");
+  const edges = useEdges();
+  const outgoing = edges.filter((edge) => edge.source === id);
+  const isBranch = outgoing.length > 1 && outgoing.some((edge) => typeof edge.label === "string" && edge.label.trim());
 
   return (
-    <div className="min-w-[4.5rem] max-w-[14rem] rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-center text-sm shadow-xs hover:border-[var(--or-outline)] transition-colors">
+    <div className={`flowchart-flow-node${isBranch ? " flowchart-flow-node--branch" : ""}`}>
       <Handle
         type="target"
         position={isLR ? Position.Left : Position.Top}
-        className="!h-2.5 !w-2.5 !rounded-full !border !border-[var(--or-outline)] !bg-[var(--or-inset)] hover:!bg-slate-400 transition-colors"
+        className="flowchart-flow-handle"
       />
-      <div className="break-words font-medium text-[var(--or-text)]">{label}</div>
+      <div className="flowchart-flow-node__label">{label}</div>
       <Handle
         type="source"
         position={isLR ? Position.Right : Position.Bottom}
-        className="!h-2.5 !w-2.5 !rounded-full !border !border-[var(--or-outline)] !bg-[var(--or-inset)] hover:!bg-slate-400 transition-colors"
+        className="flowchart-flow-handle"
       />
     </div>
   );

@@ -1,9 +1,25 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { AgentChatPanel } from "./AgentChatPanel";
-import { useAgentContext } from "../contexts/AgentContext";
+import { useTranslation } from "react-i18next";
+import { Sparkles, X } from "lucide-react";
+import { useAgentSidebar } from "../contexts/AgentContext";
 import { cn } from "../lib/utils";
 import "../ui-redesign/g55/g55.css";
+
+const AgentChatPanel = lazy(() => import("./AgentChatPanel").then((module) => ({ default: module.AgentChatPanel })));
+
+function AssistantLoading({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation(["agent", "app"]);
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--or-outline)] px-3 py-2.5">
+        <span className="flex min-w-0 items-center gap-2 text-sm font-bold"><Sparkles className="h-4 w-4 text-[var(--or-primary)]" />{t("agent:title")}</span>
+        <button type="button" data-assistant-close aria-label={t("agent:collapseSidebar")} onClick={onClose} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--or-muted)]"><X className="h-4 w-4" /></button>
+      </div>
+      <div role="status" className="flex flex-1 items-center justify-center p-4 text-sm text-[var(--or-muted)]">{t("app:loading.workspace")}</div>
+    </div>
+  );
+}
 
 export function getAssistantOverlayWidth(hostWidth: number): number {
   if (hostWidth <= 0) return 0;
@@ -20,7 +36,8 @@ export function AgentSidebar({
   mode?: "dock" | "overlay";
   overlayHost?: HTMLElement | null;
 }) {
-  const { sidebarOpen, setSidebarOpen } = useAgentContext();
+  const { sidebarOpen, setSidebarOpen } = useAgentSidebar();
+  const [panelReady, setPanelReady] = useState(false);
   const [overlayStyle, setOverlayStyle] = useState<CSSProperties | null>(null);
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== "undefined" && (window.matchMedia?.("(max-width: 767px)").matches ?? false),
@@ -28,6 +45,26 @@ export function AgentSidebar({
   const overlayDrawerRef = useRef<HTMLElement | null>(null);
   const dockRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), [setSidebarOpen]);
+  const focusLoadedPanel = useCallback(() => {
+    const drawer = mode === "overlay" ? overlayDrawerRef.current : dockRef.current;
+    if (isMobile && sidebarOpen && drawer && (document.activeElement === document.body || document.activeElement === drawer)) {
+      drawer.querySelector<HTMLElement>("[data-assistant-close]")?.focus({ preventScroll: true });
+    }
+  }, [isMobile, mode, sidebarOpen]);
+
+  useEffect(() => {
+    if (!sidebarOpen || panelReady) return;
+    let timer: number | undefined;
+    // Paint the usable drawer shell before importing and initializing chat.
+    const frame = window.requestAnimationFrame(() => {
+      timer = window.setTimeout(() => setPanelReady(true), 0);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [sidebarOpen, panelReady]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
@@ -80,10 +117,10 @@ export function AgentSidebar({
       }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && (document.activeElement === first || !drawer.contains(document.activeElement))) {
+      if (event.shiftKey && (document.activeElement === drawer || document.activeElement === first || !drawer.contains(document.activeElement))) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && (document.activeElement === last || !drawer.contains(document.activeElement))) {
+      } else if (!event.shiftKey && (document.activeElement === drawer || document.activeElement === last || !drawer.contains(document.activeElement))) {
         event.preventDefault();
         first.focus();
       }
@@ -123,6 +160,13 @@ export function AgentSidebar({
     };
   }, [mode, overlayHost]);
 
+  const loading = <AssistantLoading onClose={closeSidebar} />;
+  const panel = panelReady ? (
+    <Suspense fallback={loading}>
+      <AgentChatPanel projectBound={projectBound} onRequestCollapse={closeSidebar} onReady={focusLoadedPanel} />
+    </Suspense>
+  ) : loading;
+
   if (mode === "overlay") {
     if (!overlayHost || !overlayStyle) return null;
 
@@ -150,7 +194,7 @@ export function AgentSidebar({
           aria-hidden={!sidebarOpen}
         >
           <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
-            <AgentChatPanel projectBound={projectBound} onRequestCollapse={() => setSidebarOpen(false)} />
+            {panel}
           </div>
         </aside>
       </>,
@@ -184,7 +228,7 @@ export function AgentSidebar({
         tabIndex={-1}
         aria-hidden={!sidebarOpen}
       >
-        <AgentChatPanel projectBound={projectBound} onRequestCollapse={() => setSidebarOpen(false)} />
+        {panel}
       </aside>
     </>
   );

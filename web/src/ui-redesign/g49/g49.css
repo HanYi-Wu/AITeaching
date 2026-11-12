@@ -111,7 +111,7 @@
   }
 }
 
-/* Compose workspace: one active panel on small screens, editor-first at desktop widths. */
+/* Compose workspace: editor-first on desktop, with the question bank as an optional side panel. */
 .or-g49-compose-workspace {
   display: grid;
   flex: 1 1 0%;
@@ -126,7 +126,7 @@
 .or-g49-compose-panel-switcher {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   isolation: isolate;
   flex: 0 0 auto;
   gap: 0.25rem;
@@ -144,7 +144,7 @@
   top: 0.375rem;
   bottom: 0.375rem;
   left: 0.375rem;
-  width: calc((100% - 1.25rem) / 3);
+  width: calc((100% - 1rem) / 2);
   border: 1px solid color-mix(in srgb, var(--or-primary) 35%, var(--or-outline));
   border-radius: 0.75rem;
   background: var(--or-primary-container, #eff6ff);
@@ -156,10 +156,6 @@
 
 .or-g49-compose-workspace[data-active-panel="bank"] .or-g49-compose-panel-marker {
   transform: translateX(calc(100% + 0.25rem));
-}
-
-.or-g49-compose-workspace[data-active-panel="history"] .or-g49-compose-panel-marker {
-  transform: translateX(calc(200% + 0.5rem));
 }
 
 .or-g49-compose-panel-button {
@@ -190,7 +186,6 @@
   outline-offset: 2px;
 }
 
-.or-g49-compose-history-panel,
 .or-g49-compose-bank-panel,
 .or-g49-compose-paper-panel {
   display: none;
@@ -208,7 +203,6 @@
     display 220ms allow-discrete;
 }
 
-.or-g49-compose-workspace[data-active-panel="history"] .or-g49-compose-history-panel,
 .or-g49-compose-workspace[data-active-panel="bank"] .or-g49-compose-bank-panel,
 .or-g49-compose-workspace[data-active-panel="paper"] .or-g49-compose-paper-panel {
   display: flex;
@@ -220,30 +214,12 @@
     display 220ms allow-discrete;
 }
 
-.or-g49-compose-workspace[data-active-panel="bank"] .or-g49-compose-bank-panel,
-.or-g49-compose-workspace[data-active-panel="history"] .or-g49-compose-history-panel {
-  opacity: 1;
-  transform: translate3d(0, 0, 0);
-  transition:
-    opacity 220ms cubic-bezier(0.2, 0, 0, 1),
-    transform 220ms cubic-bezier(0.2, 0, 0, 1),
-    display 220ms allow-discrete;
-}
-
 @starting-style {
-  .or-g49-compose-workspace[data-active-panel="history"] .or-g49-compose-history-panel,
   .or-g49-compose-workspace[data-active-panel="bank"] .or-g49-compose-bank-panel,
   .or-g49-compose-workspace[data-active-panel="paper"] .or-g49-compose-paper-panel {
     opacity: 0;
     transform: translate3d(0, 8px, 0);
   }
-}
-
-.or-g49-compose-history-content {
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0%;
-  overflow: hidden;
 }
 
 .or-g49-compose-bank-panel {
@@ -260,8 +236,27 @@
   border-right: 0;
 }
 
+/* On short phones, let the search header scroll away so questions have the full
+   panel height. Keep the selection actions reachable outside this scroll area. */
+@media (max-width: 767px) and (max-height: 600px) {
+  .or-g49-compose-bank-panel > section {
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+
+  .or-g49-compose-bank-panel > section > div {
+    flex-shrink: 0;
+  }
+
+  .or-g49-compose-bank-panel > section > ul {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+}
+
 .or-g49-bank-actions {
   display: flex;
+  flex-wrap: wrap;
   flex: 0 0 auto;
   gap: 0.5rem;
   padding: 0.625rem;
@@ -278,8 +273,21 @@
   flex: 1 1 auto;
 }
 
+@media (min-width: 1024px) {
+  .or-g49-bank-actions {
+    display: none;
+  }
+}
+
 .or-g49-compose-paper-panel {
   background: var(--or-page, #f8fafc);
+}
+
+.or-g49-compose-history-content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0%;
+  overflow: hidden;
 }
 
 .or-g49-compose-paper-content {
@@ -325,6 +333,21 @@
   min-height: 0;
   flex: 1 1 0%;
   overflow: auto;
+}
+
+.or-g49-compose-history-dialog {
+  animation: or-g49-compose-history-enter 240ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes or-g49-compose-history-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(1rem, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .or-g49-tex-notice {
@@ -399,7 +422,7 @@
     justify-self: start;
     width: 18.5rem;
     min-width: 18.5rem;
-    grid-template-columns: repeat(3, minmax(5.5rem, 1fr));
+    grid-template-columns: repeat(2, minmax(5.5rem, 1fr));
     border-bottom: 0;
     background: transparent;
     padding: 0.5rem 0.75rem;
@@ -409,7 +432,7 @@
     top: 0.5rem;
     bottom: 0.5rem;
     left: 0.75rem;
-    width: calc((100% - 2rem) / 3);
+    width: calc((100% - 1.75rem) / 2);
   }
 
   .or-g49-compose-panel-button {
@@ -425,23 +448,23 @@
     transform: none;
   }
 
-  .or-g49-compose-workspace[data-active-panel="bank"],
-  .or-g49-compose-workspace[data-active-panel="history"] {
+  .or-g49-compose-workspace[data-active-panel="bank"] {
     grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
   }
 
-  .or-g49-compose-workspace[data-active-panel="bank"] .or-g49-compose-bank-panel,
-  .or-g49-compose-workspace[data-active-panel="history"] .or-g49-compose-history-panel {
+  .or-g49-compose-workspace[data-active-panel="bank"] .or-g49-compose-bank-panel {
     display: flex;
     grid-column: 1;
     grid-row: 2;
     border-right: 1px solid var(--or-outline, #e2e8f0);
   }
 
-  .or-g49-compose-workspace[data-active-panel="bank"] .or-g49-compose-paper-panel,
-  .or-g49-compose-workspace[data-active-panel="history"] .or-g49-compose-paper-panel {
+  .or-g49-compose-workspace[data-active-panel="bank"] .or-g49-compose-paper-panel {
+    display: flex;
     grid-column: 2;
     grid-row: 2;
+    opacity: 1;
+    transform: none;
   }
 
   .or-g49-compose-paper-content {
@@ -504,13 +527,11 @@
     grid-row: 2;
   }
 
-  .or-g49-compose-workspace.has-pdf[data-active-panel="bank"],
-  .or-g49-compose-workspace.has-pdf[data-active-panel="history"] {
+  .or-g49-compose-workspace.has-pdf[data-active-panel="bank"] {
     grid-template-columns: minmax(220px, 260px) minmax(500px, 1fr) minmax(300px, 0.62fr);
   }
 
-  .or-g49-compose-workspace.has-pdf[data-active-panel="bank"] .or-g49-compose-pdf-aside,
-  .or-g49-compose-workspace.has-pdf[data-active-panel="history"] .or-g49-compose-pdf-aside {
+  .or-g49-compose-workspace.has-pdf[data-active-panel="bank"] .or-g49-compose-pdf-aside {
     display: flex;
     grid-column: 3;
     grid-row: 2;
@@ -521,14 +542,17 @@
 @media (prefers-reduced-motion: reduce) {
   .or-g49-compose-panel-button,
   .or-g49-compose-panel-marker,
-  .or-g49-compose-history-panel,
   .or-g49-compose-bank-panel,
   .or-g49-compose-paper-panel,
+  .or-g49-compose-history-dialog,
   .or-g49-tex-notice-toggle svg {
     transition: none !important;
   }
 
-  .or-g49-compose-history-panel,
+  .or-g49-compose-history-dialog {
+    animation: none;
+  }
+
   .or-g49-compose-bank-panel,
   .or-g49-compose-paper-panel {
     transform: none !important;

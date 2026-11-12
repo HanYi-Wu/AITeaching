@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { ToolBarProvider, useToolBar } from "../../contexts/ToolBarContext";
@@ -160,5 +160,61 @@ describe("BankToolbar component", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: /筛选/ })).not.toBeInTheDocument();
     });
+  });
+
+  it("keeps a local search draft through toolbar updates and filter reopen, then submits on Enter or blur", async () => {
+    const setSearchInput = vi.fn();
+    const commitSearch = vi.fn();
+    const toolbar = (summary: string) => (
+      <TestI18nProvider>
+        <ToolBarProvider>
+          <Consumer />
+          <BankToolbar
+            {...defaultProps}
+            searchInput=""
+            setSearchInput={setSearchInput}
+            commitSearch={commitSearch}
+            bankFilterSummary={summary}
+          />
+        </ToolBarProvider>
+      </TestI18nProvider>
+    );
+    const { rerender } = render(toolbar("全部题目"));
+
+    await userEvent.click(screen.getByRole("button", { name: /筛选/ }));
+    let input = screen.getByPlaceholderText("题号、题干摘要或标签") as HTMLInputElement;
+    await userEvent.type(input, "draft text");
+    expect(input).toHaveValue("draft text");
+    expect(setSearchInput).not.toHaveBeenCalled();
+    expect(commitSearch).not.toHaveBeenCalled();
+
+    // A fresh toolbar node can arrive from a parent render while the draft is uncommitted.
+    rerender(toolbar("后台状态更新"));
+    await waitFor(() => expect(screen.getByPlaceholderText("题号、题干摘要或标签")).toHaveValue("draft text"));
+
+    // Closing and reopening the filter menu must retain the in-memory draft.
+    fireEvent.click(screen.getByRole("button", { name: /筛选/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /筛选/ })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /筛选/ }));
+    input = screen.getByPlaceholderText("题号、题干摘要或标签") as HTMLInputElement;
+    expect(input).toHaveValue("draft text");
+
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(setSearchInput).not.toHaveBeenCalled();
+    expect(commitSearch).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(setSearchInput).toHaveBeenNthCalledWith(1, "draft text");
+    expect(commitSearch).toHaveBeenNthCalledWith(1, "draft text");
+
+    fireEvent.change(input, { target: { value: "blur text" } });
+    fireEvent.blur(input);
+    expect(setSearchInput).toHaveBeenNthCalledWith(2, "blur text");
+    expect(commitSearch).toHaveBeenNthCalledWith(2, "blur text");
+
+    fireEvent.click(screen.getByRole("button", { name: /筛选/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /筛选/ })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /筛选/ }));
+    expect(screen.getByPlaceholderText("题号、题干摘要或标签")).toHaveValue("blur text");
   });
 });

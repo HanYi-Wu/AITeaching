@@ -9,7 +9,7 @@ import {
   type AnalysisRemediationDraftPreviewResponse,
   type AnalysisRemediationDraftResponse,
 } from "../../api/client";
-import { useAgentContext } from "../../contexts/AgentContext";
+import { useAgentActions } from "../../contexts/AgentContext";
 import { dispatchExamsChanged } from "../../lib/examEvents";
 
 interface UseAnalysisDiagnosisOptions {
@@ -56,7 +56,7 @@ export function useAnalysisDiagnosis({
   currentScopeKeyRef.current = currentScopeKey;
   const scopeReadyRef = useRef(scopeReady);
   scopeReadyRef.current = scopeReady;
-  const { requestAgentPrefill } = useAgentContext();
+  const { requestAgentPrefill } = useAgentActions();
 
   const loadDiagnosis = useCallback(async (examId: string, batchId: string) => {
     const requestScopeKey = JSON.stringify([scopeKey, examId, batchId]);

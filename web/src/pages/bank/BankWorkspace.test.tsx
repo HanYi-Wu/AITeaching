@@ -17,7 +17,7 @@ vi.mock("../../api/client", () => ({
   apiGraphQuestionBindingsIndex: async () => ({ index: {} }),
 }));
 vi.mock("../../platform/auth", () => ({ listTaggedItems: async () => ({ items: {} }), downloadPlatformBlob: mocks.blob }));
-vi.mock("../../contexts/AgentContext", () => ({ useAgentContext: () => ({ setPageContext: mocks.context }) }));
+vi.mock("../../contexts/AgentContext", () => ({ useAgentActions: () => ({ setPageContext: mocks.context }) }));
 vi.mock("../../components/ContentTags", () => ({ ContentTags: () => null, TagChips: () => null }));
 vi.mock("../../components/QuestionHoverDetails", () => ({ QuestionHoverDetails: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../../components/MathInsertOverlay", () => ({ MathInsertOverlay: () => null }));
@@ -25,21 +25,41 @@ vi.mock("../../components/MermaidEditorModal", () => ({ MermaidEditorModal: () =
 vi.mock("../../components/PrimeBrushEditorModal", () => ({ PrimeBrushEditorModal: () => null }));
 // The real workspace, toolbar, file list and save workflows are under test.
 // Replace only the rich editor's rendering with the same controlled input contract.
-vi.mock("../../components/BankQuestionEditorPanel", () => ({
-  BankQuestionEditorPanel: ({ panelMode, detail, rawYaml, setRawYaml, metaRows, setMetaRows }: BankQuestionEditorPanelProps) => (
-    <div>
-      <span data-testid="editor-question-id">{detail.qualified_id}</span>
-      {panelMode === "yaml" ? (
-        <textarea aria-label="题目 YAML" value={rawYaml} onChange={(event) => setRawYaml(event.target.value)} />
-      ) : (
-        <>
-          <input aria-label="附加信息名称" value={metaRows[0]?.key ?? ""} onChange={(event) => setMetaRows([{ key: event.target.value, value: metaRows[0]?.value ?? "" }])} />
-          <input aria-label="附加信息内容" value={metaRows[0]?.value ?? ""} onChange={(event) => setMetaRows([{ key: metaRows[0]?.key ?? "", value: event.target.value }])} />
-        </>
-      )}
-    </div>
-  ),
-}));
+vi.mock("../../components/BankQuestionEditorPanel", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    BankQuestionEditorPanel: (props: BankQuestionEditorPanelProps) => {
+    const { panelMode, draftStore, setDetail, setRawYaml, setMetaRows } = props;
+    const draft = useSyncExternalStore(
+      draftStore!.subscribe,
+      draftStore!.getSnapshot,
+      draftStore!.getSnapshot,
+    );
+    const detail = draft.detail ?? props.detail;
+    return (
+      <div>
+        <span data-testid="editor-question-id">{detail.qualified_id}</span>
+        {panelMode === "yaml" ? (
+          <textarea aria-label="题目 YAML" value={draft.rawYaml} onChange={(event) => setRawYaml(event.target.value)} />
+        ) : (
+          <>
+            <textarea
+              aria-label="题目正文"
+              value={detail.question.content}
+              onChange={(event) => setDetail((current) => current ? {
+                ...current,
+                question: { ...current.question, content: event.target.value },
+              } : current)}
+            />
+            <input aria-label="附加信息名称" value={draft.metaRows[0]?.key ?? ""} onChange={(event) => setMetaRows([{ key: event.target.value, value: draft.metaRows[0]?.value ?? "" }])} />
+            <input aria-label="附加信息内容" value={draft.metaRows[0]?.value ?? ""} onChange={(event) => setMetaRows([{ key: draft.metaRows[0]?.key ?? "", value: event.target.value }])} />
+          </>
+        )}
+      </div>
+    );
+    },
+  };
+});
 
 function Toolbar() {
   const { left, right } = useToolBar();
@@ -191,7 +211,49 @@ describe("bank toolbar uses the current selection and edits", () => {
     );
   });
 
-  it("creates a blank stem and keeps the new editor modal open after saving", async () => {
+  it("creates a question with a Chinese ID and loads it through the encoded qualified ID", async () => {
+    const questionId = "第一题（选择题）";
+    const createdId = `数学/默认/${questionId}`;
+    const createdQuestion: QuestionJson = {
+      id: questionId,
+      type: "single_choice",
+      content: "",
+      options: { A: "", B: "", C: "", D: "" },
+      answer: "",
+      analysis: "",
+      metadata: {},
+    };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === `/api/bank/items/${encodeURIComponent(createdId)}`) {
+        return {
+          qualified_id: createdId,
+          question: createdQuestion,
+          file_yaml: yaml.dump(createdQuestion),
+          storage_path: `resource/数学/默认/${questionId}.yaml`,
+          storage_kind: "single",
+        };
+      }
+      return baseGet(path);
+    });
+    mocks.post.mockResolvedValueOnce({ ok: true, qualified_id: createdId });
+    mountWorkspace();
+
+    await userEvent.click(screen.getByRole("button", { name: /新建题目/ }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "题号" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "题号" }), questionId);
+    await userEvent.click(screen.getByRole("button", { name: "创建空白草稿" }));
+
+    expect(mocks.post).toHaveBeenCalledWith("/api/bank/items", expect.objectContaining({
+      subject: "数学",
+      collection: "默认",
+      question: expect.objectContaining({ id: questionId, content: "" }),
+    }));
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent(createdId);
+    expect(mocks.get).toHaveBeenCalledWith(`/api/bank/items/${encodeURIComponent(createdId)}`);
+  });
+
+  it("keeps edits and the editor open after save failure, then returns to the list after success", async () => {
     const createdId = "数学/默认/new_question_001";
     const createdQuestion: QuestionJson = {
       id: "new_question_001",
@@ -230,6 +292,7 @@ describe("bank toolbar uses the current selection and edits", () => {
       question: expect.objectContaining({ id: "new_question_001", content: "" }),
     }));
 
+    fireEvent.change(screen.getByRole("textbox", { name: "附加信息名称" }), { target: { value: "备注" } });
     fireEvent.change(screen.getByRole("textbox", { name: "附加信息内容" }), { target: { value: "still editing" } });
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
 
@@ -237,15 +300,17 @@ describe("bank toolbar uses the current selection and edits", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("题目已在其他位置更新，请查看最新内容。");
     expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
     expect(screen.getByTestId("editor-question-id")).toHaveTextContent(createdId);
+    expect(screen.getByRole("textbox", { name: "附加信息名称" })).toHaveValue("备注");
+    expect(screen.getByRole("textbox", { name: "附加信息内容" })).toHaveValue("still editing");
 
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2));
     expect(mocks.put).toHaveBeenLastCalledWith(
       `/api/bank/items/${encodeURIComponent(createdId)}`,
-      expect.objectContaining({ content: "" }),
+      expect.objectContaining({ content: "", metadata: { 备注: "still editing" } }),
     );
-    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByTestId("editor-question-id")).toHaveTextContent(createdId);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.querySelector(".or-g48-bank-workspace")).toHaveAttribute("data-active-panel", "list");
   });
 
   it("removes deleted question from selectedExportIds and updates export count", async () => {
@@ -348,6 +413,38 @@ describe("bank toolbar uses the current selection and edits", () => {
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(`/api/bank/items/${encodeURIComponent(qid)}`, expect.objectContaining({ analysis: "final edit" })));
     await waitFor(() => expect((screen.getByRole("textbox", { name: "题目 YAML" }) as HTMLTextAreaElement).value).toContain("final edit"));
+  });
+
+  it("saves the latest rich-text snapshot without rerendering the workspace on every keystroke", async () => {
+    await openFirstQuestion();
+    const editor = screen.getByRole("textbox", { name: "题目正文" });
+    fireEvent.change(editor, { target: { value: "第一版题干" } });
+    fireEvent.change(editor, { target: { value: "中文题干 $x^2$ 最终版" } });
+
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(
+      `/api/bank/items/${encodeURIComponent(qid)}`,
+      expect.objectContaining({ content: "中文题干 $x^2$ 最终版" }),
+    ));
+  });
+
+  it("does not ask to discard after a draft has synchronously returned to its baseline", async () => {
+    const q2 = "数学/default/q2";
+    const q2Question = { id: "q2", type: "fill", content: "Question two", answer: "8", analysis: "", metadata: {} };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => path === `/api/bank/items/${encodeURIComponent(q2)}`
+      ? { qualified_id: q2, question: q2Question, file_yaml: yaml.dump(q2Question), storage_path: "resource/数学/default/q2.yaml", storage_kind: "single" }
+      : baseGet(path));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await openFirstQuestion();
+    const editor = screen.getByRole("textbox", { name: "题目正文" });
+    fireEvent.change(editor, { target: { value: "temporary edit" } });
+    fireEvent.change(editor, { target: { value: "Question one" } });
+
+    await userEvent.click(screen.getByRole("button", { name: /数学\/default\/q2/ }));
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent("数学/default/q2");
   });
 
   it("uses the latest YAML draft for sidebar switch confirmation and keeps the current question when canceled", async () => {

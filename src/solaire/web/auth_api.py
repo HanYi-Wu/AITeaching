@@ -80,6 +80,18 @@ def current_platform_user(
     return user
 
 
+def _with_management_permissions(root: Path, user: dict[str, Any]) -> dict[str, Any]:
+    """Attach current school access for auth responses without caching it in sessions."""
+    from solaire.web.management.access import get_management_access
+
+    access = get_management_access(root, user)
+    result = dict(user)
+    result["management_permissions"] = access["effective_permissions"]
+    if user.get("role") == "school":
+        result["school_access_mode"] = "full" if access["full_access"] else "custom"
+    return result
+
+
 def current_session_token(
     authorization: Annotated[str | None, Header()] = None,
     x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
@@ -105,7 +117,7 @@ def teacher_guide_progress(body: TeacherGuideBody, user: Annotated[dict[str, Any
         if body.step != 0 and body.step not in {current, current + 1}:
             raise HTTPException(status_code=400, detail='请按顺序完成引导')
         con.execute('UPDATE users SET teacher_guide_step=? WHERE id=?', (body.step, user['id']))
-    return {'user': get_user_profile(root, str(user['id']))}
+    return {'user': _with_management_permissions(root, get_user_profile(root, str(user['id'])))}
 
 
 @router.get("/platform/status")
@@ -135,7 +147,7 @@ def auth_bootstrap_admin(body: BootstrapAdminBody) -> dict[str, Any]:
         status = 409 if "admin already exists" in msg else 400
         raise HTTPException(status_code=status, detail=msg) from e
     token = create_session(root, str(user["id"]))
-    return {"user": user, "token": token}
+    return {"user": _with_management_permissions(root, user), "token": token}
 
 
 @router.post("/auth/login")
@@ -145,7 +157,7 @@ def auth_login(body: LoginBody) -> dict[str, Any]:
     if user is None:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = create_session(root, str(user["id"]))
-    return {"user": user, "token": token}
+    return {"user": _with_management_permissions(root, user), "token": token}
 
 
 @router.get("/auth/me")
@@ -153,7 +165,9 @@ def auth_me_route(
     authorization: Annotated[str | None, Header()] = None,
     x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
 ) -> dict[str, Any]:
-    return {"user": current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)}
+    root = require_platform_root()
+    user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
+    return {"user": _with_management_permissions(root, user)}
 
 
 @router.get("/auth/profile")
@@ -162,7 +176,8 @@ def auth_profile_get(
     x_solaire_session: Annotated[str | None, Header(alias="X-Solaire-Session")] = None,
 ) -> dict[str, Any]:
     user = current_platform_user(authorization=authorization, x_solaire_session=x_solaire_session)
-    return {"profile": get_user_profile(require_platform_root(), str(user["id"]))}
+    root = require_platform_root()
+    return {"profile": _with_management_permissions(root, get_user_profile(root, str(user["id"])))}
 
 
 @router.patch("/auth/profile")
@@ -183,7 +198,7 @@ def auth_profile_update(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"profile": profile}
+    return {"profile": _with_management_permissions(require_platform_root(), profile)}
 
 
 def _update_account_credentials(
@@ -213,7 +228,7 @@ def _update_account_credentials(
             "password change is required before username changes": "首次登录必须先修改密码",
         }.get(message, message)
         raise HTTPException(status_code=400, detail=friendly) from e
-    return {"user": updated}
+    return {"user": _with_management_permissions(root, updated)}
 
 
 @router.patch("/auth/account")

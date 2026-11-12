@@ -14,6 +14,7 @@ type Props = {
   onSelectVisible: () => void;
   onClearSelection: () => void;
   onMoveSelected: (itemIds: string[], folderId: string | null) => void | Promise<void>;
+  portalContainer?: HTMLElement | null;
 };
 
 export function ContentSelectionControls({
@@ -26,6 +27,7 @@ export function ContentSelectionControls({
   onSelectVisible,
   onClearSelection,
   onMoveSelected,
+  portalContainer,
 }: Props) {
   const [destination, setDestination] = useState("");
   const allVisibleSelected = visibleItemIds.length > 0 && visibleItemIds.every((id) => selectedItemIds.includes(id));
@@ -66,6 +68,7 @@ export function ContentSelectionControls({
       </div>
       <div className="flex gap-2">
         <AppSelect
+          portalContainer={portalContainer}
           aria-label="批量移动到文件夹"
           value={destination}
           disabled={busy || selectedItemIds.length === 0}

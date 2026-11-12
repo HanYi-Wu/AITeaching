@@ -31,6 +31,7 @@ from solaire.web.papers.repository import (
     get_or_create_exam_paper,
     get_paper_record,
     list_adaptive_paper_records,
+    reconcile_exam_papers,
 )
 from solaire.web.papers.visibility import (
     adaptive_paper_summary as _adaptive_paper_summary,
@@ -163,49 +164,74 @@ def _paper_summary(
     }
 
 
-def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
+def _paper_candidates(
+    project_root: Path,
+    platform_root: Path,
+    user: dict[str, Any],
+) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], list[dict[str, Any]]]:
+    """Collect visible paper metadata without calculating publication stats."""
     init_platform_db(platform_root)
     exams = list_exam_results(project_root)
-
-    candidate_exams: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for exam in exams:
-        try:
-            record = _paper_record_for_exam(platform_root, exam, user)
-        except PermissionError:
-            continue
-        if not _paper_visible_to_user(record, user):
-            continue
-        candidate_exams.append((record, exam))
+    candidate_exams = [
+        (record, exam)
+        for record, exam in reconcile_exam_papers(platform_root, exams, user, id_factory=_new_id)
+        if _paper_visible_to_user(record, user)
+    ]
 
     adaptive_records = list_adaptive_paper_records(platform_root)
     existing_ids = {str(rec["id"]) for rec, _ in candidate_exams}
-    candidate_adaptives: list[dict[str, Any]] = []
-    for record in adaptive_records:
-        paper_id = str(record.get("id") or "")
-        if not paper_id or paper_id in existing_ids or not _paper_visible_to_user(record, user):
-            continue
-        candidate_adaptives.append(record)
-
-    all_paper_ids = [str(rec["id"]) for rec, _ in candidate_exams] + [
-        str(rec.get("id")) for rec in candidate_adaptives
+    candidate_adaptives = [
+        record
+        for record in adaptive_records
+        if (paper_id := str(record.get("id") or ""))
+        and paper_id not in existing_ids
+        and _paper_visible_to_user(record, user)
     ]
+    return candidate_exams, candidate_adaptives
+
+
+def _paper_candidate_metadata(
+    record: dict[str, Any],
+    exam: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build only fields needed for filtering, sorting, and pagination."""
+    return {
+        "record": record,
+        "exam": exam,
+        "paper_id": record.get("id"),
+        "exam_id": record.get("exam_id"),
+        "title": record.get("title"),
+        "subject": record.get("subject"),
+        "delivery_mode": record.get("delivery_mode"),
+        "status": record.get("status"),
+        "folder_id": record.get("folder_id"),
+        "mtime": (exam or {}).get("mtime") or record.get("updated_at"),
+    }
+
+
+def _paper_summaries_for_candidates(
+    platform_root: Path,
+    candidates: list[dict[str, Any]],
+    user: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Materialize full summaries and stats for the already selected page."""
+    paper_ids = [str(item["record"]["id"]) for item in candidates]
     stats_by_paper_id = batch_publication_stats(
         platform_root,
-        all_paper_ids,
+        paper_ids,
         user,
         _publication_access_clause,
     )
-
     papers: list[dict[str, Any]] = []
-    for record, exam in candidate_exams:
+    for item in candidates:
+        record = item["record"]
+        exam = item["exam"]
         paper_id = str(record["id"])
         stats = stats_by_paper_id.get(paper_id, {})
-        papers.append(_paper_summary(record, stats, exam=exam))
-
-    for record in candidate_adaptives:
-        paper_id = str(record.get("id") or "")
+        if exam is not None:
+            papers.append(_paper_summary(record, stats, exam=exam))
+            continue
         question_count, has_score = _adaptive_paper_summary(platform_root, paper_id, user)
-        stats = stats_by_paper_id.get(paper_id, {})
         papers.append(
             _paper_summary(
                 record,
@@ -217,6 +243,19 @@ def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -
             )
         )
     return papers
+
+
+def list_papers(project_root: Path, platform_root: Path, user: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return all visible papers with complete summaries (legacy API behavior)."""
+    candidate_exams, candidate_adaptives = _paper_candidates(project_root, platform_root, user)
+    candidates = [
+        _paper_candidate_metadata(record, exam)
+        for record, exam in candidate_exams
+    ] + [
+        _paper_candidate_metadata(record)
+        for record in candidate_adaptives
+    ]
+    return _paper_summaries_for_candidates(platform_root, candidates, user)
 
 
 def sync_paper_for_exam(
@@ -257,7 +296,14 @@ def query_papers(
     page: int = 1,
     page_size: int = 10,
 ) -> dict[str, Any]:
-    papers = list_papers(project_root, platform_root, user)
+    candidate_exams, candidate_adaptives = _paper_candidates(project_root, platform_root, user)
+    papers = [
+        _paper_candidate_metadata(record, exam)
+        for record, exam in candidate_exams
+    ] + [
+        _paper_candidate_metadata(record)
+        for record in candidate_adaptives
+    ]
     if delivery_mode and delivery_mode != "all":
         papers = [paper for paper in papers if str(paper.get("delivery_mode") or "") == delivery_mode]
     if status and status != "all":
@@ -280,7 +326,11 @@ def query_papers(
         ]
     papers.sort(key=lambda item: str(item.get("mtime") or item.get("updated_at") or ""), reverse=True)
     result = _page(papers, page=page, page_size=page_size)
-    return {"papers": result.pop("items"), **result}
+    page_candidates = result.pop("items")
+    return {
+        "papers": _paper_summaries_for_candidates(platform_root, page_candidates, user),
+        **result,
+    }
 
 
 def get_paper(root: Path, paper_id: str) -> dict[str, Any]:
@@ -636,7 +686,7 @@ def _analysis_attempt_clause(
     attempt_id_column: str = "id",
     class_id: str | None = None,
 ) -> tuple[str, list[str]]:
-    return paper_analysis.analysis_attempt_clause(
+    clause, params = paper_analysis.analysis_attempt_clause(
         user,
         publication_id,
         attempt_alias=attempt_alias,
@@ -644,6 +694,25 @@ def _analysis_attempt_clause(
         class_id=class_id,
         attempt_access_clause_fn=_attempt_access_clause,
     )
+    if str(user.get("role") or "") == "school":
+        attempt_ref = f"{attempt_alias}.{attempt_id_column}"
+        clause = (
+            f"({clause}) AND EXISTS ("
+            "SELECT 1 FROM attempt_class_memberships school_acm "
+            "JOIN classes school_c ON school_c.id = school_acm.class_id "
+            f"JOIN publication_classes school_pc ON school_pc.publication_id = {attempt_alias}.publication_id "
+            "AND school_pc.class_id = school_acm.class_id "
+            f"WHERE school_acm.attempt_id = {attempt_ref} AND school_c.school_id = ?)"
+        )
+        params.append(str(user.get("school_id") or ""))
+    return clause, params
+
+
+def _analysis_class_school_clause(user: dict[str, Any], class_alias: str) -> tuple[str, list[str]]:
+    """Limit school-role class choices to classes currently owned by that school."""
+    if str(user.get("role") or "") != "school":
+        return "1 = 1", []
+    return f"{class_alias}.school_id = ?", [str(user.get("school_id") or "")]
 
 
 def analyze_paper(
@@ -678,20 +747,38 @@ def analyze_paper(
         if publication_id and publication_id not in {str(row["id"]) for row in publication_rows}:
             raise FileNotFoundError("发布记录不存在或无权访问")
         if class_id:
+            selected_class_school_clause, selected_class_school_params = _analysis_class_school_clause(
+                user, "selected_class"
+            )
             allowed_class = con.execute(
                 f"SELECT 1 FROM exam_publications ep JOIN publication_classes pc ON pc.publication_id=ep.id "
-                f"WHERE ep.paper_id=? AND ep.id=? AND ep.recipient_scope='class' AND pc.class_id=? AND {publication_access} LIMIT 1",
-                (paper_id, publication_id, class_id, *publication_params),
+                f"JOIN classes selected_class ON selected_class.id=pc.class_id "
+                f"WHERE ep.paper_id=? AND ep.id=? AND ep.recipient_scope='class' AND pc.class_id=? "
+                f"AND {publication_access} AND {selected_class_school_clause} LIMIT 1",
+                (paper_id, publication_id, class_id, *publication_params, *selected_class_school_params),
             ).fetchone()
             if allowed_class is None:
                 raise PermissionError("无权查看该发布批次的班级分析")
+        class_school_clause, class_school_params = _analysis_class_school_clause(user, "c")
         class_choices = [row_to_dict(row) or {} for row in con.execute(
             f"SELECT DISTINCT c.id, c.name, c.grade FROM exam_publications ep "
             f"JOIN publication_classes pc ON pc.publication_id=ep.id "
             f"JOIN classes c ON c.id=pc.class_id "
-            f"WHERE ep.paper_id=? AND ep.recipient_scope='class' AND (? IS NULL OR ep.id=?) AND {publication_access} ORDER BY c.name",
-            (paper_id, publication_id, publication_id, *publication_params),
+            f"WHERE ep.paper_id=? AND ep.recipient_scope='class' AND (? IS NULL OR ep.id=?) "
+            f"AND {publication_access} AND {class_school_clause} ORDER BY c.name",
+            (paper_id, publication_id, publication_id, *publication_params, *class_school_params),
         ).fetchall()]
+        school_publication_class_ids: set[str] = set()
+        if role == "school" and publication_id:
+            school_publication_class_ids = {
+                str(row["class_id"])
+                for row in con.execute(
+                    "SELECT DISTINCT pc.class_id FROM publication_classes pc "
+                    "JOIN classes c ON c.id=pc.class_id "
+                    "WHERE pc.publication_id=? AND c.school_id=?",
+                    (publication_id, str(user.get("school_id") or "")),
+                ).fetchall()
+            }
         publication_rows = [row for row in publication_rows if str(row["id"]) == publication_id]
         attempt_access, attempt_params = _analysis_attempt_clause(user, publication_id, class_id=class_id)
         event_access, event_params = _analysis_attempt_clause(
@@ -736,21 +823,36 @@ def analyze_paper(
             f"JOIN student_attempts sa ON sa.id=ans.attempt_id JOIN exam_publications ep ON ep.id=sa.publication_id "
             f"WHERE ep.paper_id=? AND {attempt_access}", (paper_id, *attempt_params)
         ).fetchall()
+        class_snapshot_scope_join = ""
+        class_snapshot_scope_params: list[str] = []
+        if role == "school":
+            class_snapshot_scope_join = (
+                "JOIN classes visible_class ON visible_class.id = acm.class_id AND visible_class.school_id = ? "
+                "JOIN publication_classes visible_pc ON visible_pc.publication_id = ep.id "
+                "AND visible_pc.class_id = acm.class_id "
+            )
+            class_snapshot_scope_params.append(str(user.get("school_id") or ""))
         attempt_class_rows = con.execute(
             f"""
             SELECT acm.attempt_id, acm.class_id, acm.class_name
             FROM attempt_class_memberships acm
             JOIN student_attempts sa ON sa.id = acm.attempt_id
             JOIN exam_publications ep ON ep.id = sa.publication_id
+            {class_snapshot_scope_join}
             WHERE ep.paper_id = ? AND {attempt_access}
             ORDER BY acm.attempt_id, acm.class_id
             """,
-            (paper_id, *attempt_params),
+            (*class_snapshot_scope_params, paper_id, *attempt_params),
         ).fetchall()
         classes = _build_class_report(
             root, paper_id=paper_id, user=user, publication_id=publication_id,
             class_id=class_id, connection=con,
         )
+        if role == "school":
+            classes = [
+                item for item in classes
+                if str(item.get("class_id") or "") in school_publication_class_ids
+            ]
 
     allowed_publication_ids = {str(row["id"]) for row in publication_rows}
     attempt_rows = [row for row in attempt_rows if str(row["publication_id"]) in allowed_publication_ids]

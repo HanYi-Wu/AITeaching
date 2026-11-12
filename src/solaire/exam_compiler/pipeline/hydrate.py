@@ -63,13 +63,19 @@ def hydrate(exam: ExamConfig, template: ExamTemplate, loaded: LoadedQuestions) -
             entry = loaded.by_qualified[qid]
             sc = resolved_score(qid)
             if isinstance(entry, QuestionItem):
+                namespace = namespace_of_qualified(qid)
                 hqs.append(HydratedQuestion(qualified_id=qid, item=entry, item_score=sc))
-                namespaces_used.add(namespace_of_qualified(qid))
+                namespaces_used.add(namespace)
             else:
                 assert isinstance(entry, QuestionGroupRecord)
-                for row in entry.flatten():
-                    hqs.append(HydratedQuestion(qualified_id=qid, item=row, item_score=sc))
-                    namespaces_used.add(namespace_of_qualified(qid))
+                rows = iter(entry.iter_flattened())
+                first_row = next(rows, None)
+                if first_row is not None:
+                    namespace = namespace_of_qualified(qid)
+                    hqs.append(HydratedQuestion(qualified_id=qid, item=first_row, item_score=sc))
+                    for row in rows:
+                        hqs.append(HydratedQuestion(qualified_id=qid, item=row, item_score=sc))
+                    namespaces_used.add(namespace)
         sections.append(
             HydratedSection(
                 section_id=sel.section_id,

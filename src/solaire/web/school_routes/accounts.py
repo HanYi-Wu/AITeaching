@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from io import BytesIO
 from typing import Annotated, Any
 
@@ -11,6 +12,8 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 
 from solaire.web.auth_api import current_platform_user, require_platform_root
+from solaire.web.management.access import get_management_access
+from solaire.web.platform_db import connect, init_platform_db
 from solaire.web.school_routes.common import (
     _raise_api_error,
     _require_school,
@@ -42,6 +45,7 @@ from solaire.web.school_service import (
     update_student,
     update_teacher,
 )
+from solaire.web.school.roster import list_filtered_teachers
 from solaire.web.school.transfers import (
     StudentClassTransferConflict,
     StudentClassTransferForbidden,
@@ -74,6 +78,36 @@ def _students_export_workbook(students: list[dict[str, Any]]) -> bytes:
     return stream.getvalue()
 
 
+def _teachers_export_workbook(teachers: list[dict[str, Any]]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "teachers"
+    rows = [
+        ("用户名", "姓名", "邮箱", "学科", "状态", "创建时间", "更新时间"),
+        *[
+            (
+                teacher.get("username"),
+                teacher.get("display_name"),
+                teacher.get("email"),
+                "、".join(str(subject) for subject in (teacher.get("subjects") or [])),
+                teacher.get("status"),
+                teacher.get("created_at"),
+                teacher.get("updated_at"),
+            )
+            for teacher in teachers
+        ],
+    ]
+    for row_index, values in enumerate(rows, start=1):
+        for column_index, value in enumerate(values, start=1):
+            cell = ws.cell(row=row_index, column=column_index)
+            cell.value = "" if value is None else str(value)
+            # Keep user-provided strings such as values beginning with '=' as text.
+            cell.data_type = "s"
+    stream = BytesIO()
+    wb.save(stream)
+    return stream.getvalue()
+
+
 # --- Teachers ---
 
 
@@ -88,6 +122,18 @@ def school_teachers_list(
     school_id = _require_school(user)
     root = require_platform_root()
     return query_teachers(root, school_id=school_id, q=q, status=status, page=page, page_size=page_size)
+
+
+@router.get("/school/teachers/export.xlsx")
+def school_teachers_export(
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    q: str | None = None,
+    status: str | None = None,
+) -> StreamingResponse:
+    school_id = _require_school(user)
+    root = require_platform_root()
+    teachers = list_filtered_teachers(root, school_id=school_id, q=q, status=status)
+    return _workbook_response(_teachers_export_workbook(teachers), "teachers.xlsx")
 
 
 @router.get("/school/teachers/template.xlsx")
@@ -217,7 +263,23 @@ def school_students_list(
 ) -> dict[str, Any]:
     school_id = _require_school(user)
     root = require_platform_root()
-    return query_students(root, school_id=school_id, class_id=class_id, q=q, status=status, page=page, page_size=page_size)
+    result = query_students(
+        root,
+        school_id=school_id,
+        class_id=class_id,
+        q=q,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+    access = get_management_access(root, user)
+    if not access["full_access"] and not {
+        "school.students.manage",
+        "school.students.export",
+    }.intersection(access["effective_permissions"]):
+        for student in result["students"]:
+            student["initial_password"] = None
+    return result
 
 
 @router.get("/school/students/{student_id}/class-transfer")
@@ -361,8 +423,53 @@ async def school_students_import_file(
 @router.get("/school/students/export.xlsx")
 def school_students_export(
     user: Annotated[dict[str, Any], Depends(current_platform_user)],
+    class_id: str | None = Query(default=None, min_length=1),
 ) -> StreamingResponse:
     school_id = _require_school(user)
     root = require_platform_root()
-    data = _students_export_workbook(list_students(root, school_id=school_id))
+    if class_id is not None:
+        init_platform_db(root)
+        with closing(connect(root)) as con:
+            klass = con.execute(
+                "SELECT id FROM classes WHERE id = ? AND school_id = ?",
+                (class_id, school_id),
+            ).fetchone()
+        if klass is None:
+            raise HTTPException(status_code=404, detail="班级不存在")
+    data = _students_export_workbook(list_students(root, school_id=school_id, class_id=class_id))
     return _workbook_response(data, "student_accounts.xlsx")
+
+
+@router.get("/school/papers/{paper_id}/export-options")
+def school_paper_export_options(
+    paper_id: str,
+    user: Annotated[dict[str, Any], Depends(current_platform_user)],
+) -> dict[str, Any]:
+    """Read export choices without constructing full student analysis reports."""
+    school_id = _require_school(user)
+    root = require_platform_root()
+    init_platform_db(root)
+    with closing(connect(root)) as con, con:
+        con.execute("BEGIN")
+        paper = con.execute(
+            "SELECT id FROM paper_records WHERE id = ? AND school_id = ?", (paper_id, school_id)
+        ).fetchone()
+        if paper is None:
+            raise HTTPException(status_code=404, detail="试卷不存在")
+        rows = con.execute(
+            "SELECT ep.id, ep.title, ep.status, ep.created_at, c.id AS class_id, c.name, c.grade "
+            "FROM exam_publications ep "
+            "JOIN publication_classes pc ON pc.publication_id = ep.id "
+            "JOIN classes c ON c.id = pc.class_id "
+            "WHERE ep.paper_id = ? AND ep.recipient_scope = 'class' AND c.school_id = ? "
+            "ORDER BY ep.created_at DESC, ep.rowid DESC, c.name, c.id",
+            (paper_id, school_id),
+        ).fetchall()
+    publications: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        publication = publications.setdefault(row["id"], {
+            "id": row["id"], "title": row["title"], "status": row["status"],
+            "created_at": row["created_at"], "classes": [],
+        })
+        publication["classes"].append({"id": row["class_id"], "name": row["name"], "grade": row["grade"]})
+    return {"publications": list(publications.values())}

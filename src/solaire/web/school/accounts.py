@@ -13,6 +13,9 @@ from solaire.web.school.common import (
     _new_id,
     _new_student_password,
     _new_student_username,
+    _fetch_sql_page,
+    _register_school_query_functions,
+    _sql_search_clause,
     _student_with_account,
 )
 
@@ -77,6 +80,175 @@ def create_school_user(
         school_id=school_id,
         email=email,
     )
+
+
+def query_school_users(
+    root: Path,
+    *,
+    school_id: str,
+    q: str | None = None,
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
+) -> dict[str, Any]:
+    """Return a paged, password-free list of school accounts for one school."""
+    init_platform_db(root)
+    filters = ""
+    filter_params: list[object] = []
+    if status and status != "all":
+        filters += " AND status = ?"
+        filter_params.append(_clean_status(status))
+    search, search_params = _sql_search_clause(q, "username, display_name, email, status")
+    filters += search
+    filter_params.extend(search_params)
+    school_users_cte = """
+        school_users AS (
+            SELECT id, school_id, role, username, display_name, email, status,
+                   must_change_password, created_at, updated_at
+            FROM users
+            WHERE school_id = ? AND role = 'school'
+        )
+    """
+    with closing(connect(root)) as con, con:
+        _register_school_query_functions(con)
+        users, total, clean_page, clean_page_size, total_pages = _fetch_sql_page(
+            con,
+            ctes=school_users_cte,
+            rows_sql=f"SELECT * FROM school_users WHERE 1 = 1{filters}",
+            params=(school_id, *filter_params),
+            order_by="created_at DESC, id DESC",
+            identity_column="id",
+            page=page,
+            page_size=page_size,
+        )
+    return {
+        "users": users,
+        "total": total,
+        "page": clean_page,
+        "page_size": clean_page_size,
+        "total_pages": total_pages,
+    }
+
+
+def update_school_user(
+    root: Path,
+    *,
+    school_id: str,
+    user_id: str,
+    username: str | None = None,
+    display_name: str | None = None,
+    email: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """Update a school account and revoke its sessions when it is disabled."""
+    init_platform_db(root)
+    updates: list[str] = []
+    params: list[object] = []
+    if username is not None:
+        clean_username = username.strip()
+        if len(clean_username) < 3:
+            raise ValueError("用户名至少需要 3 个字符")
+        updates.append("username = ?")
+        params.append(clean_username)
+    if display_name is not None:
+        clean_display_name = display_name.strip()
+        if not clean_display_name:
+            raise ValueError("显示名称不能为空")
+        updates.append("display_name = ?")
+        params.append(clean_display_name)
+    if email is not None:
+        updates.append("email = ?")
+        params.append(email.strip() or None)
+    clean_status = _clean_status(status) if status is not None else None
+    if clean_status is not None:
+        updates.append("status = ?")
+        params.append(clean_status)
+    if not updates:
+        raise ValueError("请至少提供一个要更新的字段")
+
+    now = utc_now()
+    updates.append("updated_at = ?")
+    params.append(now)
+    params.extend([user_id, school_id])
+    with closing(connect(root)) as con, con:
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT id FROM users WHERE id = ? AND school_id = ? AND role = 'school'",
+            (user_id, school_id),
+        ).fetchone()
+        if existing is None:
+            raise ValueError("school user not found")
+        con.execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE id = ? AND school_id = ? AND role = 'school'",
+            tuple(params),
+        )
+        if clean_status == "disabled":
+            con.execute(
+                "UPDATE platform_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+                (now, user_id),
+            )
+        row = con.execute(
+            """
+            SELECT id, school_id, role, username, display_name, email, status,
+                   must_change_password, created_at, updated_at
+            FROM users
+            WHERE id = ? AND school_id = ? AND role = 'school'
+            """,
+            (user_id, school_id),
+        ).fetchone()
+    result = row_to_dict(row)
+    if result is None:
+        raise ValueError("school user not found")
+    return result
+
+
+def reset_school_user_password(
+    root: Path,
+    *,
+    school_id: str,
+    user_id: str,
+    password: str,
+) -> dict[str, Any]:
+    """Set an explicit password, revoke all existing sessions, and return no secret."""
+    clean_password = password
+    if len(clean_password) < 6:
+        raise ValueError("密码至少需要 6 个字符")
+    password_hash = hash_password(clean_password)
+    now = utc_now()
+    init_platform_db(root)
+    with closing(connect(root)) as con, con:
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT id FROM users WHERE id = ? AND school_id = ? AND role = 'school'",
+            (user_id, school_id),
+        ).fetchone()
+        if existing is None:
+            raise ValueError("school user not found")
+        con.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, updated_at = ?
+            WHERE id = ? AND school_id = ? AND role = 'school'
+            """,
+            (password_hash, now, user_id, school_id),
+        )
+        con.execute(
+            "UPDATE platform_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            (now, user_id),
+        )
+        row = con.execute(
+            """
+            SELECT id, school_id, role, username, display_name, email, status,
+                   must_change_password, created_at, updated_at
+            FROM users
+            WHERE id = ? AND school_id = ? AND role = 'school'
+            """,
+            (user_id, school_id),
+        ).fetchone()
+    result = row_to_dict(row)
+    if result is None:
+        raise ValueError("school user not found")
+    return result
 
 
 def create_teacher(

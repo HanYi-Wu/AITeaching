@@ -5,6 +5,7 @@
   "confirmDeleteExam": "确认删除这场考试及其全部成绩批次吗？删除后不可恢复。",
   "historyTitle": "历史考试",
   "refresh": "刷新",
+  "replayChartAnimations": "重新播放动效",
   "loading": "加载中…",
   "noExams": "暂无历史考试。完成一次组卷导出后即可在此查看。",
   "questionCount": "{{n}}题",

@@ -48,6 +48,20 @@ export type { EmbedKind, MathFieldKey } from "../lib/bankEditorEmbedKinds";
 
 export type MetaRow = { key: string; value: string };
 
+export type BankEditorDraftSnapshot = {
+  detail: BankDetailState | null;
+  rawYaml: string;
+  metaRows: MetaRow[];
+};
+
+export type BankEditorDraftStore = {
+  getSnapshot: () => BankEditorDraftSnapshot;
+  subscribe: (listener: () => void) => () => void;
+  setDetail: Dispatch<SetStateAction<BankDetailState | null>>;
+  setRawYaml: Dispatch<SetStateAction<string>>;
+  setMetaRows: Dispatch<SetStateAction<MetaRow[]>>;
+};
+
 export type GiLatexMemberField = "content" | "answer" | "analysis";
 
 export type BankQuestionEditorPanelProps = {
@@ -55,6 +69,8 @@ export type BankQuestionEditorPanelProps = {
   panelMode?: "full" | "form" | "yaml";
   detail: BankDetailState;
   setDetail: Dispatch<SetStateAction<BankDetailState | null>>;
+  /** Stable snapshot store keeps high-frequency editor updates out of BankWorkspace renders. */
+  draftStore?: BankEditorDraftStore;
   busy: boolean;
   editorTab: "form" | "yaml";
   setEditorTab: Dispatch<SetStateAction<"form" | "yaml">>;

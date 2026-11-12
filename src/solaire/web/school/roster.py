@@ -80,6 +80,19 @@ def query_teachers(
     page: int = 1,
     page_size: int = 10,
 ) -> dict[str, Any]:
+    teachers = list_filtered_teachers(root, school_id=school_id, q=q, status=status)
+    result = _page(teachers, page=page, page_size=page_size)
+    return {"teachers": result.pop("items"), **result}
+
+
+def list_filtered_teachers(
+    root: Path,
+    *,
+    school_id: str,
+    q: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return the complete teacher list matching the optional filters."""
     teachers = list_teachers(root, school_id=school_id)
     if status and status != "all":
         teachers = [teacher for teacher in teachers if str(teacher.get("status") or "") == status]
@@ -89,8 +102,7 @@ def query_teachers(
             for teacher in teachers
             if _contains_query(teacher, q, ["username", "display_name", "email", "status", "subjects"])
         ]
-    result = _page(teachers, page=page, page_size=page_size)
-    return {"teachers": result.pop("items"), **result}
+    return teachers
 
 
 def list_students(root: Path, *, school_id: str, class_id: str | None = None) -> list[dict[str, Any]]:

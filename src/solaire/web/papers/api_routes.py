@@ -19,6 +19,7 @@ from solaire.web.content_organizer import all_item_tags, analyze_paper_folder, a
 from solaire.web.analysis_report_service import analysis_report_filename, build_paper_analysis_pdf, build_paper_analysis_workbook
 from solaire.web.adaptive_practice_service import list_practice_history, publish_reinforcement_practice, publish_wrong_question_practice
 from solaire.web.auth_api import current_platform_user, require_platform_root
+from solaire.web.management.access import management_route_guard
 from solaire.web.paper_service import preflight_offline_submission, analyze_paper, get_attempt_scan_image, get_teacher_student_profile, complete_paper_attempt_grading, grade_paper_answer, ingest_offline_submission, list_paper_publications, list_paper_submissions, list_teacher_class_students, list_teacher_classes, publish_online_paper, query_papers, revoke_paper_publication, suggest_ai_grades_for_attempt, sync_paper_for_exam, update_paper_publication, update_paper_delivery_mode
 
 from solaire.web.papers.api_models import PaperUpdateBody, PaperFromExamBody, PaperPublishBody, PaperPublicationUpdateBody, FolderCreateBody, FolderUpdateBody, TagBody, TagLinksBody, FolderItemBody, PaperAiGradeBody, PaperAnswerGradeBody, WrongQuestionPracticeBody, ReinforcementPracticeBody
@@ -113,7 +114,7 @@ def _ingest_offline_scans(
     )
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(management_route_guard)])
 
 @router.get("/tools/offline-answer-uploader.exe")
 def download_offline_answer_uploader(

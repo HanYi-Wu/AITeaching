@@ -1,12 +1,14 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, type RefObject } from "react";
 import { CheckCircle2, FolderPlus } from "lucide-react";
 import type { ContentFolder, PlatformPaperRecord, PaperSubmissionMode, TeacherClassRecord, TeacherClassStudentRecord } from "../../../platform/auth";
 import { G51EmptyState } from "../../../ui-redesign/g51/PaperUiComponents";
 import { applySelectionDelta, isShiftSpace, rangeSelection } from "../../../lib/rangeSelection";
 import { formatSubjectLabel } from "../../../lib/subjectLabels";
 import { Select as AppSelect } from "../../../components/ui/select";
+import { DeferredMount } from "../../../components/DeferredMount";
 
 export type PaperClassPublishPanelProps = {
+  scrollRootRef?: RefObject<HTMLElement | null>;
   selectedPaper: PlatformPaperRecord;
   folders: ContentFolder[];
   publishFolderId: string;
@@ -44,6 +46,7 @@ export type PaperClassPublishPanelProps = {
 };
 
 export function PaperClassPublishPanel({
+  scrollRootRef,
   selectedPaper,
   folders,
   publishFolderId,
@@ -212,7 +215,99 @@ export function PaperClassPublishPanel({
         </AppSelect>
       </div>
 
-      {/* Classes Grid */}
+      <DeferredMount
+        scrollRootRef={scrollRootRef}
+        rootMargin="160px 0px"
+        fallback={(
+          <div className="min-h-56 rounded-2xl border border-dashed border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_45%,transparent)] px-4 py-3 text-xs text-[var(--or-muted)]" role="status">
+            滚动到班级选择区域后加载…
+          </div>
+        )}
+      >
+        <PaperClassPublishAudience
+          classes={classes}
+          alreadyPublishedClassIds={alreadyPublishedClassIds}
+          selectedClassIds={selectedClassIds}
+          recipientScope={recipientScope}
+          onToggleClass={onToggleClass}
+          selectClassRange={selectClassRange}
+          classSelectionAnchor={classSelectionAnchor}
+          selectedStudentIds={selectedStudentIds}
+          studentSearch={studentSearch}
+          visibleStudents={visibleStudents}
+          onStudentSearchChange={onStudentSearchChange}
+          onToggleStudent={onToggleStudent}
+          selectStudentRange={selectStudentRange}
+          studentSelectionAnchor={studentSelectionAnchor}
+        />
+      </DeferredMount>
+
+      <DeferredMount
+        scrollRootRef={scrollRootRef}
+        rootMargin="160px 0px"
+        fallback={(
+          <div className="min-h-64 rounded-2xl border border-dashed border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_45%,transparent)] px-4 py-3 text-xs text-[var(--or-muted)]" role="status">
+            滚动到提交设置后加载…
+          </div>
+        )}
+      >
+        <PaperClassPublishOptions
+          selectedPaper={selectedPaper}
+          recipientScope={recipientScope}
+          selectedClassIds={selectedClassIds}
+          submissionMode={submissionMode}
+          maxScreenSwitches={maxScreenSwitches}
+          publishStartAt={publishStartAt}
+          publishEndAt={publishEndAt}
+          timeLimitMinutes={timeLimitMinutes}
+          canPublish={canPublish}
+          onSubmissionModeChange={onSubmissionModeChange}
+          onMaxScreenSwitchesChange={onMaxScreenSwitchesChange}
+          onPublishStartAtChange={onPublishStartAtChange}
+          onPublishEndAtChange={onPublishEndAtChange}
+          onTimeLimitMinutesChange={onTimeLimitMinutesChange}
+          onPublish={onPublish}
+        />
+      </DeferredMount>
+    </div>
+  );
+}
+
+type PaperClassPublishAudienceProps = {
+  classes: TeacherClassRecord[];
+  alreadyPublishedClassIds: Set<string>;
+  selectedClassIds: string[];
+  recipientScope: "class" | "student";
+  onToggleClass: (classId: string) => void;
+  selectClassRange: (classId: string) => void;
+  classSelectionAnchor: { current: string | null };
+  selectedStudentIds: string[];
+  studentSearch: string;
+  visibleStudents: TeacherClassStudentRecord[];
+  onStudentSearchChange: (value: string) => void;
+  onToggleStudent: (studentId: string) => void;
+  selectStudentRange: (studentId: string) => void;
+  studentSelectionAnchor: { current: string | null };
+};
+
+function PaperClassPublishAudience({
+  classes,
+  alreadyPublishedClassIds,
+  selectedClassIds,
+  recipientScope,
+  onToggleClass,
+  selectClassRange,
+  classSelectionAnchor,
+  selectedStudentIds,
+  studentSearch,
+  visibleStudents,
+  onStudentSearchChange,
+  onToggleStudent,
+  selectStudentRange,
+  studentSelectionAnchor,
+}: PaperClassPublishAudienceProps) {
+  return (
+    <>
       <div className="space-y-2">
         <label className="block text-sm font-semibold text-[var(--or-text)]">
           {recipientScope === "student" ? "选择基准班级" : "选择发布班级"}
@@ -275,7 +370,6 @@ export function PaperClassPublishPanel({
         </div>
       </div>
 
-      {/* Student Selection for Personal Practice */}
       {recipientScope === "student" && selectedClassIds.length === 1 ? (
         <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-4 space-y-3">
           <div className="flex items-center justify-between">
@@ -291,38 +385,77 @@ export function PaperClassPublishPanel({
           />
           <div className="max-h-48 space-y-1.5 overflow-auto pr-1">
             {visibleStudents.map((student) => (
-                <label
-                  key={student.id}
-                  className="flex items-center gap-2 rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] p-2 text-sm text-[var(--or-text)] hover:bg-[var(--or-page)] transition cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedStudentIds.includes(student.id)}
-                    onKeyDown={(event) => {
-                      if (isShiftSpace(event)) {
-                        event.preventDefault();
-                        selectStudentRange(student.id);
-                      }
-                    }}
-                    onChange={(event) => {
-                      if ((event.nativeEvent as MouseEvent).shiftKey) {
-                        selectStudentRange(student.id);
-                      } else {
-                        studentSelectionAnchor.current = student.id;
-                        onToggleStudent(student.id);
-                      }
-                    }}
-                    className="h-4 w-4 shrink-0 rounded border-[var(--or-outline)] text-[var(--or-on-container)] focus:ring-[var(--or-focus)]"
-                  />
-                  {student.display_name} · {student.student_no}
-                </label>
-              ))}
+              <label
+                key={student.id}
+                className="flex items-center gap-2 rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] p-2 text-sm text-[var(--or-text)] hover:bg-[var(--or-page)] transition cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedStudentIds.includes(student.id)}
+                  onKeyDown={(event) => {
+                    if (isShiftSpace(event)) {
+                      event.preventDefault();
+                      selectStudentRange(student.id);
+                    }
+                  }}
+                  onChange={(event) => {
+                    if ((event.nativeEvent as MouseEvent).shiftKey) {
+                      selectStudentRange(student.id);
+                    } else {
+                      studentSelectionAnchor.current = student.id;
+                      onToggleStudent(student.id);
+                    }
+                  }}
+                  className="h-4 w-4 shrink-0 rounded border-[var(--or-outline)] text-[var(--or-on-container)] focus:ring-[var(--or-focus)]"
+                />
+                {student.display_name} · {student.student_no}
+              </label>
+            ))}
           </div>
           <p className="text-xs text-[var(--or-muted)]">已选 {selectedStudentIds.length} 人；每人在所选试卷文件夹内最多收到一份。</p>
         </div>
       ) : null}
+    </>
+  );
+}
 
-      {/* Submission Modes */}
+type PaperClassPublishOptionsProps = {
+  selectedPaper: PlatformPaperRecord;
+  recipientScope: "class" | "student";
+  selectedClassIds: string[];
+  submissionMode: PaperSubmissionMode;
+  maxScreenSwitches: number;
+  publishStartAt: string;
+  publishEndAt: string;
+  timeLimitMinutes: number;
+  canPublish: boolean;
+  onSubmissionModeChange: (mode: PaperSubmissionMode) => void;
+  onMaxScreenSwitchesChange: (value: number) => void;
+  onPublishStartAtChange: (value: string) => void;
+  onPublishEndAtChange: (value: string) => void;
+  onTimeLimitMinutesChange: (value: number) => void;
+  onPublish: () => void;
+};
+
+function PaperClassPublishOptions({
+  selectedPaper,
+  recipientScope,
+  selectedClassIds,
+  submissionMode,
+  maxScreenSwitches,
+  publishStartAt,
+  publishEndAt,
+  timeLimitMinutes,
+  canPublish,
+  onSubmissionModeChange,
+  onMaxScreenSwitchesChange,
+  onPublishStartAtChange,
+  onPublishEndAtChange,
+  onTimeLimitMinutesChange,
+  onPublish,
+}: PaperClassPublishOptionsProps) {
+  return (
+    <>
       <div className="space-y-2">
         <label className="block text-sm font-semibold text-[var(--or-text)]">
           作答与提交模式
@@ -359,7 +492,6 @@ export function PaperClassPublishPanel({
         </div>
       </div>
 
-      {/* Screen switch limit */}
       <div className="space-y-1.5">
         <label className="block text-sm font-semibold text-[var(--or-text)]">
           允许切屏次数
@@ -374,7 +506,6 @@ export function PaperClassPublishPanel({
         />
       </div>
 
-      {/* Time & Duration */}
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1.5">
           <label className="block text-sm font-semibold text-[var(--or-text)]">开始时间</label>
@@ -408,7 +539,6 @@ export function PaperClassPublishPanel({
         </div>
       </div>
 
-      {/* Warnings & Validation feedback */}
       {selectedPaper.question_count <= 0 ? (
         <p className="text-sm font-medium text-[var(--or-on-warning)] bg-[var(--or-warning-container)] border border-[var(--or-warning)] rounded-xl p-3">
           试卷至少需要包含 1 道题后才能发布。
@@ -420,7 +550,6 @@ export function PaperClassPublishPanel({
         </p>
       ) : null}
 
-      {/* Publish Execution Button */}
       <div className="pt-2">
         <button
           type="button"
@@ -433,6 +562,6 @@ export function PaperClassPublishPanel({
           {recipientScope === "student" ? "布置个人练习" : "发布到班级"}
         </button>
       </div>
-    </div>
+    </>
   );
 }

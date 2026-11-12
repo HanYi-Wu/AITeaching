@@ -31,6 +31,7 @@ import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import { StudentNavButton, StudentAnalysisVisual, StudentResultDetails } from "./StudentPanels";
 import { StudentExamPanel } from "./StudentExamPanel";
 import { useStudentExam } from "./useStudentExam";
+import { DeferredMount } from "../../../components/DeferredMount";
 import "../../../ui-redesign/g54/g54.css";
 import { Select as AppSelect } from "../../../components/ui/select";
 
@@ -790,7 +791,18 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                     {result.show_results ? (
                       <>
                         <StudentAnalysisVisual result={result} />
-                        <StudentResultDetails result={result} />
+                        <DeferredMount
+                          fallback={(
+                            <div
+                              className="mt-4 min-h-20 rounded-2xl border border-dashed border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_45%,transparent)] px-4 py-3 text-xs text-[var(--or-muted)]"
+                              role="status"
+                            >
+                              正在准备逐题复盘…
+                            </div>
+                          )}
+                        >
+                          <StudentResultDetails result={result} />
+                        </DeferredMount>
                       </>
                     ) : (
                       <p className="mt-3.5 rounded-xl border border-[color-mix(in_srgb,var(--or-warning)_70%,transparent)] bg-[color-mix(in_srgb,var(--or-warning-container)_60%,transparent)] px-3.5 py-2.5 text-xs text-[var(--or-on-warning)]">

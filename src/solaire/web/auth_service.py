@@ -54,7 +54,7 @@ def _public_user(row: dict[str, object]) -> dict[str, object]:
         preferences = json.loads(str(row.get("preferences_json") or "{}"))
     except json.JSONDecodeError:
         preferences = {}
-    return {
+    public = {
         "id": row["id"],
         "school_id": row.get("school_id"),
         "role": row["role"],
@@ -69,6 +69,9 @@ def _public_user(row: dict[str, object]) -> dict[str, object]:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+    if row.get("role") == "school":
+        public["school_access_mode"] = "custom" if row.get("school_access_mode") == "custom" else "full"
+    return public
 
 
 def get_user_profile(root: Path, user_id: str) -> dict[str, object]:

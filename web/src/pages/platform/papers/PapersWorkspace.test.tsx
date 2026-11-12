@@ -130,9 +130,73 @@ describe("PapersWorkspace", () => {
     await waitFor(() => expect(mocks.updatePlatformPaperDeliveryMode).toHaveBeenCalledWith("p1", "online"));
     expect((await screen.findAllByText("线上")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("2 份已提交").length).toBeGreaterThan(0);
-    await userEvent.click(screen.getByLabelText(/Class 1/));
-    await selectOption(screen.getByRole("combobox", { name: "发布文件夹" }), "f1");
+    await userEvent.click(await screen.findByLabelText(/Class 1/));
+    await selectOption(await screen.findByRole("combobox", { name: "发布文件夹" }), "f1");
     expect(screen.getByTestId("paper-publish")).toBeEnabled();
+  });
+
+  it("does not mount hidden mobile paper details until the detail segment is opened", async () => {
+    const originalMatchMedia = window.matchMedia;
+    const mobileMedia = {
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => mobileMedia),
+    });
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, question_count: 0 }] });
+
+    try {
+      const { rerender } = render(<PapersWorkspace />);
+      expect(await screen.findByTestId("paper-list-item-p1")).toBeInTheDocument();
+      expect(screen.queryByTestId("paper-publish")).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "试卷内容" }));
+      expect(await screen.findByTestId("paper-publish")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: /返回试卷列表/ }));
+      expect(screen.getByTestId("paper-publish")).toBeInTheDocument();
+      expect(screen.getByTestId("paper-publish").closest("main")).toHaveClass("hidden");
+
+      rerender(<PapersWorkspace projectScope={{ ready: true, value: "other-project" }} />);
+      expect(screen.queryByTestId("paper-publish")).not.toBeInTheDocument();
+    } finally {
+      if (originalMatchMedia) {
+        Object.defineProperty(window, "matchMedia", {
+          configurable: true,
+          writable: true,
+          value: originalMatchMedia,
+        });
+      } else {
+        Reflect.deleteProperty(window, "matchMedia");
+      }
+    }
+  });
+
+  it("keeps the full workspace layout visible while the account profile is pending", async () => {
+    const profileRequest = deferred<{ profile: { id: string; subjects: string[] } }>();
+    mocks.getAccountProfile.mockReturnValue(profileRequest.promise);
+    mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, question_count: 0 }] });
+
+    render(<PapersWorkspace />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在加载当前账号数据");
+    expect(await screen.findByTitle("新建文件夹")).toBeInTheDocument();
+    expect(await screen.findByLabelText("全选当前可移动试卷")).toBeInTheDocument();
+    expect(screen.queryByTestId("paper-list-item-p1")).not.toBeInTheDocument();
+    expect(mocks.listPlatformPapers).not.toHaveBeenCalled();
+
+    await act(async () => {
+      profileRequest.resolve({ profile: { id: "teacher-1", subjects: [] } });
+      await profileRequest.promise;
+    });
+
+    expect(await screen.findByTestId("paper-list-item-p1")).toBeInTheDocument();
+    expect(await screen.findByTestId("paper-publish")).toBeInTheDocument();
+    expect(screen.queryByText("正在加载发布面板…")).not.toBeInTheDocument();
   });
 
   it("selects and drags a group of movable papers, then clears selection after a successful batch move", async () => {
@@ -184,7 +248,7 @@ describe("PapersWorkspace", () => {
     expect(await screen.findByText("move rejected")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "选择试卷 Movable Paper" })).toBeChecked();
     await userEvent.click(screen.getByTestId("paper-list-item-p3"));
-    expect(screen.getByLabelText("试卷所在文件夹")).toBeDisabled();
+    await waitFor(() => expect(screen.getByLabelText("试卷所在文件夹")).toBeDisabled());
     expect(screen.getByLabelText("试卷所在文件夹")).toHaveAttribute("title", "已有发布记录，请移动整个文件夹，以保留答卷和统计关系");
   });
 
@@ -204,8 +268,8 @@ describe("PapersWorkspace", () => {
     render(<PapersWorkspace />);
 
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
-    await userEvent.click(screen.getByLabelText(/Class 1/));
-    await selectOption(screen.getByRole("combobox", { name: "发布文件夹" }), "f1");
+    await userEvent.click(await screen.findByLabelText(/Class 1/));
+    await selectOption(await screen.findByRole("combobox", { name: "发布文件夹" }), "f1");
     await userEvent.click(screen.getByTestId("paper-publish"));
 
     await waitFor(() =>
@@ -375,14 +439,14 @@ describe("PapersWorkspace", () => {
     render(<PapersWorkspace />);
 
     expect((await screen.findAllByText("Midterm")).length).toBeGreaterThan(0);
-    await userEvent.click(screen.getByTestId("paper-load-analysis"));
+    await userEvent.click(await screen.findByTestId("paper-load-analysis"));
 
     await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("p1", undefined, undefined));
     expect(await screen.findByRole("dialog", { name: "试卷分析" })).toBeInTheDocument();
-    expect(screen.getByTestId("paper-analysis-charts")).toBeInTheDocument();
-    expect(screen.getByTestId("paper-analysis-chart-score")).toBeInTheDocument();
-    expect(screen.getByTestId("paper-analysis-classes")).toBeInTheDocument();
-    expect(screen.getByTestId("paper-analysis-questions")).toBeInTheDocument();
+    expect(await screen.findByTestId("paper-analysis-charts")).toBeInTheDocument();
+    expect(await screen.findByTestId("paper-analysis-chart-score")).toBeInTheDocument();
+    expect(await screen.findByTestId("paper-analysis-classes")).toBeInTheDocument();
+    expect(await screen.findByTestId("paper-analysis-questions")).toBeInTheDocument();
     expect(screen.getByText("学生个人分析表")).toBeInTheDocument();
     expect(screen.getByText("Student One")).toBeInTheDocument();
     expect(screen.getByText("2/1")).toBeInTheDocument();
@@ -402,14 +466,14 @@ describe("PapersWorkspace", () => {
     const { rerender } = render(<PapersWorkspace />);
 
     expect(await screen.findByText("Midterm")).toBeInTheDocument();
-    expect(screen.getByTestId("paper-publish")).toBeDisabled();
+    expect(await screen.findByTestId("paper-publish")).toBeDisabled();
 
     mocks.listPlatformPapers.mockResolvedValue({ papers: [{ ...offlinePaper, delivery_mode: "online" }] });
     rerender(<PapersWorkspace />);
     await userEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => expect(screen.getByTestId("paper-publish")).toBeDisabled());
-    await userEvent.click(screen.getByLabelText(/Class 1/));
-    await selectOption(screen.getByRole("combobox", { name: "发布文件夹" }), "f1");
+    await userEvent.click(await screen.findByLabelText(/Class 1/));
+    await selectOption(await screen.findByRole("combobox", { name: "发布文件夹" }), "f1");
     expect(screen.getByTestId("paper-publish")).not.toBeDisabled();
     await userEvent.click(screen.getByTestId("paper-submission-image-ai"));
     await userEvent.clear(screen.getByTestId("paper-time-limit"));
@@ -500,7 +564,7 @@ describe("PapersWorkspace", () => {
     expect(screen.getAllByText(/已提交/).length).toBeGreaterThan(0);
     expect(screen.getByText(/待批改/)).toBeInTheDocument();
     expect(screen.queryByText("submitted")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("paper-ai-grade-a1"));
+    await userEvent.click(await screen.findByTestId("paper-ai-grade-a1"));
     await waitFor(() =>
       expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledWith("p1", "a1", ["math/q1"]),
     );
@@ -667,12 +731,12 @@ describe("PapersWorkspace", () => {
     await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
     await waitFor(() => expect(calls).toBe(1));
 
-    await userEvent.click(screen.getByTestId("paper-save-grade-math/q2"));
+    await userEvent.click(await screen.findByTestId("paper-save-grade-math/q2"));
     await screen.findByText("已保存批改结果");
 
     await userEvent.clear(score);
     await userEvent.type(score, "3");
-    await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
+    await userEvent.click(await screen.findByTestId("paper-save-grade-math/q1"));
     expect(calls).toBe(1);
 
     await act(async () => {
@@ -923,7 +987,7 @@ describe("PapersWorkspace", () => {
     await waitFor(() => expect(screen.getAllByText("Midterm").length).toBeGreaterThan(0));
     await userEvent.click(screen.getByTestId("paper-tab-grading"));
     await screen.findByText("Student One");
-    const firstScore = screen.getByTestId("paper-grade-math/q1");
+    const firstScore = await screen.findByTestId("paper-grade-math/q1");
     await userEvent.clear(firstScore);
     await userEvent.type(firstScore, "2");
     await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
@@ -1004,10 +1068,10 @@ describe("PapersWorkspace", () => {
 
     render(<PapersWorkspace />);
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
-    await userEvent.click(screen.getByTestId("paper-ai-grade-a1"));
+    await userEvent.click(await screen.findByTestId("paper-ai-grade-a1"));
     await waitFor(() => expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledOnce());
 
-    const score = screen.getByTestId("paper-grade-math/q1");
+    const score = await screen.findByTestId("paper-grade-math/q1");
     const feedback = screen.getByTestId("paper-feedback-math/q1");
     await userEvent.clear(score);
     await userEvent.type(score, "3.5");
@@ -1050,9 +1114,9 @@ describe("PapersWorkspace", () => {
 
     render(<PapersWorkspace />);
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
-    await userEvent.click(screen.getByTestId("paper-ai-grade-a1"));
+    await userEvent.click(await screen.findByTestId("paper-ai-grade-a1"));
     await waitFor(() => expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledOnce());
-    const score = screen.getByTestId("paper-grade-math/q1");
+    const score = await screen.findByTestId("paper-grade-math/q1");
     const feedback = screen.getByTestId("paper-feedback-math/q1");
     await userEvent.type(score, "4");
 
@@ -1099,10 +1163,10 @@ describe("PapersWorkspace", () => {
 
     render(<PapersWorkspace />);
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
-    await userEvent.click(screen.getByTestId("paper-ai-grade-batch"));
+    await userEvent.click(await screen.findByTestId("paper-ai-grade-batch"));
     await waitFor(() => expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledWith("p1", "a1", ["math/q1"]));
 
-    const firstScore = screen.getByTestId("paper-grade-math/q1");
+    const firstScore = await screen.findByTestId("paper-grade-math/q1");
     const firstFeedback = screen.getByTestId("paper-feedback-math/q1");
     await userEvent.clear(firstScore);
     await userEvent.type(firstScore, "4");
@@ -1123,7 +1187,7 @@ describe("PapersWorkspace", () => {
     expect(firstFeedback).toHaveValue("教师在批量请求后修改");
     expect(await screen.findByText("AI 批量预批改完成：生成 1 条建议，0 题可重试，忽略 2 个过期字段。请教师逐题复核。")).toBeInTheDocument();
     await selectOption(screen.getByTestId("paper-grading-student-select"), "a2");
-    expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("3");
+    await waitFor(() => expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("3"));
     expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("AI 学生二");
     confirm.mockRestore();
   });
@@ -1148,9 +1212,9 @@ describe("PapersWorkspace", () => {
 
     render(<PapersWorkspace />);
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
-    await userEvent.click(screen.getByTestId("paper-ai-grade-batch"));
+    await userEvent.click(await screen.findByTestId("paper-ai-grade-batch"));
     await waitFor(() => expect(mocks.suggestAiGradesForAttempt).toHaveBeenCalledOnce());
-    const score = screen.getByTestId("paper-grade-math/q1");
+    const score = await screen.findByTestId("paper-grade-math/q1");
     const feedback = screen.getByTestId("paper-feedback-math/q1");
     await userEvent.type(score, "4");
     await userEvent.type(feedback, "教师最终评语");
@@ -1233,7 +1297,7 @@ describe("PapersWorkspace", () => {
 
     render(<PapersWorkspace />);
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
-    expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("4");
+    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("4");
     await userEvent.click(screen.getByTestId("paper-save-grade-math/q1"));
 
     await waitFor(() =>
@@ -1351,6 +1415,7 @@ describe("PapersWorkspace", () => {
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
     const selector = await screen.findByTestId("paper-grading-student-select");
     expect(selector).toHaveTextContent("Student One");
+    await screen.findByTestId("paper-grade-math/q1");
     expect(screen.getByText("学生真实作答一")).toBeInTheDocument();
     expect(screen.queryByText("学生真实作答二")).not.toBeInTheDocument();
 
@@ -1417,6 +1482,7 @@ describe("PapersWorkspace", () => {
     render(<PapersWorkspace />);
 
     // Query A is pending. Switch to Query B by typing "Physics"
+    await waitFor(() => expect(mocks.listPlatformPapers).toHaveBeenCalledWith(expect.objectContaining({ q: "" })));
     const searchInput = screen.getByPlaceholderText("搜索试卷");
     await userEvent.type(searchInput, "Physics");
 
@@ -1458,6 +1524,7 @@ describe("PapersWorkspace", () => {
     render(<PapersWorkspace onError={onError} />);
 
     // Query A is in flight. Trigger Query B (Chemistry)
+    await waitFor(() => expect(mocks.listPlatformPapers).toHaveBeenCalledWith(expect.objectContaining({ q: "" })));
     const searchInput = screen.getByPlaceholderText("搜索试卷");
     await userEvent.type(searchInput, "Chemistry");
 
@@ -1603,7 +1670,7 @@ describe("PapersWorkspace", () => {
     await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledWith("/api/project/info"));
 
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
-    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("3.5");
+    await waitFor(() => expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("3.5"));
     expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("Default scope draft");
   });
 
@@ -1646,8 +1713,8 @@ describe("PapersWorkspace", () => {
 
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
     // Draft should NOT be restored
-    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("");
-    expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("");
+    expect(screen.queryByTestId("paper-grade-math/q1")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("paper-feedback-math/q1")).not.toBeInTheDocument();
   });
 
   it("host projectScope with ready=true and string value isolates drafts to custom scope without calling /api/project/info", async () => {
@@ -1689,7 +1756,7 @@ describe("PapersWorkspace", () => {
     expect(mocks.apiGet).not.toHaveBeenCalledWith("/api/project/info");
 
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
-    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("4.5");
+    await waitFor(() => expect(screen.getByTestId("paper-grade-math/q1")).toHaveValue("4.5"));
     expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("Custom host scope feedback");
   });
 
@@ -1729,12 +1796,12 @@ describe("PapersWorkspace", () => {
     expect(mocks.apiGet).not.toHaveBeenCalledWith("/api/project/info");
 
     await userEvent.click(await screen.findByTestId("paper-tab-grading"));
-    expect(await screen.findByTestId("paper-grade-math/q1")).toHaveValue("");
+    expect(screen.queryByTestId("paper-grade-math/q1")).not.toBeInTheDocument();
 
     // Transition scope to ready
     rerender(<PapersWorkspace projectScope={{ ready: true, value: "bound-project" }} />);
 
-    expect(await screen.findByDisplayValue("5")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByDisplayValue("5")).toBeInTheDocument());
     expect(screen.getByTestId("paper-feedback-math/q1")).toHaveValue("Resolved bound draft");
     expect(mocks.apiGet).not.toHaveBeenCalledWith("/api/project/info");
   });  it("PaperPublishingSidebar independently renders and updates publication window badge without parent clock prop", async () => {
@@ -1960,7 +2027,7 @@ describe("PapersWorkspace", () => {
     expect(screen.getByText("1 + 1 = ?")).toBeInTheDocument();
 
     // Type score and comment for Paper 1
-    const scoreInputP1 = screen.getByTestId("paper-grade-q1");
+    const scoreInputP1 = await screen.findByTestId("paper-grade-q1");
     const feedbackInputP1 = screen.getByTestId("paper-feedback-q1");
     await userEvent.type(scoreInputP1, "5");
     await userEvent.type(feedbackInputP1, "Excellent job!");
@@ -1980,7 +2047,7 @@ describe("PapersWorkspace", () => {
     await userEvent.click(screen.getByTestId("paper-tab-grading"));
     expect(await screen.findByText("Alice")).toBeInTheDocument();
     // Draft score and feedback for Paper 1 are preserved
-    expect(screen.getByTestId("paper-grade-q1")).toHaveValue("5");
+    await waitFor(() => expect(screen.getByTestId("paper-grade-q1")).toHaveValue("5"));
     expect(screen.getByTestId("paper-feedback-q1")).toHaveValue("Excellent job!");
 
     // 4. Save grading
@@ -2014,7 +2081,7 @@ describe("PapersWorkspace", () => {
     await waitFor(() => expect(mocks.updatePlatformPaperDeliveryMode).toHaveBeenCalledWith("p1", "online"));
 
     // User downloads score template
-    const downloadTemplateBtn = screen.getByText("下载成绩模板");
+    const downloadTemplateBtn = await screen.findByRole("button", { name: "下载成绩模板" });
     await userEvent.click(downloadTemplateBtn);
     await waitFor(() =>
       expect(mocks.apiDownloadBlob).toHaveBeenCalledWith(`/api/exams/${encodeURIComponent(paper.exam_id)}/score-template`),

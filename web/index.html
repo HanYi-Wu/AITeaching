@@ -5,9 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>源远教学平台 · OriginReach</title>
+    <script>
+      try {
+        if (window.innerWidth < 900 && !localStorage.getItem("solaire.platform.session")) {
+          document.documentElement.dataset.orBootLogin = "true";
+        }
+      } catch {}
+    </script>
     <style>
       html {
-        background-color: #f8fafc;
+        background-color: var(--or-page, #efedf0);
+      }
+      html[data-or-boot-login="true"],
+      html[data-or-boot-login="true"] body {
+        background-color: #000000;
       }
     </style>
   </head>

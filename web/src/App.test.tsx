@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode, type ReactNode } from "react";
+import { memo, StrictMode, type ReactNode } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlatformUser } from "./platform/auth";
 import { setupTestI18n, TestI18nProvider } from "./test/i18nTestUtils";
@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   logoutPlatform: vi.fn(), setPlatformProjectRoot: vi.fn(), setSidebarOpen: vi.fn(),
   resetAgentContext: vi.fn(),
   loadSchoolWorkspace: vi.fn(),
+  composeRender: vi.fn(),
+  failStudentWorkspaceRender: false,
   sidebarOpen: false,
 }));
 const school: PlatformUser = { id: "school-user", username: "school", role: "school", display_name: "学校", status: "active" };
@@ -23,7 +25,7 @@ vi.mock("./platform/auth", () => ({
 }));
 vi.mock("./contexts/AgentContext", () => ({
   AgentProvider: ({ children }: { children: ReactNode }) => children,
-  useAgentContext: () => ({ sidebarOpen: mocks.sidebarOpen, toggleSidebar: vi.fn(), setSidebarOpen: mocks.setSidebarOpen, resetAgentContext: mocks.resetAgentContext }),
+  useAgentSidebar: () => ({ sidebarOpen: mocks.sidebarOpen, toggleSidebar: vi.fn(), setSidebarOpen: mocks.setSidebarOpen, resetAgentContext: mocks.resetAgentContext }),
 }));
 vi.mock("./contexts/ToolBarContext", () => ({
   ToolBarProvider: ({ children }: { children: ReactNode }) => children,
@@ -37,17 +39,39 @@ vi.mock("./pages/platform/papers/PapersWorkspace", () => ({
 }));
 vi.mock("./app/routes", () => ({
   BankRoute: () => null,
-  ComposeRoute: ({ onRefreshInfo }: { onRefreshInfo: () => Promise<void> }) => <button onClick={() => void onRefreshInfo()}>刷新项目范围</button>,
+  ComposeRoute: memo(function MockComposeRoute({ onRefreshInfo }: { onRefreshInfo: () => Promise<void> }) {
+    mocks.composeRender();
+    return <button onClick={() => void onRefreshInfo()}>刷新项目范围</button>;
+  }),
   GraphRoute: () => null,
   TemplateRoute: () => null,
 }));
 vi.mock("./pages/platform/school/SchoolWorkspace", async () => {
   await mocks.loadSchoolWorkspace();
-  return { SchoolWorkspace: () => <div>学校工作区</div> };
+  return {
+    SchoolWorkspace: ({ onError, onLogout }: { onError: (message: string | null) => void; onLogout: () => void }) => (
+      <div>
+        学校工作区
+        <button onClick={() => onError("学校数据加载失败：班级名单暂时不可用")}>触发学校错误</button>
+        <button onClick={onLogout}>退出登录</button>
+      </div>
+    ),
+  };
 });
-vi.mock("./pages/platform/student/StudentWorkspace", () => ({ StudentWorkspace: () => <div>学生工作区</div> }));
+vi.mock("./pages/platform/student/StudentWorkspace", () => ({
+  StudentWorkspace: () => {
+    if (mocks.failStudentWorkspaceRender) throw new Error("student workspace chunk failed");
+    return <div>学生工作区</div>;
+  },
+}));
 vi.mock("./pages/platform/admin/AdminWorkspace", () => ({
-  AdminWorkspace: ({ onLogout }: { onLogout: () => void }) => <div>管理员工作区<button onClick={onLogout}>退出登录</button></div>,
+  AdminWorkspace: ({ onError, onLogout }: { onError: (message: string | null) => void; onLogout: () => void }) => (
+    <div>
+      管理员工作区
+      <button onClick={() => onError("管理员读取失败：学校列表暂时不可用")}>触发管理员错误</button>
+      <button onClick={onLogout}>退出登录</button>
+    </div>
+  ),
 }));
 vi.mock("./pages/platform/login/PlatformLogin", () => ({
   PlatformLogin: ({ mode, onAuthenticated }: { mode: "bootstrap" | "login"; onAuthenticated: (user: PlatformUser) => void }) => (
@@ -64,10 +88,40 @@ describe("role-specific project requests", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.sidebarOpen = false;
+    mocks.failStudentWorkspaceRender = false;
     mocks.getPlatformStatus.mockResolvedValue({ admin_exists: true, public_mode: true });
     mocks.apiGet.mockResolvedValue({ bound: true, root: "/teacher-project" });
     mocks.logoutPlatform.mockResolvedValue({});
     mocks.loadSchoolWorkspace.mockResolvedValue(undefined);
+  });
+
+  it("keeps the active editor out of navigation-only renders", async () => {
+    mocks.getCurrentUser.mockResolvedValue({ user: { ...school, id: "teacher-user", role: "teacher" } });
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByRole("button", { name: "刷新项目范围" });
+    await waitFor(() => expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith("/teacher-project"));
+    mocks.composeRender.mockClear();
+    await user.click(screen.getByRole("button", { name: "收起导航" }));
+    expect(screen.getByRole("button", { name: "展开导航" })).toBeInTheDocument();
+    expect(mocks.composeRender).not.toHaveBeenCalled();
+  });
+
+  it("does not re-render the hidden compose route when graph navigates to papers", async () => {
+    mocks.getCurrentUser.mockResolvedValue({ user: { ...school, id: "teacher-user", role: "teacher" } });
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByRole("button", { name: "刷新项目范围" });
+    await waitFor(() => expect(mocks.composeRender).toHaveBeenCalled());
+    mocks.composeRender.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "知识图谱" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "知识图谱" })).toHaveAttribute("aria-current", "page"));
+    expect(mocks.composeRender).toHaveBeenCalledTimes(1); // only toolBarActive true -> false
+
+    await user.click(screen.getByTestId("nav-papers"));
+    await screen.findByTestId("paper-project-scope");
+    expect(mocks.composeRender).toHaveBeenCalledTimes(1); // false -> false keeps the hidden editor stable
   });
 
   it("keeps the login screen up until the authenticated workspace chunk is ready", async () => {
@@ -92,10 +146,55 @@ describe("role-specific project requests", () => {
     mocks.getPlatformStatus.mockResolvedValue({ admin_exists: true, public_mode: publicMode });
     mocks.getCurrentUser.mockResolvedValue({ user: { ...school, role } });
     mocks.apiGet.mockRejectedValue(new Error(`${role} role cannot access this endpoint`));
+    mocks.failStudentWorkspaceRender = role === "student";
+    const consoleError = role === "student"
+      ? vi.spyOn(console, "error").mockImplementation(() => {})
+      : null;
+    try {
+      renderApp();
+      await screen.findByText(role === "school" ? "学校工作区" : "此工作区暂时无法加载");
+      if (role === "student") {
+        expect(screen.getByRole("alert")).toHaveTextContent("此工作区暂时无法加载");
+      }
+      expect(mocks.apiGet).not.toHaveBeenCalled();
+      expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith(null);
+    } finally {
+      consoleError?.mockRestore();
+    }
+  });
+
+  it.each([
+    { role: "管理员", user: admin, workspace: "管理员工作区", trigger: "触发管理员错误", message: "管理员读取失败：学校列表暂时不可用" },
+    { role: "学校", user: school, workspace: "学校工作区", trigger: "触发学校错误", message: "学校数据加载失败：班级名单暂时不可用" },
+  ])("shows readable workspace errors for the $role role", async ({ user, workspace, trigger, message }) => {
+    mocks.getCurrentUser.mockResolvedValue({ user });
     renderApp();
-    await screen.findByText(role === "school" ? "学校工作区" : "学生工作区");
-    expect(mocks.apiGet).not.toHaveBeenCalled();
-    expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith(null);
+
+    await screen.findByText(workspace);
+    await userEvent.click(screen.getByRole("button", { name: trigger }));
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(message);
+    expect(alert.querySelector("[tabindex='0']")).toHaveTextContent(message);
+    expect(alert.querySelector("[tabindex='0']")).toHaveClass("overflow-y-auto");
+    expect(alert).toHaveTextContent("完整说明见运行日志");
+  });
+
+  it("clears workspace errors after logout and a role change", async () => {
+    mocks.getCurrentUser.mockResolvedValue({ user: admin });
+    const user = userEvent.setup();
+    renderApp();
+
+    await screen.findByText("管理员工作区");
+    await user.click(screen.getByRole("button", { name: "触发管理员错误" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("管理员读取失败：学校列表暂时不可用");
+
+    await user.click(screen.getByRole("button", { name: "退出登录" }));
+    await screen.findByText("登录页");
+    await user.click(screen.getByRole("button", { name: "以学校身份登录" }));
+    await screen.findByText("学校工作区");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("管理员读取失败：学校列表暂时不可用")).not.toBeInTheDocument();
   });
 
   it.each(["teacher", "admin"] as const)("loads project information for %s", async (role) => {

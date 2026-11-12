@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import subprocess
+import os
+import tempfile
+import time
 import zipfile
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from xml.etree import ElementTree as ET
+from weakref import WeakValueDictionary
 
 from solaire.web.extension_registry import resolve_exe
 
@@ -20,6 +26,8 @@ _XML_NAMESPACES = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
     "pic": "http://schemas.openxmlformats.org/drawingml/2006/picture",
 }
+_REFERENCE_THREAD_LOCKS: WeakValueDictionary[str, Lock] = WeakValueDictionary()
+_REFERENCE_THREAD_LOCKS_GUARD = Lock()
 
 for _prefix, _uri in _XML_NAMESPACES.items():
     ET.register_namespace(_prefix, _uri)
@@ -369,6 +377,82 @@ def _patch_reference_docx(reference_docx: Path) -> None:
     tmp.replace(reference_docx)
 
 
+@contextmanager
+def _reference_docx_lock(reference_docx: Path, *, timeout: float = 60.0):
+    """Serialize template creation across threads and processes on Windows/Unix."""
+    lock_path = reference_docx.with_name(f"{reference_docx.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_key = str(lock_path.resolve())
+    with _REFERENCE_THREAD_LOCKS_GUARD:
+        thread_lock = _REFERENCE_THREAD_LOCKS.get(lock_key)
+        if thread_lock is None:
+            thread_lock = Lock()
+            _REFERENCE_THREAD_LOCKS[lock_key] = thread_lock
+    with thread_lock:
+        with _reference_docx_process_lock(lock_path, timeout=timeout):
+            yield
+
+
+@contextmanager
+def _reference_docx_process_lock(lock_path: Path, *, timeout: float):
+    with lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        deadline = time.monotonic() + timeout
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"Timed out waiting for DOCX template lock: {lock_path}")
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            while True:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"Timed out waiting for DOCX template lock: {lock_path}")
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _is_complete_reference_docx(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return archive.testzip() is None
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def _path_signature(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
 def _ensure_gaokao_reference_docx(
     reference_docx: Path,
     pandoc: str,
@@ -377,38 +461,55 @@ def _ensure_gaokao_reference_docx(
     patch_reference_docx: Callable[[Path], None] = _patch_reference_docx,
     error_type: type[PandocError] = PandocError,
 ) -> Path:
-    if reference_docx.is_file() and reference_docx.stat().st_size > 0:
+    if _is_complete_reference_docx(reference_docx):
         return reference_docx
     reference_docx.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        proc = subprocess_run(
-            [pandoc, "--print-default-data-file=reference.docx"],
-            capture_output=True,
-            timeout=60,
-            check=False,
+    with _reference_docx_lock(reference_docx):
+        if _is_complete_reference_docx(reference_docx):
+            return reference_docx
+        try:
+            proc = subprocess_run(
+                [pandoc, "--print-default-data-file=reference.docx"],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        except FileNotFoundError as e:
+            raise error_type(
+                "未检测到用于导出 Word 的文档转换组件 Pandoc。请在“设置/扩展组件”中安装或指定 Pandoc 后重试。"
+            ) from e
+        except subprocess.TimeoutExpired as e:
+            raise error_type(
+                "Pandoc 生成 Word 样式模板超时。",
+                stdout=_decode_process_output(e.stdout),
+                stderr=_decode_process_output(e.stderr),
+            ) from e
+        if proc.returncode != 0 or not proc.stdout:
+            raise error_type(
+                "Pandoc 生成 Word 样式模板失败。",
+                returncode=proc.returncode,
+                stdout=_decode_process_output(proc.stdout),
+                stderr=_decode_process_output(proc.stderr),
+            )
+
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{reference_docx.stem}.",
+            suffix=".tmp.docx",
+            dir=reference_docx.parent,
         )
-    except FileNotFoundError as e:
-        raise error_type(
-            "未检测到用于导出 Word 的文档转换组件 Pandoc。请在“设置/扩展组件”中安装或指定 Pandoc 后重试。"
-        ) from e
-    except subprocess.TimeoutExpired as e:
-        raise error_type(
-            "Pandoc 生成 Word 样式模板超时。",
-            stdout=_decode_process_output(e.stdout),
-            stderr=_decode_process_output(e.stderr),
-        ) from e
-    if proc.returncode != 0 or not proc.stdout:
-        raise error_type(
-            "Pandoc 生成 Word 样式模板失败。",
-            returncode=proc.returncode,
-            stdout=_decode_process_output(proc.stdout),
-            stderr=_decode_process_output(proc.stderr),
-        )
-    reference_docx.write_bytes(proc.stdout)
-    try:
-        patch_reference_docx(reference_docx)
-    except (OSError, zipfile.BadZipFile, ET.ParseError) as e:
-        raise error_type(f"无法准备 Word 样式模板: {e}") from e
+        os.close(fd)
+        temporary = Path(temp_name)
+        try:
+            payload = proc.stdout.encode("utf-8") if isinstance(proc.stdout, str) else proc.stdout
+            temporary.write_bytes(payload)
+            patch_reference_docx(temporary)
+            if not _is_complete_reference_docx(temporary):
+                raise zipfile.BadZipFile("Pandoc reference template is not a complete DOCX archive")
+            os.replace(temporary, reference_docx)
+        except (OSError, zipfile.BadZipFile, ET.ParseError) as e:
+            raise error_type(f"无法准备 Word 样式模板: {e}") from e
+        finally:
+            temporary.unlink(missing_ok=True)
     return reference_docx
 
 
@@ -433,6 +534,15 @@ def _run_pandoc(
         md_path.parent / "gaokao_reference.docx",
         pandoc,
     )
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{docx_path.stem}.",
+        suffix=".tmp.docx",
+        dir=docx_path.parent,
+    )
+    os.close(fd)
+    temporary = Path(temp_name)
+    temporary.unlink()
+    original_output_signature = _path_signature(docx_path)
     cmd = [
         pandoc,
         md_path.name,
@@ -445,35 +555,43 @@ def _run_pandoc(
         "--reference-doc",
         str(reference.resolve()),
         "-o",
-        docx_path.name,
+        temporary.name,
     ]
     try:
-        proc = subprocess_run(
-            cmd,
-            cwd=md_path.parent,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=300,
-            check=False,
-        )
-    except FileNotFoundError as e:
-        raise error_type(
-            "未检测到用于导出 Word 的文档转换组件 Pandoc。请在“设置/扩展组件”中安装或指定 Pandoc 后重试。"
-        ) from e
-    except subprocess.TimeoutExpired as e:
-        raise error_type(
-            "Pandoc 转换 Word 超时。",
-            stdout=e.stdout or "",
-            stderr=e.stderr or "",
-        ) from e
-    if proc.returncode != 0:
-        raise error_type(
-            f"Pandoc 转换 Word 失败（退出码 {proc.returncode}）。",
-            returncode=proc.returncode,
-            stdout=proc.stdout or "",
-            stderr=proc.stderr or "",
-        )
-    if not docx_path.is_file():
-        raise error_type("Pandoc reported success but DOCX not found.")
+        try:
+            proc = subprocess_run(
+                cmd,
+                cwd=md_path.parent,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                check=False,
+            )
+        except FileNotFoundError as e:
+            raise error_type(
+                "未检测到用于导出 Word 的文档转换组件 Pandoc。请在“设置/扩展组件”中安装或指定 Pandoc 后重试。"
+            ) from e
+        except subprocess.TimeoutExpired as e:
+            raise error_type(
+                "Pandoc 转换 Word 超时。",
+                stdout=e.stdout or "",
+                stderr=e.stderr or "",
+            ) from e
+        if proc.returncode != 0:
+            raise error_type(
+                f"Pandoc 转换 Word 失败（退出码 {proc.returncode}）。",
+                returncode=proc.returncode,
+                stdout=proc.stdout or "",
+                stderr=proc.stderr or "",
+            )
+        if not temporary.is_file():
+            # Compatibility for older subprocess adapters that write to the
+            # requested destination directly instead of honoring the staged -o path.
+            if _path_signature(docx_path) != original_output_signature:
+                return
+            raise error_type("Pandoc reported success but DOCX not found.")
+        os.replace(temporary, docx_path)
+    finally:
+        temporary.unlink(missing_ok=True)

@@ -11,21 +11,21 @@ from solaire.primebrush.geometry.result import GeometrySolveResult
 
 def _min_angle_degrees(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
     """Minimum angle at the three vertices (degrees)."""
+    ab, ac, bc = b - a, c - a, c - b
+    n_ab = np.linalg.norm(ab)
+    n_ac = np.linalg.norm(ac)
+    n_bc = np.linalg.norm(bc)
+    if n_ab < 1e-9 or n_ac < 1e-9 or n_bc < 1e-9:
+        return 0.0
 
-    def ang_at(p: np.ndarray, q: np.ndarray, r: np.ndarray) -> float:
-        v1 = q - p
-        v2 = r - p
-        n1 = np.linalg.norm(v1)
-        n2 = np.linalg.norm(v2)
-        if n1 < 1e-9 or n2 < 1e-9:
-            return 0.0
-        cos_t = float(np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0))
-        return math.degrees(math.acos(cos_t))
-
+    ba, ca, cb = a - b, a - c, b - c
+    cos_a = float(np.clip(np.dot(ab, ac) / (n_ab * n_ac), -1.0, 1.0))
+    cos_b = float(np.clip(np.dot(ba, bc) / (n_ab * n_bc), -1.0, 1.0))
+    cos_c = float(np.clip(np.dot(ca, cb) / (n_ac * n_bc), -1.0, 1.0))
     return min(
-        ang_at(a, b, c),
-        ang_at(b, a, c),
-        ang_at(c, a, b),
+        math.degrees(math.acos(cos_a)),
+        math.degrees(math.acos(cos_b)),
+        math.degrees(math.acos(cos_c)),
     )
 
 
@@ -51,33 +51,37 @@ def _random_triangle(
     raise ValueError("could not sample triangle satisfying min_angle; try different seed or relax min_angle")
 
 
-def _as_vec(points: dict[str, tuple[float, float]], name: str) -> np.ndarray:
-    p = points[str(name)]
-    return np.array([p[0], p[1]], dtype=np.float64)
+def _as_vec(points: dict[str, np.ndarray], name: str) -> np.ndarray:
+    """Return the stored coordinate vector without copying it per constraint."""
+    return points[str(name)]
 
 
 def _segment_far(
     origin: np.ndarray,
-    direction: np.ndarray,
+    direction: np.ndarray | tuple[float, float],
     width: float,
     height: float,
-) -> tuple[np.ndarray, np.ndarray]:
+    *,
+    direction_norm: float | None = None,
+) -> tuple[tuple[float, float], tuple[float, float]]:
     """Two endpoints along line origin + t * direction, long enough for the canvas."""
-    d = np.asarray(direction, dtype=np.float64)
-    n = float(np.linalg.norm(d))
+    dx, dy = float(direction[0]), float(direction[1])
+    n = direction_norm
+    if n is None:
+        n = math.sqrt(dx * dx + dy * dy)
     if n < 1e-12:
         raise ValueError("degenerate direction for line")
-    u = d / n
+    ux, uy = dx / n, dy / n
     span = math.hypot(width, height) * 1.2
-    p1 = origin - span * u
-    p2 = origin + span * u
-    return p1, p2
+    sx, sy = span * ux, span * uy
+    ox, oy = float(origin[0]), float(origin[1])
+    return (ox - sx, oy - sy), (ox + sx, oy + sy)
 
 
 def _append_segment_drawable(
     drawables: list[dict[str, Any]],
-    p1: np.ndarray,
-    p2: np.ndarray,
+    p1: tuple[float, float],
+    p2: tuple[float, float],
     item: dict[str, Any],
     default_style: str = "dashed",
 ) -> None:
@@ -95,7 +99,7 @@ def _append_segment_drawable(
     )
 
 
-def _circle_spec_radius(spec: dict[str, Any], points: dict[str, tuple[float, float]]) -> tuple[np.ndarray, float]:
+def _circle_spec_radius(spec: dict[str, Any], points: dict[str, np.ndarray]) -> tuple[np.ndarray, float]:
     o = _as_vec(points, str(spec["center"]))
     r = euclid.resolve_circle_radius(spec, points)
     return o, r
@@ -108,8 +112,11 @@ def solve_geometry(
     rng: np.random.Generator,
 ) -> GeometrySolveResult:
     """Resolve named points and collect drawable primitives."""
-    points: dict[str, tuple[float, float]] = {}
+    points: dict[str, np.ndarray] = {}
     drawables: list[dict[str, Any]] = []
+    foot_cache: dict[
+        tuple[int, int, int], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    ] = {}
 
     for item in constructions:
         op = item.get("op")
@@ -125,7 +132,7 @@ def solve_geometry(
             if len(nodes) != 3:
                 raise ValueError("triangle requires exactly 3 nodes")
             for name, pt in zip(nodes, (a, b, c), strict=True):
-                points[str(name)] = (float(pt[0]), float(pt[1]))
+                points[str(name)] = pt
 
         elif op == "in_line":
             pid = item["id"]
@@ -133,8 +140,12 @@ def solve_geometry(
             params = float(item.get("params", 0.5))
             a = _as_vec(points, src[0])
             b = _as_vec(points, src[1])
-            p = a + params * (b - a)
-            points[str(pid)] = (float(p[0]), float(p[1]))
+            ax, ay = float(a[0]), float(a[1])
+            p = np.array(
+                [ax + params * (float(b[0]) - ax), ay + params * (float(b[1]) - ay)],
+                dtype=np.float64,
+            )
+            points[str(pid)] = p
 
         elif op == "line":
             src = item["source"]
@@ -147,37 +158,57 @@ def solve_geometry(
             p = _as_vec(points, str(item["point"]))
             a = _as_vec(points, item["line"][0])
             b = _as_vec(points, item["line"][1])
-            h = euclid.foot_on_line(p, a, b)
-            points[pid] = (float(h[0]), float(h[1]))
+            projection_key = (id(p), id(a), id(b))
+            cached_projection = foot_cache.get(projection_key)
+            if cached_projection is None:
+                h = euclid.foot_on_line(p, a, b)
+                foot_cache[projection_key] = (p, a, b, h)
+            else:
+                h = cached_projection[3]
+            points[pid] = h
 
         elif op == "reflection":
             pid = str(item["id"])
             p = _as_vec(points, str(item["point"]))
             a = _as_vec(points, item["line"][0])
             b = _as_vec(points, item["line"][1])
-            h = euclid.foot_on_line(p, a, b)
-            rp = 2.0 * h - p
-            points[pid] = (float(rp[0]), float(rp[1]))
+            projection_key = (id(p), id(a), id(b))
+            cached_projection = foot_cache.get(projection_key)
+            if cached_projection is None:
+                h = euclid.foot_on_line(p, a, b)
+                foot_cache[projection_key] = (p, a, b, h)
+            else:
+                h = cached_projection[3]
+            rp = np.array(
+                [2.0 * float(h[0]) - float(p[0]), 2.0 * float(h[1]) - float(p[1])],
+                dtype=np.float64,
+            )
+            points[pid] = rp
 
         elif op == "perpendicular":
             p = _as_vec(points, str(item["through"]))
             a = _as_vec(points, item["to"][0])
             b = _as_vec(points, item["to"][1])
-            ab = b - a
-            if float(np.linalg.norm(ab)) < 1e-9:
+            dx, dy = float(b[0]) - float(a[0]), float(b[1]) - float(a[1])
+            direction_norm = math.sqrt(dx * dx + dy * dy)
+            if direction_norm < 1e-9:
                 raise ValueError("perpendicular: degenerate line")
-            direction = np.array([-ab[1], ab[0]], dtype=np.float64)
-            p1, p2 = _segment_far(p, direction, width, height)
+            p1, p2 = _segment_far(
+                p, (-dy, dx), width, height, direction_norm=direction_norm
+            )
             _append_segment_drawable(drawables, p1, p2, item)
 
         elif op == "parallel":
             p = _as_vec(points, str(item["through"]))
             a = _as_vec(points, item["to"][0])
             b = _as_vec(points, item["to"][1])
-            direction = b - a
-            if float(np.linalg.norm(direction)) < 1e-9:
+            dx, dy = float(b[0]) - float(a[0]), float(b[1]) - float(a[1])
+            direction_norm = math.sqrt(dx * dx + dy * dy)
+            if direction_norm < 1e-9:
                 raise ValueError("parallel: degenerate direction")
-            p1, p2 = _segment_far(p, direction, width, height)
+            p1, p2 = _segment_far(
+                p, (dx, dy), width, height, direction_norm=direction_norm
+            )
             _append_segment_drawable(drawables, p1, p2, item)
 
         elif op == "intersection_lines":
@@ -189,7 +220,7 @@ def solve_geometry(
             inter = euclid.intersect_lines_infinite(a, b, c, d)
             if inter is None:
                 raise ValueError("intersection_lines: parallel lines")
-            points[pid] = (float(inter[0]), float(inter[1]))
+            points[pid] = inter
 
         elif op == "intersection_line_circle":
             pid = str(item["id"])
@@ -206,7 +237,7 @@ def solve_geometry(
             if which < 0 or which >= len(pts):
                 raise ValueError(f"intersection_line_circle: which={which} but got {len(pts)} point(s)")
             pt = pts[which]
-            points[pid] = (float(pt[0]), float(pt[1]))
+            points[pid] = pt
 
         elif op == "intersection_circles":
             c1 = item["circle1"]
@@ -223,12 +254,12 @@ def solve_geometry(
             if len(pts) == 1:
                 if len(ids) != 1:
                     raise ValueError("intersection_circles: tangent case yields one point; use ids with one name")
-                points[ids[0]] = (float(pts[0][0]), float(pts[0][1]))
+                points[ids[0]] = pts[0]
             else:
                 if len(ids) != 2:
                     raise ValueError("intersection_circles: two intersections require ids: [P, Q]")
-                points[ids[0]] = (float(pts[0][0]), float(pts[0][1]))
-                points[ids[1]] = (float(pts[1][0]), float(pts[1][1]))
+                points[ids[0]] = pts[0]
+                points[ids[1]] = pts[1]
 
         elif op == "perpendicular_bisector":
             src = item["source"]
@@ -236,12 +267,16 @@ def solve_geometry(
                 raise ValueError("perpendicular_bisector requires source: [A, B]")
             a = _as_vec(points, src[0])
             b = _as_vec(points, src[1])
-            mid = (a + b) / 2.0
-            ab = b - a
-            if float(np.linalg.norm(ab)) < 1e-9:
+            ax, ay = float(a[0]), float(a[1])
+            bx, by = float(b[0]), float(b[1])
+            mid = np.array([(ax + bx) / 2.0, (ay + by) / 2.0], dtype=np.float64)
+            dx, dy = bx - ax, by - ay
+            direction_norm = math.sqrt(dx * dx + dy * dy)
+            if direction_norm < 1e-9:
                 raise ValueError("perpendicular_bisector: segment has zero length")
-            direction = np.array([-ab[1], ab[0]], dtype=np.float64)
-            p1, p2 = _segment_far(mid, direction, width, height)
+            p1, p2 = _segment_far(
+                mid, (-dy, dx), width, height, direction_norm=direction_norm
+            )
             _append_segment_drawable(drawables, p1, p2, item)
 
         elif op == "angle_bisector":
@@ -253,21 +288,24 @@ def solve_geometry(
             pa = _as_vec(points, arms[0])
             pb = _as_vec(points, vertex)
             pc = _as_vec(points, arms[1])
-            ba = pa - pb
-            bc = pc - pb
-            n1 = float(np.linalg.norm(ba))
-            n2 = float(np.linalg.norm(bc))
+            bax, bay = float(pa[0]) - float(pb[0]), float(pa[1]) - float(pb[1])
+            bcx, bcy = float(pc[0]) - float(pb[0]), float(pc[1]) - float(pb[1])
+            n1 = math.sqrt(bax * bax + bay * bay)
+            n2 = math.sqrt(bcx * bcx + bcy * bcy)
             if n1 < 1e-9 or n2 < 1e-9:
                 raise ValueError("angle_bisector: degenerate arm")
-            u1 = ba / n1
-            u2 = bc / n2
-            direction = u1 + u2
-            n = float(np.linalg.norm(direction))
+            u1x, u1y = bax / n1, bay / n1
+            u2x, u2y = bcx / n2, bcy / n2
+            dx, dy = u1x + u2x, u1y + u2y
+            n = math.sqrt(dx * dx + dy * dy)
             if n < 1e-9:
-                direction = np.array([-u1[1], u1[0]], dtype=np.float64)
+                dx, dy = -u1y, u1x
             else:
-                direction = direction / n
-            p1, p2 = _segment_far(pb, direction, width, height)
+                dx, dy = dx / n, dy / n
+            direction_norm = math.sqrt(dx * dx + dy * dy)
+            p1, p2 = _segment_far(
+                pb, (dx, dy), width, height, direction_norm=direction_norm
+            )
             _append_segment_drawable(drawables, p1, p2, item)
 
         elif op == "circle":
@@ -315,4 +353,7 @@ def solve_geometry(
         else:
             raise ValueError(f"unknown construction op: {op!r}")
 
-    return GeometrySolveResult(points=points, drawables=drawables)
+    resolved_points = {
+        name: (float(point[0]), float(point[1])) for name, point in points.items()
+    }
+    return GeometrySolveResult(points=resolved_points, drawables=drawables)

@@ -1,30 +1,40 @@
-# PrimeBrush（Rust）
+# PrimeBrush Rust workspace
 
-Python 包 `solaire.primebrush` 的长期迁移目标：几何与绘图热路径在此实现，经 **PyO3** 供后端调用，经 **wasm-bindgen** 供浏览器调用。
+This workspace provides optional native acceleration for the Python
+`solaire.primebrush` package. The current PyO3 extension formats the 200-point
+2D curve path; Python continues to parse and evaluate expressions and render
+the rest of the SVG.
 
-## 构建
+## Build
 
-```bash
-cargo check   # 工作区检查
-```
-
-### PyO3 扩展（可选）
-
-使用 [maturin](https://www.maturin.rs/) 在 `crates/primebrush-pyo3` 目录构建，产出 Python 模块 `primebrush_rs`。未安装时，Python 自动使用纯 Python 插件实现。
-
-### WASM（可选）
+From this directory, build the locked workspace in release mode:
 
 ```bash
-cd crates/primebrush-wasm
-wasm-pack build --target web
+cargo build --locked --workspace --release
 ```
 
-当前 API 为占位，待与 `primebrush-core` 对接。
+With the portable Windows GNU toolchain in this non-ASCII workspace path,
+point `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` to the toolchain's
+`lib/rustlib/x86_64-pc-windows-gnu/bin/rust-lld.exe` and set
+`RUSTFLAGS="-C linker-flavor=ld.lld -C link-self-contained=yes"`.
 
-## 目录
+On Windows, Cargo emits `primebrush_rs.dll` in the release output directory.
+For a local run, copy it as `primebrush_rs.pyd` into a temporary directory on
+`PYTHONPATH`; a global install is not needed.
 
-| Crate | 说明 |
-|-------|------|
-| `primebrush-core` | 公共类型与插件 trait 骨架 |
-| `primebrush-pyo3` | `primebrush_rs` Python 模块 |
-| `primebrush-wasm` | 浏览器 WASM 占位 |
+## Fallback behavior
+
+The Python renderer uses `primebrush_rs.plot2d_path` when that function is
+available. Without the extension, or with an older extension that lacks this
+function, it uses the equivalent Python path formatter. This extension exports
+`HAS_FULL_RENDER = False` because its module-level `render` is still a stub;
+the public API skips that stub before serializing a model. Older external
+extensions without the marker retain the existing `render` call behavior.
+
+## Crates
+
+| Crate | Purpose |
+|---|---|
+| `primebrush-core` | Shared Rust types and plugin trait scaffold |
+| `primebrush-pyo3` | Optional `primebrush_rs` Python extension |
+| `primebrush-wasm` | Browser WASM scaffold |

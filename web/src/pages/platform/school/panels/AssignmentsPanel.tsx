@@ -18,6 +18,7 @@ import {
 } from "../SchoolControls";
 import "../../../../ui-redesign/g53/g53.css";
 import { Select as AppSelect } from "../../../../components/ui/select";
+import { useManagementCapability } from "../../../../platform/useManagementOptions";
 
 type AssignmentsMainProps = {
   assignments: TeacherClassAssignmentRecord[];
@@ -36,6 +37,7 @@ export function AssignmentsMainPanel({
   busy,
   run,
 }: AssignmentsMainProps) {
+  const canWrite = useManagementCapability("school.assignments.manage");
   return (
     <ManagementSection
       title="教师班级分配"
@@ -73,7 +75,7 @@ export function AssignmentsMainPanel({
                 <td className="px-3.5 py-2.5 text-right">
                   <IconButton
                     label="移除分配"
-                    disabled={busy}
+                    disabled={busy || !canWrite}
                     onClick={() =>
                       void run(async () => {
                         await removeTeacherClassAssignment({
@@ -125,8 +127,7 @@ export function AssignmentsAsidePanel({
     <aside className="min-w-0 space-y-6">
       <section className="or-g53-card p-4 sm:p-5">
         <h2 className="text-base font-semibold text-or-text">分配任课教师</h2>
-        <p className="mt-1 text-sm text-or-muted">将教师绑定至班级，绑定后教师可发布试卷与查看学生答卷。</p>
-        <form className="mt-4 space-y-3" onSubmit={submitAssignment}>
+        <form className="mt-3 space-y-3" onSubmit={submitAssignment}>
           <AppSelect
             className="or-g53-select w-full text-sm"
             value={assignTeacherId}

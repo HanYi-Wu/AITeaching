@@ -13,6 +13,28 @@
   background: transparent;
 }
 
+/*
+ * iOS Safari：转场幕布从底部向上收起时，html/body 立即取首页背景色（底部地址栏第一帧即为首页颜色），
+ * 顶部状态栏由 60px 固定条 .or-login-handoff-top 在黑幕遮盖顶边期间保持品牌黑，黑幕收过顶边后隐藏。
+ */
+.or-login-handoff-top {
+  display: none;
+}
+
+@media (max-width: 899.98px) {
+  .or-login-handoff[data-curtain="covering"] .or-login-handoff-top {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1;
+    display: block;
+    height: 60px;
+    pointer-events: auto;
+    background: var(--or-login-accent-color, #000000);
+  }
+}
+
 .or-login-handoff[data-device="desktop"][data-ready="true"] {
   background: transparent;
 }

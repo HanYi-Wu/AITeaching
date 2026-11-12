@@ -130,6 +130,15 @@
     background: var(--or-sidebar);
   }
 
+  /*
+   * 导航本来就在布局最底部，sticky 不改变显示位置；
+   * 它让 iOS Safari 把底部导航识别为贴底的边缘元素，底部地址栏区域随导航栏取色。
+   */
+  .or-mobile-nav {
+    position: sticky;
+    bottom: 0;
+  }
+
   .or-mobile-nav .or-sidebar-brand,
   .or-mobile-nav .or-user-badge {
     display: none;

@@ -1,4 +1,4 @@
-import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useEffect, useState } from "react";
+import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useEffect, useRef, useState } from "react";
 import { ArrowRightLeft, KeyRound, Plus, Save, UserCheck, UserX } from "lucide-react";
 import {
   bulkUpdateStudents,
@@ -26,6 +26,41 @@ import {
 import { StudentTransferDialog } from "./StudentTransferDialog";
 import "../../../../ui-redesign/g53/g53.css";
 import { Select as AppSelect } from "../../../../components/ui/select";
+import { useManagementCapability } from "../../../../platform/useManagementOptions";
+
+function CurrentPageSelectAll({
+  visibleIds,
+  selectedIds,
+  onChange,
+  disabled = false,
+}: {
+  visibleIds: string[];
+  selectedIds: string[];
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  const checkboxRef = useRef<HTMLInputElement>(null);
+  const selectedVisibleCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
+  const checked = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+  const indeterminate = selectedVisibleCount > 0 && !checked;
+
+  useEffect(() => {
+    if (checkboxRef.current) checkboxRef.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+
+  return (
+    <input
+      ref={checkboxRef}
+      type="checkbox"
+      aria-label="全选当前页学生"
+      data-testid="students-select-all"
+      className="h-4 w-4 rounded accent-or-primary focus:ring-or-focus"
+      checked={checked}
+      disabled={disabled || visibleIds.length === 0}
+      onChange={(event) => onChange(event.currentTarget.checked)}
+    />
+  );
+}
 
 type StudentsMainProps = {
   students: StudentRecord[];
@@ -71,8 +106,11 @@ export function StudentsMainPanel({
   transferScopeKey,
   onTransferred,
 }: StudentsMainProps) {
+  const canWrite = useManagementCapability("school.students.manage");
   const [transferSelection, setTransferSelection] = useState<{ student: StudentRecord; scopeKey: string } | null>(null);
   const transferStudent = transferSelection?.scopeKey === transferScopeKey ? transferSelection.student : null;
+  const visibleStudentIds = students.map((student) => student.id);
+  const selectedVisibleStudentIds = visibleStudentIds.filter((id) => selectedStudentIds.includes(id));
 
   useEffect(() => {
     setTransferSelection((current) => current?.scopeKey === transferScopeKey ? current : null);
@@ -90,19 +128,19 @@ export function StudentsMainPanel({
               onQueryChange={(patch) => setStudentQuery((current) => ({ ...current, ...patch, page: patch.page ?? 1 }))}
               status
               bulk={
-                selectedStudentIds.length ? (
+                canWrite && selectedVisibleStudentIds.length ? (
                   <BulkActions
                     disabled={busy}
-                    count={selectedStudentIds.length}
+                    count={selectedVisibleStudentIds.length}
                     onEnable={() =>
                       void run(async () => {
-                        await bulkUpdateStudents({ ids: selectedStudentIds, status: "active" });
+                        await bulkUpdateStudents({ ids: selectedVisibleStudentIds, status: "active" });
                         setSelectedStudentIds([]);
                       })
                     }
                     onDisable={() =>
                       void run(async () => {
-                        await bulkUpdateStudents({ ids: selectedStudentIds, status: "disabled" });
+                        await bulkUpdateStudents({ ids: selectedVisibleStudentIds, status: "disabled" });
                         setSelectedStudentIds([]);
                       })
                     }
@@ -132,7 +170,19 @@ export function StudentsMainPanel({
           <table className="min-w-[980px] w-full text-left text-sm">
             <thead className="border-b border-or-outline bg-or-block text-xs font-semibold text-or-muted">
               <tr>
-                <th className="w-10 px-3.5 py-2.5"></th>
+                <th className="w-10 px-3.5 py-2.5">
+                  <CurrentPageSelectAll
+                    disabled={!canWrite || busy}
+                    visibleIds={visibleStudentIds}
+                    selectedIds={selectedStudentIds}
+                    onChange={(checked) => {
+                      const pageIds = new Set(visibleStudentIds);
+                      setSelectedStudentIds((current) => checked
+                        ? [...new Set([...current, ...visibleStudentIds])]
+                        : current.filter((id) => !pageIds.has(id)));
+                    }}
+                  />
+                </th>
                 <th className="px-3.5 py-2.5">学号</th>
                 <th className="px-3.5 py-2.5">姓名</th>
                 <th className="px-3.5 py-2.5">邮箱</th>
@@ -157,6 +207,8 @@ export function StudentsMainPanel({
                         type="checkbox"
                         className="h-4 w-4 rounded accent-or-primary focus:ring-or-focus"
                         checked={selectedStudentIds.includes(student.id)}
+                        disabled={busy || !canWrite}
+                        aria-label={"选择学生 " + student.student_no}
                         onChange={() => toggleStudent(student.id)}
                       />
                     </td>
@@ -164,6 +216,7 @@ export function StudentsMainPanel({
                       <input
                         className="or-g53-input w-28 py-1 text-sm font-medium"
                         value={draft.student_no}
+                        readOnly={!canWrite}
                         onChange={(event) =>
                           setStudentDrafts((prev) => ({ ...prev, [student.id]: { ...draft, student_no: event.target.value } }))
                         }
@@ -173,6 +226,7 @@ export function StudentsMainPanel({
                       <input
                         className="or-g53-input w-32 py-1 text-sm font-medium"
                         value={draft.display_name}
+                        readOnly={!canWrite}
                         onChange={(event) =>
                           setStudentDrafts((prev) => ({
                             ...prev,
@@ -185,6 +239,7 @@ export function StudentsMainPanel({
                       <input
                         className="or-g53-input w-40 py-1 text-sm font-medium"
                         value={draft.email}
+                        readOnly={!canWrite}
                         onChange={(event) =>
                           setStudentDrafts((prev) => ({ ...prev, [student.id]: { ...draft, email: event.target.value } }))
                         }
@@ -209,7 +264,7 @@ export function StudentsMainPanel({
                       <div className="flex justify-end gap-2">
                         <IconButton
                           label="保存学生"
-                          disabled={busy}
+                          disabled={busy || !canWrite}
                           onClick={() =>
                             void run(async () => {
                               await updateStudent(student.id, draft);
@@ -219,7 +274,7 @@ export function StudentsMainPanel({
                         />
                         <IconButton
                           label="重置密码"
-                          disabled={busy}
+                          disabled={busy || !canWrite}
                           onClick={() =>
                             void run(async () => {
                               const result = await resetStudentPassword(student.id);
@@ -230,7 +285,7 @@ export function StudentsMainPanel({
                         />
                         <IconButton
                           label={student.status === "active" ? "停用学生" : "启用学生"}
-                          disabled={busy}
+                          disabled={busy || !canWrite}
                           onClick={() =>
                             void run(async () => {
                               await updateStudent(student.id, { status: student.status === "active" ? "disabled" : "active" });
@@ -238,7 +293,7 @@ export function StudentsMainPanel({
                           }
                           icon={student.status === "active" ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
                         />
-                        {canTransfer ? (
+                        {canTransfer && canWrite ? (
                           <IconButton
                             label="转班"
                             disabled={busy}
@@ -256,7 +311,7 @@ export function StudentsMainPanel({
         </div>
         <Pager meta={studentMeta} onPage={(page) => setStudentQuery((current) => ({ ...current, page }))} />
       </ManagementSection>
-      {canTransfer && transferStudent ? (
+      {canTransfer && canWrite && transferStudent ? (
         <StudentTransferDialog
           student={transferStudent}
           scopeKey={transferScopeKey}
@@ -303,11 +358,10 @@ export function StudentsAsidePanel({
     <aside className="min-w-0 space-y-6">
       <section className="or-g53-card p-4 sm:p-5">
         <h2 className="text-base font-semibold text-or-text">录入学生</h2>
-        <p className="mt-1 text-sm text-or-muted">录入后自动生成初始登录名与密码，亦可使用模板批量导入。</p>
-        <p className="mt-2 text-xs leading-5 text-or-muted">
-          每位学生最多一个当前班级；同班重复导入会更新资料，跨班导入会被拒绝，不会自动转班。
+        <p className="mt-1 text-xs leading-5 text-or-muted">
+          学生只能归属一个当前班级；同班导入更新资料，跨班请使用“转班”。
         </p>
-        <form className="mt-4 space-y-3" onSubmit={submitStudent}>
+        <form className="mt-3 space-y-3" onSubmit={submitStudent}>
           <AppSelect
             className="or-g53-select w-full text-sm"
             value={studentClassId}

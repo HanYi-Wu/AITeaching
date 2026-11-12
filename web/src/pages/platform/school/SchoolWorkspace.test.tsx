@@ -1,8 +1,10 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlatformRequestError } from "../../../platform/platformRequest";
+import { clearSessionToken, loadSessionToken, saveSessionToken } from "../../../platform/session";
+import { confirmDialog } from "../../../lib/confirmDialog";
 import { SchoolWorkspace } from "./SchoolWorkspace";
 import { selectOption } from "../../../test/selectOption";
 
@@ -21,8 +23,11 @@ const mocks = vi.hoisted(() => ({
   createTeacher: vi.fn(),
   deleteClass: vi.fn(),
   downloadSchoolImportTemplate: vi.fn(),
+  downloadBlob: vi.fn(),
   exportStudentAccounts: vi.fn(),
+  exportTeachers: vi.fn(),
   getStudentClassTransfer: vi.fn(),
+  getSchoolAiCapabilities: vi.fn(),
   getSchoolAiSettings: vi.fn(),
   importClassesFile: vi.fn(),
   importSchoolAiFile: vi.fn(),
@@ -57,8 +62,10 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
     createTeacher: mocks.createTeacher,
     deleteClass: mocks.deleteClass,
     downloadSchoolImportTemplate: mocks.downloadSchoolImportTemplate,
+    exportTeachers: mocks.exportTeachers,
     exportStudentAccounts: mocks.exportStudentAccounts,
     getStudentClassTransfer: mocks.getStudentClassTransfer,
+    getSchoolAiCapabilities: mocks.getSchoolAiCapabilities,
     getSchoolAiSettings: mocks.getSchoolAiSettings,
     importClassesFile: mocks.importClassesFile,
     importSchoolAiFile: mocks.importSchoolAiFile,
@@ -82,9 +89,24 @@ vi.mock("../../../platform/auth", async (importOriginal) => {
   };
 });
 
+vi.mock("../../../lib/confirmDialog", () => ({ confirmDialog: vi.fn() }));
+vi.mock("./hooks/useSchoolWorkspaceData", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./hooks/useSchoolWorkspaceData")>();
+  return { ...actual, downloadBlob: mocks.downloadBlob };
+});
+vi.mock("../../../platform/useManagementOptions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../platform/useManagementOptions")>()),
+  useManagementOptions: () => null,
+}));
+vi.mock("../management/AuditPanel", () => ({ AuditPanel: () => <div data-testid="school-audit-panel" /> }));
+vi.mock("../management/AccessPanel", () => ({ AccessPanel: () => <div data-testid="school-access-panel" /> }));
+vi.mock("../management/ManagementSettingsPanel", () => ({ ManagementSettingsPanel: () => <div data-testid="school-settings-panel" /> }));
+vi.mock("../management/ActivityPanel", () => ({ ActivityPanel: () => <div data-testid="school-activity-panel" /> }));
+
 describe("SchoolWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(confirmDialog).mockResolvedValue(true);
     mocks.listTeachers.mockResolvedValue({
       teachers: [
         {
@@ -122,6 +144,14 @@ describe("SchoolWorkspace", () => {
       ai_enabled: false,
       school: { id: "s1", name: "School A", status: "active", ai_enabled: 0, created_at: "", updated_at: "" },
     });
+    mocks.getSchoolAiCapabilities.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: false,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 0, created_at: "", updated_at: "" },
+      capabilities: [],
+      stats: { teachers: 1, classes: 1, students: 1, assignments: 0 },
+    });
+    mocks.exportTeachers.mockResolvedValue(new Blob(["xlsx"]));
     mocks.updateSchoolAiSettings.mockResolvedValue({
       ai_available: true,
       ai_enabled: true,
@@ -136,6 +166,183 @@ describe("SchoolWorkspace", () => {
       reply: "当前学校教师名单：\n1. Teacher Li（账号：teacher_li，学科：Math，状态：active）",
       source: "local",
     });
+  });
+
+  it("integrates management pages without loading roster panels", async () => {
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", school_id: "s1", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    await screen.findByRole("heading", { name: "学校管理总览" });
+    await userEvent.click(screen.getByTestId("school-page-audit"));
+    expect(screen.getByTestId("school-audit-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("school-page-teachers")).toBeInTheDocument();
+    expect(mocks.listTeachers).not.toHaveBeenCalled();
+    expect(mocks.listStudents).not.toHaveBeenCalled();
+  });
+
+  it("shows management navigation and exports according to the school permission list", async () => {
+    render(
+      <SchoolWorkspace
+        user={{ id: "custom", role: "school", school_id: "s1", username: "custom", display_name: "自定义账号", status: "active", school_access_mode: "custom", management_permissions: ["school.overview.read", "school.access.read"] }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "学校管理总览" });
+    expect(screen.getByTestId("school-page-access")).toBeInTheDocument();
+    expect(screen.queryByTestId("school-page-teachers")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("school-page-activity")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("students-export-link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "导出成绩分析" })).not.toBeInTheDocument();
+  });
+
+  it("loads overview totals from the school capabilities stats response", async () => {
+    mocks.getSchoolAiCapabilities.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: false,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 0, created_at: "", updated_at: "" },
+      capabilities: [],
+      stats: { teachers: 12, classes: 8, students: 34, assignments: 5 },
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "学校管理总览" })).toBeInTheDocument();
+    expect(screen.getByText("12", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("8", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("34", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("5", { exact: true })).toBeInTheDocument();
+    expect(mocks.getSchoolAiCapabilities).toHaveBeenCalledTimes(1);
+    expect(mocks.listTeachers).not.toHaveBeenCalled();
+    expect(mocks.listClasses).not.toHaveBeenCalled();
+    expect(mocks.listStudents).not.toHaveBeenCalled();
+    expect(mocks.listTeacherClassAssignments).not.toHaveBeenCalled();
+  });
+
+  it("loads page data and choice lists only after entering the relevant panel", async () => {
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "学校管理总览" });
+    expect(mocks.listTeachers.mock.calls.filter(([query]: any[]) => query?.pageSize === 100)).toHaveLength(0);
+    expect(mocks.listClasses.mock.calls.filter(([query]: any[]) => query?.pageSize === 100)).toHaveLength(0);
+
+    await userEvent.click(screen.getByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+    expect(mocks.listTeachers).toHaveBeenCalledWith(expect.objectContaining({ page: 1, pageSize: 10 }));
+    expect(mocks.listTeachers.mock.calls.filter(([query]: any[]) => query?.pageSize === 100)).toHaveLength(0);
+
+    await userEvent.click(screen.getByTestId("school-page-students"));
+    expect(await screen.findByDisplayValue("Student One")).toBeInTheDocument();
+    expect(mocks.listStudents).toHaveBeenCalledWith(null, expect.objectContaining({ page: 1, pageSize: 10 }));
+    expect(mocks.listClasses.mock.calls.filter(([query]: any[]) => query?.pageSize === 100).length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByTestId("school-page-assignments"));
+    expect(await screen.findAllByText("Teacher Li")).not.toHaveLength(0);
+    expect(mocks.listTeachers.mock.calls.filter(([query]: any[]) => query?.pageSize === 100).length).toBeGreaterThan(0);
+  });
+
+  it("does not let a late overview metadata response overwrite the active page total", async () => {
+    let resolveOverview!: (value: unknown) => void;
+    const overviewTeachers = new Promise((resolve) => { resolveOverview = resolve; });
+    mocks.listTeachers.mockImplementation((query: any = {}) => {
+      if (query.pageSize === 1) return overviewTeachers;
+      return Promise.resolve({
+        teachers: [{ id: "t-current", display_name: "Current Teacher", username: "current", status: "active", subjects: [] }],
+        total: 2,
+        page: 1,
+        page_size: 10,
+        total_pages: 1,
+      });
+    });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Current Teacher")).toBeInTheDocument();
+    expect(screen.getByText("第 1 / 1 页，共 2 条")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveOverview({ teachers: [{ id: "t-old" }], total: 99, page: 1, page_size: 1, total_pages: 99 });
+      await overviewTeachers;
+    });
+
+    expect(screen.getByText("第 1 / 1 页，共 2 条")).toBeInTheDocument();
+    expect(screen.queryByText("第 1 / 99 页，共 99 条")).not.toBeInTheDocument();
+  });
+
+  it("keeps the student class filter when the class page shows a filtered subset", async () => {
+    const classOne = { id: "c1", school_id: "s1", name: "Class 1", grade: "G10", subject_hint: null };
+    const classTwo = { id: "c2", school_id: "s1", name: "Class 2", grade: "G10", subject_hint: null };
+    mocks.listClasses.mockImplementation((query: any = {}) => {
+      const classes = query.q ? [classTwo] : [classOne, classTwo];
+      return Promise.resolve({
+        classes,
+        total: classes.length,
+        page: query.page ?? 1,
+        page_size: query.pageSize ?? 10,
+        total_pages: 1,
+      });
+    });
+    mocks.listStudents.mockImplementation((classId: string | null, query: any = {}) => Promise.resolve({
+      students: [{
+        id: "stu1",
+        school_id: "s1",
+        student_no: "S001",
+        display_name: "Student One",
+        status: "active",
+        class_names: classId === "c1" ? "Class 1" : "Class 1, Class 2",
+      }],
+      total: 1,
+      page: query.page ?? 1,
+      page_size: query.pageSize ?? 10,
+      total_pages: 1,
+    }));
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-students"));
+    await screen.findByDisplayValue("Student One");
+    await selectOption(comboboxWithText("全部班级"), "c1");
+    await waitFor(() => expect(mocks.listStudents).toHaveBeenCalledWith("c1", expect.anything()));
+
+    await userEvent.click(screen.getByTestId("school-page-classes"));
+    expect(await screen.findByDisplayValue("Class 1")).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText("搜索"), "Class 2");
+    await waitFor(() => expect(screen.getAllByDisplayValue("Class 2").length).toBeGreaterThan(0));
+
+    await userEvent.click(screen.getByTestId("school-page-students"));
+    const filter = await waitFor(() => comboboxWithText("Class 1"));
+    expect(filter).toHaveTextContent("Class 1");
+    await waitFor(() => expect(mocks.listStudents).toHaveBeenCalledWith("c1", expect.anything()));
   });
 
   it("assigns a teacher to a class without requiring a subject", async () => {
@@ -191,6 +398,13 @@ describe("SchoolWorkspace", () => {
   });
 
   it("uses a chat-style school AI panel and imports files from the AI page", async () => {
+    mocks.getSchoolAiCapabilities.mockResolvedValue({
+      ai_available: true,
+      ai_enabled: true,
+      school: { id: "s1", name: "School A", status: "active", ai_enabled: 1, created_at: "", updated_at: "" },
+      capabilities: [],
+      stats: { teachers: 1, classes: 1, students: 1, assignments: 0 },
+    });
     mocks.getSchoolAiSettings.mockResolvedValue({
       ai_available: true,
       ai_enabled: true,
@@ -259,7 +473,6 @@ describe("SchoolWorkspace", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "首次使用清单" })).toBeInTheDocument();
-    expect(screen.getByText("按顺序完成教师、班级、学生和任课分配")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "分配任课教师" }));
     expect(screen.getByTestId("assign-teacher-class")).toBeInTheDocument();
   });
@@ -343,6 +556,9 @@ describe("SchoolWorkspace", () => {
       />,
     );
 
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    await waitFor(() => expect(mocks.listTeachers).toHaveBeenCalledTimes(1));
+
     // Switch account to u2
     rerender(
       <SchoolWorkspace
@@ -352,7 +568,6 @@ describe("SchoolWorkspace", () => {
       />,
     );
 
-    await userEvent.click(await screen.findByTestId("school-page-teachers"));
     expect(await screen.findByDisplayValue("Teacher New")).toBeInTheDocument();
 
     // Now late response for user 1 resolves with Teacher Li
@@ -376,7 +591,7 @@ describe("SchoolWorkspace", () => {
     expect(screen.queryByDisplayValue("Teacher Li")).not.toBeInTheDocument();
   });
 
-  it("isolates list requests across six consecutive search updates", async () => {
+  it("debounces consecutive text updates into one isolated list request", async () => {
     render(
       <SchoolWorkspace
         user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
@@ -399,8 +614,11 @@ describe("SchoolWorkspace", () => {
     const searchInput = screen.getByPlaceholderText("搜索");
     await userEvent.type(searchInput, "abcdef");
 
-    // Total target list calls increased by exactly 6
-    expect(mocks.listTeachers).toHaveBeenCalledTimes(baselineCalls.teachers + 6);
+    // The control updates immediately while the text request waits for the short debounce.
+    expect(searchInput).toHaveValue("abcdef");
+    expect(mocks.listTeachers).toHaveBeenCalledTimes(baselineCalls.teachers);
+    await waitFor(() => expect(mocks.listTeachers).toHaveBeenCalledTimes(baselineCalls.teachers + 1));
+    expect(mocks.listTeachers.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ q: "abcdef" }));
 
     // Other lists, options, and AI queries were NOT called
     expect(mocks.listClasses).toHaveBeenCalledTimes(baselineCalls.classes);
@@ -413,6 +631,30 @@ describe("SchoolWorkspace", () => {
       .slice(baselineCalls.teachers)
       .filter(([arg]: any) => arg && arg.pageSize === 100);
     expect(choicesCalls).toHaveLength(0);
+  });
+
+  it("waits for Chinese IME composition to finish before searching", async () => {
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+    const baselineCalls = mocks.listTeachers.mock.calls.length;
+    const searchInput = screen.getByPlaceholderText("搜索");
+
+    fireEvent.compositionStart(searchInput);
+    fireEvent.change(searchInput, { target: { value: "中文" } });
+    expect(searchInput).toHaveValue("中文");
+    expect(mocks.listTeachers).toHaveBeenCalledTimes(baselineCalls);
+
+    fireEvent.compositionEnd(searchInput, { data: "中文" });
+    await waitFor(() => expect(mocks.listTeachers).toHaveBeenCalledTimes(baselineCalls + 1));
+    expect(mocks.listTeachers.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ q: "中文" }));
   });
 
   it("keeps the newest list response when same-account queries resolve out of order", async () => {
@@ -441,10 +683,11 @@ describe("SchoolWorkspace", () => {
     });
 
     const searchInput = screen.getByPlaceholderText("搜索");
-    // Trigger Query A
-    await userEvent.type(searchInput, "A");
-    // Trigger Query B
+    // A filter change starts Query A immediately; text starts Query B after debounce.
+    await selectOption(comboboxWithText("全部状态"), "active");
+    await waitFor(() => expect(callIndex).toBe(1));
     await userEvent.type(searchInput, "B");
+    await waitFor(() => expect(callIndex).toBe(2));
 
     // Resolve B first with Teacher B
     resolveQueryB({
@@ -496,6 +739,60 @@ describe("SchoolWorkspace", () => {
     expect(screen.getByText("第 1 / 1 页，共 1 条")).toBeInTheDocument();
   });
 
+  it("reloads a search key when its earlier request was invalidated during debounce", async () => {
+    let resolveFirstA!: (value: unknown) => void;
+    let resolveSecondA!: (value: unknown) => void;
+    const firstA = new Promise((resolve) => { resolveFirstA = resolve; });
+    const secondA = new Promise((resolve) => { resolveSecondA = resolve; });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher Li")).toBeInTheDocument();
+
+    let queryACalls = 0;
+    mocks.listTeachers.mockImplementation((query: any = {}) => {
+      if (query.q !== "A") return Promise.resolve({ teachers: [], total: 0 });
+      queryACalls++;
+      return queryACalls === 1 ? firstA : secondA;
+    });
+
+    const searchInput = screen.getByPlaceholderText("搜索");
+    await userEvent.type(searchInput, "A");
+    await waitFor(() => expect(queryACalls).toBe(1));
+    await userEvent.type(searchInput, "B");
+    await userEvent.keyboard("{Backspace}");
+    await waitFor(() => expect(queryACalls).toBe(2));
+
+    resolveSecondA({
+      teachers: [{ id: "t_latest_a", display_name: "Latest A", username: "latest_a", status: "active", subjects: [] }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      total_pages: 1,
+    });
+    expect(await screen.findByDisplayValue("Latest A")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirstA({
+        teachers: [{ id: "t_stale_a", display_name: "Stale A", username: "stale_a", status: "active", subjects: [] }],
+        total: 1,
+        page: 1,
+        page_size: 10,
+        total_pages: 1,
+      });
+      await firstA;
+    });
+    expect(screen.getByDisplayValue("Latest A")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Stale A")).not.toBeInTheDocument();
+  });
+
   it("ignores stale same-account query errors without disturbing the latest request", async () => {
     const onError = vi.fn();
     let rejectQueryA!: (err: unknown) => void;
@@ -524,8 +821,10 @@ describe("SchoolWorkspace", () => {
     });
 
     const searchInput = screen.getByPlaceholderText("搜索");
-    await userEvent.type(searchInput, "A");
+    await selectOption(comboboxWithText("全部状态"), "active");
+    await waitFor(() => expect(callIndex).toBe(1));
     await userEvent.type(searchInput, "B");
+    await waitFor(() => expect(callIndex).toBe(2));
 
     // Reject Query A while Query B is still pending
     await act(async () => {
@@ -736,6 +1035,13 @@ describe("SchoolWorkspace", () => {
     await userEvent.click(screen.getByTestId("school-page-classes"));
     expect(await screen.findByDisplayValue("Class 1")).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole("button", { name: "删除班级" })[0]);
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalledTimes(1));
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("此操作不可撤销"), "确认删除班级");
+    await waitFor(() => expect(mocks.deleteClass).toHaveBeenCalledWith("c1"));
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("Class 1")).not.toBeInTheDocument();
+      expect(screen.getByDisplayValue("Class 2")).toBeInTheDocument();
+    });
 
     await userEvent.click(await screen.findByTestId("school-page-students"));
     const filter = comboboxWithText("全部班级");
@@ -828,7 +1134,7 @@ describe("SchoolWorkspace", () => {
     const dialog = await screen.findByRole("dialog", { name: "转班确认" });
     expect(dialog).toHaveTextContent("Class 1（G10）");
     expect(dialog).toHaveTextContent("保留 4 份考试记录");
-    expect(dialog).toHaveTextContent("2 份旧考试记录没有冻结的原始班级快照");
+    expect(dialog).toHaveTextContent("2 份旧记录无原始班级快照");
 
     const studentCallsBefore = mocks.listStudents.mock.calls.length;
     const classCallsBefore = mocks.listClasses.mock.calls.length;
@@ -1055,7 +1361,11 @@ describe("SchoolWorkspace", () => {
         />,
       );
 
-      await userEvent.click(await screen.findByTestId("school-page-students"));
+      if (role === "admin") {
+        await userEvent.click(await screen.findByTestId("school-page-students"));
+      } else {
+        expect(screen.queryByTestId("school-page-students")).not.toBeInTheDocument();
+      }
       expect(screen.queryByRole("button", { name: "转班" })).not.toBeInTheDocument();
       view.unmount();
     }
@@ -1212,7 +1522,7 @@ describe("SchoolWorkspace", () => {
 
     // 6. Header global refresh button: click and verify full reload
     const baselineGlobalCalls = {
-      ai: mocks.getSchoolAiSettings.mock.calls.length,
+      ai: mocks.getSchoolAiCapabilities.mock.calls.length,
       teachers: mocks.listTeachers.mock.calls.length,
       classes: mocks.listClasses.mock.calls.length,
       students: mocks.listStudents.mock.calls.length,
@@ -1220,7 +1530,7 @@ describe("SchoolWorkspace", () => {
     };
     await userEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => {
-      expect(mocks.getSchoolAiSettings.mock.calls.length).toBeGreaterThan(baselineGlobalCalls.ai);
+      expect(mocks.getSchoolAiCapabilities.mock.calls.length).toBeGreaterThan(baselineGlobalCalls.ai);
       expect(mocks.listTeachers.mock.calls.length).toBeGreaterThan(baselineGlobalCalls.teachers);
       expect(mocks.listClasses.mock.calls.length).toBeGreaterThan(baselineGlobalCalls.classes);
     });
@@ -1258,6 +1568,198 @@ describe("SchoolWorkspace", () => {
     // Assignments panel shows empty message "暂无数据"
     await userEvent.click(screen.getByTestId("school-page-assignments"));
     expect(await screen.findByText("暂无数据")).toBeInTheDocument();
+  });
+
+  it("exports the teacher list with current filters without the current page limit", async () => {
+    mocks.listTeachers.mockImplementation((query: any = {}) => Promise.resolve({
+      teachers: [
+        { id: "t1", school_id: "s1", role: "teacher", username: "teacher_li", display_name: "Teacher Li", status: "disabled", subjects: ["Math"] },
+      ],
+      total: 20,
+      page: query.page ?? 1,
+      page_size: 10,
+      total_pages: 2,
+    }));
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    await userEvent.type(screen.getByPlaceholderText("搜索"), "Math");
+    await selectOption(comboboxWithText("全部状态"), "disabled");
+    await waitFor(() =>
+      expect(mocks.listTeachers).toHaveBeenCalledWith(expect.objectContaining({ q: "Math", status: "disabled", page: 1 })),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(screen.getByText("第 2 / 2 页，共 20 条")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId("teachers-export"));
+
+    await waitFor(() => expect(mocks.exportTeachers).toHaveBeenCalledWith({ q: "Math", status: "disabled" }));
+    expect(mocks.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "教师名单.xlsx");
+  });
+
+  it("ignores a teacher export that resolves after switching accounts", async () => {
+    let resolveExport!: (blob: Blob) => void;
+    const pendingExport = new Promise<Blob>((resolve) => {
+      resolveExport = resolve;
+    });
+    mocks.exportTeachers.mockReturnValue(pendingExport);
+
+    const view = render(
+      <SchoolWorkspace
+        user={{ id: "u1", school_id: "s1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    await userEvent.click(screen.getByTestId("teachers-export"));
+    await waitFor(() => expect(mocks.exportTeachers).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <SchoolWorkspace
+        user={{ id: "u2", school_id: "s2", role: "school", username: "school_b", display_name: "School B", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    expect(await screen.findByTestId("teachers-export")).toBeInTheDocument();
+    await act(async () => {
+      resolveExport(new Blob(["old school export"]));
+      await pendingExport;
+    });
+
+    expect(mocks.downloadBlob).not.toHaveBeenCalled();
+    expect(screen.queryByText("教师名单已导出。")).not.toBeInTheDocument();
+  });
+
+  it("does not download a teacher export that resolves after its panel unmounts", async () => {
+    let resolveExport!: (blob: Blob) => void;
+    const pendingExport = new Promise<Blob>((resolve) => {
+      resolveExport = resolve;
+    });
+    mocks.exportTeachers.mockReturnValue(pendingExport);
+
+    const view = render(
+      <SchoolWorkspace
+        user={{ id: "u1", school_id: "s1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    await userEvent.click(screen.getByTestId("teachers-export"));
+    await waitFor(() => expect(mocks.exportTeachers).toHaveBeenCalledTimes(1));
+    view.unmount();
+
+    await act(async () => {
+      resolveExport(new Blob(["unmounted export"]));
+      await pendingExport;
+    });
+
+    expect(mocks.downloadBlob).not.toHaveBeenCalled();
+  });
+
+  it("ignores teacher exports from a previous session token", async () => {
+    let rejectExport!: (reason?: unknown) => void;
+    const pendingExport = new Promise<Blob>((_resolve, reject) => {
+      rejectExport = reject;
+    });
+    mocks.exportTeachers.mockReturnValue(pendingExport);
+    const previousSessionToken = loadSessionToken();
+    saveSessionToken("teacher-export-session-a");
+
+    try {
+      render(
+        <SchoolWorkspace
+          user={{ id: "u1", school_id: "s1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+          onLogout={vi.fn()}
+          onError={vi.fn()}
+        />,
+      );
+      await userEvent.click(await screen.findByTestId("school-page-teachers"));
+      await userEvent.click(screen.getByTestId("teachers-export"));
+      await waitFor(() => expect(mocks.exportTeachers).toHaveBeenCalledTimes(1));
+      saveSessionToken("teacher-export-session-b");
+      await act(async () => {
+        rejectExport(new Error("previous session export failed"));
+        await pendingExport.catch(() => undefined);
+      });
+
+      expect(mocks.downloadBlob).not.toHaveBeenCalled();
+      expect(screen.queryByText("教师名单已导出。")).not.toBeInTheDocument();
+      expect(screen.queryByText("教师名单导出失败：previous session export failed")).not.toBeInTheDocument();
+    } finally {
+      if (previousSessionToken !== null) saveSessionToken(previousSessionToken);
+      else clearSessionToken();
+    }
+  });
+
+  it("selects all visible teachers and students and limits bulk actions to the current page", async () => {
+    const teachers = [
+      { id: "t1", school_id: "s1", role: "teacher", username: "teacher_one", display_name: "Teacher One", status: "active", subjects: [] },
+      { id: "t2", school_id: "s1", role: "teacher", username: "teacher_two", display_name: "Teacher Two", status: "active", subjects: [] },
+      { id: "t3", school_id: "s1", role: "teacher", username: "teacher_three", display_name: "Teacher Three", status: "active", subjects: [] },
+    ];
+    const students = [
+      { id: "s1", school_id: "s1", student_no: "S001", display_name: "Student One", status: "active", account_username: "student_one", initial_password: "pass-one", class_names: "Class 1" },
+      { id: "s2", school_id: "s1", student_no: "S002", display_name: "Student Two", status: "active", account_username: "student_two", initial_password: "pass-two", class_names: "Class 1" },
+      { id: "s3", school_id: "s1", student_no: "S003", display_name: "Student Three", status: "active", account_username: "student_three", initial_password: "pass-three", class_names: "Class 1" },
+    ];
+    mocks.listTeachers.mockImplementation((query: any = {}) => {
+      const page = query.page ?? 1;
+      return Promise.resolve({ teachers: page === 2 ? [teachers[2]] : teachers.slice(0, 2), total: 3, page, page_size: 2, total_pages: 2 });
+    });
+    mocks.listStudents.mockImplementation((_classId: string | null, query: any = {}) => {
+      const page = query.page ?? 1;
+      return Promise.resolve({ students: page === 2 ? [students[2]] : students.slice(0, 2), total: 3, page, page_size: 2, total_pages: 2 });
+    });
+    mocks.bulkUpdateTeachers.mockResolvedValue({ updated: 1 });
+    mocks.bulkUpdateStudents.mockResolvedValue({ updated: 1 });
+
+    render(
+      <SchoolWorkspace
+        user={{ id: "u1", school_id: "s1", role: "school", username: "school_a", display_name: "School A", status: "active" }}
+        onLogout={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("school-page-teachers"));
+    expect(await screen.findByDisplayValue("Teacher One")).toBeInTheDocument();
+    const teacherSelectAll = screen.getByTestId("teachers-select-all") as HTMLInputElement;
+    const teacherOneRow = screen.getByDisplayValue("Teacher One").closest("tr");
+    expect(teacherOneRow).not.toBeNull();
+    await userEvent.click(within(teacherOneRow as HTMLTableRowElement).getByRole("checkbox"));
+    expect(teacherSelectAll.indeterminate).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByDisplayValue("Teacher Three")).toBeInTheDocument();
+    await userEvent.click(teacherSelectAll);
+    expect(screen.getByText("已选 1")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "停用" }));
+    await waitFor(() => expect(mocks.bulkUpdateTeachers).toHaveBeenCalledWith({ ids: ["t3"], status: "disabled" }));
+
+    await userEvent.click(screen.getByTestId("school-page-students"));
+    expect(await screen.findByDisplayValue("Student One")).toBeInTheDocument();
+    const studentSelectAll = screen.getByTestId("students-select-all") as HTMLInputElement;
+    const studentOneRow = screen.getByDisplayValue("Student One").closest("tr");
+    expect(studentOneRow).not.toBeNull();
+    await userEvent.click(within(studentOneRow as HTMLTableRowElement).getByRole("checkbox"));
+    expect(studentSelectAll.indeterminate).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByDisplayValue("Student Three")).toBeInTheDocument();
+    await userEvent.click(studentSelectAll);
+    expect(screen.getByText("已选 1")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "停用" }));
+    await waitFor(() => expect(mocks.bulkUpdateStudents).toHaveBeenCalledWith({ ids: ["s3"], status: "disabled" }));
   });
 
   it("user perspective: gracefully handles query errors and allows recovery without page reload", async () => {

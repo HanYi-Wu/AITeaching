@@ -30,8 +30,8 @@ import {
   apiGraphRenameGraph,
   apiGraphUpdateNode,
 } from "../../api/client";
-import { useAgentContext } from "../../contexts/AgentContext";
-import { useToolBar } from "../../contexts/ToolBarContext";
+import { useAgentActions } from "../../contexts/AgentContext";
+import { useToolBarActions } from "../../contexts/ToolBarContext";
 import { GraphSubjectSidebar } from "../../graph/GraphSubjectSidebar";
 import { GraphCanvas } from "../../graph/GraphCanvas";
 import { MindMapCanvas } from "../../graph/MindMapCanvas";
@@ -43,6 +43,7 @@ import i18n from "../../i18n/i18n";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { cn } from "../../lib/utils";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
+import { isImeComposingKeyboardEvent } from "../../lib/ime";
 
 type GraphWorkspaceProps = {
   onError: (s: string | null) => void;
@@ -77,8 +78,8 @@ function GraphWorkspaceContent({
   onFocusConsumed,
 }: GraphWorkspaceProps) {
   const { t } = useTranslation(["graph", "common"]);
-  const { setPageContext } = useAgentContext();
-  const { setToolBar, clearToolBar } = useToolBar();
+  const { setPageContext } = useAgentActions();
+  const { setToolBar, clearToolBar } = useToolBarActions();
 
   const {
     graphs, activeSlug, setGraphs, setActiveSlug,
@@ -114,6 +115,45 @@ function GraphWorkspaceContent({
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const sidebarDrawerRef = useRef<HTMLDivElement | null>(null);
+  const sidebarOpenTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const sidebarOpenTriggerKindRef = useRef<"header" | "toolbar">("header");
+
+  const openMobileSidebar = useCallback((trigger: HTMLButtonElement, kind: "header" | "toolbar") => {
+    sidebarOpenTriggerRef.current = trigger;
+    sidebarOpenTriggerKindRef.current = kind;
+    setMobileSidebarOpen(true);
+  }, []);
+  const closeMobileSidebar = useCallback(() => setMobileSidebarOpen(false), []);
+
+  useEffect(() => {
+    if (mobileSidebarOpen) {
+      sidebarDrawerRef.current
+        ?.querySelector<HTMLButtonElement>("[data-graph-sidebar-close]")
+        ?.focus();
+      return;
+    }
+
+    if (!sidebarOpenTriggerRef.current) return;
+    const currentTrigger = sidebarOpenTriggerRef.current;
+    const trigger = currentTrigger?.isConnected
+      ? currentTrigger
+      : document.querySelector<HTMLButtonElement>(`[data-graph-sidebar-trigger="${sidebarOpenTriggerKindRef.current}"]`);
+    trigger?.focus();
+    sidebarOpenTriggerRef.current = null;
+  }, [mobileSidebarOpen]);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isImeComposingKeyboardEvent(event)) return;
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeMobileSidebar();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [mobileSidebarOpen, closeMobileSidebar]);
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? graphNodes.find((n) => n.id === selectedNodeId) ?? null : null),
@@ -869,7 +909,7 @@ function GraphWorkspaceContent({
       </Select>
     </div>;
     const right = <div className="or-g50-mobile-actions">
-      <button type="button" className="or-g50-btn or-g50-btn-secondary" onClick={() => setMobileSidebarOpen(true)} title={t("graphsTitle")} aria-label={t("graphsTitle")}>
+      <button type="button" className="or-g50-btn or-g50-btn-secondary" onClick={(event) => openMobileSidebar(event.currentTarget, "toolbar")} title={t("graphsTitle")} aria-label={t("graphsTitle")} aria-expanded={mobileSidebarOpen} aria-controls="graph-subject-sidebar" data-graph-sidebar-trigger="toolbar">
         <Network className="h-4 w-4" />
         {!(selectedNode && !panelExpanded) ? <span className="max-w-16 truncate">{activeGraphInfo?.display_name ?? t("graphsTitle")}</span> : null}
       </button>
@@ -879,7 +919,7 @@ function GraphWorkspaceContent({
     </div>;
     setToolBar({ left: <>{left}{mobileMode}</>, right });
     return () => clearToolBar();
-  }, [viewMode, setViewMode, t, setToolBar, clearToolBar, selectedNode, panelExpanded, activeGraphInfo, busy, activeSlug, handleExportGraph, setPanelExpanded]);
+  }, [viewMode, setViewMode, t, setToolBar, clearToolBar, selectedNode, panelExpanded, activeGraphInfo, busy, activeSlug, handleExportGraph, setPanelExpanded, openMobileSidebar, mobileSidebarOpen]);
 
   const REL_KEYS = ["prerequisite", "part_of", "related", "causal"] as const;
 
@@ -899,9 +939,14 @@ function GraphWorkspaceContent({
           {/* Mobile drawer toggle */}
           <button
             type="button"
-            className="md:hidden or-g50-btn or-g50-btn-secondary !h-8 !px-2.5 !text-xs font-medium shrink-0"
-            onClick={() => setMobileSidebarOpen(true)}
+            className="md:!hidden or-g50-btn or-g50-btn-secondary !h-8 !px-2.5 !text-xs font-medium shrink-0"
+            onClick={(event) => openMobileSidebar(event.currentTarget, "header")}
             title={t("graphsTitle")}
+            aria-label={t("graphsTitle")}
+            aria-expanded={mobileSidebarOpen}
+            aria-controls="graph-subject-sidebar"
+            data-testid="graph-sidebar-open"
+            data-graph-sidebar-trigger="header"
           >
             <Network className="h-3.5 w-3.5 text-[var(--or-on-container)]  shrink-0" />
             <span className="max-w-[120px] truncate">
@@ -927,7 +972,7 @@ function GraphWorkspaceContent({
             <button
               type="button"
               onClick={() => setPanelExpanded(true)}
-              className="lg:hidden or-g50-btn or-g50-btn-primary !h-8 !px-2.5 !text-xs font-medium"
+              className="lg:!hidden or-g50-btn or-g50-btn-primary !h-8 !px-2.5 !text-xs font-medium"
               title={t("expandMaintain")}
             >
               <span className="max-w-[80px] truncate">{selectedNode.canonical_name}</span>
@@ -965,7 +1010,7 @@ function GraphWorkspaceContent({
         {mobileSidebarOpen && (
           <div
             className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs md:hidden"
-            onClick={() => setMobileSidebarOpen(false)}
+            onClick={closeMobileSidebar}
             aria-hidden="true"
           />
         )}
@@ -973,9 +1018,11 @@ function GraphWorkspaceContent({
           className={cn(
             "md:flex md:w-56 lg:w-60 md:shrink-0",
             mobileSidebarOpen
-              ? "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col shadow-2xl animate-in slide-in-from-left duration-200 md:shadow-none md:animate-none"
+              ? "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col shadow-2xl animate-in slide-in-from-left duration-200 md:!static md:!inset-auto md:!z-auto md:!w-56 md:!max-w-none md:!shadow-none md:!animate-none lg:!w-60"
               : "hidden",
           )}
+          ref={sidebarDrawerRef}
+          id="graph-subject-sidebar"
         >
           <GraphSubjectSidebar
             graphs={graphs}
@@ -984,13 +1031,13 @@ function GraphWorkspaceContent({
               setActiveSlug(slug);
               setSelectedNodeId(null);
               setSelectedEdgeId(null);
-              setMobileSidebarOpen(false);
+              closeMobileSidebar();
             }}
             onCreateGraph={handleCreateGraph}
             onDeleteGraph={handleDeleteGraph}
             onRenameGraph={handleRenameGraph}
             busy={busy}
-            onClose={() => setMobileSidebarOpen(false)}
+            onClose={closeMobileSidebar}
           />
         </div>
 

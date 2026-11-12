@@ -3,6 +3,7 @@ import { Atom, BarChart3, Check, LineChart, Shapes, X, type LucideIcon } from "l
 
 import { apiPost } from "../api/client";
 import { cn } from "../lib/utils";
+import { decoratePrimeBrushPreviewSvg, getPrimeBrushPreviewConfig, type PrimeBrushPreviewConfig } from "./primeBrushPreview";
 
 type PrimeBrushEditorModalProps = {
   open: boolean;
@@ -140,6 +141,12 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
   const [source, setSource] = useState(PRESETS[0].source);
   const [svg, setSvg] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewConfig, setPreviewConfig] = useState<PrimeBrushPreviewConfig | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(
+    () => typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
@@ -155,18 +162,38 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
     }
     setSelectedPresetId(PRESETS[0].id);
     setSource(PRESETS[0].source);
+    setSvg("");
+    setPreviewConfig(null);
     setError(null);
   }, [open]);
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const syncPreference = () => setReducedMotion(query.matches);
+    syncPreference();
+    if (typeof query.addEventListener === "function") {
+      query.addEventListener("change", syncPreference);
+      return () => query.removeEventListener("change", syncPreference);
+    }
+    query.addListener(syncPreference);
+    return () => query.removeListener(syncPreference);
+  }, []);
+
+  useEffect(() => {
     if (!open) {
+      setBusy(false);
       return;
     }
     const trimmed = source.trim();
     const requestId = ++requestRef.current;
     if (!trimmed) {
       setSvg("");
+      setPreviewConfig(null);
       setError("请输入 PrimeBrush YAML");
+      setBusy(false);
       return;
     }
     setBusy(true);
@@ -177,6 +204,7 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
             return;
           }
           setSvg(res.svg);
+          setPreviewConfig(getPrimeBrushPreviewConfig(trimmed));
           setError(null);
         })
         .catch((err: unknown) => {
@@ -184,6 +212,7 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
             return;
           }
           setSvg("");
+          setPreviewConfig(null);
           setError(err instanceof Error ? err.message : String(err));
         })
         .finally(() => {
@@ -192,7 +221,12 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
           }
         });
     }, 250);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      if (requestRef.current === requestId) {
+        requestRef.current += 1;
+      }
+    };
   }, [open, source]);
 
   useEffect(() => {
@@ -200,10 +234,11 @@ export function PrimeBrushEditorModal({ open, onClose, onConfirm }: PrimeBrushEd
       setPreviewUrl(null);
       return;
     }
-    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    const previewSvg = decoratePrimeBrushPreviewSvg(svg, previewConfig, reducedMotion);
+    const url = URL.createObjectURL(new Blob([previewSvg], { type: "image/svg+xml" }));
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [svg]);
+  }, [svg, previewConfig, reducedMotion]);
 
   if (!open) {
     return null;

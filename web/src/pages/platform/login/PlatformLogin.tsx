@@ -30,6 +30,22 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
   const inFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const { phase, sceneRef, mobilePathRef, desktopSvgRef, sceneHeight, beginSubmitting, cancelSubmitting, finish } = useLoginMotion();
+  const [chromeBottomPaper, setChromeBottomPaper] = useState(() => phase !== "splash" && phase !== "brand-exit");
+
+  useEffect(() => {
+    delete document.documentElement.dataset.orBootLogin;
+    if (phase === "splash") {
+      setChromeBottomPaper(false);
+      return;
+    }
+    if (phase === "brand-exit") {
+      // 在黑色幕布即将从底部上收前 120ms 提前将 html/body 切为纸色 #f2f2f2，
+      // 顶部状态栏由 .or-login-chrome-top 固定条保持黑色，底部地址栏则在幕布抬起第一帧即为白色。
+      const timer = window.setTimeout(() => setChromeBottomPaper(true), 250);
+      return () => window.clearTimeout(timer);
+    }
+    setChromeBottomPaper(true);
+  }, [phase]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -107,7 +123,10 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
       className="or-login"
       data-phase={phase}
       data-mode={mode}
+      data-chrome-bottom={chromeBottomPaper || (phase !== "splash" && phase !== "brand-exit") ? "paper" : "accent"}
     >
+      {/* iOS Safari：顶部 60px 固定色条（位于黑色弧形幕布内部），让灵动岛状态栏始终保持品牌黑 */}
+      <div className="or-login-chrome-top" aria-hidden="true" />
       <div ref={sceneRef} className="or-login-scene">
         <svg
           className="or-login-mobile-canopy"

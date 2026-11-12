@@ -13,6 +13,8 @@ export type PlatformUser = {
   avatar_data_url?: string | null;
   preferences?: { theme?: string; density?: string; font_scale?: number };
   subjects?: string[];
+  school_access_mode?: "full" | "custom";
+  management_permissions?: string[];
 };
 
 export type PlatformStatus = {
@@ -34,6 +36,11 @@ export type SchoolRecord = {
   created_at: string;
   updated_at: string;
   school_user_count?: number;
+};
+
+export type SchoolAccountRecord = PlatformUser & {
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type SchoolAiSettings = {

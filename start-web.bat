@@ -24,6 +24,10 @@ if %ERRORLEVEL%==2 (
 )
 
 echo [EducationHelper] Starting backend http://127.0.0.1:8000 ...
+if exist "%~dp0.venv\Scripts\python.exe" (
+  start "EducationHelper - Backend" cmd /k ""%~dp0.venv\Scripts\python.exe" -m uvicorn solaire.web.app:app --app-dir "%~dp0src" --host 0.0.0.0 --port 8000"
+  goto :backend_started
+)
 if exist "%~dp0.pixi\envs\default\python.exe" (
   start "EducationHelper - Backend" cmd /k ""%~dp0.pixi\envs\default\python.exe" -m uvicorn solaire.web.app:app --host 0.0.0.0 --port 8000"
   goto :backend_started

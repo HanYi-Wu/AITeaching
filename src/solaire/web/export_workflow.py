@@ -20,8 +20,8 @@ from solaire.web.exam_service import (
     exam_export_error_detail_short,
     export_docx,
     export_pdfs,
+    prepare_export_exam as run_validate,
     restore_build_yaml_from_backup,
-    run_validate,
     snapshot_build_yaml_before_export,
     write_build_exam_yaml,
 )

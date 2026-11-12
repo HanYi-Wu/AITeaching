@@ -36,6 +36,7 @@ import {
   createMathWidget,
   createTableWidget,
   getSerializedCaretOffset,
+  isCollapsedCaretAtEditorEnd,
   isWidget,
   renderMathHtml,
   renderMermaidToElement,
@@ -86,6 +87,8 @@ type TablePopupState = {
   isNew: boolean;
 } | null;
 
+const MATH_LINT_DEBOUNCE_MS = 250;
+
 export function LatexRichTextField({
   value,
   onChange,
@@ -117,6 +120,7 @@ export function LatexRichTextField({
   valueRef.current = value;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const [lintValue, setLintValue] = useState(value);
 
   const [mode, setMode] = useState<"visual" | "source">("visual");
 
@@ -215,19 +219,52 @@ export function LatexRichTextField({
   }, [cancelScheduledCompositionCommit, resolveCompositionWaiters]);
 
   /* ─── Lint ─── */
-  const lintResults = useMemo<MathLintResult[]>(() => lintMathContent(value), [value]);
+  useEffect(() => {
+    if (lintValue === value) return;
+    const timer = window.setTimeout(() => setLintValue(value), MATH_LINT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [value, lintValue]);
+
+  const lintResults = useMemo<MathLintResult[]>(() => lintMathContent(lintValue), [lintValue]);
 
   /* ─── Hidden textarea sync ─── */
 
-  const syncHiddenSelection = useCallback(() => {
+  const syncHiddenSelection = useCallback((serializedValue?: string) => {
+    const editor = editorRef.current;
+    const hiddenTextarea = textAreaRef.current;
+    const selection = window.getSelection();
+    if (
+      serializedValue !== undefined &&
+      mode === "visual" &&
+      editor &&
+      hiddenTextarea &&
+      selection?.rangeCount === 1 &&
+      isCollapsedCaretAtEditorEnd(editor, selection.getRangeAt(0))
+    ) {
+      try {
+        const end = serializedValue.length;
+        hiddenTextarea.setSelectionRange(end, end);
+      } catch {
+        // Keep the established full offset path for unusual textarea states.
+        getFieldSelection(
+          editor,
+          hiddenTextarea,
+          sourceTextareaRef.current,
+          mode,
+          getSerializedCaretOffset,
+        );
+      }
+      return;
+    }
     getFieldSelection(
-      editorRef.current,
-      textAreaRef.current,
+      editor,
+      hiddenTextarea,
       sourceTextareaRef.current,
       mode,
       getSerializedCaretOffset,
     );
   }, [mode, textAreaRef]);
+  const handleSelectionEvent = useCallback(() => syncHiddenSelection(), [syncHiddenSelection]);
 
   const focusAtSerializedOffset = useCallback((offset: number): boolean => {
     if (mode === "source") {
@@ -265,10 +302,11 @@ export function LatexRichTextField({
 
   const emitFromEditor = useCallback(() => {
     const root = editorRef.current;
-    if (!root) return;
+    if (!root) return null;
     const next = serializeEditor(root);
     lastEmittedRef.current = next;
     onChangeRef.current(next);
+    return next;
   }, []);
 
   const emitCompositionFromEditor = useCallback((root: HTMLElement | null) => {
@@ -277,7 +315,7 @@ export function LatexRichTextField({
     lastEmittedRef.current = next;
     compositionCommitTextRef.current = next;
     onChangeRef.current(next);
-    syncHiddenSelection();
+    syncHiddenSelection(next);
     if (valueRef.current === next) acknowledgeCompositionValue(next);
   }, [syncHiddenSelection, acknowledgeCompositionValue]);
 
@@ -314,8 +352,8 @@ export function LatexRichTextField({
       }
 
       window.requestAnimationFrame(() => {
-        emitFromEditor();
-        syncHiddenSelection();
+        const next = emitFromEditor();
+        syncHiddenSelection(next ?? undefined);
       });
     },
     [emitFromEditor, syncHiddenSelection],
@@ -624,8 +662,8 @@ export function LatexRichTextField({
 
   const handleInput = () => {
     if (composingRef.current) return;
-    emitFromEditor();
-    syncHiddenSelection();
+    const next = emitFromEditor();
+    syncHiddenSelection(next ?? undefined);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -945,14 +983,14 @@ export function LatexRichTextField({
               emitCompositionFromEditor(target);
             });
           }}
-          onKeyUp={syncHiddenSelection}
-          onMouseUp={syncHiddenSelection}
+          onKeyUp={handleSelectionEvent}
+          onMouseUp={handleSelectionEvent}
         />
       ) : (
         <textarea
           ref={sourceTextareaRef}
-          onKeyUp={syncHiddenSelection}
-          onMouseUp={syncHiddenSelection}
+          onKeyUp={handleSelectionEvent}
+          onMouseUp={handleSelectionEvent}
           className={`w-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2.5 font-mono text-sm leading-relaxed text-[var(--or-text)] outline-none focus-visible:border-[var(--or-primary)] focus-visible:ring-1 focus-visible:ring-[var(--or-focus)] ${hideToolbar ? "rounded-2xl" : "rounded-b-2xl border-t-0"}`}
           style={{ minHeight: minH }}
           value={value}

@@ -5,6 +5,7 @@ import {
   createClass,
   createTeacher,
   downloadSchoolImportTemplate,
+  getSchoolAiCapabilities,
   getSchoolAiSettings,
   importClassesFile,
   importSchoolAiFile,
@@ -21,6 +22,7 @@ import {
   type ClassRecord,
   type PlatformUser,
   type SchoolAiImportReviewResponse,
+  type SchoolAiResponse,
   type SchoolAiSettings,
   type SchoolImportKind,
   type StudentRecord,
@@ -28,12 +30,14 @@ import {
   type TeacherRecord,
 } from "../../../../platform/auth";
 import type { PageMeta, PageQuery } from "../SchoolControls";
+import { canManage } from "../../../../platform/managementAccess";
+import type { ManagementOptions } from "../../../../platform/managementApi";
 export type { PageMeta, PageQuery };
 
 export type TeacherDraft = { display_name: string; email: string; subjects: string };
 export type ClassDraft = { name: string; grade: string };
 export type StudentDraft = { student_no: string; display_name: string; email: string };
-export type SchoolPage = "overview" | "teachers" | "classes" | "students" | "assignments" | "ai";
+export type SchoolPage = "overview" | "teachers" | "classes" | "students" | "assignments" | "ai" | "audit" | "access" | "settings" | "activity";
 export type SchoolAiMessage = { role: "user" | "assistant" | "system"; content: string; source?: string };
 export type PendingSchoolAiImport = {
   kind: SchoolImportKind;
@@ -43,6 +47,58 @@ export type PendingSchoolAiImport = {
 };
 
 type RefreshTarget = "teachers" | "classes" | "students" | "assignments" | "ai";
+
+const LIST_SEARCH_DEBOUNCE_MS = 300;
+
+type ListQueryEffectSnapshot = {
+  activePage: SchoolPage;
+  accountKey: string;
+  query: PageQuery;
+  scope?: string;
+};
+
+type CurrentValue<T> = { current: T };
+
+type ScheduleListQueryOptions = {
+  targetPage: SchoolPage;
+  query: PageQuery;
+  queryRef: CurrentValue<PageQuery>;
+  scope?: string;
+  currentScope?: () => string | undefined;
+  includeStatus: boolean;
+  serialize: (query: PageQuery, scope?: string) => string;
+  lastLoadedRef: CurrentValue<string | null>;
+  timerRef: CurrentValue<number | null>;
+  previousRef: CurrentValue<ListQueryEffectSnapshot | null>;
+  sequenceRef: CurrentValue<number>;
+  fetch: (query: PageQuery, scope: string | undefined, accountKey: string) => void;
+};
+
+function isSearchOnlyQueryChange(
+  previous: ListQueryEffectSnapshot | null,
+  next: ListQueryEffectSnapshot,
+  includeStatus: boolean,
+): boolean {
+  if (
+    !previous ||
+    previous.activePage !== next.activePage ||
+    previous.accountKey !== next.accountKey ||
+    previous.scope !== next.scope ||
+    previous.query.q === next.query.q ||
+    previous.query.pageSize !== next.query.pageSize ||
+    (includeStatus && previous.query.status !== next.query.status)
+  ) {
+    return false;
+  }
+
+  // Search changes reset a later page to page 1 in the panel's existing setter.
+  return previous.query.page === next.query.page || (previous.query.page > 1 && next.query.page === 1);
+}
+
+function clearListSearchTimer(timer: { current: number | null }) {
+  if (timer.current !== null) window.clearTimeout(timer.current);
+  timer.current = null;
+}
 
 export const DEFAULT_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
 
@@ -84,7 +140,16 @@ export function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: string | null) => void) {
+export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: string | null) => void, managementOptions?: ManagementOptions | null) {
+  const permissionsKey = JSON.stringify([user.school_access_mode, user.management_permissions]);
+  const currentUserRef = useRef(user);
+  currentUserRef.current = user;
+  const allowed = (permission: string) => canManage(currentUserRef.current, permission);
+  const canReadTeachers = canManage(user, "school.teachers.read");
+  const canReadClasses = canManage(user, "school.classes.read");
+  const canReadStudents = canManage(user, "school.students.read");
+  const canReadAssignments = canManage(user, "school.assignments.read");
+  const canReadAi = canManage(user, "school.ai.read");
   const [activePage, setActivePage] = useState<SchoolPage>("overview");
   const [teachers, setTeachers] = useState<TeacherRecord[]>([]);
   const [teacherChoices, setTeacherChoices] = useState<TeacherRecord[]>([]);
@@ -93,6 +158,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [assignments, setAssignments] = useState<TeacherClassAssignmentRecord[]>([]);
   const [aiSettings, setAiSettings] = useState<SchoolAiSettings | null>(null);
+  const [schoolStats, setSchoolStats] = useState<SchoolAiResponse["stats"] | null>(null);
   const [teacherMeta, setTeacherMeta] = useState<PageMeta>(DEFAULT_META);
   const [classMeta, setClassMeta] = useState<PageMeta>(DEFAULT_META);
   const [studentMeta, setStudentMeta] = useState<PageMeta>(DEFAULT_META);
@@ -142,14 +208,27 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   studentClassFilterRef.current = studentClassFilter;
 
   // Track active account to protect against late responses from previously selected account/school
-  const activeAccountKey = `${user.id}:${user.school_id ?? ""}`;
+  const activeAccountKey = `${user.id}:${user.school_id ?? ""}:${permissionsKey}`;
   const activeAccountRef = useRef(activeAccountKey);
+  activeAccountRef.current = activeAccountKey;
+  const activePageRef = useRef(activePage);
+  activePageRef.current = activePage;
+  const previousAccountKeyRef = useRef(activeAccountKey);
+  const accountSwitchingRef = useRef(false);
 
   const teacherSeqRef = useRef(0);
+  const teacherChoicesSeqRef = useRef(0);
   const classSeqRef = useRef(0);
   const classChoicesSeqRef = useRef(0);
   const studentSeqRef = useRef(0);
   const assignmentSeqRef = useRef(0);
+  const overviewRefreshSeqRef = useRef(0);
+  const teacherChoicesAccountRef = useRef<string | null>(null);
+  const classChoicesAccountRef = useRef<string | null>(null);
+  const hasTeacherChoicesSnapshotRef = useRef(false);
+  const hasClassChoicesSnapshotRef = useRef(false);
+  const aiSettingsAccountRef = useRef<string | null>(null);
+  const defaultPageSizeAccountRef = useRef<{ key: string; value: number } | null>(null);
 
   const serializeTeacherQuery = (q: PageQuery) => `${q.q}:${q.status ?? ""}:${q.page}:${q.pageSize}`;
   const serializeClassQuery = (q: PageQuery) => `${q.q}:${q.page}:${q.pageSize}`;
@@ -160,14 +239,97 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   const lastLoadedClassQueryRef = useRef<string | null>(null);
   const lastLoadedStudentQueryRef = useRef<string | null>(null);
   const lastLoadedAssignmentQueryRef = useRef<string | null>(null);
+  const teacherSearchTimerRef = useRef<number | null>(null);
+  const classSearchTimerRef = useRef<number | null>(null);
+  const studentSearchTimerRef = useRef<number | null>(null);
+  const assignmentSearchTimerRef = useRef<number | null>(null);
+  const previousTeacherEffectRef = useRef<ListQueryEffectSnapshot | null>(null);
+  const previousClassEffectRef = useRef<ListQueryEffectSnapshot | null>(null);
+  const previousStudentEffectRef = useRef<ListQueryEffectSnapshot | null>(null);
+  const previousAssignmentEffectRef = useRef<ListQueryEffectSnapshot | null>(null);
+
+  function clearPendingListSearches() {
+    clearListSearchTimer(teacherSearchTimerRef);
+    clearListSearchTimer(classSearchTimerRef);
+    clearListSearchTimer(studentSearchTimerRef);
+    clearListSearchTimer(assignmentSearchTimerRef);
+  }
+
+  function scheduleListQuery({
+    targetPage,
+    query,
+    queryRef,
+    scope,
+    currentScope,
+    includeStatus,
+    serialize,
+    lastLoadedRef,
+    timerRef,
+    previousRef,
+    sequenceRef,
+    fetch,
+  }: ScheduleListQueryOptions): (() => void) | undefined {
+    const accountKey = activeAccountKey;
+    const snapshot: ListQueryEffectSnapshot = { activePage, accountKey, query: { ...query }, scope };
+    const previous = previousRef.current;
+    previousRef.current = snapshot;
+    if (activePage !== targetPage) return undefined;
+
+    const key = serialize(query, scope);
+    if (lastLoadedRef.current === key) {
+      clearListSearchTimer(timerRef);
+      return undefined;
+    }
+
+    if (isSearchOnlyQueryChange(previous, snapshot, includeStatus)) {
+      sequenceRef.current += 1;
+      // A response for the previous key is stale now, even if that key is typed again before debounce.
+      lastLoadedRef.current = null;
+      clearListSearchTimer(timerRef);
+      const querySnapshot = { ...query };
+      const scopeSnapshot = scope;
+      const timer = window.setTimeout(() => {
+        if (timerRef.current === timer) timerRef.current = null;
+        if (activePageRef.current !== targetPage || activeAccountRef.current !== accountKey) return;
+        if (serialize(queryRef.current, currentScope?.()) !== key) return;
+        lastLoadedRef.current = key;
+        fetch(querySnapshot, scopeSnapshot, accountKey);
+      }, LIST_SEARCH_DEBOUNCE_MS);
+      timerRef.current = timer;
+      return () => {
+        if (timerRef.current === timer) clearListSearchTimer(timerRef);
+      };
+    }
+
+    clearListSearchTimer(timerRef);
+    lastLoadedRef.current = key;
+    fetch({ ...query }, scope, accountKey);
+    return undefined;
+  }
 
   useEffect(() => {
     activeAccountRef.current = `${user.id}:${user.school_id ?? ""}`;
   }, [user.id, user.school_id]);
 
-  const teacherOptions = useMemo(() => teacherChoices.filter((teacher) => teacher.status === "active"), [teacherChoices]);
+  // A page-sized list is only an option fallback while the full choice
+  // snapshot is loading. Once a full snapshot exists, preserve it (including
+  // an intentionally empty snapshot) through ordinary page refreshes.
+  const visibleTeacherChoices = hasTeacherChoicesSnapshotRef.current ? teacherChoices : teachers;
+  const visibleClassChoices = hasClassChoicesSnapshotRef.current ? classChoices : classes;
+  const teacherOptions = useMemo(
+    () => visibleTeacherChoices.filter((teacher) => teacher.status === "active"),
+    [visibleTeacherChoices],
+  );
+  const visibleAssignTeacherId = assignTeacherId || teacherOptions[0]?.id || "";
+  const visibleAssignClassId = classChoicesAccountRef.current === activeAccountKey
+    ? (assignClassId && visibleClassChoices.some((klass) => klass.id === assignClassId) ? assignClassId : visibleClassChoices[0]?.id || "")
+    : assignClassId || visibleClassChoices[0]?.id || "";
+  const visibleStudentClassId = classChoicesAccountRef.current === activeAccountKey
+    ? (studentClassId && visibleClassChoices.some((klass) => klass.id === studentClassId) ? studentClassId : visibleClassChoices[0]?.id || "")
+    : studentClassId || visibleClassChoices[0]?.id || "";
 
   async function fetchTeachersList(query: PageQuery, accountKey: string) {
+    if (!allowed("school.teachers.read")) return;
     const seq = ++teacherSeqRef.current;
     const querySnapshot = { ...query };
     try {
@@ -198,18 +360,25 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   }
 
   async function fetchTeacherChoices(accountKey: string) {
+    if (!allowed("school.teachers.read")) return false;
+    const seq = ++teacherChoicesSeqRef.current;
     try {
       const allTeacherData = await listTeachers({ page: 1, pageSize: 100, status: "active" });
-      if (activeAccountRef.current !== accountKey) return;
+      if (teacherChoicesSeqRef.current !== seq || activeAccountRef.current !== accountKey) return false;
       setTeacherChoices(allTeacherData.teachers);
       setAssignTeacherId((current) => current || allTeacherData.teachers.find((teacher) => teacher.status === "active")?.id || "");
+      hasTeacherChoicesSnapshotRef.current = true;
+      teacherChoicesAccountRef.current = accountKey;
+      return true;
     } catch (e) {
-      if (activeAccountRef.current !== accountKey) return;
+      if (teacherChoicesSeqRef.current !== seq || activeAccountRef.current !== accountKey) return false;
       onError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   }
 
   async function fetchClassesList(query: PageQuery, accountKey: string): Promise<boolean> {
+    if (!allowed("school.classes.read")) return false;
     const seq = ++classSeqRef.current;
     const querySnapshot = { ...query };
     try {
@@ -256,13 +425,17 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   }
 
   async function fetchClassChoices(accountKey: string): Promise<boolean> {
+    if (!allowed("school.classes.read")) return false;
     const seq = ++classChoicesSeqRef.current;
     try {
       const allClassData = await listClasses({ page: 1, pageSize: 100 });
       if (classChoicesSeqRef.current !== seq || activeAccountRef.current !== accountKey) return false;
       const selection = applyClassChoices(allClassData.classes);
-      if (selection.removed || selection.studentFilterChanged) {
+      hasClassChoicesSnapshotRef.current = true;
+      classChoicesAccountRef.current = accountKey;
+      if ((selection.removed || selection.studentFilterChanged) && allowed("school.students.read")) {
         const query = { ...studentQueryRef.current };
+        clearListSearchTimer(studentSearchTimerRef);
         lastLoadedStudentQueryRef.current = serializeStudentQuery(selection.studentFilter, query);
         if (!await fetchStudentsList(selection.studentFilter, query, accountKey)) return false;
       }
@@ -275,6 +448,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   }
 
   async function fetchStudentsList(classFilter: string, query: PageQuery, accountKey: string): Promise<boolean> {
+    if (!allowed("school.students.read")) return false;
     const seq = ++studentSeqRef.current;
     const querySnapshot = { ...query };
     try {
@@ -307,6 +481,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   }
 
   async function fetchAssignmentsList(query: PageQuery, accountKey: string) {
+    if (!allowed("school.assignments.read")) return;
     const seq = ++assignmentSeqRef.current;
     const querySnapshot = { ...query };
     try {
@@ -324,27 +499,73 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     }
   }
 
+  async function fetchAiSettings(accountKey: string): Promise<boolean> {
+    if (!allowed("school.ai.read")) return false;
+    try {
+      const aiData = await getSchoolAiSettings();
+      if (activeAccountRef.current !== accountKey) return false;
+      setAiSettings(aiData);
+      aiSettingsAccountRef.current = accountKey;
+      return true;
+    } catch (e) {
+      if (activeAccountRef.current !== accountKey) return false;
+      onError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  }
+
+  async function fetchSchoolAiOverview(accountKey: string): Promise<boolean> {
+    const requestId = ++overviewRefreshSeqRef.current;
+    try {
+      const overview = await getSchoolAiCapabilities();
+      if (activeAccountRef.current !== accountKey || overviewRefreshSeqRef.current !== requestId) return false;
+      setAiSettings(overview);
+      setSchoolStats(overview.stats);
+      aiSettingsAccountRef.current = accountKey;
+      return true;
+    } catch (e) {
+      if (activeAccountRef.current !== accountKey || overviewRefreshSeqRef.current !== requestId) return false;
+      onError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  }
+
+  async function refreshOverview() {
+    const requestKey = activeAccountRef.current;
+    onError(null);
+    await fetchSchoolAiOverview(requestKey);
+  }
+
   async function refresh() {
+    clearPendingListSearches();
+    overviewRefreshSeqRef.current += 1;
+    teacherChoicesAccountRef.current = null;
+    classChoicesAccountRef.current = null;
     const requestKey = activeAccountRef.current;
     const currentTeacherQuery = { ...teacherQueryRef.current };
     const currentClassQuery = { ...classQueryRef.current };
     const currentStudentQuery = { ...studentQueryRef.current };
     const currentAssignmentQuery = { ...assignmentQueryRef.current };
     const currentStudentClassFilter = studentClassFilterRef.current;
+    lastLoadedTeacherQueryRef.current = serializeTeacherQuery(currentTeacherQuery);
+    lastLoadedClassQueryRef.current = serializeClassQuery(currentClassQuery);
+    lastLoadedStudentQueryRef.current = serializeStudentQuery(currentStudentClassFilter, currentStudentQuery);
+    lastLoadedAssignmentQueryRef.current = serializeAssignmentQuery(currentAssignmentQuery);
+    const teacherChoicesSeq = ++teacherChoicesSeqRef.current;
     const classChoicesSeq = ++classChoicesSeqRef.current;
     const teacherSeq = ++teacherSeqRef.current;
     const classSeq = ++classSeqRef.current;
     const studentSeq = ++studentSeqRef.current;
     const assignmentSeq = ++assignmentSeqRef.current;
     onError(null);
-    const [aiData, teacherData, allTeacherData, classData, allClassData, studentData, assignmentData] = await Promise.all([
-      getSchoolAiSettings(),
-      listTeachers(currentTeacherQuery),
-      listTeachers({ page: 1, pageSize: 100, status: "active" }),
-      listClasses(currentClassQuery),
-      listClasses({ page: 1, pageSize: 100 }),
-      listStudents(currentStudentClassFilter || null, currentStudentQuery),
-      listTeacherClassAssignments(currentAssignmentQuery),
+    const [, teacherData, allTeacherData, classData, allClassData, studentData, assignmentData] = await Promise.all([
+      fetchSchoolAiOverview(requestKey),
+      allowed("school.teachers.read") ? listTeachers(currentTeacherQuery) : Promise.resolve({ teachers: [], total: 0 }),
+      allowed("school.teachers.read") ? listTeachers({ page: 1, pageSize: 100, status: "active" }) : Promise.resolve({ teachers: [] }),
+      allowed("school.classes.read") ? listClasses(currentClassQuery) : Promise.resolve({ classes: [], total: 0 }),
+      allowed("school.classes.read") ? listClasses({ page: 1, pageSize: 100 }) : Promise.resolve({ classes: [] }),
+      allowed("school.students.read") ? listStudents(currentStudentClassFilter || null, currentStudentQuery) : Promise.resolve({ students: [], total: 0 }),
+      allowed("school.assignments.read") ? listTeacherClassAssignments(currentAssignmentQuery) : Promise.resolve({ assignments: [], total: 0 }),
     ]);
 
     // Check if account has changed since request was launched
@@ -352,7 +573,6 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       return;
     }
 
-    setAiSettings(aiData);
     if (teacherSeqRef.current === teacherSeq) {
       setTeachers(teacherData.teachers);
       setTeacherMeta(mergeMeta(teacherData, currentTeacherQuery, teacherData.teachers.length));
@@ -370,7 +590,11 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       );
       lastLoadedTeacherQueryRef.current = serializeTeacherQuery(currentTeacherQuery);
     }
-    setTeacherChoices(allTeacherData.teachers);
+    if (teacherChoicesSeqRef.current === teacherChoicesSeq) {
+      setTeacherChoices(allTeacherData.teachers);
+      hasTeacherChoicesSnapshotRef.current = true;
+      teacherChoicesAccountRef.current = requestKey;
+    }
     if (classSeqRef.current === classSeq) {
       setClasses(classData.classes);
       setClassMeta(mergeMeta(classData, currentClassQuery, classData.classes.length));
@@ -384,9 +608,14 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     const classChoicesSelection = classChoicesSeqRef.current === classChoicesSeq
       ? applyClassChoices(allClassData.classes)
       : null;
+    if (classChoicesSelection) {
+      hasClassChoicesSnapshotRef.current = true;
+      classChoicesAccountRef.current = requestKey;
+    }
     if (classChoicesSelection?.removed || classChoicesSelection?.studentFilterChanged) {
       studentSeqRef.current += 1;
       const query = { ...studentQueryRef.current };
+      clearListSearchTimer(studentSearchTimerRef);
       lastLoadedStudentQueryRef.current = serializeStudentQuery(classChoicesSelection.studentFilter, query);
       void fetchStudentsList(classChoicesSelection.studentFilter, query, requestKey);
     }
@@ -412,52 +641,118 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       setAssignmentMeta(mergeMeta(assignmentData, currentAssignmentQuery, assignmentData.assignments.length));
       lastLoadedAssignmentQueryRef.current = serializeAssignmentQuery(currentAssignmentQuery);
     }
-    setAssignTeacherId((current) => current || allTeacherData.teachers.find((teacher) => teacher.status === "active")?.id || "");
+    if (teacherChoicesSeqRef.current === teacherChoicesSeq) {
+      setAssignTeacherId((current) => current || allTeacherData.teachers.find((teacher) => teacher.status === "active")?.id || "");
+    }
   }
 
   async function refreshTargets(targets: RefreshTarget[]): Promise<boolean> {
+    overviewRefreshSeqRef.current += 1;
     const accountKey = activeAccountRef.current;
     const promises: Array<Promise<void | boolean>> = [];
 
     if (targets.includes("teachers")) {
+      clearListSearchTimer(teacherSearchTimerRef);
+      teacherChoicesAccountRef.current = null;
+      teacherChoicesSeqRef.current += 1;
+      lastLoadedTeacherQueryRef.current = serializeTeacherQuery(teacherQueryRef.current);
       promises.push(fetchTeachersList(teacherQueryRef.current, accountKey));
-      promises.push(fetchTeacherChoices(accountKey));
+      if (activePage === "assignments") promises.push(fetchTeacherChoices(accountKey));
     }
     if (targets.includes("classes")) {
+      clearListSearchTimer(classSearchTimerRef);
+      classChoicesAccountRef.current = null;
+      classChoicesSeqRef.current += 1;
+      lastLoadedClassQueryRef.current = serializeClassQuery(classQueryRef.current);
       promises.push(fetchClassesList(classQueryRef.current, accountKey));
-      promises.push(fetchClassChoices(accountKey));
+      if (activePage === "students" || activePage === "assignments" || activePage === "ai") {
+        promises.push(fetchClassChoices(accountKey));
+      }
     }
     if (targets.includes("students")) {
+      clearListSearchTimer(studentSearchTimerRef);
+      lastLoadedStudentQueryRef.current = serializeStudentQuery(studentClassFilterRef.current, studentQueryRef.current);
       promises.push(fetchStudentsList(studentClassFilterRef.current, studentQueryRef.current, accountKey));
     }
     if (targets.includes("assignments")) {
+      clearListSearchTimer(assignmentSearchTimerRef);
+      lastLoadedAssignmentQueryRef.current = serializeAssignmentQuery(assignmentQueryRef.current);
       promises.push(fetchAssignmentsList(assignmentQueryRef.current, accountKey));
     }
     if (targets.includes("ai")) {
-      promises.push(
-        getSchoolAiSettings().then((aiData) => {
-          if (activeAccountRef.current === accountKey) {
-            setAiSettings(aiData);
-          }
-        }),
-      );
+      promises.push(fetchAiSettings(accountKey));
+    }
+    if (targets.some((target) => target === "teachers" || target === "classes" || target === "students" || target === "assignments")) {
+      promises.push(fetchSchoolAiOverview(accountKey));
     }
 
     const results = await Promise.all(promises);
     return results.every((result) => result !== false);
   }
 
+  function seedTeacherChoicesFromCurrentPage(accountKey: string) {
+    if (teacherChoicesAccountRef.current === accountKey || hasTeacherChoicesSnapshotRef.current) return;
+    setTeacherChoices(teachers);
+    setAssignTeacherId((current) => current || teachers.find((teacher) => teacher.status === "active")?.id || "");
+  }
+
+  function seedClassChoicesFromCurrentPage(accountKey: string) {
+    if (classChoicesAccountRef.current === accountKey || hasClassChoicesSnapshotRef.current) return;
+    // The visible class page is only an immediate option fallback while the
+    // full choice query is loading. It must not clear a filter or selection;
+    // only applyClassChoices(fullChoices) may make those decisions.
+    setClassChoices(classes);
+    setAssignClassId((current) => current || classes[0]?.id || "");
+    setStudentClassId((current) => current || classes[0]?.id || "");
+  }
+
   useEffect(() => {
     let cancelled = false;
-    const currentKey = `${user.id}:${user.school_id ?? ""}`;
+    const currentKey = activeAccountKey;
+    const accountChanged = previousAccountKeyRef.current !== currentKey;
+    previousAccountKeyRef.current = currentKey;
     activeAccountRef.current = currentKey;
+    accountSwitchingRef.current = accountChanged;
 
-    lastLoadedTeacherQueryRef.current = serializeTeacherQuery(teacherQuery);
-    lastLoadedClassQueryRef.current = serializeClassQuery(classQuery);
-    lastLoadedStudentQueryRef.current = serializeStudentQuery(studentClassFilter, studentQuery);
-    lastLoadedAssignmentQueryRef.current = serializeAssignmentQuery(assignmentQuery);
+    overviewRefreshSeqRef.current += 1;
+    teacherChoicesSeqRef.current += 1;
+    classChoicesSeqRef.current += 1;
+    if (accountChanged) {
+      teacherChoicesAccountRef.current = null;
+      classChoicesAccountRef.current = null;
+      aiSettingsAccountRef.current = null;
+      hasTeacherChoicesSnapshotRef.current = false;
+      hasClassChoicesSnapshotRef.current = false;
+      classChoicesRef.current = [];
+      setTeachers([]);
+      setTeacherChoices([]);
+      setClasses([]);
+      setClassChoices([]);
+      setStudents([]);
+      setAssignments([]);
+      setAiSettings(null);
+      setSchoolStats(null);
+      setTeacherMeta(DEFAULT_META);
+      setClassMeta(DEFAULT_META);
+      setStudentMeta(DEFAULT_META);
+      setAssignmentMeta(DEFAULT_META);
+      setTeacherDrafts({});
+      setClassDrafts({});
+      setStudentDrafts({});
+      setSelectedTeacherIds([]);
+      setSelectedStudentIds([]);
+      setAssignTeacherId("");
+      setAssignClassId("");
+      setStudentClassId("");
+      setStudentClassFilter("");
+      studentClassFilterRef.current = "";
+    }
+    lastLoadedTeacherQueryRef.current = null;
+    lastLoadedClassQueryRef.current = null;
+    lastLoadedStudentQueryRef.current = null;
+    lastLoadedAssignmentQueryRef.current = null;
 
-    void refresh().catch((e) => {
+    void refreshOverview().catch((e) => {
       if (!cancelled && activeAccountRef.current === currentKey) {
         onError(e instanceof Error ? e.message : String(e));
       }
@@ -467,65 +762,139 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.id, user.school_id]);
+  }, [user.id, user.school_id, permissionsKey]);
 
   useEffect(() => {
-    const key = serializeTeacherQuery(teacherQuery);
-    if (lastLoadedTeacherQueryRef.current === key) {
-      return;
-    }
-    lastLoadedTeacherQueryRef.current = key;
-    void fetchTeachersList(teacherQuery, activeAccountRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teacherQuery.q, teacherQuery.status, teacherQuery.page, teacherQuery.pageSize]);
+    if (!managementOptions) return;
+    const pageSize = managementOptions.settings.default_page_size;
+    if (![10, 20, 50].includes(pageSize)) return;
+    const previousDefault = defaultPageSizeAccountRef.current;
+    if (previousDefault?.key === activeAccountKey && previousDefault.value === pageSize) return;
+    const previousPageSize = previousDefault?.key === activeAccountKey ? previousDefault.value : 10;
+    defaultPageSizeAccountRef.current = { key: activeAccountKey, value: pageSize };
+    const applyDefault = (current: PageQuery): PageQuery =>
+      current.page === 1 && !current.q && current.pageSize === previousPageSize ? { ...current, pageSize } : current;
+    setTeacherQuery(applyDefault);
+    setClassQuery(applyDefault);
+    setStudentQuery(applyDefault);
+    setAssignmentQuery(applyDefault);
+  }, [activeAccountKey, managementOptions]);
 
   useEffect(() => {
-    const key = serializeClassQuery(classQuery);
-    if (lastLoadedClassQueryRef.current === key) {
-      return;
-    }
-    lastLoadedClassQueryRef.current = key;
-    void fetchClassesList(classQuery, activeAccountRef.current);
+    if (!canReadTeachers) return;
+    return scheduleListQuery({
+      targetPage: "teachers",
+      query: teacherQuery,
+      queryRef: teacherQueryRef,
+      includeStatus: true,
+      serialize: (query) => serializeTeacherQuery(query),
+      lastLoadedRef: lastLoadedTeacherQueryRef,
+      timerRef: teacherSearchTimerRef,
+      previousRef: previousTeacherEffectRef,
+      sequenceRef: teacherSeqRef,
+      fetch: (query, _scope, accountKey) => { void fetchTeachersList(query, accountKey); },
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classQuery.q, classQuery.page, classQuery.pageSize]);
+  }, [activePage, user.id, user.school_id, permissionsKey, canReadTeachers, teacherQuery.q, teacherQuery.status, teacherQuery.page, teacherQuery.pageSize]);
 
   useEffect(() => {
-    const key = serializeStudentQuery(studentClassFilter, studentQuery);
-    if (lastLoadedStudentQueryRef.current === key) {
-      return;
-    }
-    lastLoadedStudentQueryRef.current = key;
-    void fetchStudentsList(studentClassFilter, studentQuery, activeAccountRef.current);
+    if (!canReadClasses) return;
+    return scheduleListQuery({
+      targetPage: "classes",
+      query: classQuery,
+      queryRef: classQueryRef,
+      includeStatus: false,
+      serialize: (query) => serializeClassQuery(query),
+      lastLoadedRef: lastLoadedClassQueryRef,
+      timerRef: classSearchTimerRef,
+      previousRef: previousClassEffectRef,
+      sequenceRef: classSeqRef,
+      fetch: (query, _scope, accountKey) => { void fetchClassesList(query, accountKey); },
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studentQuery.q, studentQuery.status, studentQuery.page, studentQuery.pageSize, studentClassFilter]);
+  }, [activePage, user.id, user.school_id, permissionsKey, canReadClasses, classQuery.q, classQuery.page, classQuery.pageSize]);
 
   useEffect(() => {
-    const key = serializeAssignmentQuery(assignmentQuery);
-    if (lastLoadedAssignmentQueryRef.current === key) {
-      return;
-    }
-    lastLoadedAssignmentQueryRef.current = key;
-    void fetchAssignmentsList(assignmentQuery, activeAccountRef.current);
+    if (!canReadStudents) return;
+    return scheduleListQuery({
+      targetPage: "students",
+      query: studentQuery,
+      queryRef: studentQueryRef,
+      scope: studentClassFilter,
+      currentScope: () => studentClassFilterRef.current,
+      includeStatus: true,
+      serialize: (query, scope) => serializeStudentQuery(scope ?? "", query),
+      lastLoadedRef: lastLoadedStudentQueryRef,
+      timerRef: studentSearchTimerRef,
+      previousRef: previousStudentEffectRef,
+      sequenceRef: studentSeqRef,
+      fetch: (query, scope, accountKey) => { void fetchStudentsList(scope ?? "", query, accountKey); },
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignmentQuery.q, assignmentQuery.page, assignmentQuery.pageSize]);
+  }, [activePage, user.id, user.school_id, permissionsKey, canReadStudents, studentQuery.q, studentQuery.status, studentQuery.page, studentQuery.pageSize, studentClassFilter]);
+
+  useEffect(() => {
+    if (!canReadAssignments) return;
+    return scheduleListQuery({
+      targetPage: "assignments",
+      query: assignmentQuery,
+      queryRef: assignmentQueryRef,
+      includeStatus: false,
+      serialize: (query) => serializeAssignmentQuery(query),
+      lastLoadedRef: lastLoadedAssignmentQueryRef,
+      timerRef: assignmentSearchTimerRef,
+      previousRef: previousAssignmentEffectRef,
+      sequenceRef: assignmentSeqRef,
+      fetch: (query, _scope, accountKey) => { void fetchAssignmentsList(query, accountKey); },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePage, user.id, user.school_id, permissionsKey, canReadAssignments, assignmentQuery.q, assignmentQuery.page, assignmentQuery.pageSize]);
+
+  useEffect(() => {
+    const accountKey = activeAccountRef.current;
+    const accountChanged = accountSwitchingRef.current;
+    accountSwitchingRef.current = false;
+    if (activePage === "students" && canReadClasses && classChoicesAccountRef.current !== accountKey) {
+      if (!accountChanged) seedClassChoicesFromCurrentPage(accountKey);
+      void fetchClassChoices(accountKey);
+    }
+    if (activePage === "assignments") {
+      if (!accountChanged) {
+        seedTeacherChoicesFromCurrentPage(accountKey);
+        seedClassChoicesFromCurrentPage(accountKey);
+      }
+      if (canReadTeachers && teacherChoicesAccountRef.current !== accountKey) void fetchTeacherChoices(accountKey);
+      if (canReadClasses && classChoicesAccountRef.current !== accountKey) void fetchClassChoices(accountKey);
+    }
+    if (activePage === "ai" && canReadClasses && classChoicesAccountRef.current !== accountKey) {
+      if (!accountChanged) seedClassChoicesFromCurrentPage(accountKey);
+      void fetchClassChoices(accountKey);
+    }
+    if (activePage === "ai" && canReadAi && aiSettingsAccountRef.current !== accountKey) {
+      void fetchAiSettings(accountKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePage, user.id, user.school_id, permissionsKey, canReadClasses, canReadTeachers, canReadAi]);
 
   async function run(
     action: () => Promise<void>,
     targets?: RefreshTarget[],
   ) {
+    const operationAccount = activeAccountRef.current;
     setBusy(true);
     setNotice(null);
     try {
       await action();
+      if (activeAccountRef.current !== operationAccount) return;
       if (targets && targets.length > 0) {
         await refreshTargets(targets);
       } else {
         await refresh();
       }
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (activeAccountRef.current === operationAccount) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (activeAccountRef.current === operationAccount) setBusy(false);
     }
   }
 
@@ -562,7 +931,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     event.preventDefault();
     await run(async () => {
       await importStudents({
-        class_id: studentClassId || null,
+        class_id: visibleStudentClassId || null,
         students: [{ student_no: studentNo, display_name: studentName, email: studentEmail || null }],
       });
       setStudentNo("");
@@ -574,7 +943,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
   async function submitAssignment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(async () => {
-      await assignTeacherClass({ teacher_id: assignTeacherId, class_id: assignClassId });
+      await assignTeacherClass({ teacher_id: visibleAssignTeacherId, class_id: visibleAssignClassId });
     }, ["assignments"]);
   }
 
@@ -592,7 +961,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     await run(async () => {
       if (kind === "teachers") await importTeachersFile(file);
       if (kind === "classes") await importClassesFile(file);
-      if (kind === "students") await importStudentsFile(file, studentClassId || null);
+      if (kind === "students") await importStudentsFile(file, visibleStudentClassId || null);
       if (kind === "assignments") await importTeacherClassAssignmentsFile(file);
     }, [kind]);
   }
@@ -635,7 +1004,7 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     setPendingSchoolAiImport(null);
     try {
       const file = schoolAiImportFile;
-      const classId = schoolAiImportKind === "students" ? studentClassId || null : null;
+      const classId = schoolAiImportKind === "students" ? visibleStudentClassId || null : null;
       const review = await reviewSchoolAiImportFile(
         schoolAiImportKind,
         file,
@@ -711,12 +1080,13 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     setActivePage,
     teachers,
     setTeachers,
-    teacherChoices,
+    teacherChoices: visibleTeacherChoices,
     classes,
-    classChoices,
+    classChoices: visibleClassChoices,
     students,
     assignments,
     aiSettings,
+    schoolStats,
     teacherMeta,
     classMeta,
     studentMeta,
@@ -759,13 +1129,13 @@ export function useSchoolWorkspaceData(user: PlatformUser, onError: (message: st
     setStudentName,
     studentEmail,
     setStudentEmail,
-    studentClassId,
+    studentClassId: visibleStudentClassId,
     setStudentClassId,
     studentClassFilter,
     setStudentClassFilter,
-    assignTeacherId,
+    assignTeacherId: visibleAssignTeacherId,
     setAssignTeacherId,
-    assignClassId,
+    assignClassId: visibleAssignClassId,
     setAssignClassId,
     busy,
     notice,

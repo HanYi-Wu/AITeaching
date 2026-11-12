@@ -1,4 +1,4 @@
-import { ChangeEvent, ReactNode } from "react";
+import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { Download, Search, Upload } from "lucide-react";
 import { type SchoolImportKind } from "../../../platform/auth";
 import "../../../ui-redesign/g53/g53.css";
@@ -10,7 +10,7 @@ export type PageMeta = { total: number; page: number; pageSize: number; totalPag
 
 export function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="or-g53-card p-3.5 sm:p-4 transition-colors">
+    <div className="management-metric or-g53-card p-3.5 sm:p-4 transition-colors">
       <p className="text-sm font-medium text-or-muted">{label}</p>
       <p className="mt-1 text-2xl font-semibold tracking-tight text-or-text">{value}</p>
     </div>
@@ -19,7 +19,7 @@ export function Metric({ label, value }: { label: string; value: number }) {
 
 export function SummaryTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-or-outline/80 bg-or-block/80 p-3 sm:p-3.5 transition-colors">
+    <div className="management-summary rounded-xl border border-or-outline/80 bg-or-block/80 p-3 sm:p-3.5 transition-colors">
       <p className="text-sm font-medium text-or-muted">{label}</p>
       <p className="mt-1 text-base font-semibold text-or-text">{value}</p>
     </div>
@@ -38,8 +38,8 @@ export function ManagementSection({
   children: ReactNode;
 }) {
   return (
-    <section className="or-g53-card p-4 sm:p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <section className="management-panel or-g53-card p-4 sm:p-5">
+      <div className="management-panel-header mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <h2 className="text-base font-semibold tracking-tight text-or-text">{title}</h2>
           <span className="or-g53-pill or-g53-pill-neutral font-medium">{count}</span>
@@ -47,7 +47,7 @@ export function ManagementSection({
         {controls}
       </div>
       {count === 0 ? (
-        <p className="rounded-xl border border-dashed border-or-outline p-6 text-center text-sm text-or-muted">
+        <p className="management-empty rounded-xl border border-dashed border-or-outline p-6 text-center text-sm text-or-muted">
           暂无数据
         </p>
       ) : (
@@ -68,19 +68,43 @@ export function Toolbar({
   status?: boolean;
   bulk?: ReactNode;
 }) {
+  const [searchText, setSearchText] = useState(query.q);
+  const composingRef = useRef(false);
+
+  useEffect(() => {
+    setSearchText(query.q);
+  }, [query.q]);
+
   return (
-    <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 w-full sm:w-auto">
+    <div className="management-toolbar flex flex-wrap items-center gap-2 sm:gap-2.5 w-full sm:w-auto">
       <div className="relative flex-1 min-w-[150px] sm:w-52 sm:flex-initial">
         <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-or-muted" />
         <input
           className="or-g53-input w-full py-1.5 pl-9 pr-3 text-sm"
+          aria-label="搜索名单"
           placeholder="搜索"
-          value={query.q}
-          onChange={(event) => onQueryChange({ q: event.target.value })}
+          value={searchText}
+          onCompositionStart={() => {
+            composingRef.current = true;
+          }}
+          onCompositionEnd={(event) => {
+            composingRef.current = false;
+            const value = event.currentTarget.value;
+            setSearchText(value);
+            onQueryChange({ q: value });
+          }}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            setSearchText(value);
+            const nativeEvent = event.nativeEvent as InputEvent;
+            if (composingRef.current || nativeEvent.isComposing) return;
+            onQueryChange({ q: value });
+          }}
         />
       </div>
       {status ? (
         <AppSelect
+          aria-label="名单状态"
           className="or-g53-select py-1.5 text-sm"
           value={query.status || "all"}
           onValueChange={(value) => onQueryChange({ status: value })}
@@ -117,7 +141,7 @@ export function BulkActions({
   onDisable: () => void;
 }) {
   return (
-    <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-or-outline bg-or-inset/90 px-3 py-1">
+    <div className="management-bulk-actions inline-flex flex-wrap items-center gap-2 rounded-full border border-or-outline bg-or-inset/90 px-3 py-1">
       <span className="text-xs font-medium text-or-muted">已选 {count}</span>
       <button
         type="button"
@@ -141,7 +165,7 @@ export function BulkActions({
 
 export function Pager({ meta, onPage }: { meta: PageMeta; onPage: (page: number) => void }) {
   return (
-    <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-or-outline pt-3.5 text-sm text-or-muted">
+    <div className="management-pager mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-or-outline pt-3.5 text-sm text-or-muted">
       <span className="font-medium text-or-muted text-center sm:text-left">
         第 {meta.page} / {meta.totalPages} 页，共 {meta.total} 条
       </span>

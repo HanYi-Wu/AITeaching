@@ -27,9 +27,10 @@
 .or-select-trigger[data-state="open"] .or-select-arrow { rotate:180deg; }
 .or-select-content {
   z-index:200;
-  min-width:var(--radix-select-trigger-width);
-  max-width:calc(100vw - 24px);
-  max-height:min(360px,var(--radix-select-content-available-height));
+  box-sizing:border-box;
+  min-width:min(var(--radix-select-trigger-width, 0px),var(--radix-select-content-available-width,calc(100vw - 24px)),calc(100vw - 24px));
+  max-width:min(var(--radix-select-content-available-width,calc(100vw - 24px)),calc(100vw - 24px));
+  max-height:min(360px,var(--radix-select-content-available-height,calc(100vh - 24px)));
   overflow:hidden;
   border:1px solid var(--or-outline);
   border-radius:16px;
@@ -40,7 +41,7 @@
 }
 .or-select-content[data-state="open"] { animation:or-select-open 180ms cubic-bezier(.2,.8,.2,1) both; }
 .or-select-content[data-state="closed"] { animation:or-select-close 140ms ease-in both; }
-.or-select-viewport { padding:5px; }
+.or-select-viewport { min-width:0; min-height:0; padding:5px; overscroll-behavior:contain; }
 .or-select-item {
   display:grid;
   grid-template-columns:18px minmax(0,1fr);
@@ -56,10 +57,13 @@
   cursor:default;
   user-select:none;
 }
+.or-select-item > [id] { display:block; min-width:0; white-space:normal; overflow-wrap:anywhere; }
 .or-select-item[data-highlighted] { background:var(--or-primary-container); color:var(--or-on-container); }
 .or-select-item[data-disabled] { opacity:.45; }
+.or-select-empty { color:var(--or-muted); text-align:center; cursor:default; }
+.or-select-empty[data-disabled] { opacity:1; }
 .or-select-check { display:flex; align-items:center; justify-content:center; color:var(--or-primary); }
-.or-select-label { padding:10px 12px 4px; color:var(--or-muted); font-size:13px; font-weight:600; }
+.or-select-label { display:block; min-width:0; padding:10px 12px 4px; color:var(--or-muted); font-size:13px; font-weight:600; white-space:normal; overflow-wrap:anywhere; }
 .or-select-scroll { display:flex; align-items:center; justify-content:center; min-height:24px; color:var(--or-muted); background:var(--or-card); }
 .or-select-validation { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); opacity:0; pointer-events:none; }
 @keyframes or-select-open { from { opacity:0; translate:0 -4px; } to { opacity:1; translate:0 0; } }

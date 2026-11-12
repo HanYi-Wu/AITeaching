@@ -22,7 +22,8 @@ import {
 } from "../../platform/auth";
 import { formatSubjectLabel } from "../../lib/subjectLabels";
 import { PlatformPaperAnalysisCharts } from "../platform/AnalysisCharts";
-import { useAgentContext } from "../../contexts/AgentContext";
+import { AnalysisNumber } from "../platform/AnalysisNumber";
+import { useAgentActions } from "../../contexts/AgentContext";
 import { SelectionIndicator } from "../../design-system/SelectionIndicator";
 import { confirmDialog } from "../../lib/confirmDialog";
 import { dispatchExamsChanged } from "../../lib/examEvents";
@@ -65,6 +66,7 @@ import { useAnalysisFolders } from "./useAnalysisFolders";
 import { G52StatCard } from "../../ui-redesign/g52/G52UIComponents";
 import "../../ui-redesign/g52/g52-design-tokens.css";
 import { Select as AppSelect } from "../../components/ui/select";
+import "./analysisDashboard.css";
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -95,6 +97,7 @@ export function AnalysisWorkspace({
   const [onlinePapers, setOnlinePapers] = useState<PlatformPaperRecord[]>([]);
   const [selectedOnlinePaperId, setSelectedOnlinePaperId] = useState<string | null>(null);
   const [onlineAnalysis, setOnlineAnalysis] = useState<PlatformPaperAnalysis | null>(null);
+  const [chartReplay, setChartReplay] = useState(0);
   const [loadingExams, setLoadingExams] = useState(false);
   const [loadingOnlinePapers, setLoadingOnlinePapers] = useState(false);
   const [loadingOnlineAnalysis, setLoadingOnlineAnalysis] = useState(false);
@@ -147,7 +150,7 @@ export function AnalysisWorkspace({
   selectedOnlinePaperIdRef.current = selectedOnlinePaperId;
   const allowHostToolsRef = useRef(allowHostTools);
   allowHostToolsRef.current = allowHostTools;
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
 
   const loadExams = useCallback(async () => {
     const requestId = ++examListRequestIdRef.current;
@@ -1093,13 +1096,27 @@ export function AnalysisWorkspace({
               >
                 ← 返回考试列表
               </button>
-              <h2 className="text-xl font-bold text-[var(--or-text)] tracking-tight">
-                {selectedOnlinePaper?.title ?? onlineAnalysis?.paper.title ?? "试卷分析"}
-              </h2>
-              <div className="mt-1.5 flex flex-wrap items-center gap-3 text-sm text-[var(--or-muted)]">
-                {selectedOnlinePaper?.subject ? <span className="font-medium text-[var(--or-muted)]">{formatSubjectLabel(selectedOnlinePaper.subject)}</span> : null}
-                {selectedOnlinePaper ? <span>{selectedOnlinePaper.question_count} 题</span> : null}
-                {selectedOnlinePaper ? <span>{selectedOnlinePaper.published_class_count} 个班级</span> : null}
+              <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                <div className="min-w-0">
+                  <h2 className="text-xl font-bold text-[var(--or-text)] tracking-tight">
+                    {selectedOnlinePaper?.title ?? onlineAnalysis?.paper.title ?? "试卷分析"}
+                  </h2>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-3 text-sm text-[var(--or-muted)]">
+                    {selectedOnlinePaper?.subject ? <span className="font-medium text-[var(--or-muted)]">{formatSubjectLabel(selectedOnlinePaper.subject)}</span> : null}
+                    {selectedOnlinePaper ? <span>{selectedOnlinePaper.question_count} 题</span> : null}
+                    {selectedOnlinePaper ? <span>{selectedOnlinePaper.published_class_count} 个班级</span> : null}
+                  </div>
+                </div>
+                {!loadingOnlineAnalysis && onlineAnalysis ? (
+                  <button
+                    type="button"
+                    onClick={() => setChartReplay((previous) => previous + 1)}
+                    className="analysis-chart-replay inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-xs font-medium text-[var(--or-text)] hover:bg-[var(--or-block)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--or-primary)]"
+                  >
+                    <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
+                    {t("replayChartAnimations")}
+                  </button>
+                ) : null}
               </div>
             </div>
             {loadingOnlineAnalysis ? (
@@ -1112,26 +1129,31 @@ export function AnalysisWorkspace({
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <G52StatCard
                     label="学生数"
-                    value={onlineAnalysis.summary.total_students}
-                    icon={<Users className="h-5 w-5" />}
+                    value={<AnalysisNumber value={onlineAnalysis.summary.total_students} animationKey={chartReplay} />}
+                    icon={<Users key={chartReplay} aria-hidden="true" className="analysis-kpi-icon h-5 w-5" />}
                     valueClassName="text-[var(--or-text)]"
                   />
                   <G52StatCard
                     label="完成率"
-                    value={`${onlineAnalysis.summary.completion_rate}%`}
-                    icon={<Target className="h-5 w-5 text-[var(--or-on-container)]" />}
+                    value={<AnalysisNumber value={onlineAnalysis.summary.completion_rate} suffix="%" animationKey={chartReplay} />}
+                    icon={<Target key={chartReplay} aria-hidden="true" className="analysis-kpi-icon h-5 w-5 text-[var(--or-on-container)]" />}
                     valueClassName="text-[var(--or-on-container)]"
                   />
                   <G52StatCard
                     label="平均得分率"
-                    value={onlineAnalysis.summary.average_score ?? "-"}
-                    icon={<Clock className="h-5 w-5 text-[var(--or-on-success)]" />}
+                    value={<AnalysisNumber value={onlineAnalysis.summary.average_score} animationKey={chartReplay} />}
+                    icon={<Clock key={chartReplay} aria-hidden="true" className="analysis-kpi-icon h-5 w-5 text-[var(--or-on-success)]" />}
                     valueClassName="text-[var(--or-on-success)]"
                   />
                   <G52StatCard
                     label="切屏超限"
-                    value={onlineAnalysis.proctoring.exceeded_student_count ?? onlineAnalysis.proctoring.flagged_student_count}
-                    icon={<ShieldAlert className="h-5 w-5 text-[var(--or-on-error)]" />}
+                    value={(
+                      <AnalysisNumber
+                        value={onlineAnalysis.proctoring.exceeded_student_count ?? onlineAnalysis.proctoring.flagged_student_count}
+                        animationKey={chartReplay}
+                      />
+                    )}
+                    icon={<ShieldAlert key={chartReplay} aria-hidden="true" className="analysis-kpi-icon h-5 w-5 text-[var(--or-on-error)]" />}
                     valueClassName="text-[var(--or-on-error)]"
                   />
                 </div>
@@ -1181,7 +1203,7 @@ export function AnalysisWorkspace({
                     </label>
                   )}
                 </div>
-                <PlatformPaperAnalysisCharts analysis={onlineAnalysis} />
+                <PlatformPaperAnalysisCharts analysis={onlineAnalysis} replay={chartReplay} />
               </div>
             ) : (
               <div className="flex min-h-[20rem] items-center justify-center text-sm text-[var(--or-muted)]">

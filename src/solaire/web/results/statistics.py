@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 from pathlib import Path
 from typing import Any
 
 from solaire.knowledge_forge import load_graph
+from solaire.edu_analysis.score_matrix import compute_score_matrix
 from solaire.web.exam_service import _load_exam_config
 from solaire.web.exam_workspace_service import workspace_dir
 from solaire.web.results.analysis_cache import (
@@ -20,7 +19,6 @@ from solaire.web.results.analysis_cache import (
 from solaire.web.results.models import (
     _flatten_questions,
     _now_utc,
-    _safe_float,
 )
 from solaire.web.security import assert_within_project
 
@@ -59,119 +57,10 @@ def compute_statistics(
     except UnicodeDecodeError:
         raw_text = scores_bytes.decode("gbk", errors="replace")
 
-    reader = csv.reader(io.StringIO(raw_text))
-    rows = list(reader)
-    header = [h.strip().lstrip("\ufeff") for h in rows[0]]
-    data_rows = rows[1:]
-
-    header_lower = [h.strip().lower() for h in header]
-    col_name = header_lower.index("姓名") if "姓名" in header_lower else -1
-    col_id = header_lower.index("学号") if "学号" in header_lower else -1
-
-    # Primary: exact header match
-    header_to_idx = {h: i for i, h in enumerate(header) if h not in ("姓名", "学号")}
-    question_csv_headers = [q.csv_header() for q in questions]
-
-    # Fallback: position-based mapping for score columns
-    score_col_indices: list[int] = [i for i, h in enumerate(header) if h not in ("姓名", "学号")]
-    question_score_columns: list[tuple[int | None, bool]] = []
-    for qi, question_header in enumerate(question_csv_headers):
-        if question_header in header_to_idx:
-            question_score_columns.append((header_to_idx[question_header], False))
-        elif qi < len(score_col_indices):
-            question_score_columns.append((score_col_indices[qi], True))
-        else:
-            question_score_columns.append((None, False))
-
-    students: list[dict[str, Any]] = []
-    column_warnings: list[str] = []
-    for ri, row in enumerate(data_rows):
-        if not row or all(not c.strip() for c in row):
-            continue
-        name = row[col_name].strip() if col_name >= 0 else f"学生{ri+1}"
-        student_id = row[col_id].strip() if col_id >= 0 else ""
-        scores: list[float | None] = []
-        matched_by_position = False
-        for qi, _q in enumerate(questions):
-            idx, used_position_fallback = question_score_columns[qi]
-            if used_position_fallback:
-                matched_by_position = True
-            raw = row[idx].strip() if idx is not None and idx < len(row) else None
-            scores.append(_safe_float(raw))
-        if matched_by_position and not column_warnings:
-            column_warnings.append(
-                "部分列头与模板不完全匹配，已按顺序位置映射。如得分异常请检查列顺序是否与模板一致。"
-            )
-        students.append({"name": name, "student_id": student_id, "scores": scores})
-
-    if not students:
-        raise ValueError("No student data found")
-
-    # Per-question statistics
-    question_stats: list[dict[str, Any]] = []
-    for qi, q in enumerate(questions):
-        answered = [s["scores"][qi] for s in students if s["scores"][qi] is not None]
-        # Diagnostic: first student's raw CSV value for this question
-        first_raw = students[0]["scores"][qi] if students and qi < len(students[0]["scores"]) else None
-        if not answered:
-            err_rate = None
-            avg_score = None
-            fuzzy_score = None
-        else:
-            avg_score = sum(answered) / len(answered)
-            # Score ratio (fuzzy membership: 0=wrong, 1=full correct)
-            if q.score_per_item and q.score_per_item > 0:
-                fuzzy_scores = [min(max(s / q.score_per_item, 0.0), 1.0) for s in answered]
-                fuzzy_score = sum(fuzzy_scores) / len(fuzzy_scores)
-                correct_count = sum(1 for s in answered if s >= q.score_per_item * 0.5)
-                err_rate = 1.0 - correct_count / len(answered)
-            else:
-                fuzzy_score = 0.0
-                err_rate = None
-        question_stats.append({
-            "question_id": q.question_id,
-            "header": question_csv_headers[qi],
-            "section_id": q.section_id,
-            "score_per_item": q.score_per_item,
-            "answered_count": len(answered),
-            "error_rate": err_rate,
-            "avg_score_ratio": fuzzy_score,  # fuzzy membership 0~1
-            "avg_raw_score": avg_score,
-            "first_csv_raw": first_raw,
-        })
-
-    # Per-student statistics
-    total_score = sum(q.score_per_item for q in questions)
-    student_stats: list[dict[str, Any]] = []
-    raw_totals: list[tuple[int, float]] = []  # (index, total)
-    for si, st in enumerate(students):
-        valid_scores = [(q, st["scores"][qi] or 0.0) for qi, q in enumerate(questions)]
-        raw_total = sum(s for _, s in valid_scores)
-        score_ratio = raw_total / total_score if total_score > 0 else 0.0
-        # Fuzzy total score: use weighted average of question fuzzy memberships
-        fuzzy_total = 0.0
-        if questions:
-            fuzzy_total = sum(
-                min(max((st["scores"][qi] or 0.0) / q.score_per_item, 0.0), 1.0)
-                for qi, q in enumerate(questions)
-                if q.score_per_item > 0
-            ) / len(questions)
-        student_stats.append({
-            "name": st["name"],
-            "student_id": st["student_id"],
-            "raw_total": round(raw_total, 2),
-            "score_ratio": round(score_ratio, 4),
-            "fuzzy_score": round(fuzzy_total, 4),  # fuzzy aggregation 0~1
-        })
-        raw_totals.append((si, raw_total))
-
-    # Rank students by score_ratio descending
-    ranked = sorted(raw_totals, key=lambda x: x[1], reverse=True)
-    rank_map: dict[int, int] = {idx: rank + 1 for rank, (idx, _) in enumerate(ranked)}
-    for si, st in enumerate(student_stats):
-        st["rank"] = rank_map.get(si, 0)
-        st["class_rank"] = st["rank"]
-        st["total_in_class"] = len(students)
+    matrix = compute_score_matrix(raw_text, questions)
+    question_csv_headers = matrix.question_csv_headers
+    question_stats = matrix.question_stats
+    student_stats = matrix.student_stats
 
     # Read-only graph state loaded once for both node stats and unbound warnings
     if graph_state is None:
@@ -239,34 +128,20 @@ def compute_statistics(
 
     # Save computed analysis atomically with source fingerprint
     analysis_path = dir_path / "scores" / batch_id / "analysis.json"
-    student_mastery_rows: list[dict[str, Any]] = []
-    for st in students:
-        ratios: list[float | None] = []
-        for qi, q in enumerate(questions):
-            raw_s = st["scores"][qi] if qi < len(st["scores"]) else None
-            if raw_s is None:
-                ratios.append(None)
-            elif q.score_per_item and q.score_per_item > 0:
-                ratios.append(round(min(max(raw_s / q.score_per_item, 0.0), 1.0), 4))
-            else:
-                ratios.append(None)
-        student_mastery_rows.append(
-            {"name": st["name"], "student_id": st["student_id"], "ratios": ratios},
-        )
     analysis_data = {
         "batch_id": batch_id,
         "exam_id": exam_id,
-        "student_count": len(students),
+        "student_count": len(student_stats),
         "question_count": len(questions),
         "imported_at": _now_utc().isoformat(),
         "warnings": unbound_warnings,
         "question_order": [q.question_id for q in questions],
-        "student_mastery_rows": student_mastery_rows,
+        "student_mastery_rows": matrix.student_mastery_rows,
         "question_stats": question_stats,
         "node_stats": node_stats,
         "student_stats": student_stats,
-        "class_avg_ratio": round(sum(s["score_ratio"] for s in student_stats) / len(student_stats), 4) if student_stats else 0,
-        "class_avg_fuzzy": round(sum(s["fuzzy_score"] for s in student_stats) / len(student_stats), 4) if student_stats else 0,
+        "class_avg_ratio": matrix.class_avg_ratio,
+        "class_avg_fuzzy": matrix.class_avg_fuzzy,
     }
 
     fingerprint = compute_source_fingerprint(

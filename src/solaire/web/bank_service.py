@@ -46,6 +46,7 @@ from solaire.web.bank_reads import (
     answer_relation_needs_review as answer_relation_requires_review,
     preview_text,
 )
+from solaire.exam_compiler.pipeline.diagram_expand import DiagramRenderContext
 
 
 def _rel_to_resource(project_root: Path, path: Path) -> str:
@@ -127,6 +128,7 @@ def list_question_rows_for_web(project_root: Path) -> tuple[list[dict[str, Any]]
     """Build the compose picker from one request-local scan per library."""
     items: list[dict[str, Any]] = []
     diagnostics: list[dict[str, str]] = []
+    render_context = DiagramRenderContext()
     for ref in discover_question_library_refs(project_root):
         namespace = ref["namespace"]
         library = library_root_for_namespace(project_root, namespace)
@@ -142,7 +144,9 @@ def list_question_rows_for_web(project_root: Path) -> tuple[list[dict[str, Any]]
                 if isinstance(record, QuestionItem):
                     question = record
                     try:
-                        displayed = expand_question_for_web(project_root, namespace, question)
+                        displayed = expand_question_for_web(
+                            project_root, namespace, question, render_context=render_context
+                        )
                     except Exception:
                         displayed = question
                     content = displayed.content or ""
@@ -257,29 +261,36 @@ def question_selection_export_path(project_root: Path, filename: str) -> Path:
 def _expand_group_record_for_web(project_root: Path, namespace: str, group: QuestionGroupRecord) -> dict[str, Any]:
     lib = library_root_for_namespace(project_root, namespace)
     image_dir = lib / "image"
+    assert_within_project(project_root, image_dir)
+    render_context = DiagramRenderContext()
     pi, mi = 0, 0
     mat, pi, mi = expand_diagram_fences_in_text(
-        group.material or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+        group.material or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+        render_context=render_context,
     )
     items_out: list[dict[str, Any]] = []
     if group.unified is False:
         for row in group.items:
             d = row.model_dump(mode="json")
             c, pi, mi = expand_diagram_fences_in_text(
-                d["content"], image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                d["content"], image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                render_context=render_context,
             )
             ans, pi, mi = expand_diagram_fences_in_text(
-                d["answer"], image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                d["answer"], image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                render_context=render_context,
             )
             ana, pi, mi = expand_diagram_fences_in_text(
-                d.get("analysis") or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                d.get("analysis") or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                render_context=render_context,
             )
             opts_out: dict[str, str] | None = None
             if d.get("options"):
                 opts_out = {}
                 for ok, ov in d["options"].items():
                     ev, pi, mi = expand_diagram_fences_in_text(
-                        ov, image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                        ov, image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                        render_context=render_context,
                     )
                     opts_out[ok] = ev
             items_out.append(
@@ -296,20 +307,24 @@ def _expand_group_record_for_web(project_root: Path, namespace: str, group: Ques
         for body in group.items:
             d = body.model_dump(mode="json")
             c, pi, mi = expand_diagram_fences_in_text(
-                d["content"], image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                d["content"], image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                render_context=render_context,
             )
             ans, pi, mi = expand_diagram_fences_in_text(
-                d["answer"], image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                d["answer"], image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                render_context=render_context,
             )
             ana, pi, mi = expand_diagram_fences_in_text(
-                d.get("analysis") or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                d.get("analysis") or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                render_context=render_context,
             )
             opts_out: dict[str, str] | None = None
             if d.get("options"):
                 opts_out = {}
                 for ok, ov in d["options"].items():
                     ev, pi, mi = expand_diagram_fences_in_text(
-                        ov, image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                        ov, image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                        render_context=render_context,
                     )
                     opts_out[ok] = ev
             items_out.append(
@@ -383,28 +398,41 @@ def _question_has_diagram_fence(q: QuestionItem) -> bool:
     return False
 
 
-def expand_question_for_web(project_root: Path, namespace: str, q: QuestionItem) -> QuestionItem:
+def expand_question_for_web(
+    project_root: Path,
+    namespace: str,
+    q: QuestionItem,
+    *,
+    render_context: DiagramRenderContext | None = None,
+) -> QuestionItem:
     """Replace ```primebrush``` / ```mermaid``` with Web markers; ensure files under library image/."""
     if not _question_has_diagram_fence(q):
         return q
     lib = library_root_for_namespace(project_root, namespace)
     image_dir = lib / "image"
+    assert_within_project(project_root, image_dir)
+    if render_context is None:
+        render_context = DiagramRenderContext()
     pi, mi = 0, 0
     content, pi, mi = expand_diagram_fences_in_text(
-        q.content, image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+        q.content, image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+        render_context=render_context,
     )
     answer, pi, mi = expand_diagram_fences_in_text(
-        q.answer or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+        q.answer or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+        render_context=render_context,
     )
     analysis, pi, mi = expand_diagram_fences_in_text(
-        q.analysis or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+        q.analysis or "", image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+        render_context=render_context,
     )
     update: dict[str, Any] = {"content": content, "answer": answer, "analysis": analysis}
     if q.options is not None:
         opts_out: dict[str, str] = {}
         for ok, ov in q.options.items():
             ev, pi, mi = expand_diagram_fences_in_text(
-                ov, image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi
+                ov, image_dir=image_dir, mode="web", project_root=project_root, primebrush_start=pi, mermaid_start=mi,
+                render_context=render_context,
             )
             opts_out[ok] = ev
         update["options"] = opts_out

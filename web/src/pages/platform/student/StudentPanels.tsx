@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   fetchStudentLearningProgressComparison,
   type StudentComparisonResponse,
 } from "../../../platform/learningProgress";
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
+import { DeferredMount } from "../../../components/DeferredMount";
 import {
   type StudentAnswerImage,
   type StudentQuestionRecord,
@@ -50,7 +51,7 @@ export function StudentNavButton({
   );
 }
 
-export function StudentAnalysisVisual({ result }: { result: StudentResultRecord }) {
+export const StudentAnalysisVisual = memo(function StudentAnalysisVisual({ result }: { result: StudentResultRecord }) {
   const scorePercent = Math.max(0, Math.min(100, Number(result.score_percent ?? 0)));
   const answered = Math.max(0, Number(result.analysis?.answered_count ?? result.answers.length ?? 0));
   const correct = Math.max(0, Number(result.analysis?.correct_count ?? 0));
@@ -80,9 +81,9 @@ export function StudentAnalysisVisual({ result }: { result: StudentResultRecord 
       </div>
     </div>
   );
-}
+});
 
-export function StudentPracticeComparisonCard({
+export const StudentPracticeComparisonCard = memo(function StudentPracticeComparisonCard({
   publicationId,
 }: {
   publicationId: string;
@@ -209,20 +210,26 @@ export function StudentPracticeComparisonCard({
       </div>
     </div>
   );
-}
+});
 
-export function StudentResultDetails({ result }: { result: StudentResultRecord }) {
+export const StudentResultDetails = memo(function StudentResultDetails({ result }: { result: StudentResultRecord }) {
   const [wrongOnly, setWrongOnly] = useState(false);
-  const reviewAnswers = wrongOnly ? result.answers.filter((answer) => answer.is_correct === false) : result.answers;
-  const sections = new Map<string, { score: number; max: number; count: number }>();
-  result.answers.forEach((answer) => {
-    const section = answer.section_id || "其他";
-    const item = sections.get(section) ?? { score: 0, max: 0, count: 0 };
-    item.score += Number(answer.score || 0);
-    item.max += Number(answer.score_per_item || 0);
-    item.count += 1;
-    sections.set(section, item);
-  });
+  const reviewAnswers = useMemo(
+    () => (wrongOnly ? result.answers.filter((answer) => answer.is_correct === false) : result.answers),
+    [result.answers, wrongOnly],
+  );
+  const sections = useMemo(() => {
+    const nextSections = new Map<string, { score: number; max: number; count: number }>();
+    result.answers.forEach((answer) => {
+      const section = answer.section_id || "其他";
+      const item = nextSections.get(section) ?? { score: 0, max: 0, count: 0 };
+      item.score += Number(answer.score || 0);
+      item.max += Number(answer.score_per_item || 0);
+      item.count += 1;
+      nextSections.set(section, item);
+    });
+    return nextSections;
+  }, [result.answers]);
 
   return (
     <div className="mt-4 space-y-4">
@@ -259,8 +266,11 @@ export function StudentResultDetails({ result }: { result: StudentResultRecord }
 
         <div className="mt-4 space-y-4">
           {reviewAnswers.map((answer, index) => (
-            <article
+            <DeferredMount
               key={answer.question_id}
+              fallback={<div className="min-h-64 rounded-2xl border border-dashed border-[var(--or-outline)] p-4 text-xs text-[var(--or-muted)]">{answer.header || `第 ${index + 1} 题`}</div>}
+            >
+            <article
               className={`rounded-2xl border bg-[var(--or-card)] p-4 sm:p-5 text-sm transition-colors ${
                 answer.is_correct === false
                   ? "border-[color-mix(in_srgb,var(--or-error)_90%,transparent)]"
@@ -333,6 +343,7 @@ export function StudentResultDetails({ result }: { result: StudentResultRecord }
                 </p>
               ) : null}
             </article>
+            </DeferredMount>
           ))}
           {reviewAnswers.length === 0 ? (
             <p className="py-4 text-center text-sm text-[var(--or-muted)]">本次没有已确认错题。</p>
@@ -341,7 +352,7 @@ export function StudentResultDetails({ result }: { result: StudentResultRecord }
       </div>
     </div>
   );
-}
+});
 
 export function QuestionAnswer({
   question,

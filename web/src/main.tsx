@@ -7,11 +7,21 @@ import { isTauriShell } from "./lib/tauriEnv";
 import "./index.css";
 import "./design-system/mobile-navigation.css";
 import { applyAppearance } from "./design-system/appearance";
+import { installSafariChromeTint } from "./design-system/safariChromeTint";
+import { loadSessionToken } from "./platform/session";
 
 if (typeof document !== "undefined" && isTauriShell()) {
   document.documentElement.classList.add("tauri-shell");
+  delete document.documentElement.dataset.orBootLogin;
 }
 applyAppearance();
+if (!isTauriShell()) {
+  if (!loadSessionToken()) {
+    void import("./pages/platform/login/PlatformLogin");
+  }
+  // iOS Safari：让状态栏/灵动岛与底部地址栏区域与页面边缘同色，避免上下各露出一条浅灰色。
+  installSafariChromeTint();
+}
 
 installGlobalLogging();
 

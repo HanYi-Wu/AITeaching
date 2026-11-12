@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef } from "react";
+import { memo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -30,6 +30,8 @@ export interface BankSidebarProps {
   onRequestDelete: (item: BankListItem) => void;
 }
 
+const MemoizedKatexPlainPreview = memo(KatexPlainPreview);
+
 export const BankSidebar = memo(function BankSidebar({
   folders,
   setFolders,
@@ -49,14 +51,6 @@ export const BankSidebar = memo(function BankSidebar({
 }: BankSidebarProps) {
   const { t } = useTranslation(["bank", "lib", "common"]);
   const selectionAnchors = useRef(new Map<string, string>());
-  const visibleIdsByFolder = useMemo(() => {
-    const index = buildBankFolderIndex(folders, filteredItems);
-    const groups = new Map<string, string[]>();
-    for (const [folder, items] of index.questions) {
-      groups.set(folder, items.map((item) => item.qualified_id));
-    }
-    return groups;
-  }, [filteredItems, folders]);
 
   const toggleExportItem = (itemId: string, folder: string) => {
     selectionAnchors.current.set(folder, itemId);
@@ -64,7 +58,8 @@ export const BankSidebar = memo(function BankSidebar({
   };
 
   const selectExportRange = (itemId: string, folder: string) => {
-    const visibleIds = visibleIdsByFolder.get(folder) ?? [];
+    const visibleIds = (buildBankFolderIndex(folders, filteredItems).questions.get(folder) ?? [])
+      .map((item) => item.qualified_id);
     const next = rangeSelection(
       selectedExportIds,
       visibleIds,
@@ -147,7 +142,7 @@ export const BankSidebar = memo(function BankSidebar({
                     </div>
                     <div className="mt-1.5 block w-full min-w-0">
                       <QuestionHoverDetails id={it.qualified_id}>
-                        <KatexPlainPreview
+                        <MemoizedKatexPlainPreview
                           text={it.content_preview}
                           className="line-clamp-3 text-[15px] leading-relaxed text-[var(--or-text)] [&_.katex]:text-[0.95em]"
                         />

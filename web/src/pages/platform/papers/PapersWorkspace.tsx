@@ -1,20 +1,26 @@
 import analysisPrintCss from "./analysisPrint.css?raw";
-import { ChangeEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, lazy, ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SelectionIndicator } from "../../../design-system/SelectionIndicator";
 import {
   BarChart3,
+  ChevronDown,
   ClipboardList,
   Download,
+  FolderPlus,
+  History,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
   Upload,
+  Wifi,
   X,
 } from "lucide-react";
 import { apiDownloadBlob, apiGet } from "../../../api/client";
+import { DeferredMount } from "../../../components/DeferredMount";
+import { scheduleWorkspaceWork, useAfterWorkspaceTransition } from "../../../lib/workspaceWorkScheduler";
 import { formatSubjectLabel } from "../../../lib/subjectLabels";
 import { useCollapsedPanelInert } from "../../../hooks/useCollapsedPanelInert";
-import { ContentTags } from "../../../components/ContentTags";
+import { ContentTags, TagChips } from "../../../components/ContentTags";
 import {
   analyzePlatformPaper,
   completePaperAttemptGrading,
@@ -53,7 +59,6 @@ import {
   type ContentFolder,
   type ContentTag,
 } from "../../../platform/auth";
-import { PlatformPaperAnalysisCharts } from "../AnalysisCharts";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import {
   applyGradingSuggestions,
@@ -69,12 +74,7 @@ import {
 } from "./gradingModel";
 import { usePaperGrading } from "./usePaperGrading";
 import { PaperListSidebar } from "./PaperListSidebar";
-import { PaperClassPublishPanel } from "./PaperClassPublishPanel";
-import { PaperPublishingSidebar } from "./PaperPublishingSidebar";
-import GradingQuestionCard from "./GradingQuestionCard";
-import { GradingWorkspace } from "./GradingWorkspace";
-import { PaperSubmissionDetail } from "./PaperSubmissionDetail";
-import { G51Pill } from "../../../ui-redesign/g51/PaperUiComponents";
+import { G51EmptyState, G51Panel, G51Pill } from "../../../ui-redesign/g51/PaperUiComponents";
 import "../../../ui-redesign/g51/g51Styles.css";
 import {
   readGradingDraft,
@@ -99,6 +99,23 @@ export type ProjectScopeProp =
 const EMPTY_PAPERS: PlatformPaperRecord[] = [];
 const EMPTY_CLASSES: TeacherClassRecord[] = [];
 const EMPTY_PAPER_META: PageMeta = { total: 0, page: 1, pageSize: 10, totalPages: 1 };
+
+const LazyPlatformPaperAnalysisCharts = lazy(() =>
+  import("../AnalysisCharts").then(({ PlatformPaperAnalysisCharts }) => ({ default: PlatformPaperAnalysisCharts })),
+);
+const LazyGradingWorkspace = lazy(() =>
+  import("./GradingWorkspace").then(({ GradingWorkspace }) => ({ default: GradingWorkspace })),
+);
+const LazyPaperSubmissionDetail = lazy(() =>
+  import("./PaperSubmissionDetail").then(({ PaperSubmissionDetail }) => ({ default: PaperSubmissionDetail })),
+);
+const LazyGradingQuestionCard = lazy(() => import("./GradingQuestionCard"));
+const LazyPaperClassPublishPanel = lazy(() =>
+  import("./PaperClassPublishPanel").then(({ PaperClassPublishPanel }) => ({ default: PaperClassPublishPanel })),
+);
+const LazyPaperPublishingSidebar = lazy(() =>
+  import("./PaperPublishingSidebar").then(({ PaperPublishingSidebar }) => ({ default: PaperPublishingSidebar })),
+);
 
 type Props = {
   openTarget?: { paperId: string; attemptId: string; title: string } | null;
@@ -151,6 +168,23 @@ type AnalysisFilterSelection = {
   classId: string | undefined;
 };
 
+type PaperViewMountStages = {
+  scopeToken: string;
+  publishForm: boolean;
+  publicationHistory: boolean;
+  manageUtilities: boolean;
+  gradingWorkspace: boolean;
+  gradingAttemptId: string | null;
+};
+
+const EMPTY_PAPER_VIEW_MOUNT_STAGES: Omit<PaperViewMountStages, "scopeToken"> = {
+  publishForm: false,
+  publicationHistory: false,
+  manageUtilities: false,
+  gradingWorkspace: false,
+  gradingAttemptId: null,
+};
+
 type AcceptedAiSuggestion = {
   attemptId: string;
   questionId: string;
@@ -164,7 +198,158 @@ function paperHasPublicationHistory(paper: PlatformPaperRecord): boolean {
   return paper.publication_count > 0 || paper.has_publication_history === true;
 }
 
+function useWorkspaceScopeToken(scopeKey: string): string {
+  const generationRef = useRef({ scopeKey, generation: 0 });
+  if (generationRef.current.scopeKey !== scopeKey) {
+    generationRef.current = { scopeKey, generation: generationRef.current.generation + 1 };
+  }
+  return `${scopeKey}\u0000${generationRef.current.generation}`;
+}
+
+function PaperSelectPlaceholder({ label, className }: { label: string; className: string }) {
+  return (
+    <span className={`or-select-trigger ${className}`} aria-hidden="true">
+      <span className="or-select-balance" />
+      <span className="min-w-0 truncate">{label}</span>
+      <ChevronDown className="or-select-arrow h-4 w-4" />
+    </span>
+  );
+}
+
+function PaperPublishPanelPlaceholder({
+  recipientScope,
+  folderLabel,
+  subjectLabel,
+}: {
+  recipientScope: "class" | "student";
+  folderLabel: string;
+  subjectLabel: string;
+}) {
+  const scopeButtonClass = (active: boolean) => `flex-1 sm:flex-initial rounded-xl border px-3.5 py-2 text-sm font-semibold transition ${
+    active
+      ? "bg-[var(--or-primary)] text-[var(--or-on-primary)] border-[var(--or-primary)] shadow-sm"
+      : "bg-[var(--or-card)] text-[var(--or-muted)] border-[var(--or-outline)]"
+  }`;
+
+  return (
+    <div className="min-w-0" role="status" aria-label="正在准备发布面板">
+      <span className="sr-only">正在准备发布面板…</span>
+      <G51Panel title="发布试卷" icon={<Wifi className="h-5 w-5 text-[var(--or-on-container)]" />}>
+        <div className="space-y-5" aria-hidden="true">
+          <div className="flex w-full gap-2 sm:w-auto">
+            <span className={scopeButtonClass(recipientScope === "class")}>发布到班级</span>
+            <span className={scopeButtonClass(recipientScope === "student")}>指定学生</span>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-semibold text-[var(--or-text)]">
+              试卷归类（必选） <span className="text-[var(--or-on-error)]">*</span>
+            </label>
+            <PaperSelectPlaceholder label={folderLabel} className="or-g51-select w-full" />
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <span className="or-g51-input flex min-w-0 flex-1 items-center">
+              <span className="h-3.5 w-28 rounded bg-[var(--or-block)]" />
+            </span>
+            <span className="or-g51-btn or-g51-btn-outline w-full shrink-0 px-3 py-2 text-xs sm:w-auto sm:py-1.5">
+              <FolderPlus className="mr-1 inline h-4 w-4" />
+              新建并选择
+            </span>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-semibold text-[var(--or-text)]">发布学科</label>
+            <PaperSelectPlaceholder label={subjectLabel} className="or-g51-select w-full" />
+          </div>
+          <div className="min-h-56 rounded-2xl border border-dashed border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_45%,transparent)] px-4 py-3 text-xs text-[var(--or-muted)]">
+            滚动到班级选择区域后加载…
+          </div>
+          <div className="min-h-64 rounded-2xl border border-dashed border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_45%,transparent)] px-4 py-3 text-xs text-[var(--or-muted)]">
+            滚动到提交设置后加载…
+          </div>
+        </div>
+      </G51Panel>
+    </div>
+  );
+}
+
+function PaperPublicationHistoryPlaceholder({ publications }: { publications: PaperPublicationRecord[] }) {
+  const reservedHeight = Math.min(publications.length, 4) * 172;
+  return (
+    <div className="min-w-0" role="status" aria-label="正在准备发布记录">
+      <span className="sr-only">正在准备发布记录…</span>
+      <G51Panel title="发布记录" icon={<History className="h-5 w-5 text-[var(--or-on-container)]" />}>
+        {publications.length === 0 ? (
+          <G51EmptyState message="暂无发布记录" />
+        ) : (
+          <div
+            className="rounded-xl border border-dashed border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_60%,transparent)] p-4"
+            style={{ minHeight: reservedHeight }}
+            aria-hidden="true"
+          />
+        )}
+      </G51Panel>
+    </div>
+  );
+}
+
+function PaperManageUtilitiesPlaceholder({ analysisAvailable }: { analysisAvailable: boolean }) {
+  return (
+    <aside className="space-y-5" role="status" aria-label="正在准备成绩与分析工具">
+      <div className="space-y-5" aria-hidden="true">
+        <Panel title="线下成绩" icon={<Upload className="h-5 w-5 text-[var(--or-on-container)]" />}>
+          <div className="flex flex-col gap-2.5">
+            <button type="button" disabled className="or-g51-btn or-g51-btn-outline w-full text-sm font-medium">下载成绩模板</button>
+            <button type="button" disabled className="or-g51-btn or-g51-btn-primary w-full text-sm font-semibold">上传成绩</button>
+          </div>
+        </Panel>
+        <Panel title="分析" icon={<BarChart3 className="h-5 w-5 text-[var(--or-on-container)]" />}>
+          <button type="button" disabled className="or-g51-btn or-g51-btn-primary w-full text-sm font-semibold">查看分析摘要</button>
+          {analysisAvailable ? <p className="mt-2.5 text-xs font-medium text-[var(--or-on-success)]">分析已在大窗口中打开</p> : null}
+          <button type="button" disabled className="or-g51-btn or-g51-btn-outline mt-2.5 w-full text-sm font-medium">打开分析</button>
+        </Panel>
+      </div>
+    </aside>
+  );
+}
+
+function readPaperLargeScreen(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
+  try {
+    return window.matchMedia("(min-width: 1024px)").matches;
+  } catch {
+    return true;
+  }
+}
+
+function usePaperLargeScreen(): boolean {
+  const [largeScreen, setLargeScreen] = useState(readPaperLargeScreen);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    let media: MediaQueryList;
+    try {
+      media = window.matchMedia("(min-width: 1024px)");
+    } catch {
+      return;
+    }
+    const update = () => setLargeScreen(media.matches);
+    update();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", update);
+      return () => media.removeEventListener("change", update);
+    }
+    if (typeof media.addListener === "function") {
+      media.addListener(update);
+      return () => media.removeListener(update);
+    }
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  return largeScreen;
+}
+
 export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalysis, onOpenBank, onOpenTemplates, onOpenCompose, onError, assignStudent, onAssignStudentConsumed, projectScope }: Props) {
+  const largeScreen = usePaperLargeScreen();
   const sessionToken = loadSessionToken();
   const [, setSessionStorageRevision] = useState(0);
   useEffect(() => {
@@ -191,7 +376,6 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     ready: boolean;
     failed: boolean;
   }>({ sessionToken: null, accountId: null, subjects: [], ready: false, failed: false });
-  const confirmedProfileRef = useRef(false);
   const accountProfileReady = accountProfileState.sessionToken === sessionToken && accountProfileState.ready;
   const accountProfileFailed = accountProfileState.sessionToken === sessionToken && accountProfileState.failed;
   const gradingAccountId = accountProfileReady ? accountProfileState.accountId : null;
@@ -232,7 +416,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const mobileSegmentRef = useRef<HTMLDivElement>(null);
   const deliveryModeSegmentRef = useRef<HTMLDivElement>(null);
   const detailViewSegmentRef = useRef<HTMLDivElement>(null);
-  const [gradingDraftState, setGradingDraftState] = useState<{ ownerKey: string; drafts: GradingDrafts }>({ ownerKey: "", drafts: {} });
+  const detailScrollRootRef = useRef<HTMLElement | null>(null);
+  const [gradingDraftState, setGradingDraftState] = useState<{
+    scopeKey: string;
+    draftsByPaper: Record<string, GradingDrafts>;
+  }>({ scopeKey: "", draftsByPaper: {} });
   const [selectedPaperId, setSelectedPaperId] = useState("");
   const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
   const [movingSelectedPapers, setMovingSelectedPapers] = useState(false);
@@ -266,6 +454,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const analysisBusyOwnerRef = useRef<AnalysisBusyOwner | null>(null);
   const analysisMountedRef = useRef(false);
   const [localGradingProjectId, setLocalGradingProjectId] = useState<string | null>(null);
+  const [localGradingProjectReady, setLocalGradingProjectReady] = useState(false);
   const listRequestIdRef = useRef(0);
   const [gradingDraftStorageWarning, setGradingDraftStorageWarning] = useState<{ ownerKey: string; visible: boolean }>({ ownerKey: "", visible: false });
   const gradingDraftSourceVersionsRef = useRef(new Map<string, string | null>());
@@ -274,10 +463,17 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
   function setGradingDrafts(update: GradingDrafts | ((current: GradingDrafts) => GradingDrafts)) {
     setGradingDraftState((current) => {
-      if (gradingDraftOwnerRef.current !== gradingOwnerKey) return current;
-      const existing = current.ownerKey === gradingOwnerKey ? current.drafts : {};
+      if (
+        gradingDraftOwnerRef.current !== gradingOwnerKey ||
+        gradingOwnerGenerationRef.current.generation !== gradingOwnerGeneration
+      ) return current;
+      const draftsByPaper = current.scopeKey === gradingDraftScopeKey ? current.draftsByPaper : {};
+      const existing = draftsByPaper[selectedPaperId] ?? {};
       const drafts = typeof update === "function" ? update(existing) : update;
-      return { ownerKey: gradingOwnerKey, drafts };
+      return {
+        scopeKey: gradingDraftScopeKey,
+        draftsByPaper: { ...draftsByPaper, [selectedPaperId]: drafts },
+      };
     });
   }
 
@@ -293,11 +489,11 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
   useEffect(() => {
     let active = true;
-    setAccountProfileState({ sessionToken, accountId: null, subjects: [], ready: false, failed: false });
+    // A changed token already makes the previous profile ineligible through
+    // accountProfileReady's token check; don't schedule a redundant pending render.
     void getAccountProfile()
       .then(({ profile }) => {
         if (!active || loadSessionToken() !== sessionToken) return;
-        confirmedProfileRef.current = true;
         const subjects = profile.subjects ?? [];
         setFolders([]);
         setTaggedItems({});
@@ -336,14 +532,21 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           ? (info.project_id || info.root || "").trim().replace(/\\/g, "/").replace(/\/+$/, "")
           : "";
         setLocalGradingProjectId(projectId || null);
+        setLocalGradingProjectReady(true);
       })
-      .catch(() => { if (active) setLocalGradingProjectId(null); });
+      .catch(() => {
+        if (!active) return;
+        setLocalGradingProjectId(null);
+        setLocalGradingProjectReady(true);
+      });
     return () => { active = false; };
   }, [projectScope]);
 
   const gradingProjectId = projectScope !== undefined
     ? (projectScope.ready ? projectScope.value : null)
     : localGradingProjectId;
+  const gradingProjectScopeReady = projectScope !== undefined ? projectScope.ready : localGradingProjectReady;
+  const gradingDraftScopeKey = [gradingAccountId ?? "account-unavailable", gradingProjectId ?? "project-unavailable"].join("/");
   const paperFolderScopeKey = [
     sessionGeneration,
     accountProfileReady ? gradingAccountId ?? "account-unavailable" : "profile-unconfirmed",
@@ -380,43 +583,60 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   );
 
   useEffect(() => {
-    setSelectedPaperIds([]);
-    setMovingSelectedPapers(false);
+    setSelectedPaperIds((current) => current.length === 0 ? current : []);
+    setMovingSelectedPapers((current) => current ? false : current);
   }, [paperFolderScopeKey, paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize, browserFolderId]);
 
   useEffect(() => {
     const visibleIds = new Set(movablePaperIds);
-    setSelectedPaperIds((current) => current.filter((id) => visibleIds.has(id)));
+    setSelectedPaperIds((current) => {
+      const next = current.filter((id) => visibleIds.has(id));
+      return next.length === current.length ? current : next;
+    });
   }, [movablePaperIds]);
 
   useEffect(() => {
     if (!accountProfileReady) {
-      setFolders([]);
-      setTaggedItems({});
+      setFolders((current) => current.length === 0 ? current : []);
+      setTaggedItems((current) => Object.keys(current).length === 0 ? current : {});
       return;
     }
     let active = true;
+    let cancelCommit: (() => void) | null = null;
     const requestScope = paperFolderScopeKey;
-    void listContentFolders("paper")
-      .then((result) => {
-        if (active && paperFolderScopeRef.current === requestScope) setFolders(result.folders);
-      })
-      .catch((error) => {
-        if (active && paperFolderScopeRef.current === requestScope) reportError(error);
+    const requestScopeGeneration = paperFolderScopeGenerationRef.current.generation;
+    const foldersRequest = listContentFolders("paper");
+    const tagsRequest = listTaggedItems("paper");
+    void Promise.allSettled([foldersRequest, tagsRequest]).then(([foldersResult, tagsResult]) => {
+      if (
+        !active ||
+        paperFolderScopeRef.current !== requestScope ||
+        paperFolderScopeGenerationRef.current.generation !== requestScopeGeneration
+      ) return;
+      if (foldersResult.status === "rejected") reportError(foldersResult.reason);
+      if (tagsResult.status === "rejected") reportError(tagsResult.reason);
+      cancelCommit = scheduleWorkspaceWork(() => {
+        if (
+          !active ||
+          paperFolderScopeRef.current !== requestScope ||
+          paperFolderScopeGenerationRef.current.generation !== requestScopeGeneration
+        ) return;
+        if (foldersResult.status === "fulfilled") setFolders(foldersResult.value.folders);
+        if (tagsResult.status === "fulfilled") setTaggedItems(tagsResult.value.items);
       });
-    void listTaggedItems("paper")
-      .then((result) => {
-        if (active && paperFolderScopeRef.current === requestScope) setTaggedItems(result.items);
-      })
-      .catch((error) => {
-        if (active && paperFolderScopeRef.current === requestScope) reportError(error);
-      });
-    return () => { active = false; };
+    });
+    return () => {
+      active = false;
+      cancelCommit?.();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paperFolderScopeKey, accountProfileReady]);
 
   useEffect(() => {
-    if (!accountProfileReady || recipientScope !== "student" || selectedClassIds.length !== 1) { setClassStudents([]); return; }
+    if (!accountProfileReady || recipientScope !== "student" || selectedClassIds.length !== 1) {
+      setClassStudents((current) => current.length === 0 ? current : []);
+      return;
+    }
     let active = true;
     const requestScope = paperFolderScopeKey;
     void listTeacherClassStudents(selectedClassIds[0])
@@ -441,7 +661,15 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     () => papers.find((paper) => paper.paper_id === selectedPaperId) ?? papers[0] ?? null,
     [papers, selectedPaperId],
   );
-  const gradingOwnerKey = [gradingAccountId ?? "account-unavailable", gradingProjectId ?? "project-unavailable", selectedPaper?.paper_id ?? selectedPaperId].join("/");
+  const gradingOwnerKey = [gradingDraftScopeKey, selectedPaper?.paper_id ?? selectedPaperId].join("/");
+  const gradingOwnerGenerationRef = useRef({ ownerKey: gradingOwnerKey, generation: 0 });
+  if (gradingOwnerGenerationRef.current.ownerKey !== gradingOwnerKey) {
+    gradingOwnerGenerationRef.current = {
+      ownerKey: gradingOwnerKey,
+      generation: gradingOwnerGenerationRef.current.generation + 1,
+    };
+  }
+  const gradingOwnerGeneration = gradingOwnerGenerationRef.current.generation;
   const requestOwnerKey = [paperFolderScopeKey, selectedPaper?.paper_id ?? selectedPaperId].join("/");
   const requestOwnerKeyRef = useRef(requestOwnerKey);
   requestOwnerKeyRef.current = requestOwnerKey;
@@ -558,6 +786,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   const submissions = accountProfileReady && submissionState.ownerKey === requestOwnerKey
     ? submissionState.submissions
     : [];
+  const selectedGradingSubmission =
+    submissions.find((submission) => submission.attempt_id === selectedGradingAttemptId) ?? submissions[0] ?? null;
   const gradingDraftOwnerRef = useRef(gradingOwnerKey);
   if (gradingDraftOwnerRef.current !== gradingOwnerKey) {
     gradingDraftOwnerRef.current = gradingOwnerKey;
@@ -567,11 +797,34 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     restoredGradingDraftKeysRef.current.clear();
     pendingGradingDraftRestoreKeysRef.current.clear();
   }
-  const gradingDrafts = gradingDraftState.ownerKey === gradingOwnerKey ? gradingDraftState.drafts : {};
+  const gradingDrafts = gradingDraftState.scopeKey === gradingDraftScopeKey
+    ? gradingDraftState.draftsByPaper[selectedPaperId] ?? {}
+    : {};
   const gradingRequests = usePaperGrading(requestOwnerKey);
   const gradingStorageScope = gradingAccountId && gradingProjectId && selectedPaper
     ? { accountId: gradingAccountId, projectId: gradingProjectId, paperId: selectedPaper.paper_id }
     : null;
+  const gradingStorageScopeKey = gradingStorageScope
+    ? [gradingStorageScope.accountId, gradingStorageScope.projectId, gradingStorageScope.paperId].join("/")
+    : null;
+  const [gradingDraftRestorationState, setGradingDraftRestorationState] = useState<{
+    ownerKey: string;
+    ownerGeneration: number;
+    attemptId: string;
+    storageScopeKey: string | null;
+    ready: boolean;
+  }>({ ownerKey: "", ownerGeneration: -1, attemptId: "", storageScopeKey: null, ready: false });
+  const selectedGradingDraftsReady = !selectedGradingSubmission || (
+    accountProfileReady &&
+    gradingProjectScopeReady &&
+    (!gradingStorageScope || (
+    gradingDraftRestorationState.ownerKey === gradingOwnerKey &&
+    gradingDraftRestorationState.ownerGeneration === gradingOwnerGeneration &&
+    gradingDraftRestorationState.attemptId === selectedGradingSubmission.attempt_id &&
+    gradingDraftRestorationState.storageScopeKey === gradingStorageScopeKey &&
+    gradingDraftRestorationState.ready
+    ))
+  );
 
   function setSubmissions(
     update: PaperSubmissionRecord[] | ((current: PaperSubmissionRecord[]) => PaperSubmissionRecord[]),
@@ -586,47 +839,136 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   }
 
   useEffect(() => {
+    if (!selectedGradingSubmission) return;
+    const ownerKey = gradingOwnerKey;
+    const ownerGeneration = gradingOwnerGeneration;
+    const attemptId = selectedGradingSubmission.attempt_id;
+    setGradingDraftRestorationState({ ownerKey, ownerGeneration, attemptId, storageScopeKey: gradingStorageScopeKey, ready: !gradingStorageScope });
     if (!gradingStorageScope) return;
+
+    let active = true;
+    let nextIndex = 0;
+    let cancelBatch: (() => void) | null = null;
+    let foundStorageIssue = false;
+    const restoredKeys = new Set<string>();
     const restoreEntries: Array<{
       key: string;
+      questionId: string;
       storageKey: string;
       source: GradingDraftSource;
+      currentVersion: string | null;
       record: NonNullable<ReturnType<typeof readGradingDraft>["draft"]>;
     }> = [];
-    submissions.forEach((submission) => submission.answers.forEach((answer) => {
-      const key = gradeKey(submission.attempt_id, answer.question_id);
-      const storageScope = gradingDraftStorageScope(gradingStorageScope, submission.attempt_id, answer.question_id);
-      const storageKey = `${gradingOwnerKey}/${submission.attempt_id}/${answer.question_id}`;
-      if (restoredGradingDraftKeysRef.current.has(storageKey)) return;
-      restoredGradingDraftKeysRef.current.add(storageKey);
-      const result = readGradingDraft(storageScope);
-      if (result.status === "corrupted" || result.status === "unavailable") setGradingDraftStorageWarning({ ownerKey: gradingOwnerKey, visible: true });
-      if (!result.draft) return;
-      if (!gradingDraftSourceVersionsRef.current.has(key)) {
-        gradingDraftSourceVersionsRef.current.set(key, result.draft.sourceVersion);
+    const answers = selectedGradingSubmission.answers;
+    const scopeKey = paperFolderScopeKey;
+    const scopeGeneration = paperFolderScopeGenerationRef.current.generation;
+    const runBatch = () => {
+      if (
+        !active ||
+        paperFolderScopeRef.current !== scopeKey ||
+        paperFolderScopeGenerationRef.current.generation !== scopeGeneration ||
+        gradingDraftOwnerRef.current !== ownerKey ||
+        gradingOwnerGenerationRef.current.generation !== ownerGeneration ||
+        selectedPaperIdRef.current !== (selectedPaper?.paper_id ?? "")
+      ) return;
+
+      const batchEnd = Math.min(nextIndex + 8, answers.length);
+      const restoreEntryStartIndex = restoreEntries.length;
+      for (; nextIndex < batchEnd; nextIndex += 1) {
+        const answer = answers[nextIndex];
+        const key = gradeKey(attemptId, answer.question_id);
+        const storageKey = `${ownerKey}/${attemptId}/${answer.question_id}`;
+        if (restoredGradingDraftKeysRef.current.has(storageKey)) continue;
+        restoredKeys.add(storageKey);
+        const result = readGradingDraft(
+          gradingDraftStorageScope(gradingStorageScope, attemptId, answer.question_id),
+        );
+        if (result.status === "corrupted" || result.status === "unavailable") foundStorageIssue = true;
+        if (result.draft) {
+          restoreEntries.push({
+            key,
+            questionId: answer.question_id,
+            storageKey,
+            source: toGradingDraftSource(answer),
+            currentVersion: answer.grading_version ?? null,
+            record: result.draft,
+          });
+        }
       }
-      pendingGradingDraftRestoreKeysRef.current.add(storageKey);
-      restoreEntries.push({ key, storageKey, source: toGradingDraftSource(answer), record: result.draft });
-    }));
-    if (restoreEntries.length > 0) {
-      setGradingDrafts((current) => {
-        const next = { ...current };
-        restoreEntries.forEach(({ key, source, record }) => {
-          next[key] = restoreGradingDraft(
-            getGradingDraft(current, key, source),
-            record,
-          );
+
+      const batchEntries = restoreEntries.slice(restoreEntryStartIndex);
+      if (batchEntries.length > 0) {
+        setGradingDrafts((current) => {
+          const next = { ...current };
+          batchEntries.forEach(({ key, source, record }) => {
+            next[key] = restoreGradingDraft(getGradingDraft(current, key, source), record);
+          });
+          return next;
         });
-        return next;
+      }
+
+      if (nextIndex < answers.length) {
+        cancelBatch = scheduleWorkspaceWork(runBatch);
+        return;
+      }
+
+      if (
+        !active ||
+        paperFolderScopeRef.current !== scopeKey ||
+        paperFolderScopeGenerationRef.current.generation !== scopeGeneration ||
+        gradingDraftOwnerRef.current !== ownerKey ||
+        gradingOwnerGenerationRef.current.generation !== ownerGeneration ||
+        selectedPaperIdRef.current !== (selectedPaper?.paper_id ?? "")
+      ) return;
+
+      restoredKeys.forEach((storageKey) => restoredGradingDraftKeysRef.current.add(storageKey));
+      restoreEntries.forEach(({ key, questionId, storageKey, source, currentVersion, record }) => {
+        const restoredDraft = restoreGradingDraft(getGradingDraft(gradingDrafts, key, source), record);
+        const isClean = !restoredDraft.score.dirty && !restoredDraft.feedback.dirty;
+        if (!gradingDraftSourceVersionsRef.current.has(key)) {
+          gradingDraftSourceVersionsRef.current.set(key, isClean ? currentVersion : record.sourceVersion);
+        }
+        if (isClean && !writeGradingDraft(
+          gradingDraftStorageScope(gradingStorageScope, attemptId, questionId),
+          restoredDraft,
+          currentVersion,
+        )) {
+          foundStorageIssue = true;
+        }
+        pendingGradingDraftRestoreKeysRef.current.add(storageKey);
       });
-    }
-  }, [gradingStorageScope?.accountId, gradingStorageScope?.projectId, gradingStorageScope?.paperId, gradingOwnerKey, submissions]);
+      if (foundStorageIssue) setGradingDraftStorageWarning({ ownerKey, visible: true });
+      setGradingDraftRestorationState({ ownerKey, ownerGeneration, attemptId, storageScopeKey: gradingStorageScopeKey, ready: true });
+    };
+
+    cancelBatch = scheduleWorkspaceWork(runBatch);
+    return () => {
+      active = false;
+      cancelBatch?.();
+    };
+  }, [
+    gradingOwnerKey,
+    gradingOwnerGeneration,
+    gradingStorageScope?.accountId,
+    gradingStorageScope?.projectId,
+    gradingStorageScope?.paperId,
+    paperFolderScopeKey,
+    selectedGradingSubmission?.attempt_id,
+    selectedPaper?.paper_id,
+  ]);
 
   useEffect(() => {
-    if (!gradingStorageScope) return;
-    submissions.forEach((submission) => submission.answers.forEach((answer) => {
-      const key = gradeKey(submission.attempt_id, answer.question_id);
-      const storageKey = `${gradingOwnerKey}/${submission.attempt_id}/${answer.question_id}`;
+    if (!gradingStorageScope || !selectedGradingSubmission) return;
+    if (
+      gradingDraftRestorationState.ownerKey !== gradingOwnerKey ||
+      gradingDraftRestorationState.ownerGeneration !== gradingOwnerGeneration ||
+      gradingDraftRestorationState.attemptId !== selectedGradingSubmission.attempt_id ||
+      gradingDraftRestorationState.storageScopeKey !== gradingStorageScopeKey ||
+      !gradingDraftRestorationState.ready
+    ) return;
+    selectedGradingSubmission.answers.forEach((answer) => {
+      const key = gradeKey(selectedGradingSubmission.attempt_id, answer.question_id);
+      const storageKey = `${gradingOwnerKey}/${selectedGradingSubmission.attempt_id}/${answer.question_id}`;
       if (pendingGradingDraftRestoreKeysRef.current.has(storageKey)) {
         pendingGradingDraftRestoreKeysRef.current.delete(storageKey);
         return;
@@ -639,13 +981,24 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
       }
       const ok = writeGradingDraft(
-        gradingDraftStorageScope(gradingStorageScope, submission.attempt_id, answer.question_id),
+        gradingDraftStorageScope(gradingStorageScope, selectedGradingSubmission.attempt_id, answer.question_id),
         draft,
         gradingDraftSourceVersionsRef.current.get(key) ?? null,
       );
       if (!ok) setGradingDraftStorageWarning({ ownerKey: gradingOwnerKey, visible: true });
-    }));
-  }, [gradingDrafts, gradingStorageScope?.accountId, gradingStorageScope?.projectId, gradingStorageScope?.paperId, submissions]);
+    });
+  }, [
+    gradingDrafts,
+    gradingDraftRestorationState,
+    gradingOwnerGeneration,
+    gradingDraftScopeKey,
+    gradingStorageScope?.accountId,
+    gradingStorageScope?.projectId,
+    gradingStorageScope?.paperId,
+    gradingStorageScopeKey,
+    gradingOwnerKey,
+    selectedGradingSubmission,
+  ]);
   const activePublishedClassIds = useMemo(() => {
     const ids = new Set<string>();
     publications
@@ -1528,31 +1881,190 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     }
   }, [paperFolderScopeKey]);
 
-  function updatePaperQuery(patch: Partial<PaperQuery>) {
-    setPaperQuery((current) => ({ ...current, ...patch, page: patch.page ?? 1 }));
-  }
+  const [mobileTab, setMobileTab] = useState<"list" | "detail">("list");
+  const [detailVisitedScopeKey, setDetailVisitedScopeKey] = useState<string | null>(
+    largeScreen ? paperFolderScopeKey : null,
+  );
+  const detailHasBeenVisited = detailVisitedScopeKey === paperFolderScopeKey;
+  useEffect(() => {
+    if (largeScreen || mobileTab === "detail") {
+      setDetailVisitedScopeKey((current) => current === paperFolderScopeKey ? current : paperFolderScopeKey);
+    }
+  }, [largeScreen, mobileTab, paperFolderScopeKey]);
+  const [listCollapsed, setListCollapsed] = useState(false);
+  const paperListInnerRef = useCollapsedPanelInert(listCollapsed, 1024);
+
+  // The list panel stays mounted when mobile switches to the paper detail (and
+  // remains visible on desktop). Keep its event props stable so detail-only
+  // state changes do not ask every folder/filter/list row to render again.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const reportErrorRef = useRef(reportError);
+  reportErrorRef.current = reportError;
+  const invalidateAnalysisLifecycleRef = useRef(invalidateAnalysisLifecycle);
+  invalidateAnalysisLifecycleRef.current = invalidateAnalysisLifecycle;
+  const onSelectPaperListFolder = useCallback((id: string | null) => {
+    setBrowserFolderId(id);
+    setPaperQuery((query) => ({ ...query, page: 1 }));
+  }, []);
+  const onPaperFolderCreated = useCallback((folder: ContentFolder) => {
+    setFolders((current) => [...current, folder]);
+  }, []);
+  const onPaperFolderUpdated = useCallback((folder: ContentFolder) => {
+    setFolders((current) => current.map((item) => item.id === folder.id ? folder : item));
+  }, []);
+  const onPaperFolderDeleted = useCallback((result: { folders: ContentFolder[] }) => {
+    setFolders(result.folders);
+    setFolderAnalysis(null);
+    setPublishFolderId((current) => current && !result.folders.some((folder) => folder.id === current) ? "" : current);
+  }, []);
+  const onPaperDropItem = useCallback(async (id: string, folderId: string) => {
+    const requestScope = paperFolderScopeRef.current;
+    try {
+      await movePaperToFolder(id, folderId);
+      if (paperFolderScopeRef.current !== requestScope) return;
+      await refreshRef.current();
+    } catch (error) {
+      if (paperFolderScopeRef.current === requestScope) reportErrorRef.current(error);
+    }
+  }, []);
+  const onPaperFolderAnalyze = useCallback(async (folderId: string) => {
+    const requestScope = paperFolderScopeRef.current;
+    try {
+      const result = await analyzePaperFolder(folderId);
+      if (paperFolderScopeRef.current !== requestScope) return;
+      setFolderAnalysis(result);
+    } catch (error) {
+      if (paperFolderScopeRef.current === requestScope) reportErrorRef.current(error);
+    }
+  }, []);
+  const onPaperError = useCallback((error: unknown) => {
+    reportErrorRef.current(error);
+  }, []);
+  const onPaperSearchChange = useCallback((q: string) => {
+    setPaperQuery((current) => ({ ...current, q, page: 1 }));
+  }, []);
+  const onPaperDeliveryModeChange = useCallback((deliveryMode: PaperQuery["deliveryMode"]) => {
+    setPaperQuery((current) => ({ ...current, deliveryMode, page: 1 }));
+  }, []);
+  const onPaperStatusChange = useCallback((status: string) => {
+    setPaperQuery((current) => ({ ...current, status, page: 1 }));
+  }, []);
+  const onPaperSelect = useCallback((paper: PlatformPaperRecord) => {
+    invalidateAnalysisLifecycleRef.current();
+    setSelectedPaperId(paper.paper_id);
+    setDetailVisitedScopeKey(paperFolderScopeKey);
+    setMobileTab("detail");
+  }, [paperFolderScopeKey]);
+  const onPaperPageChange = useCallback((page: number) => {
+    setPaperQuery((current) => ({ ...current, page }));
+  }, []);
+  const onPaperPageSizeChange = useCallback((pageSize: number) => {
+    setPaperQuery((current) => ({ ...current, pageSize, page: 1 }));
+  }, []);
+  const onClearPaperSelection = useCallback(() => {
+    setSelectedPaperIds([]);
+  }, []);
 
   const modeBusy = selectedPaper ? busy === `mode:${selectedPaper.paper_id}` : false;
   const publishBusy = selectedPaper ? busy === `publish:${selectedPaper.paper_id}` : false;
   const scoresBusy = selectedPaper ? busy === `scores:${selectedPaper.paper_id}` : false;
   const analysisBusy = selectedPaper ? busy === `analysis:${selectedPaper.paper_id}` : false;
   const submissionsBusy = selectedPaper ? busy === `submissions:${selectedPaper.paper_id}` : false;
-  const [mobileTab, setMobileTab] = useState<"list" | "detail">("list");
-  const [listCollapsed, setListCollapsed] = useState(false);
-  const paperListInnerRef = useCollapsedPanelInert(listCollapsed, 1024);
-  const selectedGradingSubmission =
-    submissions.find((submission) => submission.attempt_id === selectedGradingAttemptId) ?? submissions[0] ?? null;
-  const selectedPaperHasPublicationHistory = selectedPaper ? paperHasPublicationHistory(selectedPaper) : false;
+
+  const detailContentAvailable = largeScreen || mobileTab === "detail" || detailHasBeenVisited;
+  const detailIsVisible = largeScreen || mobileTab === "detail";
+  const detailEntryScopeKey = `${requestOwnerKey}/${detailHasBeenVisited ? "visited-detail" : "unvisited-detail"}`;
+  const detailModeScopeKey = `${detailEntryScopeKey}/${paperDetailView}`;
+  const ownerScopeToken = useWorkspaceScopeToken(paperFolderScopeKey);
+  const detailEntryScopeToken = useWorkspaceScopeToken(detailEntryScopeKey);
+  const detailModeScopeToken = useWorkspaceScopeToken(detailModeScopeKey);
+  const { ready: detailToolsTransitionReady, schedule: scheduleDetailTools } = useAfterWorkspaceTransition(detailEntryScopeToken);
+  const { ready: detailModeTransitionReady, schedule: scheduleDetailMode } = useAfterWorkspaceTransition(detailModeScopeToken);
+  const [detailToolsStage, setDetailToolsStage] = useState<{ scopeToken: string; ownerScopeToken: string; paperId: string }>({
+    scopeToken: "",
+    ownerScopeToken: "",
+    paperId: "",
+  });
+  const detailToolsReady = detailToolsStage.scopeToken === detailEntryScopeToken && detailToolsStage.paperId === selectedPaper?.paper_id;
+  const mountedDetailToolsPaperId = detailToolsReady && detailToolsStage.ownerScopeToken === ownerScopeToken
+    ? detailToolsStage.paperId
+    : "";
+  const mountedDetailToolsPaper = papers.find((paper) => paper.paper_id === mountedDetailToolsPaperId) ?? null;
+  const [detailMountState, setDetailMountState] = useState<PaperViewMountStages>({
+    scopeToken: "",
+    ...EMPTY_PAPER_VIEW_MOUNT_STAGES,
+  });
+  const detailMountStages: PaperViewMountStages = detailMountState.scopeToken === detailModeScopeToken
+    ? detailMountState
+    : { scopeToken: detailModeScopeToken, ...EMPTY_PAPER_VIEW_MOUNT_STAGES };
+  const detailMountStagesRef = useRef(detailMountStages);
+  detailMountStagesRef.current = detailMountStages;
+  const selectedPublishFolder = folders.find((folder) => folder.id === publishFolderId);
+  const publishFolderLabel = selectedPublishFolder
+    ? `${selectedPublishFolder.name} · ${selectedPublishFolder.kind === "paper" ? "试卷文件夹" : "归类文件夹"}`
+    : "请选择文件夹";
+  const publishSubjectLabel = selectedSubject
+    ? formatSubjectLabel(selectedSubject)
+    : teacherSubjects.length === 1
+      ? formatSubjectLabel(teacherSubjects[0])
+      : teacherSubjects.length > 1
+        ? "请选择学科"
+        : formatSubjectLabel(selectedPaper?.subject ?? "", "通用");
+  const updateDetailMountStages = useCallback((scopeToken: string, patch: Partial<Omit<PaperViewMountStages, "scopeToken">>) => {
+    setDetailMountState((current) => {
+      const base = current.scopeToken === scopeToken
+        ? current
+        : { scopeToken, ...EMPTY_PAPER_VIEW_MOUNT_STAGES };
+      return { ...base, ...patch, scopeToken };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!detailIsVisible || !selectedPaper || !detailToolsTransitionReady) return;
+    if (detailToolsStage.scopeToken === detailEntryScopeToken && detailToolsStage.paperId === selectedPaper.paper_id) return;
+    const paperId = selectedPaper.paper_id;
+    return scheduleDetailTools(() => setDetailToolsStage({
+      scopeToken: detailEntryScopeToken,
+      ownerScopeToken,
+      paperId,
+    }));
+  }, [detailEntryScopeToken, detailIsVisible, detailToolsStage, detailToolsTransitionReady, ownerScopeToken, scheduleDetailTools, selectedPaper?.paper_id]);
+
+  useEffect(() => {
+    if (!detailIsVisible || !selectedPaper || !detailModeTransitionReady) return;
+    const current = detailMountStagesRef.current.scopeToken === detailModeScopeToken
+      ? detailMountStagesRef.current
+      : { scopeToken: detailModeScopeToken, ...EMPTY_PAPER_VIEW_MOUNT_STAGES };
+    const cancelJobs: Array<() => void> = [];
+    if (paperDetailView === "manage") {
+      if (!current.publishForm) {
+        cancelJobs.push(scheduleDetailMode(() => updateDetailMountStages(detailModeScopeToken, { publishForm: true })));
+      }
+      if (!current.publicationHistory) {
+        cancelJobs.push(scheduleDetailMode(() => updateDetailMountStages(detailModeScopeToken, { publicationHistory: true })));
+      }
+      if (!current.manageUtilities) {
+        cancelJobs.push(scheduleDetailMode(() => updateDetailMountStages(detailModeScopeToken, { manageUtilities: true })));
+      }
+    } else if (!current.gradingWorkspace) {
+      cancelJobs.push(scheduleDetailMode(() => updateDetailMountStages(detailModeScopeToken, { gradingWorkspace: true })));
+    }
+    return () => cancelJobs.forEach((cancel) => cancel());
+  }, [detailIsVisible, detailModeScopeToken, detailModeTransitionReady, paperDetailView, scheduleDetailMode, selectedPaper?.paper_id, updateDetailMountStages]);
+
+  useEffect(() => {
+    if (!detailIsVisible || paperDetailView !== "grading" || !detailModeTransitionReady || !selectedGradingSubmission || !selectedGradingDraftsReady) return;
+    if (
+      detailMountStagesRef.current.scopeToken === detailModeScopeToken &&
+      detailMountStagesRef.current.gradingAttemptId === selectedGradingSubmission.attempt_id
+    ) return;
+    const attemptId = selectedGradingSubmission.attempt_id;
+    return scheduleDetailMode(() => updateDetailMountStages(detailModeScopeToken, { gradingAttemptId: attemptId }));
+  }, [detailIsVisible, detailModeScopeToken, detailModeTransitionReady, paperDetailView, scheduleDetailMode, selectedGradingDraftsReady, selectedGradingSubmission?.attempt_id, updateDetailMountStages]);
+
   const canPublish =
     Boolean(selectedPaper) && !publishBusy && Number(selectedPaper?.question_count || 0) > 0 && selectedClassIds.length > 0 && Boolean(publishFolderId) && (recipientScope === "class" || selectedStudentIds.length > 0);
-
-  if (!accountProfileReady && (sessionGeneration > 0 || confirmedProfileRef.current || accountProfileFailed)) {
-    return (
-      <div className="flex h-full items-center justify-center bg-[var(--or-page)] text-sm text-[var(--or-muted)]" role="status">
-        {accountProfileFailed ? "当前账号信息加载失败，请刷新重试。" : "正在加载当前账号数据…"}
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--or-page)] text-[var(--or-text)]">
@@ -1570,7 +2082,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
             type="button"
             data-testid="paper-download-offline-uploader"
             onClick={() => void downloadOfflineUploader()}
-            disabled={busy === "offline-uploader"}
+            disabled={!accountProfileReady || busy === "offline-uploader"}
             className="or-g51-btn or-g51-btn-tonal text-xs sm:text-sm py-2 px-3.5"
           >
             <Download className="h-4 w-4 mr-1" />
@@ -1579,7 +2091,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           <button
             type="button"
             onClick={() => void refresh()}
-            disabled={loading}
+            disabled={!accountProfileReady || loading}
             className="or-g51-btn or-g51-btn-outline text-xs sm:text-sm py-2 px-3.5"
           >
             <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
@@ -1605,7 +2117,10 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
             type="button"
             aria-pressed={mobileTab === "detail"}
             data-state={mobileTab === "detail" ? "active" : "inactive"}
-            onClick={() => setMobileTab("detail")}
+            onClick={() => {
+              setDetailVisitedScopeKey(paperFolderScopeKey);
+              setMobileTab("detail");
+            }}
             className={`or-g51-segment-item flex-1 ${mobileTab === "detail" ? "active" : ""}`}
           >
             {selectedPaper ? "试卷内容" : "未选试卷"}
@@ -1617,38 +2132,38 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
         <div className={`or-g51-paper-list-panel min-h-0 flex-col lg:flex ${listCollapsed ? "is-collapsed" : ""} ${mobileTab === "list" ? "flex flex-1" : "hidden"}`}>
           <div ref={paperListInnerRef} className="or-g51-paper-list-inner">
             <PaperListSidebar
+              scopeKey={paperFolderScopeKey}
               papers={papers}
               selectedPaper={selectedPaper}
-              loading={loading}
+              loading={loading || !accountProfileReady}
+              workspaceStatus={!accountProfileReady
+                ? accountProfileFailed ? "当前账号信息加载失败，请刷新重试。" : "正在加载当前账号数据…"
+                : loading && papers.length === 0 ? "正在加载试卷…" : null}
               query={paperQuery}
               meta={paperMeta}
               folders={folders}
               selectedFolderId={browserFolderId}
               taggedItems={taggedItems}
-              onSelectFolder={(id) => { setBrowserFolderId(id); setPaperQuery((query) => ({ ...query, page: 1 })); }}
-              onFolderCreated={(folder) => setFolders((current) => [...current, folder])}
-              onFolderUpdated={(folder) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
-              onFolderDeleted={(result) => { setFolders(result.folders); setFolderAnalysis(null); if (publishFolderId && !result.folders.some((folder) => folder.id === publishFolderId)) setPublishFolderId(""); }}
-              onDropItem={(id, folderId) => void movePaperToFolder(id, folderId).then(() => refresh()).catch(reportError)}
+              onSelectFolder={onSelectPaperListFolder}
+              onFolderCreated={onPaperFolderCreated}
+              onFolderUpdated={onPaperFolderUpdated}
+              onFolderDeleted={onPaperFolderDeleted}
+              onDropItem={onPaperDropItem}
               onDropItems={moveSelectedPapersToFolder}
               selectedPaperIds={selectedPaperIds}
               movingSelectedPapers={movingSelectedPapers}
               onTogglePaper={togglePaperSelection}
               onToggleVisiblePapers={toggleVisiblePaperSelection}
-              onClearSelectedPapers={() => setSelectedPaperIds([])}
+              onClearSelectedPapers={onClearPaperSelection}
               onMoveSelectedPapers={moveSelectedPapersToFolder}
-              onError={reportError}
-              onAnalyzeFolder={(folderId) => void analyzePaperFolder(folderId).then(setFolderAnalysis).catch(reportError)}
-              onSearchChange={(q) => updatePaperQuery({ q })}
-              onDeliveryModeChange={(deliveryMode) => updatePaperQuery({ deliveryMode })}
-              onStatusChange={(status) => updatePaperQuery({ status })}
-              onSelectPaper={(paper) => {
-                invalidateAnalysisLifecycle();
-                setSelectedPaperId(paper.paper_id);
-                setMobileTab("detail");
-              }}
-              onPage={(page) => updatePaperQuery({ page })}
-              onPageSize={(pageSize) => updatePaperQuery({ pageSize })}
+              onError={onPaperError}
+              onAnalyzeFolder={onPaperFolderAnalyze}
+              onSearchChange={onPaperSearchChange}
+              onDeliveryModeChange={onPaperDeliveryModeChange}
+              onStatusChange={onPaperStatusChange}
+              onSelectPaper={onPaperSelect}
+              onPage={onPaperPageChange}
+              onPageSize={onPaperPageSizeChange}
             />
           </div>
           <button
@@ -1663,7 +2178,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           </button>
         </div>
 
-        <main className={`min-h-0 overflow-auto p-4 sm:p-6 ${mobileTab === "detail" ? "flex-1 block" : "hidden lg:block flex-1"}`}>
+        <main ref={detailScrollRootRef} className={`min-h-0 overflow-auto p-4 sm:p-6 ${mobileTab === "detail" ? "flex-1 block" : "hidden lg:block flex-1"}`}>
           {/* Mobile Back to List button */}
           <div className="mb-3 flex lg:hidden items-center justify-between">
             <button
@@ -1674,7 +2189,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
               ← 返回试卷列表
             </button>
           </div>
-          {selectedPaper ? (
+          {detailContentAvailable ? (
+            selectedPaper ? (
             <div className="mx-auto flex max-w-6xl flex-col gap-5">
               <section className="or-g51-surface p-4 sm:p-6 shadow-sm or-g51-static-card">
                 <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1682,24 +2198,56 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                     <p className="text-sm font-semibold text-[var(--or-on-container)]">{formatSubjectLabel(selectedPaper.subject, "综合学科")}</p>
                     <h2 className="mt-1 text-2xl font-bold tracking-tight text-[var(--or-text)]">{selectedPaper.title}</h2>
                     <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-xs">
-                      <ContentTags scope="paper" itemId={selectedPaper.paper_id} onError={(error) => reportError(error)} onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))} />
-                      <label className="inline-flex items-center gap-1.5 font-medium text-[var(--or-muted)]">
-                        归类
-                        <AppSelect
-                          aria-label="试卷所在文件夹"
-                          disabled={selectedPaperHasPublicationHistory}
-                          title={selectedPaperHasPublicationHistory ? "已有发布记录，请移动整个文件夹，以保留答卷和统计关系" : undefined}
-                          className="or-g51-select py-1 px-2.5 text-xs"
-                          value={selectedPaper.folder_id ?? ""}
-                          onValueChange={(value) => void movePaperToFolder(selectedPaper.paper_id, value).then(() => refresh()).catch(reportError)}
+                      {mountedDetailToolsPaperId ? (
+                        <div
+                          className="inline-flex items-center gap-2.5"
+                          style={{ display: mountedDetailToolsPaperId === selectedPaper.paper_id ? "inline-flex" : "none" }}
+                          aria-hidden={mountedDetailToolsPaperId !== selectedPaper.paper_id}
                         >
-                          {folders.map((folder) => (
-                            <option key={folder.id} value={folder.id}>
-                              {folder.name}
-                            </option>
-                          ))}
-                        </AppSelect>
-                      </label>
+                          <ContentTags
+                            scope="paper"
+                            itemId={mountedDetailToolsPaperId}
+                            onError={(error) => reportError(error)}
+                            onChange={() => void listTaggedItems("paper").then((result) => setTaggedItems(result.items))}
+                          />
+                          {mountedDetailToolsPaper ? (
+                            <label className="inline-flex items-center gap-1.5 font-medium text-[var(--or-muted)]">
+                              归类
+                              <AppSelect
+                                aria-label="试卷所在文件夹"
+                                disabled={paperHasPublicationHistory(mountedDetailToolsPaper)}
+                                title={paperHasPublicationHistory(mountedDetailToolsPaper) ? "已有发布记录，请移动整个文件夹，以保留答卷和统计关系" : undefined}
+                                className="or-g51-select py-1 px-2.5 text-xs"
+                                value={mountedDetailToolsPaper.folder_id ?? ""}
+                                onValueChange={(value) => void movePaperToFolder(mountedDetailToolsPaper.paper_id, value).then(() => refresh()).catch(reportError)}
+                              >
+                                {folders.map((folder) => (
+                                  <option key={folder.id} value={folder.id}>
+                                    {folder.name}
+                                  </option>
+                                ))}
+                              </AppSelect>
+                            </label>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {!detailToolsReady ? (
+                        <span className="inline-flex items-center gap-2.5" role="status" aria-label="正在准备标签与归类">
+                          <span className="relative inline-flex items-center gap-1.5">
+                            <TagChips tags={taggedItems[selectedPaper.paper_id] ?? []} />
+                            <span className="or-pill inline-flex items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] px-2 py-0.5 text-xs font-medium leading-none text-[var(--or-muted)]">
+                              标签
+                            </span>
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 font-medium text-[var(--or-muted)]">
+                            归类
+                            <PaperSelectPlaceholder
+                              label={folders.find((folder) => folder.id === selectedPaper.folder_id)?.name ?? "—"}
+                              className="or-g51-select py-1 px-2.5 text-xs"
+                            />
+                          </span>
+                        </span>
+                      ) : null}
                     </div>
                     <div className="mt-3.5 flex flex-wrap gap-2 text-sm">
                       <G51Pill variant="neutral">{selectedPaper.question_count} 题</G51Pill>
@@ -1782,61 +2330,77 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
 
               {paperDetailView === "manage" ? (
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-                <PaperPublishingSidebar
-                  publishPanel={
-                    <PaperClassPublishPanel
-                      selectedPaper={selectedPaper}
-                      folders={folders}
-                      publishFolderId={publishFolderId}
-                      newFolderName={newFolderName}
-                      recipientScope={recipientScope}
-                      selectedClassIds={selectedClassIds}
-                      selectedStudentIds={selectedStudentIds}
-                      studentSearch={studentSearch}
-                      classStudents={classStudents}
-                      teacherSubjects={teacherSubjects}
-                      selectedSubject={selectedSubject}
-                      classes={classes}
-                      alreadyPublishedClassIds={activePublishedClassIds}
-                      submissionMode={submissionMode}
-                      maxScreenSwitches={maxScreenSwitches}
-                      publishStartAt={publishStartAt}
-                      publishEndAt={publishEndAt}
-                      timeLimitMinutes={timeLimitMinutes}
-                      canPublish={canPublish}
-                      onRecipientScopeChange={(scope) => {
-                        setRecipientScope(scope);
-                        if (scope === "class") setSelectedStudentIds([]);
-                        else setSelectedClassIds([]);
-                      }}
-                      onFolderChange={setPublishFolderId}
-                      onConvertFolder={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch(reportError)}
-                      onNewFolderNameChange={setNewFolderName}
-                      onCreateFolder={() => {
-                        const parent = folders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? folders.find((folder) => folder.kind === "category" && !folder.parent_id);
-                        void createContentFolder({ scope: "paper", name: newFolderName.trim(), kind: recipientScope === "student" ? "paper" : "category", parent_id: recipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => {
-                          setFolders((current) => [...current, folder]);
-                          setPublishFolderId(folder.id);
-                          setNewFolderName("");
-                        }).catch(reportError);
-                      }}
-                      onSubjectChange={setSelectedSubject}
-                      onToggleClass={toggleClass}
-                      onStudentSearchChange={setStudentSearch}
-                      onToggleStudent={(studentId) => setSelectedStudentIds((ids) => ids.includes(studentId) ? ids.filter((id) => id !== studentId) : [...ids, studentId])}
-                      onSubmissionModeChange={setSubmissionMode}
-                      onMaxScreenSwitchesChange={setMaxScreenSwitches}
-                      onPublishStartAtChange={setPublishStartAt}
-                      onPublishEndAtChange={setPublishEndAt}
-                      onTimeLimitMinutesChange={setTimeLimitMinutes}
-                      onPublish={() => void publishSelectedPaper()}
+                {detailMountStages.publishForm || detailMountStages.publicationHistory ? (
+                  <div className="min-w-0 space-y-6">
+                    <Suspense fallback={<PaperPublishPanelPlaceholder recipientScope={recipientScope} folderLabel={publishFolderLabel} subjectLabel={publishSubjectLabel} />}>
+                      <LazyPaperPublishingSidebar
+                        showPublishPanel={detailMountStages.publishForm}
+                        showRecords={detailMountStages.publicationHistory}
+                        publishPanel={detailMountStages.publishForm ? (
+                    <LazyPaperClassPublishPanel
+                        scrollRootRef={detailScrollRootRef}
+                        selectedPaper={selectedPaper}
+                        folders={folders}
+                        publishFolderId={publishFolderId}
+                        newFolderName={newFolderName}
+                        recipientScope={recipientScope}
+                        selectedClassIds={selectedClassIds}
+                        selectedStudentIds={selectedStudentIds}
+                        studentSearch={studentSearch}
+                        classStudents={classStudents}
+                        teacherSubjects={teacherSubjects}
+                        selectedSubject={selectedSubject}
+                        classes={classes}
+                        alreadyPublishedClassIds={activePublishedClassIds}
+                        submissionMode={submissionMode}
+                        maxScreenSwitches={maxScreenSwitches}
+                        publishStartAt={publishStartAt}
+                        publishEndAt={publishEndAt}
+                        timeLimitMinutes={timeLimitMinutes}
+                        canPublish={canPublish}
+                        onRecipientScopeChange={(scope) => {
+                          setRecipientScope(scope);
+                          if (scope === "class") setSelectedStudentIds([]);
+                          else setSelectedClassIds([]);
+                        }}
+                        onFolderChange={setPublishFolderId}
+                        onConvertFolder={() => void updateContentFolder(publishFolderId, { kind: "paper" }).then(({ folder }) => setFolders((current) => current.map((item) => item.id === folder.id ? folder : item))).catch(reportError)}
+                        onNewFolderNameChange={setNewFolderName}
+                        onCreateFolder={() => {
+                          const parent = folders.find((folder) => folder.id === publishFolderId && folder.kind === "category") ?? folders.find((folder) => folder.kind === "category" && !folder.parent_id);
+                          void createContentFolder({ scope: "paper", name: newFolderName.trim(), kind: recipientScope === "student" ? "paper" : "category", parent_id: recipientScope === "student" ? parent?.id : (parent?.id ?? null) }).then(({ folder }) => {
+                            setFolders((current) => [...current, folder]);
+                            setPublishFolderId(folder.id);
+                            setNewFolderName("");
+                          }).catch(reportError);
+                        }}
+                        onSubjectChange={setSelectedSubject}
+                        onToggleClass={toggleClass}
+                        onStudentSearchChange={setStudentSearch}
+                        onToggleStudent={(studentId) => setSelectedStudentIds((ids) => ids.includes(studentId) ? ids.filter((id) => id !== studentId) : [...ids, studentId])}
+                        onSubmissionModeChange={setSubmissionMode}
+                        onMaxScreenSwitchesChange={setMaxScreenSwitches}
+                        onPublishStartAtChange={setPublishStartAt}
+                        onPublishEndAtChange={setPublishEndAt}
+                        onTimeLimitMinutesChange={setTimeLimitMinutes}
+                        onPublish={() => void publishSelectedPaper()}
                     />
-                  }
-                  publications={publications}
-                  busy={busy}
-                  onTogglePause={togglePublicationPause}
-                  onRevoke={revokePublication}
-                />
+                        ) : null}
+                        publications={publications}
+                        busy={busy}
+                        onTogglePause={togglePublicationPause}
+                        onRevoke={revokePublication}
+                      />
+                    </Suspense>
+                    {!detailMountStages.publicationHistory ? <PaperPublicationHistoryPlaceholder publications={publications} /> : null}
+                  </div>
+                ) : (
+                  <div className="min-w-0 space-y-6">
+                    <PaperPublishPanelPlaceholder recipientScope={recipientScope} folderLabel={publishFolderLabel} subjectLabel={publishSubjectLabel} />
+                    <PaperPublicationHistoryPlaceholder publications={publications} />
+                  </div>
+                )}
+                {detailMountStages.manageUtilities ? (
                 <aside className="space-y-5">
                   <Panel title="线下成绩" icon={<Upload className="h-5 w-5 text-[var(--or-on-container)]" />}>
                     <div className="flex flex-col gap-2.5">
@@ -1874,61 +2438,96 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                     </button>
                   </Panel>
                 </aside>
+                ) : (
+                  <PaperManageUtilitiesPlaceholder analysisAvailable={Boolean(analysis)} />
+                )}
               </div>
-              ) : (
-                <GradingWorkspace
-                  submissions={submissions}
-                  selectedSubmission={selectedGradingSubmission}
-                  batchBusy={busy === "ai-grade:batch"}
-                  submissionsBusy={submissionsBusy}
-                  storageWarning={gradingDraftStorageWarning.ownerKey === gradingOwnerKey && gradingDraftStorageWarning.visible}
-                  onBatch={() => void suggestLoadedPendingGrades()}
-                  onReload={() => void loadSelectedSubmissions()}
-                  onSelectSubmission={setSelectedGradingAttemptId}
+              ) : detailMountStages.gradingWorkspace ? (
+                <Suspense
+                  fallback={(
+                    <section className="or-g51-surface p-4 sm:p-6 shadow-sm" role="status">
+                      正在加载批改工作区…
+                    </section>
+                  )}
                 >
-                  {selectedGradingSubmission ? (
-                    <PaperSubmissionDetail
-                      key={selectedGradingSubmission.attempt_id}
-                      submission={selectedGradingSubmission}
-                      busy={busy}
-                      scanImageUrls={scanImageUrls}
-                      onSuggest={() => void suggestSubmissionGrades(selectedGradingSubmission)}
-                      onLoadScan={(pageIndex) => void loadOfflineScanImage(selectedGradingSubmission, pageIndex)}
-                      onComplete={() => void completeGrading(selectedGradingSubmission)}
-                    >
-                      {selectedGradingSubmission.answers.map((answer) => {
-                        const key = gradeKey(selectedGradingSubmission.attempt_id, answer.question_id);
-                        const source = toGradingDraftSource(answer);
-                        const draft = getGradingDraft(gradingDrafts, key, source);
-                        const sourceVersion = gradingDraftSourceVersionsRef.current.get(key);
-                        const versionChanged = gradingDraftSourceVersionsRef.current.has(key) && sourceVersion !== (answer.grading_version ?? null);
-                        return (
-                          <GradingQuestionCard
-                            key={answer.question_id}
-                            answer={answer}
-                            scoreValue={draft.score.value}
-                            feedbackValue={draft.feedback.value}
-                            statusLabel={gradingStatusLabel(answer.grading_status)}
-                            studentAnswerText={formatStudentAnswer(answer.answer)}
-                            saving={busy === "grade:" + key}
-                            versionChanged={versionChanged && (draft.score.dirty || draft.feedback.dirty)}
-                            onScoreChange={(changedValue) => {
-                              gradingRequests.beginEdit(key, "score");
-                              if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
-                              setGradingDrafts((current) => updateGradingDraft(current, key, source, "score", changedValue));
-                            }}
-                            onFeedbackChange={(changedValue) => {
-                              gradingRequests.beginEdit(key, "feedback");
-                              if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
-                              setGradingDrafts((current) => updateGradingDraft(current, key, source, "feedback", changedValue));
-                            }}
-                            onSave={() => void saveGrade(selectedGradingSubmission, answer.question_id)}
-                          />
-                        );
-                      })}
-                    </PaperSubmissionDetail>
-                  ) : null}
-                </GradingWorkspace>
+                  <LazyGradingWorkspace
+                    submissions={submissions}
+                    selectedSubmission={selectedGradingSubmission}
+                    batchBusy={busy === "ai-grade:batch"}
+                    submissionsBusy={submissionsBusy}
+                    storageWarning={gradingDraftStorageWarning.ownerKey === gradingOwnerKey && gradingDraftStorageWarning.visible}
+                    onBatch={() => void suggestLoadedPendingGrades()}
+                    onReload={() => void loadSelectedSubmissions()}
+                    onSelectSubmission={setSelectedGradingAttemptId}
+                  >
+                    {selectedGradingSubmission &&
+                    detailMountStages.gradingAttemptId === selectedGradingSubmission.attempt_id &&
+                    selectedGradingDraftsReady ? (
+                      <Suspense fallback={<p className="text-sm text-[var(--or-muted)]" role="status">正在加载答卷详情…</p>}>
+                        <LazyPaperSubmissionDetail
+                          key={selectedGradingSubmission.attempt_id}
+                          submission={selectedGradingSubmission}
+                          busy={busy}
+                          scanImageUrls={scanImageUrls}
+                          onSuggest={() => void suggestSubmissionGrades(selectedGradingSubmission)}
+                          onLoadScan={(pageIndex) => void loadOfflineScanImage(selectedGradingSubmission, pageIndex)}
+                          onComplete={() => void completeGrading(selectedGradingSubmission)}
+                        >
+                          {selectedGradingSubmission.answers.map((answer) => {
+                            const key = gradeKey(selectedGradingSubmission.attempt_id, answer.question_id);
+                            const source = toGradingDraftSource(answer);
+                            const draft = getGradingDraft(gradingDrafts, key, source);
+                            const sourceVersion = gradingDraftSourceVersionsRef.current.get(key);
+                            const versionChanged = gradingDraftSourceVersionsRef.current.has(key) && sourceVersion !== (answer.grading_version ?? null);
+                            return (
+                              <DeferredMount
+                                scrollRootRef={detailScrollRootRef}
+                                key={answer.question_id}
+                                fallback={(
+                                  <div
+                                    className="min-h-24 rounded-2xl border border-dashed border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_45%,transparent)] px-4 py-3 text-xs text-[var(--or-muted)]"
+                                    role="status"
+                                  >
+                                    滚动到此处后加载本题批改内容…
+                                  </div>
+                                )}
+                              >
+                                <Suspense fallback={<div className="min-h-24 rounded-2xl border border-dashed border-[var(--or-outline)] px-4 py-3 text-xs text-[var(--or-muted)]" role="status">正在加载本题…</div>}>
+                                  <LazyGradingQuestionCard
+                                    answer={answer}
+                                    scoreValue={draft.score.value}
+                                    feedbackValue={draft.feedback.value}
+                                    statusLabel={gradingStatusLabel(answer.grading_status)}
+                                    studentAnswerText={formatStudentAnswer(answer.answer)}
+                                    saving={busy === "grade:" + key}
+                                    versionChanged={versionChanged && (draft.score.dirty || draft.feedback.dirty)}
+                                    onScoreChange={(changedValue) => {
+                                      gradingRequests.beginEdit(key, "score");
+                                      if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+                                      setGradingDrafts((current) => updateGradingDraft(current, key, source, "score", changedValue));
+                                    }}
+                                    onFeedbackChange={(changedValue) => {
+                                      gradingRequests.beginEdit(key, "feedback");
+                                      if (!gradingDraftSourceVersionsRef.current.has(key)) gradingDraftSourceVersionsRef.current.set(key, answer.grading_version ?? null);
+                                      setGradingDrafts((current) => updateGradingDraft(current, key, source, "feedback", changedValue));
+                                    }}
+                                    onSave={() => void saveGrade(selectedGradingSubmission, answer.question_id)}
+                                  />
+                                </Suspense>
+                              </DeferredMount>
+                            );
+                          })}
+                        </LazyPaperSubmissionDetail>
+                      </Suspense>
+                    ) : selectedGradingSubmission ? (
+                      <p className="text-sm text-[var(--or-muted)]" role="status">正在准备答卷详情…</p>
+                    ) : null}
+                  </LazyGradingWorkspace>
+                </Suspense>
+              ) : (
+                <section className="or-g51-surface p-4 sm:p-6 shadow-sm" role="status">
+                  正在准备批改工作区…
+                </section>
               )}
               {message ? (
                 <div className="rounded-md border border-[var(--or-outline)] bg-[var(--or-card)] px-4 py-3 text-sm text-[var(--or-muted)] shadow-sm">
@@ -1936,23 +2535,28 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                 </div>
               ) : null}
             </div>
-          ) : (
-            <div className="flex h-full items-start justify-center overflow-auto p-6">
-              {loading ? <p className="py-16 text-sm text-[var(--or-muted)]">正在加载试卷...</p> : (
-                <div className="w-full max-w-5xl space-y-4">
-                  <GettingStartedChecklist
-                    description="准备题目和模板后即可组卷、预览并发布到班级"
-                    steps={[
-                      { label: "准备题目", complete: false, actionLabel: "去创建题目", onAction: onOpenBank },
-                      { label: "准备试卷模板", complete: false, actionLabel: "去创建模板", onAction: onOpenTemplates },
-                      { label: "生成第一份试卷", complete: false, actionLabel: "开始组卷", onAction: onOpenCompose },
-                    ]}
-                  />
-                  <p className="text-center text-sm text-[var(--or-muted)]">当前还没有试卷，可从上面的任一步开始。</p>
-                </div>
-              )}
-            </div>
-          )}
+            ) : (
+              <div className="flex h-full items-start justify-center overflow-auto p-6">
+                {!accountProfileReady ? (
+                  <p className="py-16 text-sm text-[var(--or-muted)]">
+                    {accountProfileFailed ? "当前账号信息加载失败，请刷新重试。" : "正在加载当前账号数据…"}
+                  </p>
+                ) : loading ? <p className="py-16 text-sm text-[var(--or-muted)]">正在加载试卷...</p> : (
+                  <div className="w-full max-w-5xl space-y-4">
+                    <GettingStartedChecklist
+                      description="准备题目和模板后即可组卷、预览并发布到班级"
+                      steps={[
+                        { label: "准备题目", complete: false, actionLabel: "去创建题目", onAction: onOpenBank },
+                        { label: "准备试卷模板", complete: false, actionLabel: "去创建模板", onAction: onOpenTemplates },
+                        { label: "生成第一份试卷", complete: false, actionLabel: "开始组卷", onAction: onOpenCompose },
+                      ]}
+                    />
+                    <p className="text-center text-sm text-[var(--or-muted)]">当前还没有试卷，可从上面的任一步开始。</p>
+                  </div>
+                )}
+              </div>
+            )
+          ) : null}
         </main>
       </div>
       {analysisDialogOpen ? (
@@ -2045,7 +2649,9 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
                       </label>
                     ) : null}
                   </div>
-                  <PlatformPaperAnalysisCharts analysis={analysis} />
+                  <Suspense fallback={<p className="text-sm text-[var(--or-muted)]" role="status">正在加载分析图表…</p>}>
+                    <LazyPlatformPaperAnalysisCharts analysis={analysis} />
+                  </Suspense>
                 </>
               ) : (
                 <div className="flex h-full items-center justify-center text-sm font-medium text-[var(--or-muted)]" role="status">正在加载试卷分析…</div>

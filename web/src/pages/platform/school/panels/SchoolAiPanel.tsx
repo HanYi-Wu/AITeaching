@@ -7,6 +7,7 @@ import type {
 } from "../hooks/useSchoolWorkspaceData";
 import "../../../../ui-redesign/g53/g53.css";
 import { Select as AppSelect } from "../../../../components/ui/select";
+import { useManagementCapability } from "../../../../platform/useManagementOptions";
 
 type SchoolAiPanelProps = {
   aiSettings: SchoolAiSettings | null;
@@ -53,6 +54,7 @@ export function SchoolAiPanel({
   confirmSchoolAiImport,
   runSchoolAiImport,
 }: SchoolAiPanelProps) {
+  const canWrite = useManagementCapability("school.ai.manage");
   return (
     <section
       data-testid="school-ai-panel"
@@ -65,17 +67,10 @@ export function SchoolAiPanel({
           </div>
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-or-text sm:text-base">学校 AI 助手</h2>
-            <p className="mt-0.5 text-xs sm:text-sm leading-5 sm:leading-6 text-or-muted">
-              直接读取本校教师、学生、班级和分配数据，亦可协助审核导入文件。
-            </p>
           </div>
         </div>
         <div data-testid="school-ai-messages" className="min-h-0 flex-1 space-y-3 sm:space-y-3.5 overflow-y-auto bg-or-block p-3.5 sm:p-5">
-          {schoolAiMessages.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-or-outline bg-or-card p-4 sm:p-6 text-xs sm:text-sm leading-5 sm:leading-6 text-or-muted">
-              可以直接提问：“有哪些教师名字”、“哪些班级没有老师”、“导入学生模板字段是什么”。AI 将基于当前学校数据为您解答。
-            </div>
-          ) : (
+          {schoolAiMessages.length > 0 ? (
             schoolAiMessages.map((item, index) => (
               <div
                 key={`${item.role}:${index}`}
@@ -100,7 +95,7 @@ export function SchoolAiPanel({
                 </div>
               </div>
             ))
-          )}
+          ) : null}
         </div>
         <form onSubmit={(event) => void submitSchoolAi(event)} className="border-t border-or-outline bg-or-card p-3 sm:p-4">
           <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -109,11 +104,11 @@ export function SchoolAiPanel({
               placeholder="询问教师导入、学生账号、班级管理或教师分配"
               value={schoolAiInput}
               onChange={(event) => setSchoolAiInput(event.target.value)}
-              disabled={!aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
+              disabled={!canWrite || !aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
             />
             <button
               type="submit"
-              disabled={!schoolAiInput.trim() || !aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
+              disabled={!canWrite || !schoolAiInput.trim() || !aiSettings?.ai_available || !aiSettings?.ai_enabled || schoolAiBusy}
               className="or-g53-btn-primary w-full sm:w-auto self-end px-4 py-2 sm:px-5 sm:py-2.5 text-xs sm:text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Send className="h-4 w-4 shrink-0" />
@@ -142,7 +137,7 @@ export function SchoolAiPanel({
               type="checkbox"
               className="h-4 w-4 rounded accent-or-primary focus:ring-or-focus"
               checked={Boolean(aiSettings?.ai_enabled)}
-              disabled={busy || !aiSettings || (!aiSettings.ai_available && !aiSettings.ai_enabled)}
+              disabled={!canWrite || busy || !aiSettings || (!aiSettings.ai_available && !aiSettings.ai_enabled)}
               onChange={(event) => void setSchoolAiEnabled(event.target.checked)}
             />
           </div>
@@ -156,6 +151,7 @@ export function SchoolAiPanel({
           <div className="space-y-2.5 sm:space-y-3">
             <AppSelect
               data-testid="school-ai-import-kind"
+              disabled={!canWrite}
               className="or-g53-select w-full text-xs sm:text-sm"
               value={schoolAiImportKind}
               onValueChange={(value) => {
@@ -171,6 +167,7 @@ export function SchoolAiPanel({
             </AppSelect>
             {schoolAiImportKind === "students" ? (
               <AppSelect
+                disabled={!canWrite}
                 className="or-g53-select w-full text-xs sm:text-sm"
                 value={studentClassId}
                 onValueChange={(value) => setStudentClassId(value)}
@@ -188,6 +185,7 @@ export function SchoolAiPanel({
               <span className="truncate">{schoolAiImportFile ? schoolAiImportFile.name : "选择 JSON / Excel"}</span>
               <input
                 data-testid="school-ai-import-file"
+                disabled={!canWrite}
                 className="sr-only"
                 type="file"
                 accept=".json,.xlsx"
@@ -197,14 +195,14 @@ export function SchoolAiPanel({
                 }}
               />
             </label>
-            <div className="rounded-xl bg-or-block/80 p-2.5 sm:p-3 text-xs leading-5 text-or-muted">
-              {schoolAiImportKind === "all"
-                ? "完整模板包含 classes、teachers、students、assignments 四个工作表；AI 审核后一次确认即可全部导入。"
-                : "上传后会按对应模板字段审核，确认后写入当前学校数据。"}
-            </div>
+            {schoolAiImportKind === "all" ? (
+              <p className="rounded-xl bg-or-block/80 p-2.5 sm:p-3 text-xs leading-5 text-or-muted">
+                完整模板需包含 classes、teachers、students、assignments 四个工作表。
+              </p>
+            ) : null}
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || !canWrite}
               onClick={() => void downloadTemplate(schoolAiImportKind)}
               className="or-g53-btn-tonal w-full py-2 text-xs font-semibold"
             >
@@ -230,7 +228,7 @@ export function SchoolAiPanel({
                   <button
                     type="button"
                     data-testid="school-ai-import-cancel"
-                    disabled={schoolAiBusy}
+                    disabled={schoolAiBusy || !canWrite}
                     onClick={() => void confirmSchoolAiImport(false)}
                     className="or-g53-btn-tonal py-1.5 text-xs font-semibold"
                   >
@@ -239,7 +237,7 @@ export function SchoolAiPanel({
                   <button
                     type="button"
                     data-testid="school-ai-import-confirm"
-                    disabled={schoolAiBusy}
+                    disabled={schoolAiBusy || !canWrite}
                     onClick={() => void confirmSchoolAiImport(true)}
                     className="or-g53-btn-primary py-1.5 text-xs font-semibold"
                   >
@@ -251,7 +249,7 @@ export function SchoolAiPanel({
             <button
               type="button"
               data-testid="school-ai-import-run"
-              disabled={!schoolAiImportFile || schoolAiBusy}
+              disabled={!canWrite || !schoolAiImportFile || schoolAiBusy}
               onClick={() => void runSchoolAiImport()}
               className="or-g53-btn-primary w-full py-2 sm:py-2.5 text-xs sm:text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
             >

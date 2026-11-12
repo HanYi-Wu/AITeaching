@@ -31,7 +31,11 @@ def _compile_exam_tex_to_pdfs(
     if not exam_yaml.is_file():
         raise FileNotFoundError(exam_yaml)
 
-    prepared = prepared or prepare_exam(exam_yaml, preview_relaxed=preview_relaxed)
+    prepared = prepared or prepare_exam(
+        exam_yaml,
+        preview_relaxed=preview_relaxed,
+        selected_questions_only=True,
+    )
     prepared.check_source(exam_yaml, preview_relaxed=preview_relaxed)
     exam, loaded, template = prepared.exam, prepared.loaded, prepared.template
     if not exam.question_libraries:

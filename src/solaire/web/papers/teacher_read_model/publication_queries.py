@@ -51,24 +51,48 @@ def batch_publication_stats(
 
             stats_rows = con.execute(
                 f"""
-                SELECT
-                  ep.paper_id,
-                  COUNT(DISTINCT ep.id) AS publication_count,
-                  COUNT(DISTINCT pc.class_id) AS published_class_count,
-                  COUNT(DISTINCT sa.id) AS total_student_count,
-                  COUNT(DISTINCT CASE
-                    WHEN sa.status IN ('submitted', 'completed') OR sa.submitted_at IS NOT NULL THEN sa.id
-                  END) AS submitted_student_count,
-                  COUNT(DISTINCT CASE
-                    WHEN sa.status = 'in_progress' AND sa.submitted_at IS NULL THEN sa.id
-                  END) AS in_progress_student_count,
-                  COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS graded_student_count,
-                  COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS published_student_count
-                FROM exam_publications ep
-                LEFT JOIN publication_classes pc ON pc.publication_id = ep.id
-                LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
-                WHERE ep.paper_id IN ({placeholders}) AND ep.status <> 'revoked' AND {access_clause}
-                GROUP BY ep.paper_id
+                WITH visible_ep AS (
+                  SELECT ep.id, ep.paper_id
+                  FROM exam_publications ep
+                  WHERE ep.paper_id IN ({placeholders})
+                    AND ep.status <> 'revoked'
+                    AND {access_clause}
+                ), publication_counts AS (
+                  SELECT paper_id, COUNT(*) AS publication_count
+                  FROM visible_ep
+                  GROUP BY paper_id
+                ), class_counts AS (
+                  SELECT visible_ep.paper_id,
+                         COUNT(DISTINCT pc.class_id) AS published_class_count
+                  FROM visible_ep
+                  LEFT JOIN publication_classes pc ON pc.publication_id = visible_ep.id
+                  GROUP BY visible_ep.paper_id
+                ), attempt_counts AS (
+                  SELECT visible_ep.paper_id,
+                         COUNT(DISTINCT sa.id) AS total_student_count,
+                         COUNT(DISTINCT CASE
+                           WHEN sa.status IN ('submitted', 'completed') OR sa.submitted_at IS NOT NULL THEN sa.id
+                         END) AS submitted_student_count,
+                         COUNT(DISTINCT CASE
+                           WHEN sa.status = 'in_progress' AND sa.submitted_at IS NULL THEN sa.id
+                         END) AS in_progress_student_count,
+                         COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS graded_student_count,
+                         COUNT(DISTINCT CASE WHEN sa.grading_completed_at IS NOT NULL THEN sa.id END) AS published_student_count
+                  FROM visible_ep
+                  LEFT JOIN student_attempts sa ON sa.publication_id = visible_ep.id
+                  GROUP BY visible_ep.paper_id
+                )
+                SELECT publication_counts.paper_id,
+                       publication_counts.publication_count,
+                       COALESCE(class_counts.published_class_count, 0) AS published_class_count,
+                       COALESCE(attempt_counts.total_student_count, 0) AS total_student_count,
+                       COALESCE(attempt_counts.submitted_student_count, 0) AS submitted_student_count,
+                       COALESCE(attempt_counts.in_progress_student_count, 0) AS in_progress_student_count,
+                       COALESCE(attempt_counts.graded_student_count, 0) AS graded_student_count,
+                       COALESCE(attempt_counts.published_student_count, 0) AS published_student_count
+                FROM publication_counts
+                LEFT JOIN class_counts ON class_counts.paper_id = publication_counts.paper_id
+                LEFT JOIN attempt_counts ON attempt_counts.paper_id = publication_counts.paper_id
                 """,
                 (*chunk, *access_params),
             ).fetchall()

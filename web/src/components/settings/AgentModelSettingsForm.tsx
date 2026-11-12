@@ -49,21 +49,6 @@ function providerLabelKey(id: AgentLlmProvider): string {
   }
 }
 
-function providerDescKey(id: AgentLlmProvider): string {
-  switch (id) {
-    case "openai":
-      return "settings:providerOpenaiDesc";
-    case "anthropic":
-      return "settings:providerAnthropicDesc";
-    case "openai_compat":
-      return "settings:providerOpenaiCompatDesc";
-    case "deepseek":
-      return "settings:providerDeepseekDesc";
-    default:
-      return "settings:providerOpenaiCompatDesc";
-  }
-}
-
 type Variant = "welcome" | "settings";
 
 export type AgentModelSettingsFormHandle = {
@@ -280,7 +265,6 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
     <div className="space-y-4">
       <div className={card}>
         <label className={labelCls}>{t("settings:providerTitle")}</label>
-        <p className={hintCls}>{t("settings:providerHint")}</p>
         <div className="mt-3 space-y-2">
           {ids.map((id) => (
             <label
@@ -309,13 +293,6 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
                   {t(providerLabelKey(id as AgentLlmProvider))}
                 </span>
               </div>
-              <div
-                className={`mt-1 pl-6 text-xs leading-relaxed ${
-                  variant === "welcome" ? "text-[var(--or-muted)]" : "text-[var(--or-muted)] "
-                }`}
-              >
-                {t(providerDescKey(id as AgentLlmProvider))}
-              </div>
             </label>
           ))}
         </div>
@@ -323,7 +300,6 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
         {provider === "deepseek" ? (
           <div className="mt-4 border-t border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] pt-3 ">
             <span className={labelCls}>{t("settings:thinkingEffortTitle")}</span>
-            <p className={hintCls}>{t("settings:thinkingEffortHint")}</p>
             <div className="mt-2.5 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -396,7 +372,6 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
 
       <div className={card}>
         <label className={labelCls}>{t("settings:fastModel")}</label>
-        <p className={hintCls}>{t("settings:fastModelHint")}</p>
         <input
           type="text"
           value={fastModel}
@@ -424,10 +399,6 @@ export const AgentModelSettingsForm = forwardRef(function AgentModelSettingsForm
           className={inputCls}
         />
       </div>
-
-      <p className="text-xs text-[var(--or-muted)] ">
-        {t("settings:footerNote")}
-      </p>
 
       {msg ? (
         <p className="or-g55-status-success rounded-lg p-2.5 text-xs font-medium">

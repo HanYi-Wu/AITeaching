@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import html
+from collections import OrderedDict
+from threading import RLock
 from typing import TYPE_CHECKING
 
 from solaire.primebrush.common.canvas import normalize_canvas
@@ -28,7 +30,14 @@ def _svg_placeholder(title: str, subtitle: str, width: float, height: float) -> 
     )
 
 
-def _smiles_to_svg_rdkit(smiles: str, width: int, height: int) -> str:
+_MAX_CACHED_SMILES_LENGTH = 4096
+_MAX_CACHED_SVG_CHARS = 256_000
+_MAX_CACHED_SVG_ITEMS = 32
+_SMILES_SVG_CACHE: OrderedDict[tuple[str, int, int], str] = OrderedDict()
+_SMILES_SVG_CACHE_LOCK = RLock()
+
+
+def _render_smiles_to_svg_rdkit(smiles: str, width: int, height: int) -> str:
     from rdkit import Chem
     from rdkit.Chem.Draw import rdMolDraw2D
 
@@ -39,6 +48,36 @@ def _smiles_to_svg_rdkit(smiles: str, width: int, height: int) -> str:
     drawer.DrawMolecule(mol)
     drawer.FinishDrawing()
     return drawer.GetDrawingText()
+
+
+def _smiles_to_svg_rdkit(smiles: str, width: int, height: int) -> str:
+    """Render a molecule and retain only small, reusable SVG results."""
+    cacheable_input = len(smiles) <= _MAX_CACHED_SMILES_LENGTH
+    key = (smiles, width, height)
+    if cacheable_input:
+        with _SMILES_SVG_CACHE_LOCK:
+            if key in _SMILES_SVG_CACHE:
+                svg = _SMILES_SVG_CACHE[key]
+                _SMILES_SVG_CACHE.move_to_end(key)
+                return svg
+
+    svg = _render_smiles_to_svg_rdkit(smiles, width, height)
+    if cacheable_input and len(svg) <= _MAX_CACHED_SVG_CHARS:
+        with _SMILES_SVG_CACHE_LOCK:
+            # Prefer an entry populated by a concurrent render of this key.
+            existing = _SMILES_SVG_CACHE.get(key)
+            if existing is not None:
+                _SMILES_SVG_CACHE.move_to_end(key)
+                return existing
+            _SMILES_SVG_CACHE[key] = svg
+            while len(_SMILES_SVG_CACHE) > _MAX_CACHED_SVG_ITEMS:
+                _SMILES_SVG_CACHE.popitem(last=False)
+    return svg
+
+
+def _clear_smiles_svg_cache() -> None:
+    with _SMILES_SVG_CACHE_LOCK:
+        _SMILES_SVG_CACHE.clear()
 
 
 class ChemistryMoleculePlugin(PrimeBrushPlugin):

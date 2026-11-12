@@ -23,7 +23,7 @@ export default function Home() {
   return (
     <main>
       <header className="site-header">
-        <a className="brand" href="#top" aria-label="EducationHelper 首页"><span className="brand-mark">EH</span><span>EducationHelper</span></a>
+        <a className="brand" href="#top" aria-label="EducationHelper 首页"><span className="brand-mark"><img src="/favicon.png" alt="" aria-hidden="true" /></span><span>EducationHelper</span></a>
         <nav aria-label="页面导航">
           <a href="#capabilities">产品能力</a><a href="#releases">下载</a><a href="#versions">版本记录</a>
           <a href="https://github.com/HanYi-Wu/AITeaching" target="_blank" rel="noreferrer">GitHub ↗</a>
@@ -83,7 +83,7 @@ export default function Home() {
         </article>)}</div>
       </section>
 
-      <footer><div className="brand footer-brand"><span className="brand-mark">EH</span><span>EducationHelper</span></div><p>面向真实教学流程的 AI 教育辅助系统</p><div><a href="/releases/versions.json">版本清单</a><a href="https://github.com/HanYi-Wu/AITeaching">源码仓库</a></div></footer>
+      <footer><div className="brand footer-brand"><span className="brand-mark"><img src="/favicon.png" alt="" aria-hidden="true" /></span><span>EducationHelper</span></div><p>面向真实教学流程的 AI 教育辅助系统</p><div><a href="/releases/versions.json">版本清单</a><a href="https://github.com/HanYi-Wu/AITeaching">源码仓库</a></div></footer>
     </main>
   );
 }

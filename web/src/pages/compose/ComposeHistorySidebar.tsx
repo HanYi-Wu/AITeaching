@@ -10,6 +10,8 @@ import { setContentItemDragData } from "../../lib/contentSelection";
 import { applySelectionDelta, isShiftSpace, rangeSelection } from "../../lib/rangeSelection";
 
 export type ComposeHistorySidebarProps = {
+  hideTitle?: boolean;
+  selectPortalContainer?: HTMLElement | null;
   busy: boolean;
   currentExamId: string | null;
   composeFolders: ContentFolder[];
@@ -35,6 +37,8 @@ export type ComposeHistorySidebarProps = {
 };
 
 export function ComposeHistorySidebar({
+  hideTitle = false,
+  selectPortalContainer,
   busy,
   currentExamId,
   composeFolders,
@@ -80,6 +84,7 @@ export function ComposeHistorySidebar({
       <div className="shrink-0 p-2.5">
         <ContentFolders
           scope="compose"
+          portalContainer={selectPortalContainer}
           folders={composeFolders}
           selectedId={selectedComposeFolderId}
           onSelect={onSelectComposeFolder}
@@ -92,14 +97,17 @@ export function ComposeHistorySidebar({
           onError={onError}
         />
       </div>
-      <div className="shrink-0 border-b border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3.5 py-2.5">
-        <h2 className="text-[13px] font-semibold uppercase leading-tight tracking-wider text-[var(--or-muted)]">
-          {t("compose:historySidebarTitle")}
-        </h2>
-      </div>
+      {!hideTitle ? (
+        <div className="shrink-0 border-b border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] px-3.5 py-2.5">
+          <h2 className="text-[13px] font-semibold uppercase leading-tight tracking-wider text-[var(--or-muted)]">
+            {t("compose:historySidebarTitle")}
+          </h2>
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1 space-y-4 overflow-auto p-2.5">
         <ContentSelectionControls
           scope="compose"
+          portalContainer={selectPortalContainer}
           folders={composeFolders}
           visibleItemIds={visibleComposeItemIds}
           selectedItemIds={selectedComposeItemIds}

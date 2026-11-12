@@ -80,6 +80,25 @@ def _mmdr_theme_config_dict() -> dict[str, object]:
     }
 
 
+def mermaid_render_cache_key(mermaid_body: str) -> tuple[object, ...]:
+    """Return the per-export identity of rendered Mermaid content and settings."""
+    mmdr = _find_mmdr()
+    binary_identity: tuple[object, ...] = (mmdr,)
+    if mmdr is not None:
+        try:
+            info = Path(mmdr).stat()
+            binary_identity = (str(Path(mmdr).resolve()), info.st_size, info.st_mtime_ns)
+        except OSError:
+            binary_identity = (mmdr,)
+    return (
+        mermaid_body.strip(),
+        *binary_identity,
+        _parse_positive_int("SOLAIRE_MERMAID_WIDTH", _DEFAULT_MERMAID_WIDTH),
+        _parse_positive_int("SOLAIRE_MERMAID_HEIGHT", _DEFAULT_MERMAID_HEIGHT),
+        json.dumps(_mmdr_theme_config_dict(), ensure_ascii=False, sort_keys=True),
+    )
+
+
 def render_mermaid_to_svg_file(mermaid_body: str, svg_path: Path) -> None:
     """Run mmdr to produce SVG at svg_path."""
     mmdr = _find_mmdr()

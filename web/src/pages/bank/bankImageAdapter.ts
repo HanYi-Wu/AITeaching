@@ -269,6 +269,7 @@ export function insertSnippetIntoDetail(
 
 export interface UseBankImageUploadOptions {
   detail: BankDetailState | null;
+  getDetail?: () => BankDetailState | null;
   setDetail: Dispatch<SetStateAction<BankDetailState | null>>;
   setBusy: (busy: boolean) => void;
   onError: (err: string | null) => void;
@@ -350,6 +351,7 @@ function planImageInsertion(
 
 export function useBankImageUpload({
   detail,
+  getDetail,
   setDetail,
   setBusy,
   onError,
@@ -364,7 +366,12 @@ export function useBankImageUpload({
   const currentSession = loadSessionToken();
   const currentSessionRef = useRef(currentSession);
   const detailRef = useRef(detail);
+  const getCurrentDetail = useCallback(() => (getDetail ? getDetail() : detailRef.current), [getDetail]);
+  // Keep the fallback detail in sync with each render. Calling getCurrentDetail
+  // here when no getter exists only reads detailRef.current, which would leave
+  // prop-driven question changes invisible to the selection-generation fence.
   detailRef.current = detail;
+  const currentDetail = getCurrentDetail();
   const mountedRef = useRef(true);
   const nextRequestIdRef = useRef(0);
   const pendingTargetRef = useRef<ImageUploadTarget | null>(null);
@@ -374,10 +381,10 @@ export function useBankImageUpload({
   const insertionTailsRef = useRef(new Map<string, Promise<void>>());
   const appliedInsertionsRef = useRef(new Map<string, AppliedImageInsertion[]>());
   if (
-    currentQidRef.current !== detail?.qualified_id ||
+    currentQidRef.current !== currentDetail?.qualified_id ||
     currentSessionRef.current !== currentSession
   ) {
-    currentQidRef.current = detail?.qualified_id;
+    currentQidRef.current = currentDetail?.qualified_id;
     currentSessionRef.current = currentSession;
     scopeRef.current++;
     pendingTargetRef.current = null;
@@ -392,7 +399,7 @@ export function useBankImageUpload({
       target.targetQid === null ||
       target.scope !== scopeRef.current ||
       target.targetQid !== currentQidRef.current ||
-      target.targetQid !== detailRef.current?.qualified_id ||
+      target.targetQid !== getCurrentDetail()?.qualified_id ||
       target.session !== loadSessionToken()
     ) return false;
 
@@ -403,7 +410,7 @@ export function useBankImageUpload({
       materialGroupRef,
     });
     return currentElement === null || currentElement === target.targetElement;
-  }, [contentRef, answerRef, analysisRef, materialGroupRef]);
+  }, [contentRef, answerRef, analysisRef, materialGroupRef, getCurrentDetail]);
 
   const publishBusy = useCallback(() => {
     if (!mountedRef.current) return;
@@ -428,7 +435,7 @@ export function useBankImageUpload({
 
   useEffect(() => {
     publishBusy();
-  }, [detail?.qualified_id, currentSession, publishBusy]);
+  }, [currentDetail?.qualified_id, currentSession, publishBusy]);
 
   const captureDomRefs = useCallback((
     target: ImageUploadTarget,
@@ -484,23 +491,24 @@ export function useBankImageUpload({
         latestFocusRequestRef.current.clear();
         publishBusy();
       }
+      const currentDetail = getCurrentDetail();
       const requestId = ++nextRequestIdRef.current;
       const target: ImageUploadTarget = {
         id: requestId,
         kind: { ...kind },
         saved: sel ? { ...sel } : null,
-        targetQid: detail?.qualified_id ?? null,
-        snapshotText: detail ? getEmbedKindText(detail, kind) : "",
+        targetQid: currentDetail?.qualified_id ?? null,
+        snapshotText: currentDetail ? getEmbedKindText(currentDetail, kind) : "",
         scope: scopeRef.current,
         session,
-        version: detail?.version,
+        version: currentDetail?.version,
         targetElement: getEmbedKindTextarea(kind, {
           contentRef,
           answerRef,
           analysisRef,
           materialGroupRef,
         }),
-        fieldKey: `${scopeRef.current}:${detail?.qualified_id ?? ""}:${session ?? ""}:${embedFieldKey(kind)}`,
+        fieldKey: `${scopeRef.current}:${currentDetail?.qualified_id ?? ""}:${session ?? ""}:${embedFieldKey(kind)}`,
         priorIds: [],
       };
       const existing = appliedInsertionsRef.current.get(target.fieldKey) ?? [];
@@ -519,7 +527,7 @@ export function useBankImageUpload({
       pendingTargetRef.current = target;
       imageInputRef.current?.click();
     },
-    [detail, contentRef, answerRef, analysisRef, materialGroupRef, publishBusy],
+    [getCurrentDetail, contentRef, answerRef, analysisRef, materialGroupRef, publishBusy],
   );
 
   const insertSnippet = useCallback(
@@ -534,15 +542,16 @@ export function useBankImageUpload({
         latestFocusRequestRef.current.clear();
         publishBusy();
       }
+      const currentDetail = getCurrentDetail();
       const target: ImageUploadTarget = {
         id: ++nextRequestIdRef.current,
         kind: { ...kind },
         saved: saved ? { ...saved } : null,
-        targetQid: currentQidRef.current ?? null,
-        snapshotText: detailRef.current ? getEmbedKindText(detailRef.current, kind) : "",
+        targetQid: currentDetail?.qualified_id ?? null,
+        snapshotText: currentDetail ? getEmbedKindText(currentDetail, kind) : "",
         scope: scopeRef.current,
         session,
-        version: detailRef.current?.version,
+        version: currentDetail?.version,
         targetElement: getEmbedKindTextarea(kind, {
           contentRef,
           answerRef,
@@ -562,7 +571,7 @@ export function useBankImageUpload({
         return insertSnippetIntoDetail(d, snippet, kind, saved, undefined, target.targetQid ?? undefined, domRefs);
       });
     },
-    [setDetail, contentRef, answerRef, analysisRef, materialGroupRef, captureDomRefs, isTargetCurrent, publishBusy],
+    [setDetail, getCurrentDetail, contentRef, answerRef, analysisRef, materialGroupRef, captureDomRefs, isTargetCurrent, publishBusy],
   );
 
   const onImageFileSelected = useCallback(
@@ -572,9 +581,21 @@ export function useBankImageUpload({
       pendingTargetRef.current = null;
       e.target.value = "";
 
-      if (!file || !target || !target.targetQid || !isTargetCurrent(target)) {
+      const currentDetail = getCurrentDetail();
+      if (
+        !file ||
+        !target ||
+        !target.targetQid ||
+        !currentDetail ||
+        currentDetail.qualified_id !== target.targetQid ||
+        !isTargetCurrent(target)
+      ) {
         return;
       }
+      // The file picker can outlive a save or another state refresh. Use the
+      // current optimistic-concurrency version while keeping the original text
+      // and selection snapshot for safe insertion after the upload completes.
+      target.version = currentDetail.version;
 
       const turn = reserveInsertionTurn(target.fieldKey);
       activeRequestsRef.current.set(target.id, target);
@@ -638,6 +659,7 @@ export function useBankImageUpload({
     [
       onError,
       setDetail,
+      getCurrentDetail,
       isTargetCurrent,
       reserveInsertionTurn,
       publishBusy,

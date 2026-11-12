@@ -1,6 +1,6 @@
-import { lazy, useEffect } from "react";
+import { lazy, memo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useAgentContext } from "../contexts/AgentContext";
+import { useAgentActions } from "../contexts/AgentContext";
 import { ProjectPanel } from "../components/ProjectPanel";
 import type { ProjectInfo } from "../types/project";
 
@@ -17,7 +17,7 @@ const TemplateWorkspace = lazy(() =>
   import("../pages/template/TemplateWorkspace").then((module) => ({ default: module.TemplateWorkspace })),
 );
 
-export function ComposeRoute({
+export const ComposeRoute = memo(function ComposeRoute({
   info,
   accountId,
   onRefreshInfo,
@@ -38,7 +38,7 @@ export function ComposeRoute({
   onOpenPapers?: () => void;
 }) {
   const { t } = useTranslation("app");
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
   useEffect(() => {
     if (info?.bound) return;
     setPageContext({
@@ -66,7 +66,7 @@ export function ComposeRoute({
       onOpenPapers={onOpenPapers}
     />
   );
-}
+});
 
 export function BankRoute({
   info,
@@ -80,7 +80,7 @@ export function BankRoute({
   onOpenGraphNode?: (nodeId: string) => void;
 }) {
   const { t } = useTranslation("app");
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
   useEffect(() => {
     if (info?.bound) return;
     setPageContext({
@@ -109,7 +109,7 @@ export function TemplateRoute({
   onError: (s: string | null) => void;
 }) {
   const { t } = useTranslation("app");
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
   useEffect(() => {
     if (info?.bound) return;
     setPageContext({
@@ -144,7 +144,7 @@ export function GraphRoute({
   onFocusConsumed?: () => void;
 }) {
   const { t } = useTranslation("app");
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
   useEffect(() => {
     if (info?.bound) return;
     setPageContext({

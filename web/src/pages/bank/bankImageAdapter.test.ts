@@ -189,6 +189,47 @@ describe("bankImageAdapter", () => {
       expect(onError).toHaveBeenCalledWith(null);
     });
 
+    it("uses the latest draft version and preserves text changed after opening the file picker", async () => {
+      vi.mocked(apiPostFormData).mockResolvedValueOnce({ marker: "![alt](asset://latest.png)" });
+      let currentDetail: BankDetailState | null = { ...sampleDetailA, version: "snapshot-v4" };
+      const setDetail = vi.fn((updater) => {
+        currentDetail = typeof updater === "function" ? updater(currentDetail) : updater;
+      });
+      const { result } = renderHook(() =>
+        useBankImageUpload({
+          detail: currentDetail,
+          getDetail: () => currentDetail,
+          setDetail,
+          setBusy: vi.fn(),
+          onError: vi.fn(),
+        }),
+      );
+
+      act(() => {
+        result.current.beginImageEmbed({ k: "q", f: "content" }, { start: 2, end: 2 });
+      });
+      currentDetail = {
+        ...currentDetail!,
+        version: "snapshot-v5",
+        question: { ...currentDetail!.question, content: "题目原始内容后续" },
+      };
+
+      const fakeFile = new File(["bytes"], "latest.png", { type: "image/png" });
+      const fakeEvent = {
+        target: { files: [fakeFile], value: "" },
+      } as unknown as React.ChangeEvent<HTMLInputElement>;
+      await act(async () => {
+        await result.current.onImageFileSelected(fakeEvent);
+      });
+
+      expect(apiPostFormData).toHaveBeenCalledWith(
+        `/api/bank/items/${encodeURIComponent("数学/default/q1")}/image`,
+        expect.any(FormData),
+        { "If-Match": "snapshot-v5" },
+      );
+      expect(currentDetail?.question.content).toBe("题目![alt](asset://latest.png)原始内容后续");
+    });
+
     it("discards a picker selection opened under an old question or account", async () => {
       localStorage.setItem("solaire.platform.session", "account-a");
       const setDetail = vi.fn();

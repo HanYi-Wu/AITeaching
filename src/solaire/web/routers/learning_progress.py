@@ -11,10 +11,15 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from solaire.web.auth_api import current_platform_user, require_platform_root
 from solaire.web.learning_progress.comparison import get_practice_comparison
+from solaire.web.management.access import management_route_guard
 from solaire.web.papers.student_sessions import _student_for_user
 from solaire.web.platform_db import connect
 
-router = APIRouter(prefix="/learning-progress", tags=["learning_progress"])
+router = APIRouter(
+    prefix="/learning-progress",
+    tags=["learning_progress"],
+    dependencies=[Depends(management_route_guard)],
+)
 
 
 def _content_root() -> Path | None:

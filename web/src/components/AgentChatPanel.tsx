@@ -6,9 +6,7 @@ import {
   History,
   Loader2,
   Paperclip,
-  Send,
   Sparkles,
-  Square,
   X,
 } from "lucide-react";
 import {
@@ -27,7 +25,6 @@ import {
 } from "../api/client";
 import { useAgentContext } from "../contexts/AgentContext";
 import { confirmDialog } from "../lib/confirmDialog";
-import { isImeComposingKeyboardEvent } from "../lib/ime";
 import i18n from "../i18n/i18n";
 import {
   AGENT_UPLOAD_ACCEPT,
@@ -40,6 +37,7 @@ import {
 import {
   ASSISTANT_PROSE_CLASS,
   AgentAttachmentList,
+  AgentChatComposer,
   AgentContextRing,
   AgentMemoryDrawer,
   AgentMessageItem,
@@ -55,15 +53,19 @@ export { ASSISTANT_PROSE_CLASS };
 export function AgentChatPanel({
   projectBound = false,
   onRequestCollapse,
+  onReady,
 }: {
   projectBound?: boolean;
   onRequestCollapse?: () => void;
+  onReady?: () => void;
 } = {}) {
   const { t } = useTranslation("agent");
   const { pageContext, sidebarOpen, prefillRequest, notifyAgentBackground } = useAgentContext();
+  useEffect(() => { onReady?.(); }, [onReady]);
 
   const [config, setConfig] = useState<AgentConfig | null>(null);
-  const [input, setInput] = useState("");
+  const composerPresetIdRef = useRef(0);
+  const [composerPreset, setComposerPreset] = useState<{ id: number; text: string } | null>(null);
   const [skills, setSkills] = useState<AgentSkillInfo[]>([]);
   const [activeSkillId, setActiveSkillId] = useState<string | null>(null);
   const [sessionList, setSessionList] = useState<AgentSessionListItem[]>([]);
@@ -247,86 +249,87 @@ export function AgentChatPanel({
     return key;
   }
 
-  const send = useCallback(async () => {
-    if (!assistantEnabled) return;
-    const typedInput = input.trim();
+  const send = useCallback((draft: string): boolean => {
+    if (!assistantEnabled) return false;
+    const typedInput = draft.trim();
     const filesToUpload = [...pendingFiles];
     const msgText = agentSendMessage(typedInput, filesToUpload.length, t("fileOnlyPrompt"));
     const gate = sendGateRef.current;
-    if (!msgText || busy || !gate?.tryAcquire()) return;
+    if (!msgText || busy || !gate?.tryAcquire()) return false;
     const epoch = conversationEpochRef.current;
     const isCurrent = () => conversationEpochRef.current === epoch && sendGateRef.current === gate;
     setBusy(true);
-    setInput("");
     setPendingFiles([]);
     isAtBottomRef.current = true;
     bottomRef.current?.scrollIntoView?.({ behavior: "smooth" });
 
-    try {
-      const sid = await ensureSession();
-      if (!isCurrent()) return;
-      const attachments: FileAttachment[] = [];
-      const failedFiles: File[] = [];
-      for (const f of filesToUpload) {
-        try {
-          const fd = new FormData();
-          fd.append("file", f);
-          fd.append("session_id", sid);
-          const res = await apiPostFormData<{
-            ok: boolean;
-            path: string;
-            mime_type: string | null;
-            original_name: string;
-          }>("/api/agent/upload", fd);
-          if (!isCurrent()) return;
-          attachments.push({
-            path: res.path,
-            mime_type: res.mime_type,
-            original_name: res.original_name,
-          });
-        } catch (e) {
-          if (!isCurrent()) return;
-          failedFiles.push(f);
-          setLines((prev) => [
-            ...prev,
-            {
-              kind: "system",
-              text: i18n.t("agent:uploadFail", {
-                name: formatUploadFailure(f.name, e),
-              }),
-            },
-          ]);
+    void (async () => {
+      try {
+        const sid = await ensureSession();
+        if (!isCurrent()) return;
+        const attachments: FileAttachment[] = [];
+        const failedFiles: File[] = [];
+        for (const f of filesToUpload) {
+          try {
+            const fd = new FormData();
+            fd.append("file", f);
+            fd.append("session_id", sid);
+            const res = await apiPostFormData<{
+              ok: boolean;
+              path: string;
+              mime_type: string | null;
+              original_name: string;
+            }>("/api/agent/upload", fd);
+            if (!isCurrent()) return;
+            attachments.push({
+              path: res.path,
+              mime_type: res.mime_type,
+              original_name: res.original_name,
+            });
+          } catch (e) {
+            if (!isCurrent()) return;
+            failedFiles.push(f);
+            setLines((prev) => [
+              ...prev,
+              {
+                kind: "system",
+                text: i18n.t("agent:uploadFail", {
+                  name: formatUploadFailure(f.name, e),
+                }),
+              },
+            ]);
+          }
         }
-      }
-      if (failedFiles.length > 0) {
-        setPendingFiles((prev) => [...failedFiles, ...prev]);
-      }
-      if (!shouldDispatchAgentMessage(typedInput, filesToUpload.length, attachments.length)) return;
+        if (failedFiles.length > 0) {
+          setPendingFiles((prev) => [...failedFiles, ...prev]);
+        }
+        if (!shouldDispatchAgentMessage(typedInput, filesToUpload.length, attachments.length)) return;
 
-      setLines((prev) => [...prev, { kind: "user", text: msgText }]);
-      await runStream({
-        session_id: sid,
-        message: msgText,
-        mode: "execute",
-        ...(attachments.length > 0 ? { file_attachments: attachments } : {}),
-      } as Parameters<typeof apiAgentChatStream>[0]);
-    } catch (e) {
-      if (!isCurrent()) return;
-      setPendingFiles((prev) => [...filesToUpload, ...prev]);
-      setLines((prev) => [
-        ...prev,
-        { kind: "system", text: e instanceof Error ? e.message : String(e) },
-      ]);
-    } finally {
-      gate.release();
-      if (isCurrent()) setBusy(false);
-    }
+        setLines((prev) => [...prev, { kind: "user", text: msgText }]);
+        await runStream({
+          session_id: sid,
+          message: msgText,
+          mode: "execute",
+          ...(attachments.length > 0 ? { file_attachments: attachments } : {}),
+        } as Parameters<typeof apiAgentChatStream>[0]);
+      } catch (e) {
+        if (!isCurrent()) return;
+        setPendingFiles((prev) => [...filesToUpload, ...prev]);
+        setLines((prev) => [
+          ...prev,
+          { kind: "system", text: e instanceof Error ? e.message : String(e) },
+        ]);
+      } finally {
+        gate.release();
+        if (isCurrent()) setBusy(false);
+      }
+    })();
+    return true;
   }, [
     assistantEnabled,
     busy,
     ensureSession,
     conversationEpochRef,
-    input,
     pendingFiles,
     runStream,
     setBusy,
@@ -339,12 +342,12 @@ export function AgentChatPanel({
     if (prefillRequest.newChat ?? true) {
       startNewChat();
     }
-    setInput(prefillRequest.message);
+    setComposerPreset({ id: ++composerPresetIdRef.current, text: prefillRequest.message });
   }, [startNewChat, prefillRequest]);
 
   const pickSkill = useCallback((s: AgentSkillInfo) => {
     setActiveSkillId(s.id);
-    setInput(s.suggested_user_input);
+    setComposerPreset({ id: ++composerPresetIdRef.current, text: s.suggested_user_input });
   }, []);
 
   const removeHistorySession = useCallback(
@@ -665,46 +668,17 @@ export function AgentChatPanel({
             </button>
           </div>
 
-          <textarea
-            value={input}
+          <AgentChatComposer
+            busy={busy}
             disabled={!assistantEnabled}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (isImeComposingKeyboardEvent(e)) return;
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            rows={2}
-            placeholder={assistantEnabled ? t("inputPh") : t("disabledInputPh")}
-            className="min-h-[46px] flex-1 resize-none rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 text-[16px] sm:text-[15px] text-[var(--or-text)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus disabled:cursor-not-allowed disabled:bg-[var(--or-page)] disabled:text-[var(--or-muted)]"
+            hasAttachments={pendingFiles.length > 0}
+            inputPlaceholder={assistantEnabled ? t("inputPh") : t("disabledInputPh")}
+            sendLabel={sendLabel}
+            stopLabel={t("stop")}
+            draftPreset={composerPreset}
+            onSend={send}
+            onStop={stopStream}
           />
-
-          {busy ? (
-            <button
-              type="button"
-              title={t("stop")}
-              aria-label={t("stop")}
-              onClick={() => void stopStream()}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-muted)] shadow-sm transition hover:bg-[var(--or-page)]"
-            >
-              <Square className="h-4 w-4 fill-current text-or-error" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={
-                !assistantEnabled || busy || (!input.trim() && pendingFiles.length === 0)
-              }
-              onClick={() => void send()}
-              aria-label={sendLabel}
-              title={sendLabel}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-or-primary text-or-on-primary shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:bg-[var(--or-page)] disabled:text-[var(--or-muted)] disabled:opacity-100 disabled:shadow-none"
-            >
-              <Send className="h-4 w-4" />
-            </button>
-          )}
         </div>
       </div>
     </div>

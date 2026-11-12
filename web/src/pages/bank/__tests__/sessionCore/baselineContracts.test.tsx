@@ -44,7 +44,7 @@ vi.mock("../../../../platform/session", () => ({
   loadSessionToken: () => mocks.sessionToken(),
 }));
 vi.mock("../../../../contexts/AgentContext", () => ({
-  useAgentContext: () => ({ setPageContext: mocks.context }),
+  useAgentActions: () => ({ setPageContext: mocks.context }),
 }));
 vi.mock("../../../../components/ContentTags", () => ({ ContentTags: () => null, TagChips: () => null }));
 vi.mock("../../../../components/QuestionHoverDetails", () => ({ QuestionHoverDetails: ({ children }: { children: ReactNode }) => children }));

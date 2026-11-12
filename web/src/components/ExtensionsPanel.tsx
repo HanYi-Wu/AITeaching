@@ -471,7 +471,6 @@ export function ExtensionsPanel({ onError }: Props) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-[var(--or-muted)] leading-relaxed">{t("ext.intro")}</p>
         <button
           type="button"
           disabled={recheckBusy}
@@ -501,11 +500,6 @@ export function ExtensionsPanel({ onError }: Props) {
       {copyNotice ? (
         <p role="status" className="rounded-[12px] border border-[var(--or-success)] bg-[var(--or-success-container)] dark:border-emerald-900/40 dark:bg-emerald-950/30 p-3 text-sm text-[var(--or-on-success)] dark:text-emerald-300">
           {copyNotice}
-        </p>
-      ) : null}
-      {!nativePathPickerAvailable ? (
-        <p role="note" className="rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-3.5 py-3 text-sm leading-relaxed text-[var(--or-muted)]">
-          {t("ext.webPathPickerNotice")}
         </p>
       ) : null}
       {pathError ? (

@@ -10,7 +10,7 @@ import {
   type LogEntry,
   type LogLevel,
 } from "../../lib/appLog";
-import { useAgentContext } from "../../contexts/AgentContext";
+import { useAgentActions } from "../../contexts/AgentContext";
 import { formatLocaleTime } from "../../lib/locale";
 import { cn } from "../../lib/utils";
 import "../../ui-redesign/g55/g55.css";
@@ -22,7 +22,7 @@ function useLogs() {
 
 export function LogWorkspace({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation(["log", "common"]);
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
   const entries = useLogs();
   const [levelFilter, setLevelFilter] = useState<LogLevel | "all">("all");
   const [copied, setCopied] = useState(false);

@@ -1,6 +1,8 @@
 # EducationHelper (EH)
 
-OriginReach is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.7.1**.
+OriginReach is a school teaching and assessment application with a React web interface, Python/FastAPI backend, AI tools, and an optional Tauri desktop shell. Current source version: **1.7.2**.
+
+Version 1.7.2 adds goal-based auto-composition, multi-dimensional duplicate checking, granular school management permissions and audit heatmaps, alongside comprehensive frontend and backend performance and mobile usability optimizations. See the [1.7.2 release notes](docs/release-1.7.2.md).
 
 Version 1.7.1 unifies in-app dropdowns and interactions, improves desktop, tablet and mobile layouts, and fixes question-bank conflict feedback, compose state and demo data. See the [1.7.1 release notes](docs/release-1.7.1.md).
 

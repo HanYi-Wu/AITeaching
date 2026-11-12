@@ -145,6 +145,8 @@ export default defineConfig({
   }],
 
   resolve: {
+    // Dialog and Select must share the same layer/focus stacks, including nested menus.
+    dedupe: ["@radix-ui/react-dismissable-layer", "@radix-ui/react-focus-scope"],
     alias: {
       /** 供 pdf.js worker 的 `?url` 导入解析到包内构建产物 */
       "pdfjs-dist/build/pdf.worker.min.mjs": path.resolve(
@@ -155,6 +157,8 @@ export default defineConfig({
 
   test: {
     environment: "jsdom",
+    // Exercise the same deduplicated popup stacks as the production bundle.
+    server: { deps: { inline: [/@radix-ui\//] } },
     // Keep jsdom workers bounded on high-core Windows hosts and CI runners.
     maxWorkers: 2,
     setupFiles: "./src/test/setup.ts",

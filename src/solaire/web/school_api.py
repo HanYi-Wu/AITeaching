@@ -5,7 +5,9 @@ This module combines modular sub-routers for schools, accounts, classes, and pol
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from solaire.web.management.access import management_route_guard
 
 from solaire.web.school_routes.accounts import (
     _students_export_workbook,
@@ -104,7 +106,7 @@ from solaire.web.school_schemas import (
     UserCreateBody,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(management_route_guard)])
 router.include_router(schools_router)
 router.include_router(policy_router)
 router.include_router(accounts_router)

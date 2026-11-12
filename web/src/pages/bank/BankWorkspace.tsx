@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ChangeEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -24,13 +25,14 @@ import {
   type QuestionGroupJson,
   type QuestionJson,
 } from "../../components/BankQuestionEditorPanel";
+import type { BankEditorDraftStore } from "../../components/bankEditorTypes";
 import type { EmbedKind } from "../../lib/bankEditorEmbedKinds";
 import { ContentWithPrimeBrush } from "../../components/ContentWithPrimeBrush";
 import { ContentTags } from "../../components/ContentTags";
 import { MathInsertOverlay } from "../../components/MathInsertOverlay";
 import { MermaidEditorModal } from "../../components/MermaidEditorModal";
 import { PrimeBrushEditorModal } from "../../components/PrimeBrushEditorModal";
-import { useAgentContext } from "../../contexts/AgentContext";
+import { useAgentActions } from "../../contexts/AgentContext";
 import { TabPanel, type TabItem } from "../../components/layout/TabPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { SelectionIndicator } from "../../design-system/SelectionIndicator";
@@ -51,7 +53,164 @@ import { useBankImageUpload } from "./bankImageAdapter";
 import { useBankEditSession, useBankImportSession } from "./sessionCore";
 import "../../ui-redesign/g48/g48-bank.css";
 
-export function BankWorkspace({
+const ignoreDraftChanges = (_listener: () => void) => () => undefined;
+
+function BankPageContextSync({
+  selectedId,
+  draftStore,
+  setPageContext,
+}: {
+  selectedId: string | null;
+  draftStore: BankEditorDraftStore;
+  setPageContext: ReturnType<typeof useAgentActions>["setPageContext"];
+}) {
+  const { t } = useTranslation(["bank"]);
+  const { detail } = useSyncExternalStore(
+    draftStore.subscribe,
+    draftStore.getSnapshot,
+    draftStore.getSnapshot,
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (selectedId && detail?.qualified_id === selectedId) {
+        const raw = typeof detail.question?.content === "string" ? detail.question.content : detail.qualified_id;
+        const preview = raw.replace(/\s+/g, " ").slice(0, 48);
+        const suffix = preview ? ` — ${preview}${preview.length >= 48 ? "…" : ""}` : "";
+        setPageContext({
+          current_page: "bank",
+          selected_resource_type: "question",
+          selected_resource_id: selectedId,
+          summary: t("bank:pageContextWithId", { id: detail.qualified_id, suffix }),
+        });
+      } else {
+        setPageContext({
+          current_page: "bank",
+          summary: t("bank:pageContextBrowse"),
+        });
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [selectedId, detail, setPageContext, t]);
+
+  useEffect(() => () => setPageContext(null), [setPageContext]);
+  return null;
+}
+
+function BankQuestionPreview({
+  draftStore,
+  live,
+}: {
+  draftStore: BankEditorDraftStore;
+  live: boolean;
+}) {
+  const { t } = useTranslation("bank");
+  const { detail } = useSyncExternalStore(
+    live ? draftStore.subscribe : ignoreDraftChanges,
+    draftStore.getSnapshot,
+    draftStore.getSnapshot,
+  );
+  const previewQ = detail ? detail.question_display ?? detail.question : null;
+  const previewGroup = detail?.question_group
+    ? detail.question_group_preview
+      ? {
+          ...detail.question_group,
+          material: detail.question_group_preview.material,
+          items: detail.question_group_preview.items,
+        }
+      : detail.question_group
+    : null;
+
+  return (
+    <>
+      <h3 className="text-sm font-semibold text-[var(--or-muted)]">{t("livePreview")}</h3>
+      {!previewQ && !previewGroup ? (
+        <p className="mt-4 text-sm text-[var(--or-muted)]">{t("previewEmpty")}</p>
+      ) : previewGroup ? (
+        <div className="mt-3 space-y-4 text-sm leading-relaxed">
+          <div>
+            <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("sharedMaterialLabel")}</p>
+            <ContentWithPrimeBrush text={previewGroup.material} className="mt-1 text-[var(--or-text)]" />
+          </div>
+          {previewGroup.items.map((it, i) => {
+            const rowIsChoice = previewGroup.unified === false
+              ? isChoiceQuestionType(it.type ?? "single_choice")
+              : typeof previewGroup.unified === "string" && isChoiceQuestionType(previewGroup.unified);
+            return (
+              <div key={i} className="border-t border-[var(--or-outline)] pt-3">
+                <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("subItemIndex", { n: i + 1 })}</p>
+                <ContentWithPrimeBrush text={it.content} className="mt-1 text-[var(--or-text)]" />
+                {rowIsChoice && (
+                  <div className="mt-2">
+                    <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("options")}</p>
+                    <ul className="mt-1 list-inside list-disc text-[var(--or-muted)]">
+                      {Object.entries(it.options ?? { A: "", B: "", C: "", D: "" }).map(([k, v]) => (
+                        <li key={k}>
+                          <strong>{k}</strong>{" "}
+                          <span className="inline-block align-top">
+                            <ContentWithPrimeBrush text={v} className="inline" />
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <details className="mt-2 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
+                  <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("answer")}</summary>
+                  <ContentWithPrimeBrush text={it.answer} className="mt-1" />
+                </details>
+                <details className="mt-1.5 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
+                  <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("analysis")}</summary>
+                  <ContentWithPrimeBrush text={it.analysis || ""} className="mt-1" />
+                </details>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-4 text-sm leading-relaxed">
+          <div>
+            <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("stem")}</p>
+            <ContentWithPrimeBrush text={previewQ!.content} className="mt-1 text-[var(--or-text)]" />
+          </div>
+          {isChoiceQuestionType(previewQ!.type) && previewQ!.options && (
+            <div>
+              <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("options")}</p>
+              <ul className="mt-1 list-inside list-disc text-[var(--or-muted)]">
+                {Object.entries(previewQ!.options).map(([k, v]) => (
+                  <li key={k}>
+                    <strong>{k}</strong>{" "}
+                    <span className="inline-block align-top">
+                      <ContentWithPrimeBrush text={v} className="inline" />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <details className="mt-2 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
+            <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("answer")}</summary>
+            <ContentWithPrimeBrush text={previewQ!.answer} className="mt-1" />
+          </details>
+          <details className="mt-1.5 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
+            <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("analysis")}</summary>
+            <ContentWithPrimeBrush text={previewQ!.analysis || ""} className="mt-1" />
+          </details>
+        </div>
+      )}
+    </>
+  );
+}
+
+export function BankWorkspace(props: {
+  onError: (s: string | null) => void;
+  onOpenGraphNode?: (nodeId: string) => void;
+}) {
+  const sessionScope = loadSessionToken() ?? "local-session";
+  return <BankWorkspaceSession key={sessionScope} {...props} />;
+}
+
+function BankWorkspaceSession({
   onError,
   onOpenGraphNode,
 }: {
@@ -177,6 +336,7 @@ export function BankWorkspace({
     setSelectedId,
     detail,
     setDetail,
+    draftStore,
     rawYaml,
     setRawYaml,
     metaRows,
@@ -186,6 +346,7 @@ export function BankWorkspace({
     workView,
     setWorkView,
     dirty,
+    isCurrentDraftDirty,
     saving,
     saveConflict,
     trySelectQuestion,
@@ -270,9 +431,15 @@ export function BankWorkspace({
   /** Saved when opening Math/Mermaid overlay — focus moves and loses textarea selection. */
   const embedSelectionRef = useRef<{ start: number; end: number } | null>(null);
 
+  const getCurrentDraftDetail = useCallback(
+    () => draftStore.getSnapshot().detail,
+    [draftStore],
+  );
+
   const { imageInputRef, beginImageEmbed, onImageFileSelected, insertSnippet } =
     useBankImageUpload({
       detail,
+      getDetail: getCurrentDraftDetail,
       setDetail,
       setBusy: setImageBusy,
       onError,
@@ -282,30 +449,7 @@ export function BankWorkspace({
       materialGroupRef,
     });
 
-  const { setPageContext } = useAgentContext();
-
-  useEffect(() => {
-    if (selectedId && detail) {
-      const raw =
-        typeof detail.question?.content === "string" ? detail.question.content : detail.qualified_id;
-      const preview = raw.replace(/\s+/g, " ").slice(0, 48);
-      const suffix = preview
-        ? ` — ${preview}${preview.length >= 48 ? "…" : ""}`
-        : "";
-      setPageContext({
-        current_page: "bank",
-        selected_resource_type: "question",
-        selected_resource_id: selectedId,
-        summary: t("bank:pageContextWithId", { id: detail.qualified_id, suffix }),
-      });
-    } else {
-      setPageContext({
-        current_page: "bank",
-        summary: t("bank:pageContextBrowse"),
-      });
-    }
-    return () => setPageContext(null);
-  }, [selectedId, detail, setPageContext, t]);
+  const { setPageContext } = useAgentActions();
 
   const beginMathEmbed = useCallback((kind: EmbedKind, sel: { start: number; end: number } | null) => {
     embedKindRef.current = kind;
@@ -600,15 +744,17 @@ export function BankWorkspace({
   }
 
   async function removeQuestion() {
-    if (!detail || !selectedId) {
+    const currentDetail = draftRef.current.detail;
+    const currentSelectedId = draftRef.current.selectedId;
+    if (!currentDetail || !currentSelectedId || currentDetail.qualified_id !== currentSelectedId) {
       return;
     }
-    const isGroup = Boolean(detail.question_group);
+    const isGroup = Boolean(currentDetail.question_group);
     if (
       !(await confirmDialog(
         isGroup
-          ? t("errors.deleteGroup", { id: detail.question_group!.id })
-          : t("errors.deleteQuestion", { id: selectedId })
+          ? t("errors.deleteGroup", { id: currentDetail.question_group!.id })
+          : t("errors.deleteQuestion", { id: currentSelectedId })
       ))
     ) {
       return;
@@ -616,21 +762,21 @@ export function BankWorkspace({
     setOpBusy(true);
     onError(null);
     try {
-      const enc = encodeURIComponent(selectedId);
-      const sp = detail.storage_path
-        ? `?storage_path=${encodeURIComponent(detail.storage_path)}`
+      const enc = encodeURIComponent(currentSelectedId);
+      const sp = currentDetail.storage_path
+        ? `?storage_path=${encodeURIComponent(currentDetail.storage_path)}`
         : "";
       await apiDelete(`/api/bank/items/${enc}${sp}`);
-      const currentItem = items.find((x) => x.qualified_id === selectedId);
+      const currentItem = items.find((x) => x.qualified_id === currentSelectedId);
       const removedIds = new Set([
-        selectedId,
+        currentSelectedId,
         ...(currentItem?.group_member_qualified_ids ?? []),
       ]);
       setSelectedExportIds((prev) => prev.filter((id) => !removedIds.has(id)));
       setOpenTabs((prev) => prev.filter((x) => !removedIds.has(x)));
-      removeBaseline(selectedId);
-      const currentSelectedId = draftRef.current.selectedId;
-      const selectedWasDeleted = Boolean(currentSelectedId && removedIds.has(currentSelectedId));
+      removeBaseline(currentSelectedId);
+      const liveSelectedId = draftRef.current.selectedId;
+      const selectedWasDeleted = Boolean(liveSelectedId && removedIds.has(liveSelectedId));
       if (selectedWasDeleted) {
         clearSessionDraft();
         setEditorModalOpen(false);
@@ -678,20 +824,6 @@ export function BankWorkspace({
     }
   }
 
-  /** 已保存题目：服务端展开插图占位符；编辑未保存时回退到表单原文 */
-  const previewQ = useMemo(() => {
-    if (!detail) return null;
-    return detail.question_display ?? detail.question ?? null;
-  }, [detail]);
-
-  const previewGroup = useMemo(() => {
-    if (!detail?.question_group) return null;
-    const g = detail.question_group;
-    const p = detail.question_group_preview;
-    if (!p) return g;
-    return { ...g, material: p.material, items: p.items };
-  }, [detail]);
-
   const trySelectId = useCallback(
     (qid: string | null) => {
       return trySelectQuestion(qid, t("switchTabDiscard"));
@@ -711,12 +843,13 @@ export function BankWorkspace({
 
   const closeTab = useCallback(
     (qid: string) => {
-      if (qid === selectedId && dirty && !window.confirm(t("closeTabConfirm"))) {
+      const closesSelected = qid === draftRef.current.selectedId;
+      if (closesSelected && isCurrentDraftDirty() && !window.confirm(t("closeTabConfirm"))) {
         return;
       }
       setOpenTabs((prev) => {
         const next = prev.filter((x) => x !== qid);
-        if (selectedId === qid) {
+        if (closesSelected) {
           const fallback = next[next.length - 1] ?? null;
           clearSessionDraft();
           setSelectedId(fallback);
@@ -725,7 +858,7 @@ export function BankWorkspace({
       });
       removeBaseline(qid);
     },
-    [selectedId, dirty, t, clearSessionDraft, setSelectedId, removeBaseline]
+    [draftRef, isCurrentDraftDirty, t, clearSessionDraft, setSelectedId, removeBaseline]
   );
 
   const saveFormRef = useRef(saveForm);
@@ -733,13 +866,24 @@ export function BankWorkspace({
   const saveRawYamlRef = useRef(saveRawYaml);
   saveRawYamlRef.current = saveRawYaml;
 
+  const saveModalEditor = useCallback(async (source: "form" | "yaml") => {
+    const saved = await (source === "yaml" ? saveRawYamlRef.current() : saveFormRef.current());
+    if (saved) {
+      setEditorModalOpen(false);
+      setMobileBankPanel("list");
+    }
+    return saved;
+  }, []);
+
   const handleToolbarSave = useCallback(() => {
-    if (editorModalOpen ? editorTab === "yaml" : workView === "source") {
+    if (editorModalOpen) {
+      void saveModalEditor(editorTab === "yaml" ? "yaml" : "form");
+    } else if (workView === "source") {
       void saveRawYamlRef.current();
     } else {
       void saveFormRef.current();
     }
-  }, [workView, editorModalOpen, editorTab]);
+  }, [workView, editorModalOpen, editorTab, saveModalEditor]);
 
   useEffect(() => {
     if (workView === "source") {
@@ -751,8 +895,10 @@ export function BankWorkspace({
 
   useEffect(() => {
     const onSave = () => {
-      if (!selectedId || !detail || !dirty) return;
-      if (editorModalOpen ? editorTab === "yaml" : workView === "source") {
+      if (!draftRef.current.selectedId || !getCurrentDraftDetail() || !isCurrentDraftDirty()) return;
+      if (editorModalOpen) {
+        void saveModalEditor(editorTab === "yaml" ? "yaml" : "form");
+      } else if (workView === "source") {
         void saveRawYamlRef.current();
       } else {
         void saveFormRef.current();
@@ -760,7 +906,7 @@ export function BankWorkspace({
     };
     window.addEventListener(SOLAIRE_SAVE_EVENT, onSave);
     return () => window.removeEventListener(SOLAIRE_SAVE_EVENT, onSave);
-  }, [selectedId, detail, dirty, workView, editorModalOpen, editorTab]);
+  }, [draftRef, getCurrentDraftDetail, isCurrentDraftDirty, workView, editorModalOpen, editorTab, saveModalEditor]);
 
   const tabItems: TabItem[] = useMemo(
     () =>
@@ -770,83 +916,6 @@ export function BankWorkspace({
       }),
     [openTabs, selectedId, dirty]
   );
-
-  const previewBlock =
-    !previewQ && !previewGroup ? (
-      <p className="mt-4 text-sm text-[var(--or-muted)]">{t("previewEmpty")}</p>
-    ) : previewGroup ? (
-      <div className="mt-3 space-y-4 text-sm leading-relaxed">
-        <div>
-          <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("sharedMaterialLabel")}</p>
-          <ContentWithPrimeBrush text={previewGroup.material} className="mt-1 text-[var(--or-text)]" />
-        </div>
-        {previewGroup.items.map((it, i) => {
-          const rowIsChoice =
-            previewGroup.unified === false
-              ? isChoiceQuestionType(it.type ?? "single_choice")
-              : typeof previewGroup.unified === "string" && isChoiceQuestionType(previewGroup.unified);
-          return (
-            <div key={i} className="border-t border-[var(--or-outline)] pt-3">
-              <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("subItemIndex", { n: i + 1 })}</p>
-              <ContentWithPrimeBrush text={it.content} className="mt-1 text-[var(--or-text)]" />
-              {rowIsChoice && (
-                <div className="mt-2">
-                  <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("options")}</p>
-                  <ul className="mt-1 list-inside list-disc text-[var(--or-muted)]">
-                    {Object.entries(it.options ?? { A: "", B: "", C: "", D: "" }).map(([k, v]) => (
-                      <li key={k}>
-                        <strong>{k}</strong>{" "}
-                        <span className="inline-block align-top">
-                          <ContentWithPrimeBrush text={v} className="inline" />
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <details className="mt-2 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
-                <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("answer")}</summary>
-                <ContentWithPrimeBrush text={it.answer} className="mt-1" />
-              </details>
-              <details className="mt-1.5 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
-                <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("analysis")}</summary>
-                <ContentWithPrimeBrush text={it.analysis || ""} className="mt-1" />
-              </details>
-            </div>
-          );
-        })}
-      </div>
-    ) : (
-      <div className="mt-3 space-y-4 text-sm leading-relaxed">
-        <div>
-          <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("stem")}</p>
-          <ContentWithPrimeBrush text={previewQ!.content} className="mt-1 text-[var(--or-text)]" />
-        </div>
-        {isChoiceQuestionType(previewQ!.type) && previewQ!.options && (
-          <div>
-            <p className="text-[13px] font-semibold text-[var(--or-muted)]">{t("options")}</p>
-            <ul className="mt-1 list-inside list-disc text-[var(--or-muted)]">
-              {Object.entries(previewQ!.options).map(([k, v]) => (
-                <li key={k}>
-                  <strong>{k}</strong>{" "}
-                  <span className="inline-block align-top">
-                    <ContentWithPrimeBrush text={v} className="inline" />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        <details className="mt-2 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
-          <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("answer")}</summary>
-          <ContentWithPrimeBrush text={previewQ!.answer} className="mt-1" />
-        </details>
-        <details className="mt-1.5 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] p-2">
-          <summary className="cursor-pointer text-sm font-medium text-[var(--or-muted)]">{t("analysis")}</summary>
-          <ContentWithPrimeBrush text={previewQ!.analysis || ""} className="mt-1" />
-        </details>
-      </div>
-    );
 
   const saveConflictBanner = saveConflict?.qid === selectedId && detail ? (
     <div role="alert" className="mb-3 rounded-xl border border-amber-300 bg-[var(--or-warning-container)] p-3.5 text-sm">
@@ -868,6 +937,11 @@ export function BankWorkspace({
 
   return (
     <>
+      <BankPageContextSync
+        selectedId={selectedId}
+        draftStore={draftStore}
+        setPageContext={setPageContext}
+      />
       <BankToolbar
         busy={busy}
         selectedExportIds={selectedExportIds}
@@ -1088,6 +1162,7 @@ export function BankWorkspace({
                       panelMode="form"
                       detail={detail}
                       setDetail={setDetail}
+                      draftStore={draftStore}
                       busy={busy}
                       editorTab="form"
                       setEditorTab={setEditorTab}
@@ -1112,8 +1187,7 @@ export function BankWorkspace({
                     />
                   </TabsContent>
                   <TabsContent value="preview" className="or-surface or-g48-card mt-0 p-5">
-                    <h3 className="text-sm font-semibold text-[var(--or-muted)]">{t("livePreview")}</h3>
-                    {previewBlock}
+                    <BankQuestionPreview draftStore={draftStore} live={!editorModalOpen} />
                   </TabsContent>
                   <TabsContent value="source" className="mt-0">
                     <BankQuestionEditorPanel
@@ -1121,6 +1195,7 @@ export function BankWorkspace({
                       panelMode="yaml"
                       detail={detail}
                       setDetail={setDetail}
+                      draftStore={draftStore}
                       busy={busy}
                       editorTab="yaml"
                       setEditorTab={setEditorTab}
@@ -1168,6 +1243,7 @@ export function BankWorkspace({
             <BankQuestionEditorPanel
               detail={detail}
               setDetail={setDetail}
+              draftStore={draftStore}
               busy={busy}
               editorTab={editorTab}
               setEditorTab={setEditorTab}
@@ -1186,8 +1262,8 @@ export function BankWorkspace({
               beginImageEmbed={beginImageEmbed}
               onImageFileSelected={onImageFileSelected}
               onRemove={removeQuestion}
-              onSave={saveForm}
-              onSaveYaml={saveRawYaml}
+              onSave={() => saveModalEditor("form")}
+              onSaveYaml={() => saveModalEditor("yaml")}
               onClose={() => setEditorModalOpen(false)}
               removeLabel={detail.question_group ? t("removeGroup") : t("remove")}
             />

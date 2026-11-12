@@ -1,0 +1,316 @@
+/* Management pages share the platform palette and a quiet, layered surface. */
+.management-shell {
+  background: linear-gradient(145deg, color-mix(in srgb, var(--or-primary) 3%, var(--or-page)), var(--or-page) 48%);
+}
+
+.management-shell .management-topbar {
+  min-height: 4.25rem;
+  background: var(--or-card);
+  border-color: color-mix(in srgb, var(--or-outline) 75%, transparent);
+}
+
+.management-shell .management-main {
+  padding: clamp(1rem, 2.5vw, 2rem);
+}
+
+.management-shell .management-page-header {
+  align-items: center;
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin-bottom: 1.5rem;
+}
+
+.management-shell .management-page-title {
+  font-size: clamp(1.35rem, 1.8vw, 1.75rem);
+  letter-spacing: -.035em;
+}
+
+.management-shell .management-page-description {
+  max-width: 44rem;
+  line-height: 1.65;
+}
+
+.management-shell :is(.or-g53-card, .or-g55-card, .management-panel) {
+  border-radius: 1.125rem;
+  border-color: color-mix(in srgb, var(--or-outline) 85%, var(--or-card));
+  box-shadow: 0 3px 16px -10px var(--or-shadow);
+}
+
+.management-shell .or-g55-card > ol {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+}
+
+.management-shell .management-metric {
+  position: relative;
+  overflow: hidden;
+  padding: 1rem 1.125rem;
+}
+
+.management-shell .management-metric::after {
+  content: "";
+  position: absolute;
+  width: 2rem;
+  height: .25rem;
+  right: 1.125rem;
+  top: 1.25rem;
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--or-primary) 30%, var(--or-block));
+}
+
+.management-shell .management-metric > p:last-child {
+  margin-top: .5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.management-shell .management-summary {
+  background: color-mix(in srgb, var(--or-block) 60%, var(--or-card));
+  border-color: transparent;
+}
+
+.management-shell .management-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  row-gap: 1rem;
+}
+
+.management-shell .management-panel-header > div:first-child {
+  min-height: 2.25rem;
+}
+
+.management-shell .management-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .625rem;
+}
+
+.management-shell .management-search-field {
+  flex: 1 1 11rem;
+}
+
+.management-shell .management-toolbar > .management-field:not(.management-search-field) {
+  flex: 0 0 auto;
+}
+
+.management-shell :is(.or-g53-btn-primary, .or-g53-btn-tonal, .or-g53-icon-btn, .or-button),
+.management-dialog :is(.or-g53-btn-primary, .or-g53-btn-tonal, .or-g53-icon-btn) {
+  border-radius: .65rem;
+}
+
+.management-shell :is(.or-g53-btn-primary, .or-g53-btn-tonal),
+.management-dialog :is(.or-g53-btn-primary, .or-g53-btn-tonal) {
+  min-height: 2.35rem;
+  font-size: .8125rem;
+  font-weight: 600;
+}
+
+.management-shell .or-g53-btn-primary,
+.management-dialog .or-g53-btn-primary {
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--or-primary) 12%, transparent);
+}
+
+.management-shell :is(.or-g53-input, .or-g53-select),
+.management-dialog :is(.or-g53-input, .or-g53-select) {
+  min-height: 2.35rem;
+  border-radius: .625rem;
+  background-color: var(--or-card);
+  font-size: .8125rem;
+}
+
+.management-shell :is(button, input, select):focus-visible,
+.management-dialog :is(button, input, select):focus-visible {
+  outline: 2px solid var(--or-focus);
+  outline-offset: 2px;
+}
+
+.management-shell .management-section-nav {
+  padding: .375rem;
+  gap: .375rem;
+  border: 1px solid var(--or-outline);
+  border-radius: .875rem;
+  background: color-mix(in srgb, var(--or-card) 75%, var(--or-block));
+}
+
+.management-shell .management-section-nav > button {
+  min-height: 2.5rem;
+  border-radius: .55rem;
+  padding: .625rem .875rem;
+  text-align: center;
+  border-color: transparent;
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.management-shell [role="tablist"].management-section-nav {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr));
+}
+
+.management-shell .management-section-nav > :is([aria-selected="true"], .bg-or-primary) {
+  background: var(--or-primary);
+  color: var(--or-on-primary);
+  box-shadow: 0 2px 5px var(--or-shadow);
+}
+
+.management-shell :is(.or-g53-table-container, .management-table-container, .management-table-wrap) {
+  overflow-x: auto;
+  border: 1px solid var(--or-outline);
+  border-radius: .8rem;
+  scrollbar-width: thin;
+}
+
+.management-shell table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.management-shell thead {
+  background: color-mix(in srgb, var(--or-block) 60%, var(--or-card));
+  white-space: nowrap;
+}
+
+.management-shell th {
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--or-muted);
+}
+
+.management-shell :is(th, td) {
+  padding: .75rem .875rem;
+}
+
+.management-shell .management-table { min-width: 23rem; }
+.management-shell .management-table :is(th, td) { vertical-align: middle; }
+.management-shell .management-table tbody > tr + tr { border-top: 1px solid var(--or-outline); }
+.management-shell .management-table tbody > tr.is-selected {
+  background: var(--or-primary-container);
+  box-shadow: inset 3px 0 var(--or-primary);
+}
+.management-shell .management-table tbody > tr.is-selected td:first-child button { color: var(--or-on-container); }
+.management-shell .management-row-actions { min-width: 10rem; }
+.management-shell .management-row-actions > button { white-space: nowrap; }
+
+.management-shell input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  vertical-align: middle;
+  accent-color: var(--or-primary);
+}
+
+.management-shell .management-bulk-actions {
+  min-height: 2.35rem;
+  border-radius: .625rem;
+  border-color: color-mix(in srgb, var(--or-primary) 25%, var(--or-outline));
+  background: var(--or-primary-container);
+}
+
+.management-shell .management-empty {
+  padding: 2.5rem 1rem;
+  background: color-mix(in srgb, var(--or-block) 40%, var(--or-card));
+}
+
+.management-shell .management-pager {
+  font-size: .8125rem;
+}
+
+.management-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: rgb(10 15 25 / 42%);
+}
+
+.management-dialog {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 120;
+  width: min(36rem, calc(100vw - 2rem));
+  max-height: min(54rem, calc(100dvh - 2rem));
+  overflow-y: auto;
+  padding: 1.5rem;
+  border: 1px solid var(--or-outline);
+  border-radius: 1.25rem;
+  background: var(--or-card);
+  color: var(--or-text);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 20%);
+}
+
+.management-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--or-outline);
+}
+
+.management-dialog-header h2 { font-size: 1.125rem; font-weight: 650; letter-spacing: -.02em; }
+.management-dialog-header p { margin-top: .375rem; font-size: .8125rem; color: var(--or-muted); line-height: 1.6; }
+
+.management-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .625rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--or-outline);
+}
+
+.management-field {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  min-width: 0;
+  font-size: .8125rem;
+  font-weight: 500;
+}
+
+.management-dialog .management-field > :is(input:not([type="range"]), select) {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: .5rem .75rem;
+  border: 1px solid var(--or-outline);
+  border-radius: .625rem;
+  background: var(--or-card);
+  color: var(--or-text);
+  font-weight: 400;
+}
+
+.management-dialog input[type="range"] { flex: 1; min-width: 0; accent-color: var(--or-primary); }
+.management-dialog .management-panel + .management-panel { padding-top: 1.25rem; border-top: 1px solid var(--or-outline); }
+
+.management-form-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.management-notice {
+  padding: .75rem 1rem;
+  border: 1px solid var(--or-outline);
+  border-radius: .75rem;
+  font-size: .8125rem;
+  line-height: 1.6;
+}
+
+html[data-eh-density="compact"] .management-shell .management-metric {
+  padding-block: .75rem;
+}
+
+html[data-eh-density="compact"] .management-shell :is(th, td) {
+  padding-block: .5rem;
+}
+
+@media (max-width: 639px) {
+  .management-shell .management-topbar { min-height: 3.75rem; }
+  .management-shell .management-page-header { align-items: flex-start; margin-bottom: 1.25rem; }
+  .management-shell .management-page-actions { gap: .5rem; }
+  .management-shell .management-panel-header { flex-direction: column; }
+  .management-shell .management-toolbar { width: 100%; }
+  .management-dialog { padding: 1.125rem; border-radius: 1rem; }
+}

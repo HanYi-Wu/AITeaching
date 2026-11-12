@@ -3,6 +3,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { ImagePlus, Plus, Minus } from "lucide-react";
@@ -33,6 +34,8 @@ import {
   updateSingleQuestionType,
 } from "./bankEditorAdapters";
 import { Select as AppSelect } from "./ui/select";
+
+const NOOP_SUBSCRIBE = (_listener: () => void) => () => undefined;
 
 export type {
   QuestionJson,
@@ -95,15 +98,16 @@ function BankGiLatexField({
 
 export function BankQuestionEditorPanel({
   panelMode = "full",
-  detail,
-  setDetail,
+  detail: initialDetail,
+  setDetail: initialSetDetail,
+  draftStore,
   busy,
   editorTab,
   setEditorTab,
-  rawYaml,
-  setRawYaml,
-  metaRows,
-  setMetaRows,
+  rawYaml: initialRawYaml,
+  setRawYaml: initialSetRawYaml,
+  metaRows: initialMetaRows,
+  setMetaRows: initialSetMetaRows,
   contentRef,
   answerRef,
   analysisRef,
@@ -122,6 +126,23 @@ export function BankQuestionEditorPanel({
   embedded = false,
 }: BankQuestionEditorPanelProps) {
   const { t } = useTranslation(["lib", "components", "bank"]);
+  const fallbackDraft = useMemo(
+    () => ({ detail: initialDetail, rawYaml: initialRawYaml, metaRows: initialMetaRows }),
+    [initialDetail, initialRawYaml, initialMetaRows],
+  );
+  const draft = useSyncExternalStore(
+    draftStore?.subscribe ?? NOOP_SUBSCRIBE,
+    draftStore?.getSnapshot ?? (() => fallbackDraft),
+    draftStore?.getSnapshot ?? (() => fallbackDraft),
+  );
+  const detail = draftStore ? draft.detail ?? initialDetail : initialDetail;
+  // Keep writes flowing through the session hook's wrapped setters. They update
+  // the external snapshot and synchronously maintain dirty/switch-confirm state.
+  const setDetail = initialSetDetail;
+  const rawYaml = draftStore ? draft.rawYaml : initialRawYaml;
+  const setRawYaml = initialSetRawYaml;
+  const metaRows = draftStore ? draft.metaRows : initialMetaRows;
+  const setMetaRows = initialSetMetaRows;
   const removeText = removeLabel ?? t("bank:remove");
   const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false);
   const qg = detail.question_group;

@@ -1,0 +1,401 @@
+.management-help {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.management-help__trigger {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--or-primary) 70%, transparent);
+  border-radius: 999px;
+  background: var(--or-primary);
+  padding: 8px 14px;
+  color: var(--or-on-primary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.1;
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--or-primary) 20%, transparent);
+  cursor: pointer;
+  transition: filter 120ms ease, transform 120ms ease;
+  white-space: nowrap;
+}
+
+.management-help__trigger:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.management-help__trigger:focus-visible,
+.management-help__close:focus-visible,
+.management-help__send:focus-visible,
+.management-help__suggestions button:focus-visible,
+.management-help__links button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--or-primary) 46%, white);
+  outline-offset: 2px;
+}
+
+.management-help__trigger-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.management-help__trigger-short {
+  display: none;
+}
+
+.management-help__shortcut {
+  margin-left: 3px;
+  border: 1px solid color-mix(in srgb, var(--or-on-primary) 35%, transparent);
+  border-radius: 6px;
+  padding: 3px 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.82;
+}
+
+.management-help__overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  background: rgb(15 23 42 / 48%);
+  animation: management-help-fade 120ms ease-out;
+}
+
+.management-help__dialog {
+  position: fixed;
+  z-index: 1001;
+  top: max(6vh, 20px);
+  left: 50%;
+  display: flex;
+  width: min(620px, calc(100vw - 28px));
+  max-height: min(760px, 88vh);
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateX(-50%);
+  border: 1px solid var(--or-outline);
+  border-radius: 22px;
+  background: var(--or-card);
+  color: var(--or-text);
+  box-shadow: 0 24px 80px rgb(15 23 42 / 25%);
+  outline: none;
+  animation: management-help-appear 140ms ease-out;
+}
+
+.management-help__header {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--or-outline);
+  padding: 16px 20px;
+}
+
+.management-help__heading-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  place-items: center;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--or-primary) 13%, var(--or-card));
+  color: var(--or-primary);
+}
+
+.management-help__heading-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.management-help__heading-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.management-help__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.management-help__description {
+  margin-top: 3px;
+  color: var(--or-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.management-help__close {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--or-muted);
+  cursor: pointer;
+}
+
+.management-help__close:hover {
+  background: var(--or-block);
+  color: var(--or-text);
+}
+
+.management-help__close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.management-help__conversation {
+  min-height: 220px;
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px 20px 16px;
+}
+
+.management-help__welcome > p {
+  margin: 0 0 11px;
+  color: var(--or-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.management-help__suggestions {
+  display: grid;
+  gap: 8px;
+}
+
+.management-help__suggestions button {
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--or-outline);
+  border-radius: 999px;
+  background: var(--or-card);
+  padding: 9px 13px;
+  color: var(--or-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.management-help__suggestions button:hover {
+  border-color: color-mix(in srgb, var(--or-primary) 55%, var(--or-outline));
+  background: color-mix(in srgb, var(--or-primary) 7%, var(--or-card));
+}
+
+.management-help__suggestions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.management-help__turns {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.management-help__turn {
+  max-width: 92%;
+  border-radius: 16px;
+  padding: 11px 14px;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.management-help__turn p {
+  margin: 0;
+}
+
+.management-help__turn--user {
+  align-self: flex-end;
+  border-bottom-right-radius: 5px;
+  background: var(--or-primary);
+  color: var(--or-on-primary);
+}
+
+.management-help__turn--assistant {
+  align-self: flex-start;
+  border: 1px solid var(--or-outline);
+  border-bottom-left-radius: 5px;
+  background: var(--or-block);
+}
+
+.management-help__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.management-help__links button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--or-primary) 35%, var(--or-outline));
+  border-radius: 999px;
+  background: var(--or-card);
+  padding: 5px 10px;
+  color: var(--or-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.management-help__links button:hover {
+  background: color-mix(in srgb, var(--or-primary) 9%, var(--or-card));
+}
+
+.management-help__links svg {
+  width: 13px;
+  height: 13px;
+}
+
+.management-help__status,
+.management-help__error {
+  margin: 10px 0 0;
+  color: var(--or-muted);
+  font-size: 12px;
+}
+
+.management-help__error {
+  color: var(--or-danger, #b42318);
+}
+
+.management-help__form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 0 20px 18px;
+  border: 1px solid var(--or-outline);
+  border-radius: 16px;
+  background: var(--or-card);
+  padding: 8px;
+}
+
+.management-help__form:focus-within {
+  border-color: color-mix(in srgb, var(--or-primary) 60%, var(--or-outline));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--or-primary) 12%, transparent);
+}
+
+.management-help__input-wrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.management-help__input-wrap textarea {
+  display: block;
+  width: 100%;
+  max-height: 120px;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 6px 7px;
+  color: var(--or-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.management-help__input-wrap textarea::placeholder {
+  color: var(--or-muted);
+}
+
+.management-help__send {
+  display: inline-flex;
+  min-width: 74px;
+  height: 38px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--or-primary);
+  color: var(--or-on-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.management-help__send:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.management-help__send svg {
+  width: 17px;
+  height: 17px;
+}
+
+@keyframes management-help-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes management-help-appear {
+  from { opacity: 0; margin-top: 5px; }
+  to { opacity: 1; margin-top: 0; }
+}
+
+@media (max-width: 640px) {
+  .management-help__trigger {
+    min-height: 38px;
+    gap: 6px;
+    padding: 8px 11px;
+  }
+
+  .management-help__trigger-long,
+  .management-help__shortcut {
+    display: none;
+  }
+
+  .management-help__trigger-short {
+    display: inline;
+  }
+
+  .management-help__dialog {
+    top: 10px;
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    border-radius: 18px;
+  }
+
+  .management-help__header {
+    min-height: 68px;
+    padding: 12px 14px;
+  }
+
+  .management-help__conversation {
+    min-height: 180px;
+    padding: 18px 14px 12px;
+  }
+
+  .management-help__form {
+    margin: 0 14px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .management-help__trigger,
+  .management-help__overlay,
+  .management-help__dialog {
+    animation: none;
+    transition: none;
+  }
+}

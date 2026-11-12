@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Literal, Union
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Annotated, Any, Iterator, Literal, Union, get_args
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 from typing_extensions import Self
@@ -12,6 +14,7 @@ ChoiceQuestionType = Literal["single_choice", "multiple_choice"]
 LegacyChoiceType = Literal["choice"]
 QuestionType = Literal["single_choice", "multiple_choice", "fill", "judge", "short_answer", "reasoning", "essay"]
 QuestionTypeOrLegacyChoice = QuestionType | LegacyChoiceType
+_QUESTION_TYPE_VALUES = frozenset(get_args(QuestionType))
 
 CHOICE_QUESTION_TYPES = frozenset({"single_choice", "multiple_choice"})
 LEGACY_CHOICE_TYPE = "choice"
@@ -36,6 +39,44 @@ def _valid_judge_answer(answer: str) -> bool:
         return False
     alternatives = branches(decode(answer))
     return all(len(branch) == 1 and next(iter(branch)).upper() in {'T', 'F'} for branch in alternatives)
+
+
+def _copy_metadata_value(value: Any, memo: dict[int, Any]) -> Any:
+    """Copy YAML containers cheaply while preserving aliases and recursive data."""
+    if type(value) is dict:
+        identity = id(value)
+        if identity in memo:
+            return memo[identity]
+        clone: dict[Any, Any] = {}
+        memo[identity] = clone
+        for key, child in value.items():
+            clone[_copy_metadata_value(key, memo)] = _copy_metadata_value(child, memo)
+        return clone
+    if type(value) is list:
+        identity = id(value)
+        if identity in memo:
+            return memo[identity]
+        clone_list: list[Any] = []
+        memo[identity] = clone_list
+        clone_list.extend(_copy_metadata_value(child, memo) for child in value)
+        return clone_list
+    if type(value) is set:
+        identity = id(value)
+        if identity not in memo:
+            memo[identity] = value.copy()
+        return memo[identity]
+    if value is None or isinstance(value, (str, bytes, int, float, bool, complex)):
+        return value
+    # SafeLoader scalar types are immutable; this fallback also handles unusual
+    # values installed by callers after parsing without sharing mutable state.
+    return deepcopy(value, memo)
+
+
+def _clone_group_metadata(value: object) -> dict[str, Any]:
+    """Preserve the historical ``dict(value)`` coercion while isolating nested data."""
+    if not value:
+        return {}
+    return _copy_metadata_value(dict(value), {})
 
 
 def is_choice_type(qtype: object) -> bool:
@@ -230,39 +271,207 @@ class QuestionItem(BaseModel):
         return self
 
 
-def _tagged_to_question_item(
+def _metadata_projection_is_safe(value: object, seen: set[int] | None = None) -> bool:
+    """Check whether lint can read metadata without invoking deepcopy hooks."""
+    value_type = type(value)
+    if value is None or value_type in (str, bytes, int, float, bool, complex):
+        return True
+    if value_type not in (dict, list, tuple, set):
+        return False
+    if seen is None:
+        seen = set()
+    identity = id(value)
+    if identity in seen:
+        return True
+    seen.add(identity)
+    if value_type is dict:
+        return all(
+            _metadata_projection_is_safe(key, seen) and _metadata_projection_is_safe(child, seen)
+            for key, child in value.items()
+        )
+    return all(_metadata_projection_is_safe(child, seen) for child in value)
+
+
+def _question_item_projection_is_valid(row: _GroupQuestionProjection) -> bool:
+    """Mirror QuestionItem's field and after-validator checks for its trusted fast path."""
+    if any(
+        type(value) is not str
+        for value in (row.id, row.type, row.content, row.answer, row.analysis)
+    ):
+        return False
+    if row.type not in _QUESTION_TYPE_VALUES:
+        return False
+    options = row.options if row.copies_options else None
+    if is_choice_type(row.type):
+        if type(options) is not dict or not options:
+            return False
+        if any(type(key) is not str or type(value) is not str for key, value in options.items()):
+            return False
+    elif options is not None:
+        return False
+    if row.type == "judge" and not _valid_judge_answer(row.answer):
+        return False
+    metadata = row.metadata
+    if type(metadata) is not dict or any(type(key) is not str for key in metadata):
+        return False
+    if not _metadata_projection_is_safe(metadata):
+        return False
+    group_material = row.group_material
+    if group_material is not None and type(group_material) is not str:
+        return False
+    unified = row.unified
+    if unified is not None and type(unified) not in (bool, str):
+        return False
+    group_root_id = row.group_root_id
+    if group_root_id is not None and type(group_root_id) is not str:
+        return False
+    group_member_index = row.group_member_index
+    return group_member_index is None or type(group_member_index) is int
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupQuestionProjection:
+    """Read-only row view shared by static linting and hydrated model materialization."""
+
+    id: str
+    type: object
+    content: object
+    options: object
+    answer: object
+    analysis: object
+    metadata: object
+    group_material: object
+    unified: object
+    group_root_id: object
+    group_member_index: object
+    copies_options: bool
+
+    def to_question_item(self) -> QuestionItem:
+        # Match the established isolation/coercion semantics of group flattening.
+        return _materialize_group_question_row(
+            id=self.id,
+            type=self.type,
+            content=self.content,
+            options=self.options,
+            answer=self.answer,
+            analysis=self.analysis,
+            metadata=self.metadata,
+            group_material=self.group_material,
+            unified=self.unified,
+            group_root_id=self.group_root_id,
+            group_member_index=self.group_member_index,
+            copies_options=self.copies_options,
+        )
+
+    def iter_text_fields(self) -> Iterator[tuple[str, str]]:
+        if not _question_item_projection_is_valid(self):
+            item = self.to_question_item()
+            if (item.content or "").strip():
+                yield "content", item.content
+            if (item.answer or "").strip():
+                yield "answer", item.answer
+            if (item.analysis or "").strip():
+                yield "analysis", item.analysis
+            if item.options:
+                for key, value in item.options.items():
+                    if (value or "").strip():
+                        yield f"option_{key}", value
+            return
+
+        for field, value in (
+            ("content", self.content),
+            ("answer", self.answer),
+            ("analysis", self.analysis),
+        ):
+            if (value or "").strip():
+                yield field, value  # type: ignore[misc]
+        if self.options:
+            # Like the former QuestionItem construction, lint sees a stable option snapshot.
+            for key, value in dict(self.options).items():  # type: ignore[arg-type]
+                if (value or "").strip():
+                    yield f"option_{key}", value
+
+
+def _materialize_group_question_row(
+    *,
+    id: str,
+    type: object,
+    content: object,
+    options: object,
+    answer: object,
+    analysis: object,
+    metadata: object,
+    group_material: object,
+    unified: object,
+    group_root_id: object,
+    group_member_index: object,
+    copies_options: bool,
+) -> QuestionItem:
+    """Construct the validated row model from the canonical group projection fields."""
+    # Preserve the legacy evaluation order: metadata copying happened before the
+    # choice-options snapshot when a group row was flattened.
+    copied_metadata = _clone_group_metadata(metadata)
+    copied_options = dict(options) if copies_options else None  # type: ignore[arg-type]
+    return QuestionItem(
+        type=type,
+        options=copied_options,
+        id=id,
+        content=content,
+        answer=answer,
+        analysis=analysis,
+        metadata=copied_metadata,
+        group_material=group_material,
+        unified=unified,
+        group_root_id=group_root_id,
+        group_member_index=group_member_index,
+    )
+
+
+def _tagged_question_projection(
     t: GroupMixedSubItem,
     *,
     group_id: str,
     member_index: int,
     material: str,
     unified_false: bool,
-) -> QuestionItem:
-    base = {
-        "id": f"{group_id}__{member_index:02d}",
-        "content": t.content,
-        "answer": t.answer,
-        "analysis": t.analysis or "",
-        "metadata": dict(t.metadata) if t.metadata else {},
-        "group_material": material,
-        "unified": False if unified_false else None,
-        "group_root_id": group_id,
-        "group_member_index": member_index,
-    }
+    materialize: bool = False,
+) -> _GroupQuestionProjection | QuestionItem:
+    row_id = f"{group_id}__{member_index:02d}"
+    content = t.content
+    answer = t.answer
+    analysis = t.analysis or ""
+    metadata = t.metadata
     if isinstance(t, TaggedChoice):
-        return QuestionItem(type=t.type, options=dict(t.options), **base)
-    if isinstance(t, TaggedFill):
-        return QuestionItem(type="fill", options=None, **base)
-    if isinstance(t, TaggedJudge):
-        return QuestionItem(type="judge", options=None, **base)
-    if isinstance(t, TaggedShortAnswer):
-        return QuestionItem(type="short_answer", options=None, **base)
-    if isinstance(t, TaggedReasoning):
-        return QuestionItem(type="reasoning", options=None, **base)
-    return QuestionItem(type="essay", options=None, **base)
+        item_type, options, copies_options = t.type, t.options, True
+    elif isinstance(t, TaggedFill):
+        item_type, options, copies_options = "fill", None, False
+    elif isinstance(t, TaggedJudge):
+        item_type, options, copies_options = "judge", None, False
+    elif isinstance(t, TaggedShortAnswer):
+        item_type, options, copies_options = "short_answer", None, False
+    elif isinstance(t, TaggedReasoning):
+        item_type, options, copies_options = "reasoning", None, False
+    else:
+        item_type, options, copies_options = "essay", None, False
+    row_unified = False if unified_false else None
+    factory = _materialize_group_question_row if materialize else _GroupQuestionProjection
+    return factory(
+        id=row_id,
+        type=item_type,
+        content=content,
+        options=options,
+        answer=answer,
+        analysis=analysis,
+        metadata=metadata,
+        group_material=material,
+        unified=row_unified,
+        group_root_id=group_id,
+        group_member_index=member_index,
+        copies_options=copies_options,
+    )
 
 
-def _unified_body_to_question_item(
+def _unified_question_projection(
     body: UnifiedBody,
     *,
     ut: QuestionType,
@@ -270,30 +479,41 @@ def _unified_body_to_question_item(
     member_index: int,
     material: str,
     unified_val: str,
-) -> QuestionItem:
-    base = {
-        "id": f"{group_id}__{member_index:02d}",
-        "content": body.content,
-        "answer": body.answer,
-        "analysis": body.analysis or "",
-        "metadata": dict(body.metadata) if body.metadata else {},
-        "group_material": material,
-        "unified": unified_val,
-        "group_root_id": group_id,
-        "group_member_index": member_index,
-    }
+    materialize: bool = False,
+) -> _GroupQuestionProjection | QuestionItem:
+    row_id = f"{group_id}__{member_index:02d}"
+    content = body.content
+    answer = body.answer
+    analysis = body.analysis or ""
+    metadata = body.metadata
     if is_choice_type(ut):
         assert isinstance(body, ChoiceBody)
-        return QuestionItem(type=ut, options=dict(body.options), **base)
-    if ut == "fill":
-        return QuestionItem(type="fill", options=None, **base)
-    if ut == "judge":
-        return QuestionItem(type="judge", options=None, **base)
-    if ut == "short_answer":
-        return QuestionItem(type="short_answer", options=None, **base)
-    if ut == "reasoning":
-        return QuestionItem(type="reasoning", options=None, **base)
-    return QuestionItem(type="essay", options=None, **base)
+        item_type, options, copies_options = ut, body.options, True
+    elif ut == "fill":
+        item_type, options, copies_options = "fill", None, False
+    elif ut == "judge":
+        item_type, options, copies_options = "judge", None, False
+    elif ut == "short_answer":
+        item_type, options, copies_options = "short_answer", None, False
+    elif ut == "reasoning":
+        item_type, options, copies_options = "reasoning", None, False
+    else:
+        item_type, options, copies_options = "essay", None, False
+    factory = _materialize_group_question_row if materialize else _GroupQuestionProjection
+    return factory(
+        id=row_id,
+        type=item_type,
+        content=content,
+        options=options,
+        answer=answer,
+        analysis=analysis,
+        metadata=metadata,
+        group_material=material,
+        unified=unified_val,
+        group_root_id=group_id,
+        group_member_index=member_index,
+        copies_options=copies_options,
+    )
 
 
 class QuestionGroupRecord(BaseModel):
@@ -366,21 +586,23 @@ class QuestionGroupRecord(BaseModel):
             return self
         raise ValueError("unified must be false or a question type name")
 
-    def flatten(self) -> list[QuestionItem]:
-        """Expand to per-row QuestionItem with hydrate fields set (for pipeline)."""
-        rows: list[QuestionItem] = []
+    def _iter_rows(
+        self,
+        *,
+        materialize: bool,
+    ) -> Iterator[_GroupQuestionProjection | QuestionItem]:
+        """Yield canonical projected fields as views or validated row models."""
         if self.unified is False:
             for i, row in enumerate(self.items):
-                rows.append(
-                    _tagged_to_question_item(
-                        row,
-                        group_id=self.id,
-                        member_index=i + 1,
-                        material=self.material,
-                        unified_false=True,
-                    )
+                yield _tagged_question_projection(
+                    row,
+                    group_id=self.id,
+                    member_index=i + 1,
+                    material=self.material,
+                    unified_false=True,
+                    materialize=materialize,
                 )
-            return rows
+            return
         ut = self.unified
         assert isinstance(ut, str)
         for i, body in enumerate(self.items):
@@ -388,17 +610,27 @@ class QuestionGroupRecord(BaseModel):
                 body,
                 (ChoiceBody, FillBody, JudgeBody, ShortAnswerBody, ReasoningBody, EssayBody),
             )
-            rows.append(
-                _unified_body_to_question_item(
-                    body,
-                    ut=ut,  # type: ignore[arg-type]
-                    group_id=self.id,
-                    member_index=i + 1,
-                    material=self.material,
-                    unified_val=ut,
-                )
+            yield _unified_question_projection(
+                body,
+                ut=ut,  # type: ignore[arg-type]
+                group_id=self.id,
+                member_index=i + 1,
+                material=self.material,
+                unified_val=ut,
+                materialize=materialize,
             )
-        return rows
+
+    def iter_projected_rows(self) -> Iterator[_GroupQuestionProjection]:
+        """Yield lightweight row views for consumers that do not need QuestionItems."""
+        yield from self._iter_rows(materialize=False)  # type: ignore[misc]
+
+    def iter_flattened(self) -> Iterator[QuestionItem]:
+        """Yield per-row QuestionItems with hydrate fields set (for pipeline)."""
+        yield from self._iter_rows(materialize=True)  # type: ignore[misc]
+
+    def flatten(self) -> list[QuestionItem]:
+        """Compatibility wrapper returning a new list on every call."""
+        return list(self.iter_flattened())
 
 
 BankRecord = QuestionItem | QuestionGroupRecord

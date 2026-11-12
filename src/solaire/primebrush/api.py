@@ -25,6 +25,8 @@ PrimeBrush 是 EducationPaperDesignAutomation 的教育绘图库，
 
 from __future__ import annotations
 
+import importlib
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +48,22 @@ _PLANNED_TYPES = frozenset(
         "geography_contour",
     }
 )
+
+@cache
+def _get_rust_render() -> Any:
+    """Resolve the optional Rust renderer once for this process."""
+    try:
+        rust_module = importlib.import_module("primebrush_rs")
+    except (ImportError, NotImplementedError):
+        return None
+    # The in-progress native extension exports a path formatter but its module
+    # level render function is still a stub. Avoid serializing the full model
+    # for that known capability set. Extensions without a marker keep the
+    # legacy behavior and are treated as full renderers.
+    if getattr(rust_module, "HAS_FULL_RENDER", True) is False:
+        return None
+    rust_render = getattr(rust_module, "render", None)
+    return rust_render if callable(rust_render) else None
 
 
 def _load_yaml_dict(raw: str | bytes | Path) -> dict[str, Any]:
@@ -83,10 +101,11 @@ def render(doc: PrimeBrushDoc, *, seed: int | None = None) -> str:
     Returns:
         SVG string.
     """
+    rust_render = _get_rust_render()
+    if rust_render is None:
+        return _render_python_impl(doc, seed=seed)
     try:
-        from primebrush_rs import render as _rust_render  # type: ignore[import-not-found]
-
-        return _rust_render(doc.model_dump(mode="json"), seed=seed)  # type: ignore[no-any-return]
+        return rust_render(doc.model_dump(mode="json"), seed=seed)  # type: ignore[no-any-return]
     except (ImportError, NotImplementedError):
         return _render_python_impl(doc, seed=seed)
 

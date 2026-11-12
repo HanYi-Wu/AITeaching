@@ -381,6 +381,38 @@ export function isWidget(el: HTMLElement): boolean {
   );
 }
 
+/**
+ * Identifies a collapsed DOM caret at the structural end of the editor.
+ * The check walks only the caret's ancestor chain; callers can use the already
+ * serialized text length for this exact case and retain the full offset walk
+ * for selections before trailing nodes or inside widgets.
+ */
+export function isCollapsedCaretAtEditorEnd(root: HTMLElement, range: Range): boolean {
+  if (!range.collapsed) return false;
+
+  let current = range.startContainer;
+  if (current !== root && !root.contains(current)) return false;
+  if (
+    current !== root &&
+    current instanceof HTMLElement &&
+    (current.tagName === "BR" || isWidget(current))
+  ) return false;
+  if (current.nodeType === Node.TEXT_NODE) {
+    if (range.startOffset !== (current.textContent ?? "").length) return false;
+  } else if (current.nodeType === Node.ELEMENT_NODE) {
+    if (range.startOffset !== current.childNodes.length) return false;
+  } else {
+    return false;
+  }
+
+  while (current !== root) {
+    const parent = current.parentNode;
+    if (!(parent instanceof HTMLElement) || isWidget(parent) || parent.lastChild !== current) return false;
+    current = parent;
+  }
+  return true;
+}
+
 export function serializedLengthOfNode(n: Node | undefined | null): number {
   if (!n) return 0;
   if (n.nodeType === Node.TEXT_NODE) return (n.textContent ?? "").length;

@@ -7,13 +7,14 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { useTranslation } from "react-i18next";
 import "../../ui-redesign/g49/g49.css";
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from "../../api/client";
 import { useContentLibraryChanged } from "../../lib/contentEvents";
 import { TexSetupNotice } from "../../components/TexSetupNotice";
-import { useAgentContext } from "../../contexts/AgentContext";
-import { useToolBar } from "../../contexts/ToolBarContext";
+import { useAgentActions } from "../../contexts/AgentContext";
+import { useToolBarActions } from "../../contexts/ToolBarContext";
 import i18n from "../../i18n/i18n";
 import type { SectionSlot } from "../../lib/groupQuestions";
 import { confirmDialog } from "../../lib/confirmDialog";
@@ -40,6 +41,7 @@ import type {
   RightSelection,
   TemplateRow,
 } from "../../types/compose";
+import type { AutoComposeResponse, DuplicateQuestionReport, DuplicateReport as DuplicateReportData } from "../../types/autoCompose";
 import {
   downloadExportedBundle,
   normTemplatePath,
@@ -66,7 +68,8 @@ import { useComposePaperHistory } from "./useComposePaperHistory";
 import { useComposeDraftScope } from "./useComposeDraftScope";
 import { useComposeBankFilter } from "./useComposeBankFilter";
 import { ComposeHistorySidebar } from "./ComposeHistorySidebar";
-import { ComposeBankSearchPanel } from "./ComposeBankSearchPanel";
+import { ComposeBankActionBar, ComposeBankSearchPanel } from "./ComposeBankSearchPanel";
+import { useBankSelectionStore } from "./bank-search/rewrite-list";
 import { ComposePaperEditorPanel } from "./ComposePaperEditorPanel";
 import { ComposePdfPreviewAside } from "./ComposePdfPreviewAside";
 import { NewPaperDialog } from "./NewPaperDialog";
@@ -78,6 +81,8 @@ import { useComposeExportTasks, type ExportSuccess } from "./useComposeExportTas
 import { ComposeExportTaskBanner } from "./ComposeExportTaskBanner";
 import { useTaskProgress } from "./useTaskProgress";
 import { ComposeDraftRecoveryDialog } from "./ComposeDraftRecoveryDialog";
+import { AutoComposeDialog } from "./AutoComposeDialog";
+import { DuplicateReport } from "./DuplicateReport";
 
 type GraphBindingNode = { id: string; canonical_name: string; node_kind?: string };
 
@@ -101,8 +106,8 @@ export function ComposeWorkspace({
   projectRoot?: string | null;
 }) {
   const { t } = useTranslation(["compose", "common", "lib"]);
-  const { setPageContext } = useAgentContext();
-  const { setToolBar, clearToolBar } = useToolBar();
+  const { setPageContext } = useAgentActions();
+  const { setToolBar, clearToolBar } = useToolBarActions();
   /** 用于右侧 PDF 的考试目录标识（``标签段/学科段``），与 ``GET /api/exams/{path}/pdf-file`` 一致 */
   const [pdfExamId, setPdfExamId] = useState<string | null>(null);
   const [pdfVariant, setPdfVariant] = useState<"student" | "teacher">("student");
@@ -113,15 +118,15 @@ export function ComposeWorkspace({
   const [namespaceFilter, setNamespaceFilter] = useState<string>("__all__");
   const [typeFilter, setTypeFilter] = useState<string>("__all__");
   const [metadataFilters, setMetadataFilters] = useState<MetadataFilters>({});
-  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [searchDraftResetVersion, setSearchDraftResetVersion] = useState(0);
   const [composeFilterExpanded, setComposeFilterExpanded] = useState(false);
-  const [activeComposePanel, setActiveComposePanel] = useState<"paper" | "bank" | "history">("paper");
+  const [activeComposePanel, setActiveComposePanel] = useState<"paper" | "bank">("paper");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historySelectPortalContainer, setHistorySelectPortalContainer] = useState<HTMLDivElement | null>(null);
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  /** 左侧题库多选（qualified_id），顺序与列表一致；配合 Ctrl/⌘、Shift 桌面习惯 */
-  const [selectedLeftIds, setSelectedLeftIds] = useState<string[]>([]);
-  /** 用于 Shift+点击 范围选择的锚点（filteredQuestions 下标） */
-  const [leftListAnchorId, setLeftListAnchorId] = useState<string | null>(null);
+  /** 左侧题库差量订阅模型（qualified_id），按 ID 局部通知更新 */
+  const bankSelectionStore = useBankSelectionStore([]);
   const [selectedRight, setSelectedRight] = useState<RightSelection | null>(null);
   /** 试卷栏 Shift 区间锚点（仅与 `section_id` 组合有效，不跨题型） */
   const [rightListAnchor, setRightListAnchor] = useState<{ sectionId: string; slotIndex: number } | null>(null);
@@ -165,12 +170,31 @@ export function ComposeWorkspace({
   /** 从历史复制时的新考试标签（学科沿用源导出） */
   const [dlgHistoryExportLabel, setDlgHistoryExportLabel] = useState("");
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [autoComposeOpen, setAutoComposeOpen] = useState(false);
+  const [duplicateReportOpen, setDuplicateReportOpen] = useState(false);
+  const [duplicateCheckLoading, setDuplicateCheckLoading] = useState(false);
+  const [duplicateCheckError, setDuplicateCheckError] = useState<string | null>(null);
+  const [duplicateReportRecord, setDuplicateReportRecord] = useState<{
+    contextKey: string;
+    selectionFingerprint: string;
+    report: DuplicateReportData;
+    stale: boolean;
+  } | null>(null);
+  const duplicateRequestIdRef = useRef(0);
   const examLoadSequence = useRef(0);
   const currentExamIdRef = useRef<string | null>(null);
   currentExamIdRef.current = currentExamId;
 
   const draftScope = useComposeDraftScope({ accountId, projectRoot, currentExamId });
-  useEffect(() => { setExportFailureExamIds([]); setExportPreflightFailure(null); setBusy(false); }, [currentExamId]);
+  useEffect(() => {
+    setExportFailureExamIds([]);
+    setExportPreflightFailure(null);
+    setBusy(false);
+    setAutoComposeOpen(false);
+    setDuplicateReportOpen(false);
+    setDuplicateCheckLoading(false);
+    setDuplicateCheckError(null);
+  }, [currentExamId]);
   const captureOwnerRequest = useComposeRequestScope(draftScope.ownerKey);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -183,8 +207,9 @@ export function ComposeWorkspace({
     currentExamIdRef.current = null;
     setCurrentExamId(null); setPdfExamId(null); setWordExamId(null); setLastExportedExamId(null);
     setPreviewPdfId(null); setPreviewOpen(false); setPreviewWarnings([]);
-    setSelectedLeftIds([]); setSelectedRight(null); setLeftListAnchorId(null); setRightListAnchor(null);
+    bankSelectionStore.clear(); setSelectedRight(null); setRightListAnchor(null);
     setExportFailureExamIds([]); setMsg(null); setNewPaperDialogOpen(false); setPublishDialogOpen(false);
+    setAutoComposeOpen(false); setDuplicateReportOpen(false); setDuplicateReportRecord(null); setDuplicateCheckLoading(false); setDuplicateCheckError(null);
     setBusy(false);
     setConflictTargetId(null); setConflictExportKind(null);
     setExportPreflightFailure(null);
@@ -198,7 +223,7 @@ export function ComposeWorkspace({
     initialExportLabel: i18n.t("defaultExamLabel", { ns: "compose" }),
     initialSubject: i18n.t("defaultSubject", { ns: "compose" }), templates,
     scope: draftScope.scope, storageKey: draftScope.storageKey, ownerKey: draftScope.ownerKey,
-    shortcutsEnabled: toolBarActive && !newPaperDialogOpen && !publishDialogOpen && !conflictTargetId,
+    shortcutsEnabled: toolBarActive && !newPaperDialogOpen && !publishDialogOpen && !conflictTargetId && !autoComposeOpen && !duplicateReportOpen,
     onOwnerIdentityChanged: clearOwnerView,
     onRestoredMsg: () => setMsg(t("compose:messages.localDraftRestored")),
     onDiscardedMsg: () => setMsg(t("compose:messages.localDraftDiscarded")),
@@ -206,6 +231,141 @@ export function ComposeWorkspace({
   const { exportLabel, subject, templatePath, templateRef, bySection, scoreBySection, countBySection, scoreOverrides } = currentPaperState;
   const paperStateRef = useRef(currentPaperState);
   paperStateRef.current = currentPaperState;
+  const autoComposeRequestScopeKey = `${draftScope.ownerKey}::${currentExamId ?? "scratch"}::${JSON.stringify(currentPaperState)}`;
+  const autoComposeOptionsScopeKey = `${draftScope.ownerKey}::${currentExamId ?? "scratch"}::${currentPaperState.subject}::${selectedTpl?.path ?? ""}::${selectedTpl?.id ?? ""}`;
+  const reportContextKey = `${draftScope.ownerKey}::${currentExamId ?? "scratch"}`;
+  const paperSelectionFingerprint = JSON.stringify(currentPaperState.bySection);
+  const captureDuplicateRequest = useComposeRequestScope(autoComposeRequestScopeKey);
+  useEffect(() => {
+    duplicateRequestIdRef.current += 1;
+    setDuplicateCheckLoading(false);
+    setDuplicateCheckError(null);
+  }, [autoComposeRequestScopeKey]);
+  const currentDuplicateRecord = duplicateReportRecord?.contextKey === reportContextKey ? duplicateReportRecord : null;
+  const duplicateThreshold = currentDuplicateRecord?.report.threshold ?? 0.85;
+  const duplicateReportStale = Boolean(currentDuplicateRecord && (
+    currentDuplicateRecord.stale || currentDuplicateRecord.selectionFingerprint !== paperSelectionFingerprint
+  ));
+  const duplicateQuestionMap = useMemo(() => {
+    if (!currentDuplicateRecord || duplicateReportStale) return new Map<string, DuplicateQuestionReport>();
+    return new Map(currentDuplicateRecord.report.questions
+      .filter((question) => question.match_count > 0 || question.matches.length > 0 || question.occurrences > 1)
+      .map((question) => [question.qualified_id, question]));
+  }, [currentDuplicateRecord, duplicateReportStale]);
+
+  useEffect(() => {
+    if (!currentDuplicateRecord || currentDuplicateRecord.stale || currentDuplicateRecord.selectionFingerprint === paperSelectionFingerprint) return;
+    setDuplicateReportRecord((previous) => previous && previous.contextKey === reportContextKey
+      ? { ...previous, stale: true }
+      : previous);
+  }, [currentDuplicateRecord, paperSelectionFingerprint, reportContextKey]);
+
+  const applyAutoComposeResult = useCallback((result: AutoComposeResponse) => {
+    const nextBySection = Object.fromEntries((selectedTpl?.sections ?? []).map((section) => [section.section_id, [] as string[]]));
+    for (const item of result.selected_items) {
+      if (item.section_id in nextBySection) nextBySection[item.section_id] = [...item.question_ids];
+    }
+    const selectedCount = Object.values(nextBySection).reduce((sum, ids) => sum + ids.length, 0);
+    if (result.generated_count <= 0 || selectedCount <= 0) {
+      const gaps = result.goals.sections.filter((section) => section.actual_count < section.requested_count)
+        .map((section) => `${section.section_id} ${section.actual_count}/${section.requested_count}`);
+      const missing = result.goals.knowledge.missing_points;
+      setMsg(`未能选出题目，当前试卷未更改。${gaps.length ? `小节缺口：${gaps.join("、")}。` : ""}${missing.length ? `未覆盖知识点：${missing.join("、")}。` : ""}${result.warnings[0] ? ` ${result.warnings[0]}` : ""}`);
+      return;
+    }
+    if (!selectedTpl || normTemplatePath(result.template_path) !== normTemplatePath(selectedTpl.path) || result.template_ref !== selectedTpl.id) {
+      setMsg("组卷结果的模板与当前试卷不一致，未应用；请重新生成。");
+      return;
+    }
+
+    const itemBySection = new Map(result.selected_items.map((item) => [item.section_id, item]));
+    const nextCounts: Record<string, number> = {};
+    for (const section of selectedTpl.sections) {
+      if (section.type === "text") continue;
+      const count = itemBySection.get(section.section_id)?.required_count;
+      if (count !== undefined && count !== section.required_count) nextCounts[section.section_id] = count;
+    }
+    const nextOverrides: Record<string, Record<string, number>> = {};
+    for (const [sectionId, ids] of Object.entries(nextBySection)) {
+      const selectedIds = new Set(ids);
+      const overrides = paperStateRef.current.scoreOverrides[sectionId];
+      const retained = overrides
+        ? Object.fromEntries(Object.entries(overrides).filter(([qid]) => selectedIds.has(qid)))
+        : {};
+      if (Object.keys(retained).length > 0) nextOverrides[sectionId] = retained;
+    }
+
+    const nextState: ComposePaperState = {
+      ...paperStateRef.current,
+      bySection: nextBySection,
+      countBySection: nextCounts,
+      scoreOverrides: nextOverrides,
+    };
+    const nextSelectionFingerprint = JSON.stringify(nextState.bySection);
+    setDuplicateReportRecord({
+      contextKey: reportContextKey,
+      selectionFingerprint: nextSelectionFingerprint,
+      report: result.duplicate_report,
+      stale: false,
+    });
+    commitPaperState(nextState);
+    setSelectedRight(null);
+    setRightListAnchor(null);
+    if (!result.complete) {
+      const missing = result.goals.knowledge.missing_points;
+      const gaps = result.goals.sections.filter((section) => section.actual_count < section.requested_count)
+        .map((section) => `${section.section_id} ${section.actual_count}/${section.requested_count}`);
+      setMsg(`已生成 ${selectedCount} 题，部分目标未达成。${gaps.length ? `小节缺口：${gaps.join("、")}。` : ""}${missing.length ? `未覆盖知识点：${missing.join("、")}。` : ""}${result.warnings[0] ? ` ${result.warnings[0]}` : ""}`);
+    } else {
+      setMsg(`已按目标生成并应用 ${selectedCount} 题，可使用撤销恢复此前试卷。`);
+    }
+  }, [commitPaperState, reportContextKey, selectedTpl]);
+
+  const checkDuplicates = useCallback(async () => {
+    const questionIds = Object.values(paperStateRef.current.bySection).flat();
+    if (questionIds.length === 0) {
+      setMsg("当前试卷还没有题目，无法查重。");
+      return;
+    }
+    const isCurrent = captureDuplicateRequest();
+    const requestId = ++duplicateRequestIdRef.current;
+    setDuplicateReportOpen(true);
+    setDuplicateCheckLoading(true);
+    setDuplicateCheckError(null);
+    setMsg(null);
+    try {
+      const report = await apiPost<DuplicateReportData>("/api/exam/check-duplicates", {
+        question_ids: questionIds,
+        exclude_exam_id: currentExamId,
+        similarity_threshold: duplicateThreshold,
+      });
+      if (!isCurrent() || requestId !== duplicateRequestIdRef.current) return;
+      setDuplicateReportRecord({
+        contextKey: reportContextKey,
+        selectionFingerprint: JSON.stringify(paperStateRef.current.bySection),
+        report,
+        stale: false,
+      });
+    } catch (error) {
+      if (!isCurrent() || requestId !== duplicateRequestIdRef.current) return;
+      const message = error instanceof Error ? error.message : String(error);
+      setDuplicateCheckError(message);
+      setMsg(`查重失败：${message}`);
+    } finally {
+      if (isCurrent() && requestId === duplicateRequestIdRef.current) setDuplicateCheckLoading(false);
+    }
+  }, [captureDuplicateRequest, currentExamId, duplicateThreshold, reportContextKey]);
+
+  const locateQuestionFromReport = useCallback((qualifiedId: string) => {
+    const sectionId = Object.entries(paperStateRef.current.bySection)
+      .find(([, ids]) => ids.includes(qualifiedId))?.[0];
+    if (!sectionId) return;
+    setActiveSection(sectionId);
+    setSelectedRight({ sectionId, qids: [qualifiedId] });
+    setActiveComposePanel("paper");
+    setHistoryOpen(false);
+    setDuplicateReportOpen(false);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -338,16 +498,14 @@ export function ComposeWorkspace({
   const { namespaces, metadataFilterDefinitions, filteredQuestions } = useComposeBankFilter({
     questions, subject, namespaceFilter, typeFilter, metadataFilters, search,
   });
-  const selectedLeftIdsSet = useMemo(() => new Set(selectedLeftIds), [selectedLeftIds]);
-
   const commitSearch = useCallback((value: string) => {
     setSearch(value);
   }, []);
 
   useEffect(() => {
     const allowed = new Set(filteredQuestions.map((q) => q.qualified_id));
-    setSelectedLeftIds((prev) => prev.filter((id) => allowed.has(id)));
-  }, [filteredQuestions]);
+    bankSelectionStore.pruneFiltered(allowed);
+  }, [filteredQuestions, bankSelectionStore]);
 
   useEffect(() => {
     onError(null);
@@ -417,16 +575,22 @@ export function ComposeWorkspace({
     return () => window.removeEventListener(SOLAIRE_EXAMS_CHANGED_EVENT, onExamsChanged);
   }, [refreshExamSummaries, onError]);
 
+  const hasSelectedQuestions = useMemo(
+    () => Object.values(bySection).some((questions) => questions.length > 0),
+    [bySection],
+  );
+
   useEffect(() => {
+    setQuestionBindingsIndex((current) => Object.keys(current).length === 0 ? current : {});
+    // This index only affects the breakdown when the paper already has selected questions.
+    if (!toolBarActive || !hasSelectedQuestions) return;
     let active = true;
-    setQuestionBindingsIndex({});
-    if (!toolBarActive) return;
     const isCurrent = captureOwnerRequest();
     void apiGet<{ index: Record<string, GraphBindingNode[]> }>("/api/graph/question-bindings-index")
       .then((r) => { if (active && isCurrent()) setQuestionBindingsIndex(r.index ?? {}); })
       .catch(() => { if (active && isCurrent()) setQuestionBindingsIndex({}); });
     return () => { active = false; };
-  }, [toolBarActive, captureOwnerRequest]);
+  }, [toolBarActive, hasSelectedQuestions, captureOwnerRequest]);
 
   const knowledgeDistributionRows = useMemo(
     () => computeKnowledgeDistribution(bySection, questionBindingsIndex),
@@ -437,8 +601,7 @@ export function ComposeWorkspace({
     if (!selectedTpl) {
       return false;
     }
-    const hasQuestions = Object.values(bySection).some((questions) => questions.length > 0);
-    return hasQuestions && selectedTpl.sections.every((s) => {
+    return hasSelectedQuestions && selectedTpl.sections.every((s) => {
       if (s.type === "text") {
         return true;
       }
@@ -447,7 +610,7 @@ export function ComposeWorkspace({
       }
       return (bySection[s.section_id]?.length ?? 0) === (countBySection[s.section_id] ?? s.required_count);
     });
-  }, [selectedTpl, bySection, countBySection]);
+  }, [selectedTpl, hasSelectedQuestions, bySection, countBySection]);
 
   const totalScore = useMemo(
     () => computeTotalScore(selectedTpl, bySection, scoreBySection, scoreOverrides),
@@ -466,35 +629,22 @@ export function ComposeWorkspace({
     (q: QuestionRow, index: number, e: MouseEvent<HTMLButtonElement>) => {
       e.preventDefault();
       if (e.shiftKey) {
-        const currentAnchorIndex = filteredQuestions.findIndex((row) => row.qualified_id === leftListAnchorId);
-        const anchor = currentAnchorIndex >= 0 ? currentAnchorIndex : index;
-        const start = Math.min(anchor, index);
-        const end = Math.max(anchor, index);
-        const range = filteredQuestions.slice(start, end + 1).map((x) => x.qualified_id);
-        setSelectedLeftIds(range);
-        setLeftListAnchorId(q.qualified_id);
+        bankSelectionStore.selectRange(q.qualified_id, index, filteredQuestions);
         setSelectedRight(null);
         setRightListAnchor(null);
         return;
       }
       if (e.metaKey || e.ctrlKey) {
-        setSelectedLeftIds((prev) => {
-          if (prev.includes(q.qualified_id)) {
-            return prev.filter((id) => id !== q.qualified_id);
-          }
-          return [...prev, q.qualified_id];
-        });
-        setLeftListAnchorId(q.qualified_id);
+        bankSelectionStore.toggle(q.qualified_id);
         setSelectedRight(null);
         setRightListAnchor(null);
         return;
       }
-      setSelectedLeftIds([q.qualified_id]);
-      setLeftListAnchorId(q.qualified_id);
+      bankSelectionStore.selectSingle(q.qualified_id);
       setSelectedRight(null);
       setRightListAnchor(null);
     },
-    [filteredQuestions, leftListAnchorId],
+    [filteredQuestions, bankSelectionStore],
   );
 
   const handleRightPaperSlotClick = useCallback(
@@ -514,7 +664,7 @@ export function ComposeWorkspace({
         if (rightListAnchor && rightListAnchor.sectionId !== sectionId) {
           setSelectedRight({ sectionId, qids: slotIds });
           setRightListAnchor({ sectionId, slotIndex });
-          setSelectedLeftIds(slotIds);
+          bankSelectionStore.setSelectedIds(slotIds);
           return;
         }
         const anchorSlot =
@@ -535,14 +685,14 @@ export function ComposeWorkspace({
         }
         setSelectedRight({ sectionId, qids: ordered });
         setRightListAnchor({ sectionId, slotIndex });
-        setSelectedLeftIds(ordered);
+        bankSelectionStore.setSelectedIds(ordered);
         return;
       }
       if (e.metaKey || e.ctrlKey) {
         if (selectedRight?.sectionId !== sectionId) {
           setSelectedRight({ sectionId, qids: slotIds });
           setRightListAnchor({ sectionId, slotIndex });
-          setSelectedLeftIds(slotIds);
+          bankSelectionStore.setSelectedIds(slotIds);
           return;
         }
         const cur = new Set(selectedRight.qids);
@@ -555,14 +705,14 @@ export function ComposeWorkspace({
         const nextOrdered = mergeOrder(cur);
         setSelectedRight(nextOrdered.length ? { sectionId, qids: nextOrdered } : null);
         setRightListAnchor({ sectionId, slotIndex });
-        setSelectedLeftIds(nextOrdered);
+        bankSelectionStore.setSelectedIds(nextOrdered);
         return;
       }
       setSelectedRight({ sectionId, qids: slotIds });
       setRightListAnchor({ sectionId, slotIndex });
-      setSelectedLeftIds(slotIds);
+      bankSelectionStore.setSelectedIds(slotIds);
     },
-    [bySection, rightListAnchor, selectedRight],
+    [bankSelectionStore, bySection, rightListAnchor, selectedRight],
   );
 
   const dlgSelectedPastExam = useMemo(
@@ -735,11 +885,10 @@ export function ComposeWorkspace({
     setCurrentExamId(eid || null);
     const parsed = examDocToPaperState(doc, { templatePath });
     resetPaperHistory(parsed.state);
-    setSelectedLeftIds([]);
-    setLeftListAnchorId(null);
+    bankSelectionStore.clear();
     setSelectedRight(null);
     setRightListAnchor(null);
-  }, [resetPaperHistory, templatePath]);
+  }, [bankSelectionStore, resetPaperHistory, templatePath]);
 
   function addQuestionsToSection(questionIds: string[], sectionId: string | null) {
     const result = addQuestionsToSectionInModel({
@@ -766,7 +915,18 @@ export function ComposeWorkspace({
   }
 
   function addFromLeft() {
-    addQuestionsToSection(selectedLeftIds, activeSection);
+    addQuestionsToSection([...bankSelectionStore.getOrderedIds()], activeSection);
+  }
+
+  function fillSectionGaps() {
+    if (!selectedTpl) return;
+    const filled = fillSectionGapsInModel({
+      state: paperStateRef.current,
+      template: selectedTpl,
+      candidateQuestions: filteredQuestions,
+    });
+    if (filled.changed) commitPaperState(filled.nextState);
+    setMsg(`已补入 ${filled.addedCount} 题；不足时请放宽左侧筛选条件。`);
   }
 
   function removeDraggedQuestion(sectionId: string, qid: string) {
@@ -1101,8 +1261,8 @@ export function ComposeWorkspace({
       applyExamDocument(r.exam);
       setNamespaceFilter("__all__");
       setTypeFilter("__all__");
-      setSearchInput("");
       setSearch("");
+      setSearchDraftResetVersion((version) => version + 1);
       setComposeFilterExpanded(false);
       const items = r.exam.selected_items ?? [];
       const firstSec = items[0]?.section_id;
@@ -1165,6 +1325,14 @@ export function ComposeWorkspace({
           onClick={() => void saveDraftToServer()}
         >
           {t("compose:saveChanges")}
+        </button>
+        <button
+          type="button"
+          className="or-g49-btn or-g49-btn-secondary"
+          onClick={() => setHistoryOpen(true)}
+          aria-haspopup="dialog"
+        >
+          历史
         </button>
       </div>
     );
@@ -1269,6 +1437,62 @@ export function ComposeWorkspace({
       />
       <PublishOnlineDialog {...publishing.dialogProps} />
       <ComposeDraftRecoveryDialog record={recoverableDraft} busy={busy} onRestore={restoreLocalDraft} onDiscard={discardLocalDraft} />
+      <Dialog.Root open={historyOpen} onOpenChange={setHistoryOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="or-g49-compose-history-overlay fixed inset-0 z-[80] bg-slate-950/40 backdrop-blur-[2px]" />
+          <Dialog.Content
+            ref={setHistorySelectPortalContainer}
+            aria-describedby="compose-history-description"
+            className="pointer-events-none fixed inset-0 z-[81] outline-none"
+          >
+            <div className="pointer-events-auto or-g49-compose-history-dialog absolute right-0 top-0 flex h-full w-[min(92vw,34rem)] flex-col overflow-hidden border-l border-[var(--or-outline)] bg-[var(--or-card)] shadow-2xl">
+              <div className="flex shrink-0 items-center justify-between border-b border-[var(--or-outline)] px-4 py-3">
+                <Dialog.Title className="text-base font-semibold text-[var(--or-text)]">
+                  {t("compose:historySidebarTitle")}
+                </Dialog.Title>
+                <Dialog.Close asChild>
+                  <button
+                    type="button"
+                    className="rounded-lg px-2 py-1 text-lg leading-none text-[var(--or-muted)] transition-colors hover:bg-[var(--or-block)] hover:text-[var(--or-text)]"
+                    aria-label="关闭历史试卷"
+                  >
+                    ×
+                  </button>
+                </Dialog.Close>
+              </div>
+              <Dialog.Description id="compose-history-description" className="sr-only">
+                查看草稿和已导出试卷，并将内容归入文件夹。
+              </Dialog.Description>
+              <ComposeHistorySidebar
+                hideTitle
+                selectPortalContainer={historySelectPortalContainer}
+                busy={busy}
+                currentExamId={currentExamId}
+                composeFolders={composeFolders}
+                selectedComposeFolderId={selectedComposeFolderId}
+                onSelectComposeFolder={setSelectedComposeFolderId}
+                onFolderCreated={(folder) => setComposeFolders((current) => [...current, folder])}
+                onFolderUpdated={(folder) => setComposeFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
+                onFolderDeleted={(result) => { setComposeFolders(result.folders); setComposeFolderItems(result.items); }}
+                onDropItemToFolder={(itemId, folderId) => { void assignFolderItem("compose", itemId, folderId).then(() => setComposeFolderItems((items) => { const next = { ...items }; if (folderId) next[itemId] = folderId; else delete next[itemId]; return next; })).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}
+                selectedComposeItemIds={selectedComposeItemIds}
+                movingComposeItems={movingComposeItems}
+                onToggleComposeItem={toggleComposeItem}
+                onToggleVisibleComposeItems={toggleVisibleComposeItems}
+                onClearComposeItems={clearComposeItems}
+                onMoveComposeItemsToFolder={moveComposeItemsToFolder}
+                draftExamRows={draftExamRows}
+                exportedExamRows={exportedExamRows}
+                taggedItems={taggedItems}
+                onLoadDraftExam={(examId) => { setHistoryOpen(false); setActiveComposePanel("paper"); void loadExamById(examId, null); }}
+                onLoadExportedExam={(exam) => { setHistoryOpen(false); setActiveComposePanel("paper"); setLastExportedExamId(exam.exam_id); void loadExamById(exam.exam_id, exam.has_pdf ? exam.exam_id : null, exam.has_docx ? exam.exam_id : null); }}
+                onDeleteExam={(examId, opts) => { void deleteExamById(examId, opts); }}
+                onError={onError}
+              />
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
       <TexSetupNotice onError={onError} />
       {msg ? (
         <div
@@ -1329,7 +1553,7 @@ export function ComposeWorkspace({
             aria-pressed={activeComposePanel === "paper"}
             onClick={() => setActiveComposePanel("paper")}
           >
-            试卷
+            编辑试卷
           </button>
           <button
             type="button"
@@ -1339,41 +1563,6 @@ export function ComposeWorkspace({
           >
             题库
           </button>
-          <button
-            type="button"
-            className="or-g49-compose-panel-button"
-            aria-pressed={activeComposePanel === "history"}
-            onClick={() => setActiveComposePanel("history")}
-          >
-            历史
-          </button>
-        </div>
-
-        <div className="or-g49-compose-history-panel">
-        <ComposeHistorySidebar
-          busy={busy}
-          currentExamId={currentExamId}
-          composeFolders={composeFolders}
-          selectedComposeFolderId={selectedComposeFolderId}
-          onSelectComposeFolder={setSelectedComposeFolderId}
-          onFolderCreated={(folder) => setComposeFolders((current) => [...current, folder])}
-          onFolderUpdated={(folder) => setComposeFolders((current) => current.map((item) => item.id === folder.id ? folder : item))}
-          onFolderDeleted={(result) => { setComposeFolders(result.folders); setComposeFolderItems(result.items); }}
-          onDropItemToFolder={(itemId, folderId) => { void assignFolderItem("compose", itemId, folderId).then(() => setComposeFolderItems((items) => { const next = { ...items }; if (folderId) next[itemId] = folderId; else delete next[itemId]; return next; })).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}
-          selectedComposeItemIds={selectedComposeItemIds}
-          movingComposeItems={movingComposeItems}
-          onToggleComposeItem={toggleComposeItem}
-          onToggleVisibleComposeItems={toggleVisibleComposeItems}
-          onClearComposeItems={clearComposeItems}
-          onMoveComposeItemsToFolder={moveComposeItemsToFolder}
-          draftExamRows={draftExamRows}
-          exportedExamRows={exportedExamRows}
-          taggedItems={taggedItems}
-          onLoadDraftExam={(examId) => { setActiveComposePanel("paper"); void loadExamById(examId, null); }}
-          onLoadExportedExam={(exam) => { setActiveComposePanel("paper"); setLastExportedExamId(exam.exam_id); void loadExamById(exam.exam_id, exam.has_pdf ? exam.exam_id : null, exam.has_docx ? exam.exam_id : null); }}
-          onDeleteExam={(examId, opts) => { void deleteExamById(examId, opts); }}
-          onError={onError}
-        />
         </div>
 
         <div className="or-g49-compose-bank-panel">
@@ -1386,10 +1575,9 @@ export function ComposeWorkspace({
           namespaces={namespaces}
           typeFilter={typeFilter}
           onTypeFilterChange={setTypeFilter}
-          searchInput={searchInput}
-          onSearchInputChange={setSearchInput}
           search={search}
           onCommitSearch={commitSearch}
+          searchDraftResetVersion={searchDraftResetVersion}
           metadataFilterDefinitions={metadataFilterDefinitions}
           metadataFilters={metadataFilters}
           onMetadataFiltersChange={setMetadataFilters}
@@ -1398,32 +1586,20 @@ export function ComposeWorkspace({
           contentSyncing={contentSyncing}
           totalQuestionCount={questions.length}
           filteredQuestions={filteredQuestions}
-          selectedLeftIds={selectedLeftIds}
-          selectedLeftIdsSet={selectedLeftIdsSet}
+          bankSelectionStore={bankSelectionStore}
           onLeftBankClick={handleLeftBankClick}
           onDropPaperItemToRemove={removeDraggedQuestion}
           onError={onError}
         />
-          <div className="or-g49-bank-actions">
-            <button
-              type="button"
-              className="or-g49-btn or-g49-btn-primary"
-              disabled={!selectedLeftIds.length || busy || contentSyncing}
-              onClick={() => {
-                addFromLeft();
-                setActiveComposePanel("paper");
-              }}
-            >
-              {t("compose:addToSection")}（{selectedLeftIds.length}）
-            </button>
-            <button
-              type="button"
-              className="or-g49-btn or-g49-btn-secondary"
-              onClick={() => setActiveComposePanel("paper")}
-            >
-              返回试卷
-            </button>
-          </div>
+          {activeComposePanel === "bank" && !historyOpen ? (
+            <ComposeBankActionBar
+              store={bankSelectionStore}
+              disabled={busy || contentSyncing}
+              onAdd={() => { addFromLeft(); setActiveComposePanel("paper"); }}
+              onFill={fillSectionGaps}
+              onEditPaper={() => setActiveComposePanel("paper")}
+            />
+          ) : null}
         </div>
 
         <div className="or-g49-compose-paper-panel">
@@ -1441,12 +1617,8 @@ export function ComposeWorkspace({
           knowledgeDistributionRows={knowledgeDistributionRows}
           questionMap={questionMap}
           selectedRight={selectedRight}
-          onFillSectionGaps={() => {
-            if (!selectedTpl) return;
-            const filled = fillSectionGapsInModel({ state: paperStateRef.current, template: selectedTpl, candidateQuestions: filteredQuestions });
-            if (filled.changed) commitPaperState(filled.nextState);
-            setMsg(`已补入 ${filled.addedCount} 题；不足时请放宽左侧筛选条件。`);
-          }}
+          showBankTools={activeComposePanel === "bank" && !historyOpen}
+          onFillSectionGaps={fillSectionGaps}
           onAddFromLeft={addFromLeft}
           onRemoveFromRight={removeFromRight}
           onMoveSelectedRight={moveSelectedRight}
@@ -1475,6 +1647,11 @@ export function ComposeWorkspace({
           onCancelConflictOverwrite={() => { setConflictTargetId(null); setConflictExportKind(null); }}
           onConfirmConflictOverwrite={() => void confirmOverwriteExport()}
           onError={onError}
+          onOpenAutoCompose={() => setAutoComposeOpen(true)}
+          onOpenDuplicateReport={() => void checkDuplicates()}
+          duplicateReportStale={duplicateReportStale}
+          duplicateFlaggedCount={duplicateReportStale ? 0 : currentDuplicateRecord?.report.summary.flagged_count ?? 0}
+          duplicateQuestionMap={duplicateQuestionMap}
         />
         </div>
 
@@ -1494,6 +1671,28 @@ export function ComposeWorkspace({
           onOpenWordExternally={() => void openViewWordExternally()}
         />
       </div>
+      <AutoComposeDialog
+        open={autoComposeOpen}
+        onClose={() => setAutoComposeOpen(false)}
+        subject={currentPaperState.subject}
+        template={selectedTpl}
+        paperState={currentPaperState}
+        currentExamId={currentExamId}
+        requestScopeKey={autoComposeRequestScopeKey}
+        optionsScopeKey={autoComposeOptionsScopeKey}
+        onApply={applyAutoComposeResult}
+        onViewDuplicates={() => setDuplicateReportOpen(true)}
+      />
+      <DuplicateReport
+        open={duplicateReportOpen}
+        onClose={() => setDuplicateReportOpen(false)}
+        report={currentDuplicateRecord?.report ?? null}
+        stale={duplicateReportStale}
+        loading={duplicateCheckLoading}
+        error={duplicateCheckError}
+        onRefresh={() => void checkDuplicates()}
+        onLocateQuestion={locateQuestionFromReport}
+      />
       <PreviewPdfModal open={previewOpen} pdfPath={composeRightPdfPath} onClose={() => setPreviewOpen(false)} />
     </div>
   );

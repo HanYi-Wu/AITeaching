@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentProvider } from "../../contexts/AgentContext";
 import { ToolBarProvider } from "../../contexts/ToolBarContext";
@@ -29,13 +29,16 @@ vi.mock("../../graph/GraphSubjectSidebar", () => ({
     graphs,
     activeSlug,
     onSelectGraph,
+    onClose,
   }: {
     graphs: Array<{ slug: string; display_name: string }>;
     activeSlug: string | null;
     onSelectGraph: (slug: string) => void;
+    onClose: () => void;
   }) => (
     <div data-testid="graph-sidebar">
       <span data-testid="active-slug">{activeSlug}</span>
+      <button type="button" data-graph-sidebar-close onClick={onClose}>Close sidebar</button>
       {graphs.map((g) => (
         <button
           key={g.slug}
@@ -116,6 +119,26 @@ describe("GraphWorkspace request isolation across graph switching", () => {
       subjects: ["数学", "物理"],
       levels: ["高中", "高考"],
     });
+  });
+
+  it("closes the mobile graph drawer with Escape and restores focus for reopening", async () => {
+    renderWorkspace(vi.fn());
+
+    const openButton = screen.getByTestId("graph-sidebar-open");
+    fireEvent.click(openButton);
+    expect(openButton).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Close sidebar")).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(openButton).toHaveAttribute("aria-expanded", "false");
+    expect(openButton).toHaveFocus();
+
+    fireEvent.click(openButton);
+    expect(openButton).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Close sidebar")).toHaveFocus();
+    fireEvent.click(screen.getByText("Close sidebar"));
+    expect(openButton).toHaveAttribute("aria-expanded", "false");
+    expect(openButton).toHaveFocus();
   });
 
   it("isolates late successful response of graph A from overwriting graph B data", async () => {

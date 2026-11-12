@@ -6,10 +6,28 @@ import re
 from pathlib import Path
 
 
+_LATEX_TEXT_TRANSLATION = str.maketrans(
+    {
+        "\\": r"\textbackslash{}",
+        "{": r"\{",
+        "}": r"\}",
+        "$": r"\$",
+        "&": r"\&",
+        "%": r"\%",
+        "#": r"\#",
+        "^": r"\textasciicircum{}",
+        "_": r"\_",
+        "~": r"\textasciitilde{}",
+    }
+)
+
+
 def latex_escape_text(s: str) -> str:
     """Escape user-supplied plain text for LaTeX (metadata titles, school names, etc.)."""
     if not s:
         return ""
+    if type(s) is str:
+        return s.translate(_LATEX_TEXT_TRANSLATION)
     out: list[str] = []
     for ch in s:
         if ch == "\\":

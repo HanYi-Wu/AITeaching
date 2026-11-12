@@ -27,17 +27,36 @@ class PreparedExam:
             raise ValueError("Prepared exam belongs to a different source or validation mode")
 
 
-def prepare_exam(exam_yaml: Path, *, preview_relaxed: bool = False) -> PreparedExam:
+def prepare_exam(
+    exam_yaml: Path,
+    *,
+    preview_relaxed: bool = False,
+    selected_questions_only: bool = False,
+) -> PreparedExam:
     exam_yaml = exam_yaml.resolve()
     with exam_yaml.open(encoding="utf-8") as stream:
         exam = ExamConfig.model_validate(yaml.safe_load(stream))
-    loaded = load_all_questions(exam_yaml, [(lib.namespace, lib.path) for lib in exam.question_libraries])
+    warnings: list[str] = []
+    libraries = [(lib.namespace, lib.path) for lib in exam.question_libraries]
+    if selected_questions_only:
+        # Preview normalization only reorders or drops existing ids, so the
+        # source selections are a safe superset. Load banks first to preserve
+        # the established library-before-template error order.
+        selected_ids = {qid for section in exam.selected_items for qid in section.question_ids}
+        loaded = load_all_questions(
+            exam_yaml,
+            libraries,
+            selected_qualified_ids=selected_ids,
+        )
+    else:
+        loaded = load_all_questions(exam_yaml, libraries)
+
     template_path = resolve_template_yaml_path(exam_yaml, exam)
     template = load_template(template_path)
-    warnings: list[str] = []
     if preview_relaxed:
         exam, warnings = normalize_exam_for_preview(exam, template)
         validate_exam_preview(exam, template, loaded)
     else:
         validate_exam(exam, template, loaded)
+
     return PreparedExam(exam_yaml, exam, loaded, template_path, template, preview_relaxed, tuple(warnings))

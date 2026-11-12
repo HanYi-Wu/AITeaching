@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import re
+import sys
+from collections import OrderedDict
+from collections.abc import Iterator
 from dataclasses import dataclass
+from functools import lru_cache
+from threading import Lock
 from typing import Any, Literal
 
 import yaml
@@ -12,6 +17,11 @@ from solaire.common.yaml_utils import safe_load_yaml
 from solaire.exam_compiler.latex_util import latex_escape_text
 
 TABLE_FENCE_RE = re.compile(r"```solaire-table\s*\n(.*?)```", re.DOTALL)
+_TABLE_RENDER_CACHE_MAX_ENTRIES = 512
+_TABLE_RENDER_CACHE_MAX_BYTES = 8 * 1024 * 1024
+_TABLE_RENDER_CACHE: OrderedDict[tuple[str, str], tuple[str, int]] = OrderedDict()
+_TABLE_RENDER_CACHE_BYTES = 0
+_TABLE_RENDER_CACHE_LOCK = Lock()
 
 Align = Literal["left", "center", "right"]
 
@@ -95,12 +105,66 @@ def _parse_table_rows(source: str) -> list[list[TableCell]]:
 
 
 def parse_table(source: str) -> list[list[TableCell]]:
-    out = _parse_table_rows(source)
-    expand_table(out)
-    return out
+    rows = _table_plan(source)
+    expand_table([list(row) for row in rows])
+    return [list(row) for row in rows]
 
 
-def expand_table(rows: list[list[TableCell]]) -> ExpandedTable:
+@dataclass(frozen=True)
+class _ExpansionPlan:
+    width: int
+    height: int
+    slots: tuple[tuple[tuple[int, int, int, bool], ...], ...]
+    anchors: tuple[tuple[int, int, int], ...]
+
+
+def _build_expansion_plan(rows: tuple[tuple[TableCell, ...], ...]) -> _ExpansionPlan:
+    slots: list[list[tuple[int, int, int, bool] | None]] = [[] for _ in rows]
+    anchors: list[tuple[int, int, int]] = []
+    for r, row in enumerate(rows):
+        c = 0
+        for cell_index, cell in enumerate(row):
+            if r + cell.row_span > len(rows):
+                raise ValueError("rowSpan exceeds table height")
+            while c < len(slots[r]) and slots[r][c] is not None:
+                c += 1
+            for rr in range(r, r + cell.row_span):
+                while len(slots[rr]) < c + cell.col_span:
+                    slots[rr].append(None)
+                for cc in range(c, c + cell.col_span):
+                    if slots[rr][cc] is not None:
+                        raise ValueError("table cells overlap")
+            anchors.append((r, c, cell_index))
+            for rr in range(r, r + cell.row_span):
+                for cc in range(c, c + cell.col_span):
+                    slots[rr][cc] = (r, c, cell_index, rr != r or cc != c)
+            c += cell.col_span
+    width = max(len(row) for row in slots)
+    dense: list[tuple[tuple[int, int, int, bool], ...]] = []
+    for row in slots:
+        if len(row) != width or any(slot is None for slot in row):
+            raise ValueError("table must be rectangular")
+        dense.append(tuple(slot for slot in row if slot is not None))
+    return _ExpansionPlan(width, len(rows), tuple(dense), tuple(anchors))
+
+
+@lru_cache(maxsize=128)
+def _cached_expansion_plan(rows: tuple[tuple[TableCell, ...], ...]) -> _ExpansionPlan:
+    return _build_expansion_plan(rows)
+
+
+def _materialize_expansion_plan(
+    plan: _ExpansionPlan, rows: list[list[TableCell]] | tuple[tuple[TableCell, ...], ...]
+) -> ExpandedTable:
+    slots = [
+        [TableSlot(r, c, rows[r][cell_index], covered) for r, c, cell_index, covered in row]
+        for row in plan.slots
+    ]
+    anchors = [TableAnchor(r, c, rows[r][cell_index]) for r, c, cell_index in plan.anchors]
+    return ExpandedTable(plan.width, plan.height, slots, anchors)
+
+
+def _expand_table_direct(rows: list[list[TableCell]]) -> ExpandedTable:
     slots: list[list[TableSlot | None]] = [[] for _ in rows]
     anchors: list[TableAnchor] = []
     for r, row in enumerate(rows):
@@ -135,25 +199,85 @@ def expand_table(rows: list[list[TableCell]]) -> ExpandedTable:
     return ExpandedTable(width=width, height=len(rows), slots=dense, anchors=anchors)
 
 
+def expand_table(rows: list[list[TableCell]]) -> ExpandedTable:
+    frozen_rows = tuple(tuple(row) for row in rows)
+    if all(type(cell) is TableCell for row in frozen_rows for cell in row):
+        try:
+            hash(frozen_rows)
+        except TypeError:
+            return _expand_table_direct(rows)
+        return _materialize_expansion_plan(_cached_expansion_plan(frozen_rows), rows)
+    return _expand_table_direct(rows)
+
+
+_DEFAULT_EXPAND_TABLE = expand_table
+
+
+_TablePlan = tuple[tuple[TableCell, ...], ...]
+_TABLE_PLAN_MAX_SOURCE_CHARS = 16 * 1024
+
+
+def _build_table_plan(source: str) -> _TablePlan:
+    return tuple(tuple(row) for row in _parse_table_rows(source))
+
+
+@lru_cache(maxsize=128)
+def _cached_table_plan(source: str) -> _TablePlan:
+    return _build_table_plan(source)
+
+
+def _table_plan(source: str) -> _TablePlan:
+    # Share parsed cells and the expanded grid across preview, TeX, and Word
+    # exports while keeping unusually large source strings out of the cache.
+    if len(source) <= _TABLE_PLAN_MAX_SOURCE_CHARS:
+        return _cached_table_plan(source)
+    return _build_table_plan(source)
+
+
+def _find_math_close(text: str, delimiter: str, start: int) -> int:
+    index = start
+    while index < len(text):
+        if text[index] != "$":
+            index += 1
+            continue
+        token = "$$" if text.startswith("$$", index) else "$"
+        if token == delimiter:
+            return index
+        index += len(token)
+    return -1
+
+
+def _iter_math_segments(text: str) -> Iterator[tuple[str, str | None]]:
+    """Yield (plain text, None) or (formula body, its exact dollar delimiter)."""
+    plain_start = 0
+    index = 0
+    size = len(text)
+    while index < size:
+        if text[index] != "$":
+            index += 1
+            continue
+        delimiter = "$$" if text.startswith("$$", index) else "$"
+        closing = _find_math_close(text, delimiter, index + len(delimiter))
+        if closing < 0:
+            if plain_start < size:
+                yield text[plain_start:], None
+            return
+        if plain_start < index:
+            yield text[plain_start:index], None
+        yield text[index + len(delimiter) : closing], delimiter
+        index = closing + len(delimiter)
+        plain_start = index
+    if plain_start < size:
+        yield text[plain_start:], None
+
+
 def _latex_text(text: str) -> str:
-    if not text:
-        return ""
     out: list[str] = []
-    i = 0
-    while i < len(text):
-        if text[i] == "$":
-            delim = "$$" if text.startswith("$$", i) else "$"
-            end = text.find(delim, i + len(delim))
-            if end != -1:
-                out.append(text[i : end + len(delim)])
-                i = end + len(delim)
-                continue
-        j = text.find("$", i)
-        chunk = text[i:] if j == -1 else text[i:j]
-        out.append(latex_escape_text(chunk).replace("\n", r"\newline "))
-        if j == -1:
-            break
-        i = j
+    for segment, delimiter in _iter_math_segments(text):
+        if delimiter is None:
+            out.append(latex_escape_text(segment).replace("\n", r"\newline "))
+        else:
+            out.extend((delimiter, segment, delimiter))
     return "".join(out)
 
 
@@ -162,8 +286,8 @@ def _col_width(width: int, span: int = 1) -> str:
     return f"{portion:.3f}\\linewidth"
 
 
-def table_to_latex(source: str) -> str:
-    expanded = expand_table(_parse_table_rows(source))
+def _render_table_latex_uncached(source: str) -> str:
+    expanded = expand_table([list(row) for row in _table_plan(source)])
     spec = "|" + "|".join([rf"p{{{_col_width(expanded.width)}}}" for _ in range(expanded.width)]) + "|"
     lines = [r"\begin{center}", r"\small", rf"\begin{{tabular}}{{{spec}}}", r"\hline"]
     if any(anchor.cell.row_span > 1 for anchor in expanded.anchors):
@@ -199,6 +323,50 @@ def table_to_latex(source: str) -> str:
     return "\n".join(lines)
 
 
+def _cached_table_output(format: Literal["latex", "openxml"], source: str) -> str:
+    if expand_table is not _DEFAULT_EXPAND_TABLE or type(source) is not str:
+        renderer = _render_table_latex_uncached if format == "latex" else _render_table_openxml_uncached
+        return renderer(source)
+    if sys.getsizeof(source) + 128 > _TABLE_RENDER_CACHE_MAX_BYTES:
+        return _render_table_latex_uncached(source) if format == "latex" else _render_table_openxml_uncached(source)
+
+    key = (format, source)
+    with _TABLE_RENDER_CACHE_LOCK:
+        cached = _TABLE_RENDER_CACHE.get(key)
+        if cached is not None:
+            _TABLE_RENDER_CACHE.move_to_end(key)
+            return cached[0]
+
+    renderer = _render_table_latex_uncached if format == "latex" else _render_table_openxml_uncached
+    output = renderer(source)
+    weight = (
+        sys.getsizeof(source)
+        + sys.getsizeof(output)
+        + sys.getsizeof(key)
+        + sys.getsizeof((output, 0))
+        + 128  # OrderedDict entry and retained format metadata.
+    )
+    if weight <= _TABLE_RENDER_CACHE_MAX_BYTES:
+        global _TABLE_RENDER_CACHE_BYTES
+        with _TABLE_RENDER_CACHE_LOCK:
+            previous = _TABLE_RENDER_CACHE.pop(key, None)
+            if previous is not None:
+                _TABLE_RENDER_CACHE_BYTES -= previous[1]
+            _TABLE_RENDER_CACHE[key] = (output, weight)
+            _TABLE_RENDER_CACHE_BYTES += weight
+            while (
+                len(_TABLE_RENDER_CACHE) > _TABLE_RENDER_CACHE_MAX_ENTRIES
+                or _TABLE_RENDER_CACHE_BYTES > _TABLE_RENDER_CACHE_MAX_BYTES
+            ):
+                _old_key, (_old_output, old_weight) = _TABLE_RENDER_CACHE.popitem(last=False)
+                _TABLE_RENDER_CACHE_BYTES -= old_weight
+    return output
+
+
+def table_to_latex(source: str) -> str:
+    return _cached_table_output("latex", source)
+
+
 def expand_tables_for_latex(text: str) -> str:
     if not text or "```solaire-table" not in text:
         return text
@@ -216,23 +384,13 @@ def _xml_escape(text: str) -> str:
 
 def _paragraph_content_with_math(text: str) -> str:
     out: list[str] = []
-    i = 0
-    while i < len(text):
-        if text[i] == "$":
-            delim = "$$" if text.startswith("$$", i) else "$"
-            end = text.find(delim, i + len(delim))
-            if end != -1:
-                math = _xml_escape(text[i + len(delim) : end])
-                out.append(f"<m:oMath><m:r><m:t>{math}</m:t></m:r></m:oMath>")
-                i = end + len(delim)
-                continue
-        j = text.find("$", i)
-        chunk = text[i:] if j == -1 else text[i:j]
-        if chunk:
-            out.append(f'<w:r><w:t xml:space="preserve">{_xml_escape(chunk)}</w:t></w:r>')
-        if j == -1:
-            break
-        i = j
+    for segment, delimiter in _iter_math_segments(text):
+        if delimiter is None:
+            if segment:
+                out.append(f'<w:r><w:t xml:space="preserve">{_xml_escape(segment)}</w:t></w:r>')
+        else:
+            math = _xml_escape(segment)
+            out.append(f"<m:oMath><m:r><m:t>{math}</m:t></m:r></m:oMath>")
     return "".join(out) or '<w:r><w:t xml:space="preserve"></w:t></w:r>'
 
 
@@ -241,8 +399,8 @@ def _cell_paragraphs(text: str) -> str:
     return "".join("<w:p>" + _paragraph_content_with_math(line) + "</w:p>" for line in lines)
 
 
-def table_to_openxml(source: str) -> str:
-    expanded = expand_table(_parse_table_rows(source))
+def _render_table_openxml_uncached(source: str) -> str:
+    expanded = expand_table([list(row) for row in _table_plan(source)])
     grid = "".join('<w:gridCol w:w="2400"/>' for _ in range(expanded.width))
     rows: list[str] = []
     for r, row in enumerate(expanded.slots):
@@ -287,6 +445,10 @@ def table_to_openxml(source: str) -> str:
         + "".join(rows)
         + "</w:tbl>"
     )
+
+
+def table_to_openxml(source: str) -> str:
+    return _cached_table_output("openxml", source)
 
 
 def expand_tables_for_docx_markdown(text: str) -> str:

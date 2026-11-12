@@ -5,6 +5,7 @@
   "confirmDeleteExam": "Delete this exam and all its score batches? This cannot be undone.",
   "historyTitle": "Past exams",
   "refresh": "Refresh",
+  "replayChartAnimations": "Replay chart animations",
   "loading": "Loading…",
   "noExams": "No exams yet. Export a paper once to see it here.",
   "questionCount": "{{n}} Q",

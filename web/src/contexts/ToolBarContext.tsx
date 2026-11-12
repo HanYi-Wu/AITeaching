@@ -4,6 +4,11 @@ type ToolBarState = {
   left: ReactNode;
   right: ReactNode;
 };
+type ToolBarActions = {
+  setToolBar: (partial: Partial<ToolBarState>) => void;
+  clearToolBar: () => void;
+};
+const ToolBarActionsContext = createContext<ToolBarActions | null>(null);
 
 const ToolBarContext = createContext<{
   setToolBar: (partial: Partial<ToolBarState>) => void;
@@ -30,8 +35,15 @@ export function ToolBarProvider({ children }: { children: ReactNode }) {
     () => ({ setToolBar, clearToolBar, left, right }),
     [setToolBar, clearToolBar, left, right],
   );
+  const actions = useMemo(() => ({ setToolBar, clearToolBar }), [setToolBar, clearToolBar]);
 
-  return <ToolBarContext.Provider value={value}>{children}</ToolBarContext.Provider>;
+  return <ToolBarContext.Provider value={value}><ToolBarActionsContext.Provider value={actions}>{children}</ToolBarActionsContext.Provider></ToolBarContext.Provider>;
+}
+
+export function useToolBarActions(): ToolBarActions {
+  const value = useContext(ToolBarActionsContext);
+  if (!value) throw new Error("useToolBarActions must be used within ToolBarProvider");
+  return value;
 }
 
 export function useToolBar() {

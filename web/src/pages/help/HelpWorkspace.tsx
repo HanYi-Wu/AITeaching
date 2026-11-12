@@ -7,7 +7,7 @@ import remarkMath from "remark-math";
 import { BookOpen, ChevronRight } from "lucide-react";
 import "katex/dist/katex.min.css";
 import { apiGet } from "../../api/client";
-import { useAgentContext } from "../../contexts/AgentContext";
+import { useAgentActions } from "../../contexts/AgentContext";
 import { cn } from "../../lib/utils";
 import { mdComponents } from "./markdownComponents";
 import "../../ui-redesign/g55/g55.css";
@@ -23,7 +23,7 @@ const SECTION_ORDER = ["入门与理念", "知识图谱", "题库建设", "试�
 
 export function HelpWorkspace({ onError }: { onError: (msg: string | null) => void }) {
   const { t } = useTranslation("help");
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
   const [index, setIndex] = useState<HelpIndexEntry[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [page, setPage] = useState<HelpPage | null>(null);

@@ -1,14 +1,10 @@
-import { memo } from "react";
+import { lazy, memo, Suspense } from "react";
 import { Bot } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
-import { MarkdownProseImg, MarkdownProseLink } from "../../lib/markdownTauriUrls";
 import { ASSISTANT_PROSE_CLASS, type ChatLine } from "./types";
 import { AgentConfirmCard, AgentPlanCard, AgentToolCard } from "./AgentCards";
 import "../../ui-redesign/g55/g55.css";
+
+const AgentMarkdown = lazy(() => import("./AgentMarkdown"));
 
 export interface AgentMessageItemProps {
   line: ChatLine;
@@ -41,13 +37,9 @@ export const AgentMessageItem = memo(function AgentMessageItem({
           <Bot className="h-4 w-4" />
         </div>
         <div className={ASSISTANT_PROSE_CLASS}>
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-            components={{ img: MarkdownProseImg, a: MarkdownProseLink }}
-          >
-            {line.text}
-          </ReactMarkdown>
+          <Suspense fallback={<div className="whitespace-pre-wrap">{line.text}</div>}>
+            <AgentMarkdown text={line.text} />
+          </Suspense>
         </div>
       </div>
     );

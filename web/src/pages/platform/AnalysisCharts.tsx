@@ -1,6 +1,10 @@
+import { useEffect, useId, useState } from "react";
+import type { CSSProperties } from "react";
 import type { PlatformPaperAnalysis } from "../../platform/auth";
 import { G52Pill } from "../../ui-redesign/g52/G52UIComponents";
 import "../../ui-redesign/g52/g52-design-tokens.css";
+import { AnalysisNumber } from "./AnalysisNumber";
+import "./AnalysisCharts.css";
 
 type Bucket = {
   label: string;
@@ -39,7 +43,34 @@ function classDisplayName(name: string, grade?: string | null): string {
 }
 
 function clampPercent(value: number | null | undefined): number {
-  return Math.max(0, Math.min(100, Number(value ?? 0)));
+  const number = Number(value ?? 0);
+  return Math.max(0, Math.min(100, Number.isFinite(number) ? number : 0));
+}
+
+function useChartAnimation(animationKey: string): boolean {
+  const [state, setState] = useState<{ key: string; ready: boolean }>({ key: "", ready: false });
+  const ready = state.key === animationKey && state.ready;
+
+  useEffect(() => {
+    const media = typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)")
+      : null;
+    if (media?.matches) {
+      setState({ key: animationKey, ready: true });
+      return;
+    }
+
+    setState({ key: animationKey, ready: false });
+    const onFrame = () => setState({ key: animationKey, ready: true });
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      const frameId = window.requestAnimationFrame(onFrame);
+      return () => window.cancelAnimationFrame?.(frameId);
+    }
+    const timer = window.setTimeout(onFrame, 0);
+    return () => window.clearTimeout(timer);
+  }, [animationKey]);
+
+  return ready;
 }
 
 const RADAR_LABELS: Record<string, string> = {
@@ -94,19 +125,30 @@ function makeStatusBuckets(analysis: PlatformPaperAnalysis): Bucket[] {
   ];
 }
 
-function BarRows({ rows, total }: { rows: Bucket[]; total: number }) {
+function BarRows({ rows, total, animationKey }: { rows: Bucket[]; total: number; animationKey: string }) {
+  const ready = useChartAnimation(animationKey);
   const denominator = Math.max(total, ...rows.map((row) => row.value), 1);
   return (
     <div className="space-y-3">
-      {rows.map((row) => {
+      {rows.map((row, index) => {
         const width = percent(row.value, denominator);
         return (
           <div key={row.label} className="grid grid-cols-[88px_minmax(0,1fr)_56px] items-center gap-2 text-xs">
             <span className="truncate text-[var(--or-muted)] font-medium">{row.label}</span>
             <div className="h-2.5 overflow-hidden rounded-full bg-[var(--or-block)]">
-              <div className={`h-full rounded-full ${row.color}`} style={{ width: `${width}%` }} />
+              <div
+                className={`analysis-chart-fill h-full rounded-full ${row.color}`}
+                data-ready={ready}
+                style={{
+                  "--analysis-chart-target-width": `${width}%`,
+                  width: `${ready ? width : 0}%`,
+                  transitionDelay: `${index * 45}ms`,
+                } as CSSProperties}
+              />
             </div>
-            <span className="text-right font-semibold text-[var(--or-text)]">{row.value} 人</span>
+            <span className="text-right font-semibold text-[var(--or-text)]">
+              <AnalysisNumber value={row.value} suffix=" 人" animationKey={animationKey} />
+            </span>
           </div>
         );
       })}
@@ -114,23 +156,41 @@ function BarRows({ rows, total }: { rows: Bucket[]; total: number }) {
   );
 }
 
-function SegmentedStatus({ rows, total }: { rows: Bucket[]; total: number }) {
+function SegmentedStatus({ rows, total, animationKey }: { rows: Bucket[]; total: number; animationKey: string }) {
+  const ready = useChartAnimation(animationKey);
   const denominator = Math.max(total, 1);
   return (
     <div>
-      <div className="flex h-3 overflow-hidden rounded-full bg-[var(--or-block)]">
-        {rows.map((row) => (
-          <div key={row.label} className={row.color} style={{ width: `${percent(row.value, denominator)}%` }} />
+      <div
+        className="flex h-3 overflow-hidden rounded-full bg-[var(--or-block)]"
+        role="img"
+        aria-label={`答题进度分布：${rows.map((row) => `${row.label}${row.value}人`).join("，")}`}
+      >
+        {rows.map((row, index) => (
+          <div
+            key={row.label}
+            aria-hidden="true"
+            className={`analysis-chart-segment ${row.color}`}
+            data-ready={ready}
+            style={{
+              "--analysis-chart-target-width": `${percent(row.value, denominator)}%`,
+              width: `${ready ? percent(row.value, denominator) : 0}%`,
+              transitionDelay: `${index * 55}ms`,
+            } as CSSProperties}
+          />
         ))}
       </div>
-      <div className="mt-3.5 grid gap-2 sm:grid-cols-3">
+      <div className="mt-3.5 grid gap-1.5">
         {rows.map((row) => (
-          <div key={row.label} className="rounded-xl border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-2.5 text-xs">
-            <div className="flex items-center gap-1.5 text-[var(--or-muted)]">
+          <div
+            key={row.label}
+            className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] px-2.5 py-2 text-xs"
+          >
+            <div className="flex min-w-0 items-center gap-1.5 text-[var(--or-muted)]">
               <span className={`h-2 w-2 rounded-full ${row.color}`} />
-              <span className="font-medium">{row.label}</span>
+              <span className="whitespace-nowrap font-medium">{row.label}</span>
             </div>
-            <p className="mt-1 font-semibold text-[var(--or-text)] text-sm">
+            <p className="whitespace-nowrap text-right text-sm font-semibold text-[var(--or-text)]">
               {row.value} 人 · {percent(row.value, denominator)}%
             </p>
           </div>
@@ -140,7 +200,9 @@ function SegmentedStatus({ rows, total }: { rows: Bucket[]; total: number }) {
   );
 }
 
-function RadarChart({ analysis }: { analysis: PlatformPaperAnalysis }) {
+function RadarChart({ analysis, animationKey }: { analysis: PlatformPaperAnalysis; animationKey: string }) {
+  const gradientId = `paper-analysis-radar-${useId().replace(/:/g, "")}`;
+  const ready = useChartAnimation(animationKey);
   const axes = (analysis.radar ?? []).map((axis) => ({
     ...axis,
     label: RADAR_LABELS[axis.id] ?? axis.label,
@@ -150,7 +212,7 @@ function RadarChart({ analysis }: { analysis: PlatformPaperAnalysis }) {
   }
   const size = 220;
   const center = size / 2;
-  const radius = 76;
+  const radius = 96;
   const points = axes.map((axis, index) => {
     const angle = -Math.PI / 2 + (Math.PI * 2 * index) / axes.length;
     const valueRadius = (clampPercent(axis.value) / 100) * radius;
@@ -176,7 +238,20 @@ function RadarChart({ analysis }: { analysis: PlatformPaperAnalysis }) {
       className="grid min-w-0 gap-4 overflow-hidden md:grid-cols-[minmax(0,220px)_minmax(0,1fr)]"
       data-testid="paper-analysis-radar"
     >
-      <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto h-auto w-full max-w-[220px]">
+      <svg viewBox="-30 -30 280 280" className="mx-auto h-auto w-full max-w-[220px]">
+        <defs>
+          <radialGradient
+            id={gradientId}
+            gradientUnits="userSpaceOnUse"
+            cx={center}
+            cy={center}
+            r={radius}
+          >
+            <stop offset="0%" stopColor="var(--or-primary)" stopOpacity="0.02" />
+            <stop offset="58%" stopColor="var(--or-primary)" stopOpacity="0.09" />
+            <stop offset="100%" stopColor="var(--or-primary)" stopOpacity="0.22" />
+          </radialGradient>
+        </defs>
         {[0.25, 0.5, 0.75, 1].map((scale) => (
           <circle key={scale} cx={center} cy={center} r={radius * scale} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
@@ -194,21 +269,115 @@ function RadarChart({ analysis }: { analysis: PlatformPaperAnalysis }) {
             </text>
           </g>
         ))}
-        <polygon points={polygon} fill="#007aff" fillOpacity="0.14" stroke="#007aff" strokeWidth="2" />
-        {points.map((item) => (
-          <circle key={`${item.axis.id}:point`} cx={item.point.x} cy={item.point.y} r="3" fill="#007aff" />
-        ))}
+        <g className="analysis-radar-shape" data-ready={ready} aria-hidden="true">
+          <polygon points={polygon} fill={`url(#${gradientId})`} stroke="var(--or-primary)" strokeWidth="2" />
+          {points.map((item) => (
+            <circle
+              key={`${item.axis.id}:point`}
+              cx={item.point.x}
+              cy={item.point.y}
+              r="3"
+              fill="var(--or-primary)"
+            />
+          ))}
+        </g>
       </svg>
       <div className="min-w-0 space-y-2.5 self-center">
-        {axes.map((axis) => (
+        {axes.map((axis, index) => (
           <div key={axis.id} className="grid min-w-0 grid-cols-[minmax(0,96px)_minmax(40px,1fr)_36px] items-center gap-2 text-xs">
             <span className="truncate text-[var(--or-muted)] font-medium">{axis.label}</span>
             <div className="h-2 overflow-hidden rounded-full bg-[var(--or-block)]">
-              <div className="h-full rounded-full bg-[var(--or-primary)]" style={{ width: `${clampPercent(axis.value)}%` }} />
+              <div
+                className="analysis-chart-fill h-full rounded-full bg-[var(--or-primary)]"
+                data-ready={ready}
+                style={{
+                  "--analysis-chart-target-width": `${clampPercent(axis.value)}%`,
+                  width: `${ready ? clampPercent(axis.value) : 0}%`,
+                  transitionDelay: `${index * 45}ms`,
+                } as CSSProperties}
+              />
             </div>
-            <span className="text-right font-semibold text-[var(--or-text)]">{Math.round(axis.value)}</span>
+            <span className="text-right font-semibold text-[var(--or-text)]">
+              <AnalysisNumber value={Math.round(axis.value)} animationKey={animationKey} />
+            </span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ClassMeanChart({ analysis, animationKey }: { analysis: PlatformPaperAnalysis; animationKey: string }) {
+  const ready = useChartAnimation(animationKey);
+  const rows = analysis.classes ?? [];
+  if (rows.length === 0 || rows.every((row) => row.average_score == null || !Number.isFinite(Number(row.average_score)))) {
+    return <p className="py-4 text-center text-sm text-[var(--or-muted)]">暂无班级平均分数据</p>;
+  }
+
+  return (
+    <div className="flex min-w-0" data-testid="paper-analysis-class-means">
+      <div className="relative mr-2 mt-5 h-32 w-7 shrink-0 text-[10px] text-[var(--or-muted)]" aria-hidden="true">
+        {[100, 75, 50, 25, 0].map((tick) => (
+          <span
+            key={tick}
+            className="absolute right-0 -translate-y-1/2 tabular-nums"
+            style={{ top: `${100 - tick}%` }}
+          >
+            {tick}
+          </span>
+        ))}
+      </div>
+      <div className="relative min-w-0 flex-1 overflow-x-auto">
+        <div
+          className="relative h-[176px]"
+          style={{ minWidth: `${rows.length * 88}px` }}
+        >
+          <div className="pointer-events-none absolute inset-x-0 top-5 h-32" aria-hidden="true">
+            {[100, 75, 50, 25, 0].map((tick) => (
+              <div
+                key={tick}
+                className={`absolute inset-x-0 border-t ${tick === 0 ? "border-[var(--or-outline)]" : "border-dashed border-[color-mix(in_srgb,var(--or-outline)_60%,transparent)]"}`}
+                style={{ top: `${100 - tick}%` }}
+              />
+            ))}
+          </div>
+          <ul
+            className="relative flex h-full items-stretch justify-around gap-2 px-2"
+            aria-label="各班级当前考试平均得分率"
+          >
+            {rows.map((row, index) => {
+              const value = row.average_score == null || !Number.isFinite(Number(row.average_score))
+                ? null
+                : clampPercent(row.average_score);
+              const barHeight = value ?? 0;
+              return (
+                <li
+                  key={row.class_id}
+                  className="flex w-[64px] shrink-0 flex-col items-center"
+                  title={`${classDisplayName(row.class_name, row.class_grade)}：${value == null ? "暂无平均分" : `${Math.round(value)}%`}`}
+                >
+                  <span className="mb-1 flex h-4 items-center text-xs font-semibold tabular-nums text-[var(--or-text)]">
+                    <AnalysisNumber value={value == null ? null : Math.round(value)} suffix="%" animationKey={animationKey} />
+                  </span>
+                  <div className="relative h-32 w-full">
+                    <div
+                      className="analysis-chart-fill analysis-class-mean-bar absolute inset-x-[14px] bottom-0"
+                      data-ready={ready}
+                      style={{
+                        "--analysis-chart-target-height": `${barHeight}%`,
+                        height: `${ready ? barHeight : 0}%`,
+                        transitionDelay: `${index * 45}ms`,
+                      } as CSSProperties}
+                    />
+                  </div>
+                  <span className="mt-1 w-full truncate text-center text-[11px] font-medium text-[var(--or-muted)]">
+                    {classDisplayName(row.class_name, row.class_grade)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       </div>
     </div>
   );
@@ -446,34 +615,51 @@ function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; c
 export function PlatformPaperAnalysisCharts({
   analysis,
   compact = false,
+  replay = 0,
 }: {
   analysis: PlatformPaperAnalysis;
   compact?: boolean;
+  replay?: number;
 }) {
   const total = Math.max(analysis.summary.total_students, analysis.students.length, 0);
   const statusRows = makeStatusBuckets(analysis);
   const scoreRows = makeScoreBuckets(analysis);
   const timeRows = makeTimeBuckets(analysis);
+  const animationKey = JSON.stringify([
+    analysis.paper.paper_id,
+    analysis.paper.exam_id,
+    analysis.publication_id ?? "",
+    analysis.class_id ?? "",
+    replay,
+  ]);
 
   return (
-    <div className="space-y-6" data-testid="paper-analysis-charts">
+    <div className="platform-analysis-charts min-w-0 space-y-6" data-testid="paper-analysis-charts">
+      <section className="min-w-0 or-g52-surface-card p-5" data-testid="paper-analysis-chart-class-means-card">
+        <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-2">
+          <h4 className="text-sm font-semibold tracking-tight text-[var(--or-text)]">各班级平均分</h4>
+          <span className="text-xs text-[var(--or-muted)]">%</span>
+        </div>
+        <ClassMeanChart analysis={analysis} animationKey={animationKey} />
+      </section>
+
       <div className={`grid gap-4 ${compact ? "grid-cols-1" : "lg:grid-cols-3"}`}>
         <section className="or-g52-surface-card p-5" data-testid="paper-analysis-chart-status">
           <h4 className="text-sm font-semibold text-[var(--or-text)] tracking-tight">答题进度分布</h4>
           <div className="mt-4">
-            <SegmentedStatus rows={statusRows} total={total} />
+            <SegmentedStatus rows={statusRows} total={total} animationKey={animationKey} />
           </div>
         </section>
         <section className="or-g52-surface-card p-5" data-testid="paper-analysis-chart-score">
           <h4 className="text-sm font-semibold text-[var(--or-text)] tracking-tight">分数区间分布</h4>
           <div className="mt-4">
-            <BarRows rows={scoreRows} total={Math.max(analysis.students.length, 1)} />
+            <BarRows rows={scoreRows} total={Math.max(analysis.students.length, 1)} animationKey={animationKey} />
           </div>
         </section>
         <section className="or-g52-surface-card p-5" data-testid="paper-analysis-chart-time">
           <h4 className="text-sm font-semibold text-[var(--or-text)] tracking-tight">耗时区间分布</h4>
           <div className="mt-4">
-            <BarRows rows={timeRows} total={Math.max(analysis.students.length, 1)} />
+            <BarRows rows={timeRows} total={Math.max(analysis.students.length, 1)} animationKey={animationKey} />
           </div>
         </section>
       </div>
@@ -485,20 +671,29 @@ export function PlatformPaperAnalysisCharts({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3.5">
             <p className="text-xs font-medium text-[var(--or-muted)]">完成率</p>
-            <p className="mt-1 text-xl font-bold text-[var(--or-text)]">{analysis.summary.completion_rate}%</p>
+            <p className="mt-1 text-xl font-bold text-[var(--or-text)]">
+              <AnalysisNumber value={analysis.summary.completion_rate} suffix="%" animationKey={animationKey} />
+            </p>
           </div>
           <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3.5">
             <p className="text-xs font-medium text-[var(--or-muted)]">平均得分率</p>
-            <p className="mt-1 text-xl font-bold text-[var(--or-text)]">{analysis.summary.average_score ?? "-"}</p>
+            <p className="mt-1 text-xl font-bold text-[var(--or-text)]">
+              <AnalysisNumber value={analysis.summary.average_score} animationKey={animationKey} />
+            </p>
           </div>
           <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3.5">
             <p className="text-xs font-medium text-[var(--or-muted)]">切屏次数</p>
-            <p className="mt-1 text-xl font-bold text-[var(--or-text)]">{analysis.proctoring.screen_switch_count}</p>
+            <p className="mt-1 text-xl font-bold text-[var(--or-text)]">
+              <AnalysisNumber value={analysis.proctoring.screen_switch_count} animationKey={animationKey} />
+            </p>
           </div>
           <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3.5">
             <p className="text-xs font-medium text-[var(--or-muted)]">超限学生</p>
             <p className="mt-1 text-xl font-bold text-[var(--or-text)]">
-              {analysis.proctoring.exceeded_student_count ?? analysis.proctoring.flagged_student_count}
+              <AnalysisNumber
+                value={analysis.proctoring.exceeded_student_count ?? analysis.proctoring.flagged_student_count}
+                animationKey={animationKey}
+              />
             </p>
           </div>
         </div>
@@ -508,10 +703,10 @@ export function PlatformPaperAnalysisCharts({
         <section className="min-w-0 overflow-hidden or-g52-surface-card p-5">
           <h4 className="text-sm font-semibold text-[var(--or-text)] tracking-tight">雷达 / 蜘蛛图</h4>
           <div className="mt-3.5">
-            <RadarChart analysis={analysis} />
+            <RadarChart analysis={analysis} animationKey={animationKey} />
           </div>
         </section>
-        <section className="or-g52-surface-card p-5">
+        <section className="min-w-0 or-g52-surface-card p-5">
           <h4 className="text-sm font-semibold text-[var(--or-text)] tracking-tight">模块级报告</h4>
           <div className="mt-3.5">
             <ModuleReport analysis={analysis} />
@@ -519,14 +714,14 @@ export function PlatformPaperAnalysisCharts({
         </section>
       </div>
 
-      <div className={`grid gap-4 ${compact ? "grid-cols-1" : "xl:grid-cols-2"}`}>
-        <section className="or-g52-surface-card p-5">
+      <div className={`grid min-w-0 gap-4 ${compact ? "grid-cols-1" : "xl:grid-cols-2"}`}>
+        <section className="min-w-0 or-g52-surface-card p-5">
           <h4 className="text-sm font-semibold text-[var(--or-text)] tracking-tight">班级维度报表</h4>
           <div className="mt-3.5">
             <ClassReport analysis={analysis} />
           </div>
         </section>
-        <section className="or-g52-surface-card p-5">
+        <section className="min-w-0 or-g52-surface-card p-5">
           <h4 className="text-sm font-semibold text-[var(--or-text)] tracking-tight">题目维度报表</h4>
           <div className="mt-3.5">
             <QuestionReport analysis={analysis} />
@@ -534,7 +729,7 @@ export function PlatformPaperAnalysisCharts({
         </section>
       </div>
 
-      <section className="space-y-3.5">
+      <section className="min-w-0 space-y-3.5">
         <div className="flex flex-wrap items-center justify-between gap-3 px-1">
           <h4 className="text-base font-semibold text-[var(--or-text)] tracking-tight">学生个人分析表</h4>
           <span className="text-xs text-[var(--or-muted)]">含得分、耗时、切屏与考试行为稳定度（仅供教师复核，不自动判定作弊）</span>

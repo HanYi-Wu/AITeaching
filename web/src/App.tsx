@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useTranslation } from "react-i18next";
 import {
@@ -24,7 +24,8 @@ import { WorkspaceLoadBoundary } from './components/WorkspaceLoadBoundary';
 import { TeacherFirstUseGuide } from './components/TeacherFirstUseGuide';
 import { LoginHandoff } from './pages/platform/login/LoginHandoff';
 import { ToolBar } from "./components/layout/ToolBar";
-import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
+import { AgentSidebar } from "./components/AgentSidebar";
+import { AgentProvider, useAgentSidebar } from "./contexts/AgentContext";
 import { ToolBarProvider, useToolBar } from "./contexts/ToolBarContext";
 import { apiGet } from "./api/client";
 import { dispatchSolaireSave } from "./lib/saveEvents";
@@ -33,6 +34,7 @@ import { installAppearance } from "./design-system/appearance";
 import { SelectionIndicator } from "./design-system/SelectionIndicator";
 import { cn } from "./lib/utils";
 import { isTauriShell } from "./lib/tauriEnv";
+import { trackWorkspaceAnimation } from "./lib/workspaceWorkScheduler";
 import type { AppPage } from "./app/appPages";
 import { BankRoute, ComposeRoute, GraphRoute, TemplateRoute } from "./app/routes";
 import {
@@ -46,9 +48,6 @@ import {
 import { resolvePlatformRoute } from "./platform/routing";
 import type { ProjectInfo } from "./types/project";
 
-const AgentSidebar = lazy(() =>
-  import("./components/AgentSidebar").then((module) => ({ default: module.AgentSidebar })),
-);
 const AnalysisWorkspace = lazy(() =>
   import("./pages/analysis/AnalysisWorkspace").then((module) => ({ default: module.AnalysisWorkspace })),
 );
@@ -108,8 +107,7 @@ export default function App() {
 
 function AppShell() {
   const { t, i18n } = useTranslation(["app", "common"]);
-  const { toggleSidebar, sidebarOpen, setSidebarOpen, resetAgentContext } = useAgentContext();
-  const { left: toolBarLeft, right: toolBarRight } = useToolBar();
+  const { toggleSidebar, sidebarOpen, setSidebarOpen, resetAgentContext } = useAgentSidebar();
   const [page, setPage] = useState<AppPage>("compose");
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -149,7 +147,11 @@ function AppShell() {
   useLayoutEffect(() => {
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     const animation = pageBodyRef.current?.animate?.([{ opacity: 0.6 }, { opacity: 1 }], { duration: 220, easing: "ease-in-out" });
-    return () => animation?.cancel();
+    const stopTracking = trackWorkspaceAnimation(animation ?? null);
+    return () => {
+      stopTracking();
+      animation?.cancel();
+    };
   }, [page]);
 
   const refreshInfo = useCallback(async () => {
@@ -280,6 +282,10 @@ function AppShell() {
   }, [onAuthenticated]);
   const finishLoginHandoff = useCallback(() => setLoginHandoff(false), []);
 
+  const onManagementProfileUpdated = useCallback((profile: PlatformUser) => {
+    setCurrentUser((current) => current?.id === profile.id ? { ...current, ...profile } : current);
+  }, []);
+
   const onLogout = useCallback(async () => {
     setAssistantMounted(false);
     platformRequestId.current += 1;
@@ -293,6 +299,9 @@ function AppShell() {
   const openPapersPage = useCallback(() => {
     setPage("papers");
   }, []);
+  const onOpenExamConsumed = useCallback(() => {
+    setComposeOpenExamId(null);
+  }, []);
 
   const platformRoute = resolvePlatformRoute({
     loading: platformLoading,
@@ -301,6 +310,13 @@ function AppShell() {
     userRole: currentUser?.role ?? null,
     adminProjectMode,
   });
+
+  useLayoutEffect(() => {
+    if (platformRoute !== "loading" && platformRoute !== "login" && platformRoute !== "bootstrap") {
+      delete document.documentElement.dataset.orBootLogin;
+    }
+  }, [platformRoute]);
+
   const mobileMoreActive = sidebarOpen || ["template", "students", "analysis", "help", "settings"].includes(page);
   const navigationSelector = isMobileNavigation
     ? '[data-mobile-primary="true"][aria-current="page"], [data-mobile-more][aria-current="page"]'
@@ -318,6 +334,48 @@ function AppShell() {
   useEffect(() => {
     if (info?.bound && currentUser && page === 'compose') setComposeOwner(currentUser.id);
   }, [info?.bound, currentUser?.id, page]);
+
+  // Opening navigation or the assistant must not re-render the active editor.
+  // Its own data, account, project and route changes still update normally.
+  const workspaceContent = useMemo(() => (
+    <WorkspaceLoadBoundary resetKey={page}>
+      <Suspense fallback={<AppLoadingFallback />}>
+        {info?.bound && (page === "compose" || Boolean(composeOwner && composeOwner === currentUser?.id)) && (
+          <div className={cn("h-full min-h-0 min-w-0 overflow-hidden", page !== "compose" && "hidden")} aria-hidden={page !== "compose"}>
+            <ComposeRoute
+              key={currentUser?.id ?? "local"} info={info} accountId={currentUser?.id ?? null}
+              onRefreshInfo={refreshInfo} onError={setErr} toolBarActive={page === "compose"}
+              openExamId={composeOpenExamId} onOpenExamConsumed={onOpenExamConsumed} onOpenPapers={openPapersPage}
+            />
+          </div>
+        )}
+        {page === "bank" && <BankRoute info={info} onRefreshInfo={refreshInfo} onError={setErr} onOpenGraphNode={(nodeId) => { setGraphFocusNodeId(nodeId); setPage("graph"); }} />}
+        {page === "template" && <TemplateRoute info={info} onRefreshInfo={refreshInfo} onError={setErr} />}
+        {page === "graph" && <GraphRoute info={info} accountId={currentUser?.id ?? null} onRefreshInfo={refreshInfo} onError={setErr} focusNodeId={graphFocusNodeId} onFocusConsumed={() => setGraphFocusNodeId(null)} />}
+        {page === "papers" && (
+          <PapersWorkspace
+            projectScope={infoAccountId === (currentUser?.id ?? "local")
+              ? { ready: true, value: info?.bound ? info.root ?? null : null }
+              : { ready: false, value: null }}
+            openTarget={paperOpenTarget} assignStudent={studentPracticeTarget}
+            onAssignStudentConsumed={() => setStudentPracticeTarget(null)} onOpenTargetConsumed={() => setPaperOpenTarget(null)}
+            onOpenBank={() => setPage("bank")} onOpenTemplates={() => setPage("template")} onOpenCompose={() => setPage("compose")}
+            onOpenAnalysis={() => setPage("analysis")} onError={setErr}
+          />
+        )}
+        {page === "students" && <TeacherStudentInsightsWorkspace onError={setErr} onOpenPaper={(target) => { setPaperOpenTarget(target); setPage("papers"); }} onAssignStudent={(target) => { setStudentPracticeTarget(target); setPage("papers"); }} />}
+        {page === "settings" && <SettingsWorkspace onError={setErr} userRole={currentUser?.role} onProfileUpdated={setCurrentUser} />}
+        {page === "help" && <HelpWorkspace onError={setErr} />}
+        {page === "analysis" && (
+          <AnalysisWorkspace
+            allowHostTools={!platformStatus?.public_mode && currentUser?.role === "admin"}
+            ownerId={currentUser?.id ?? null} projectId={info?.bound ? info.root || info.project_id : null}
+            onOpenExamInCompose={(examId) => { setComposeOpenExamId(examId); setPage("compose"); }}
+          />
+        )}
+      </Suspense>
+    </WorkspaceLoadBoundary>
+  ), [page, info, infoAccountId, currentUser?.id, currentUser?.role, composeOwner, composeOpenExamId, graphFocusNodeId, paperOpenTarget, studentPracticeTarget, platformStatus?.public_mode, refreshInfo, openPapersPage, onOpenExamConsumed]);
 
   return (
     <div
@@ -354,15 +412,37 @@ function AppShell() {
         ) : platformRoute === "login" ? (
           <PlatformLogin mode="login" onAuthenticated={onLoginAuthenticated} onError={setErr} />
         ) : platformRoute === "admin" && currentUser ? (
-          <AdminWorkspace
-            user={currentUser}
-            onLogout={() => void onLogout()}
-            onError={setErr}
-          />
+          <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
+            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              <WorkspaceErrorBanner error={err} />
+              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                <AdminWorkspace
+                  user={currentUser}
+                  onLogout={() => void onLogout()}
+                  onError={setErr}
+                  onProfileUpdated={onManagementProfileUpdated}
+                />
+              </div>
+            </div>
+          </WorkspaceLoadBoundary>
         ) : platformRoute === "school" && currentUser ? (
-          <SchoolWorkspace user={currentUser} onLogout={() => void onLogout()} onError={setErr} />
+          <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
+            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              <WorkspaceErrorBanner error={err} />
+              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                <SchoolWorkspace user={currentUser} onLogout={() => void onLogout()} onError={setErr} onProfileUpdated={onManagementProfileUpdated} />
+              </div>
+            </div>
+          </WorkspaceLoadBoundary>
         ) : platformRoute === "student" && currentUser ? (
-          <StudentWorkspace user={currentUser} onLogout={() => void onLogout()} />
+          <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
+            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              <WorkspaceErrorBanner error={err} />
+              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                <StudentWorkspace user={currentUser} onLogout={() => void onLogout()} />
+              </div>
+            </div>
+          </WorkspaceLoadBoundary>
         ) : (
           <TeacherWorkspace>
             <Dialog.Root open={moreOpen} onOpenChange={setMoreOpen}>
@@ -552,7 +632,7 @@ function AppShell() {
             </Dialog.Root>
 
             <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-              <ToolBar left={toolBarLeft} right={toolBarRight} />
+              <WorkspaceToolBar />
 
               {err && (
                 <div
@@ -581,87 +661,7 @@ function AppShell() {
                 className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
               >
                 <main ref={pageBodyRef} className="or-workspace-content min-h-0 min-w-0 flex-1 overflow-hidden">
-                  <WorkspaceLoadBoundary resetKey={page}>
-                  <Suspense fallback={<AppLoadingFallback />}>
-                  {info?.bound && (page === 'compose' || Boolean(composeOwner && composeOwner === currentUser?.id)) && (
-                    <div
-                      className={cn(
-                        "h-full min-h-0 min-w-0 overflow-hidden",
-                        page !== "compose" && "hidden",
-                      )}
-                      aria-hidden={page !== "compose"}
-                    >
-                      <ComposeRoute
-                        key={currentUser?.id ?? 'local'}
-                        info={info}
-                        accountId={currentUser?.id ?? null}
-                        onRefreshInfo={refreshInfo}
-                        onError={setErr}
-                        toolBarActive={page === "compose"}
-                        openExamId={composeOpenExamId}
-                        onOpenExamConsumed={() => setComposeOpenExamId(null)}
-                        onOpenPapers={openPapersPage}
-                      />
-                    </div>
-                  )}
-                  {page === "bank" && (
-                    <BankRoute
-                      info={info}
-                      onRefreshInfo={refreshInfo}
-                      onError={setErr}
-                      onOpenGraphNode={(nodeId) => {
-                        setGraphFocusNodeId(nodeId);
-                        setPage("graph");
-                      }}
-                    />
-                  )}
-                  {page === "template" && <TemplateRoute info={info} onRefreshInfo={refreshInfo} onError={setErr} />}
-                  {page === "graph" && (
-                    <GraphRoute
-                      info={info}
-                      accountId={currentUser?.id ?? null}
-                      onRefreshInfo={refreshInfo}
-                      onError={setErr}
-                      focusNodeId={graphFocusNodeId}
-                      onFocusConsumed={() => setGraphFocusNodeId(null)}
-                    />
-                  )}
-                  {page === "papers" && (
-                    <PapersWorkspace
-                      projectScope={infoAccountId === (currentUser?.id ?? "local")
-                        ? { ready: true, value: info?.bound ? info.root ?? null : null }
-                        : { ready: false, value: null }}
-                      openTarget={paperOpenTarget}
-                      assignStudent={studentPracticeTarget}
-                      onAssignStudentConsumed={() => setStudentPracticeTarget(null)}
-                      onOpenTargetConsumed={() => setPaperOpenTarget(null)}
-                      onOpenBank={() => setPage("bank")}
-                      onOpenTemplates={() => setPage("template")}
-                      onOpenCompose={() => setPage("compose")}
-                      onOpenAnalysis={() => {
-                        setPage("analysis");
-                      }}
-                      onError={setErr}
-                    />
-                  )}
-                  {page === "students" && <TeacherStudentInsightsWorkspace onError={setErr} onOpenPaper={(target) => { setPaperOpenTarget(target); setPage("papers"); }} onAssignStudent={(target) => { setStudentPracticeTarget(target); setPage("papers"); }} />}
-                  {page === "settings" && (
-                    <SettingsWorkspace onError={setErr} userRole={currentUser?.role} onProfileUpdated={setCurrentUser} />
-                  )}
-                  {page === "help" && <HelpWorkspace onError={setErr} />}
-                  {page === "analysis" && (
-                    <AnalysisWorkspace
-                      allowHostTools={!platformStatus?.public_mode && currentUser?.role === "admin"}
-                      ownerId={currentUser?.id ?? null}
-                      projectId={info?.bound ? info.root || info.project_id : null}
-                      onOpenExamInCompose={(examId) => {
-                        setComposeOpenExamId(examId);
-                        setPage("compose");
-                      }}
-                    />
-                  )}
-                  </Suspense>
-                  </WorkspaceLoadBoundary>
+                  {workspaceContent}
                 </main>
                 <WorkspaceLoadBoundary>
                 <Suspense fallback={null}>
@@ -679,11 +679,37 @@ function AppShell() {
   );
 }
 
+function WorkspaceToolBar() {
+  const { left, right } = useToolBar();
+  return <ToolBar left={left} right={right} />;
+}
+
 function AppLoadingFallback() {
   const { t } = useTranslation("app");
   return (
     <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-sm text-[var(--or-muted)]">
       {t("loading.workspace")}
+    </div>
+  );
+}
+
+function WorkspaceErrorBanner({ error }: { error: string | null }) {
+  const { t } = useTranslation("app");
+  if (!error) return null;
+  return (
+    <div
+      className="flex max-h-32 shrink-0 items-start gap-2 overflow-hidden border-b border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_90%,transparent)] px-4 py-2 dark:border-red-900/40 dark:bg-red-950/40"
+      role="alert"
+    >
+      <div
+        className="max-h-24 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-snug text-[var(--or-on-error)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--or-error)] dark:text-red-300"
+        tabIndex={0}
+      >
+        {error}
+      </div>
+      <span className="shrink-0 whitespace-nowrap text-xs text-[color-mix(in_srgb,var(--or-on-error)_90%,transparent)] dark:text-[var(--or-on-error)] sm:text-[13px]">
+        {t("errorBannerLogHint")}
+      </span>
     </div>
   );
 }

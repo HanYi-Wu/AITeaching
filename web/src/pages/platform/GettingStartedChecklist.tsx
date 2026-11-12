@@ -9,7 +9,7 @@ export type GettingStartedStep = {
 };
 
 type Props = {
-  description: string;
+  description?: string;
   steps: GettingStartedStep[];
 };
 
@@ -21,7 +21,7 @@ export function GettingStartedChecklist({ description, steps }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-bold text-[var(--or-text)] ">首次使用清单</h2>
-          <p className="mt-1 text-sm text-[var(--or-muted)] ">{description}</p>
+          {description ? <p className="mt-1 text-sm text-[var(--or-muted)] ">{description}</p> : null}
         </div>
         <span className="or-g55-pill bg-or-primary-container text-xs font-semibold text-or-on-container">
           {completedCount}/{steps.length} 已完成

@@ -1,6 +1,7 @@
-import { ChangeEvent, Dispatch, FormEvent, SetStateAction } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ChangeEvent, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { Plus, Save, Trash2 } from "lucide-react";
 import { deleteClass, updateClass, type ClassRecord } from "../../../../platform/auth";
+import { confirmDialog } from "../../../../lib/confirmDialog";
 import {
   IconButton,
   ImportActions,
@@ -12,6 +13,7 @@ import {
 } from "../SchoolControls";
 import type { ClassDraft } from "../hooks/useSchoolWorkspaceData";
 import "../../../../ui-redesign/g53/g53.css";
+import { useManagementCapability, useManagementDictionary } from "../../../../platform/useManagementOptions";
 
 type ClassesMainProps = {
   classes: ClassRecord[];
@@ -34,6 +36,42 @@ export function ClassesMainPanel({
   busy,
   run,
 }: ClassesMainProps) {
+  const canWrite = useManagementCapability("school.classes.manage");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const confirmingDeleteRef = useRef(false);
+  const mountedRef = useRef(true);
+  const deleteContextRef = useRef({ classes, run, busy, canWrite });
+  deleteContextRef.current = { classes, run, busy, canWrite };
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const confirmDeleteClass = async (klass: ClassRecord) => {
+    if (busy || !canWrite || confirmingDeleteRef.current) return;
+
+    confirmingDeleteRef.current = true;
+    setConfirmingDelete(true);
+    try {
+      const confirmed = await confirmDialog(
+        `删除“${klass.name}”后，该班学生会失去当前班级归属，教师班级分配和面向该班的试卷发布关联会被清除。学生、教师、试卷以及已有考试记录和答卷会保留。此操作不可撤销，确定删除吗？`,
+        "确认删除班级",
+      );
+      const current = deleteContextRef.current;
+      if (!confirmed || !mountedRef.current || current.busy || !current.canWrite) return;
+      if (!current.classes.some(({ id, name }) => id === klass.id && name === klass.name)) return;
+      await current.run(async () => {
+        await deleteClass(klass.id);
+      });
+    } finally {
+      confirmingDeleteRef.current = false;
+      if (mountedRef.current) setConfirmingDelete(false);
+    }
+  };
+
   return (
     <ManagementSection
       title="班级管理"
@@ -67,6 +105,7 @@ export function ClassesMainPanel({
                       <input
                         className="or-g53-input w-52 py-1 text-sm font-medium"
                         value={draft.name}
+                        readOnly={!canWrite}
                         onChange={(event) =>
                           setClassDrafts((prev) => ({ ...prev, [klass.id]: { ...draft, name: event.target.value } }))
                         }
@@ -76,6 +115,7 @@ export function ClassesMainPanel({
                       <input
                         className="or-g53-input w-28 py-1 text-sm font-medium"
                         value={draft.grade}
+                        readOnly={!canWrite}
                         onChange={(event) =>
                           setClassDrafts((prev) => ({ ...prev, [klass.id]: { ...draft, grade: event.target.value } }))
                         }
@@ -87,7 +127,7 @@ export function ClassesMainPanel({
                       <div className="flex justify-end gap-2">
                         <IconButton
                           label="保存班级"
-                          disabled={busy}
+                          disabled={busy || !canWrite}
                           onClick={() =>
                             void run(async () => {
                               await updateClass(klass.id, { name: draft.name, grade: draft.grade });
@@ -97,12 +137,8 @@ export function ClassesMainPanel({
                         />
                         <IconButton
                           label="删除班级"
-                          disabled={busy}
-                          onClick={() =>
-                            void run(async () => {
-                              await deleteClass(klass.id);
-                            })
-                          }
+                          disabled={busy || confirmingDelete || !canWrite}
+                          onClick={() => void confirmDeleteClass(klass)}
                           icon={<Trash2 className="h-4 w-4" />}
                         />
                       </div>
@@ -139,12 +175,13 @@ export function ClassesAsidePanel({
   downloadTemplate,
   handleFile,
 }: ClassesAsideProps) {
+  const dictionary = useManagementDictionary();
+  const gradeListId = useId();
   return (
     <aside className="min-w-0 space-y-6">
       <section className="or-g53-card p-4 sm:p-5">
         <h2 className="text-base font-semibold text-or-text">创建班级</h2>
-        <p className="mt-1 text-sm text-or-muted">创建班级后可继续录入学生或分配任课教师。</p>
-        <form className="mt-4 space-y-3" onSubmit={submitClass}>
+        <form className="mt-3 space-y-3" onSubmit={submitClass}>
           <input
             className="or-g53-input w-full text-sm"
             placeholder="班级名称，如 高一 1 班"
@@ -155,9 +192,13 @@ export function ClassesAsidePanel({
           <input
             className="or-g53-input w-full text-sm"
             placeholder="年级，如 高一"
+            list={gradeListId}
             value={grade}
             onChange={(e) => setGrade(e.target.value)}
           />
+          <datalist id={gradeListId}>
+            {dictionary?.grades.map((item) => <option key={item.id} value={item.value}>{item.label}</option>)}
+          </datalist>
           <button
             type="submit"
             disabled={busy}

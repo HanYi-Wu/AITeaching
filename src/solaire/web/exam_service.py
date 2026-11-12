@@ -345,6 +345,12 @@ def run_validate(project_root: Path, exam_yaml: Path) -> PreparedExam:
     return prepare_exam(exam_yaml)
 
 
+def prepare_export_exam(project_root: Path, exam_yaml: Path) -> PreparedExam:
+    """Validate the bank and retain the question records used for export."""
+    assert_within_project(project_root, exam_yaml)
+    return prepare_exam(exam_yaml, selected_questions_only=True)
+
+
 def run_latex_precheck(exam_yaml: Path, *, prepared: PreparedExam | None = None) -> tuple[bool, str | None]:
     """Full hydrate → TeX → latexmk; returns (True, None) or (False, user-facing excerpt)."""
     try:

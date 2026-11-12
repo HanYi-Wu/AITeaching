@@ -189,11 +189,11 @@ describe("PapersWorkspace analysis request ownership", () => {
 
     render(<PapersWorkspace />);
     fireEvent.click(await screen.findByRole("button", { name: /Paper A/ }));
-    fireEvent.click(screen.getByTestId("paper-load-analysis"));
+    fireEvent.click(await screen.findByTestId("paper-load-analysis"));
     await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("paper-a", undefined, undefined));
 
     fireEvent.click(screen.getByRole("button", { name: /Paper B/ }));
-    fireEvent.click(screen.getByTestId("paper-load-analysis"));
+    fireEvent.click(await screen.findByTestId("paper-load-analysis"));
     await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("paper-b", undefined, undefined));
 
     await act(async () => { analysisB.resolve(paperAnalysis(papers[1]!)); });
@@ -423,11 +423,11 @@ describe("PapersWorkspace analysis request ownership", () => {
 
     render(<PapersWorkspace onError={onError} />);
     fireEvent.click(await screen.findByRole("button", { name: /Paper A/ }));
-    fireEvent.click(screen.getByTestId("paper-load-analysis"));
+    fireEvent.click(await screen.findByTestId("paper-load-analysis"));
     await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("paper-a", undefined, undefined));
 
     fireEvent.click(screen.getByRole("button", { name: /Paper B/ }));
-    fireEvent.click(screen.getByTestId("paper-load-analysis"));
+    fireEvent.click(await screen.findByTestId("paper-load-analysis"));
     await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("paper-b", undefined, undefined));
 
     await act(async () => {
@@ -456,7 +456,7 @@ describe("PapersWorkspace analysis request ownership", () => {
     render(<PapersWorkspace projectScope={{ ready: true, value: "project-alpha" }} />);
     fireEvent.click(await screen.findByTestId("paper-load-analysis"));
     await screen.findByRole("heading", { name: "Paper A · 试卷分析" });
-    fireEvent.click(screen.getByTestId("paper-export-report-xlsx"));
+    fireEvent.click(await screen.findByTestId("paper-export-report-xlsx"));
     await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith(
       "paper-a",
       "xlsx",
@@ -484,7 +484,7 @@ describe("PapersWorkspace analysis request ownership", () => {
     render(<PapersWorkspace />);
     fireEvent.click(await screen.findByTestId("paper-load-analysis"));
     await screen.findByRole("heading", { name: "Paper A · 试卷分析" });
-    fireEvent.click(screen.getByTestId("paper-export-report-xlsx"));
+    fireEvent.click(await screen.findByTestId("paper-export-report-xlsx"));
     await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledWith(
       "paper-a",
       "xlsx",
@@ -494,7 +494,7 @@ describe("PapersWorkspace analysis request ownership", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "关闭试卷分析" }));
     fireEvent.click(screen.getByRole("button", { name: /Paper B/ }));
-    fireEvent.click(screen.getByTestId("paper-load-analysis"));
+    fireEvent.click(await screen.findByTestId("paper-load-analysis"));
     await waitFor(() => expect(mocks.analyzePlatformPaper).toHaveBeenCalledWith("paper-b", undefined, undefined));
 
     await act(async () => {
@@ -529,8 +529,8 @@ describe("PapersWorkspace analysis request ownership", () => {
       );
       fireEvent.click(await screen.findByTestId("paper-load-analysis"));
       await screen.findByRole("heading", { name: "Paper A · 试卷分析" });
-      fireEvent.click(screen.getByTestId("paper-export-report-xlsx"));
-      fireEvent.click(screen.getByTestId("paper-export-report-pdf"));
+      fireEvent.click(await screen.findByTestId("paper-export-report-xlsx"));
+      fireEvent.click(await screen.findByTestId("paper-export-report-pdf"));
       await waitFor(() => expect(mocks.downloadPaperAnalysisReport).toHaveBeenCalledTimes(2));
 
       if (boundary === "project") {

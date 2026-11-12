@@ -67,9 +67,11 @@ export function GraphSubjectSidebar({
         {onClose && (
           <button
             type="button"
-            className="md:hidden or-g50-btn or-g50-btn-ghost !h-7 !w-7 !p-0"
+            className="md:!hidden or-g50-btn or-g50-btn-ghost !h-7 !w-7 !p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--or-focus)]"
             onClick={onClose}
             title={t("collapse")}
+            aria-label={t("collapse")}
+            data-graph-sidebar-close
           >
             <X className="h-4 w-4 text-[var(--or-muted)]" />
           </button>

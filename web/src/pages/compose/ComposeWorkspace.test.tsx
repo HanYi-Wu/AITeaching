@@ -13,7 +13,7 @@ import { selectOption } from "../../test/selectOption";
 
 const mocks = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), download: vi.fn(), sync: vi.fn(), onError: vi.fn(), setPageContext: vi.fn(), listContentFolders: vi.fn(), moveContentItemsToFolder: vi.fn(), listClasses: vi.fn(), listPracticeHistory: vi.fn(), getProfile: vi.fn() }));
 vi.mock("../../api/client", async (importOriginal) => ({ ...await importOriginal<typeof import("../../api/client")>(), apiGet: mocks.apiGet, apiPost: mocks.apiPost }));
-vi.mock("../../contexts/AgentContext", () => ({ useAgentContext: () => ({ setPageContext: mocks.setPageContext }) }));
+vi.mock("../../contexts/AgentContext", () => ({ useAgentActions: () => ({ setPageContext: mocks.setPageContext }) }));
 vi.mock("../../components/PdfPreview", () => ({ PdfPreview: () => null }));
 vi.mock("./composeHelpers", async (original) => ({ ...await original<typeof import("./composeHelpers")>(), downloadExportedBundle: mocks.download }));
 vi.mock("../../platform/auth", async (importOriginal) => ({
@@ -121,6 +121,10 @@ describe("new paper template selection", () => {
 
     const missingTemplate = await screen.findByText("未找到试卷模板文件，请将模板放入内容目录的 templates/ 目录。");
     expect(missingTemplate.closest('[role="status"]')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("combobox", { name: "当前小节（加入题目目标）：" }));
+    expect(await screen.findByRole("option", { name: "暂无可选小节" })).toHaveAttribute("aria-disabled", "true");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(document.querySelector("[data-or-select-content]")).not.toBeInTheDocument());
     await userEvent.click(screen.getByText("导出 ▾"));
     expect(screen.getByRole("button", { name: "导出 PDF" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "导出 Word" })).toBeDisabled();
@@ -243,6 +247,7 @@ describe("export result integration", () => {
     mocks.listContentFolders.mockResolvedValue({ folders: [{ id: "compose-folder", owner_teacher_id: "teacher-a", scope: "compose", parent_id: null, kind: "category", name: "已归档" }] });
     mocks.moveContentItemsToFolder.mockResolvedValue({ ok: true, moved_count: 2 });
     renderWorkspace({ accountId: "teacher-a", projectRoot: "C:/project-a" });
+    await userEvent.click(await screen.findByRole("button", { name: "历史" }));
 
     const draftCheckbox = await screen.findByRole("checkbox", { name: "选择草稿 Draft math" });
     const exportedCheckbox = await screen.findByRole("checkbox", { name: "选择试卷 Science quiz" });
@@ -280,6 +285,7 @@ describe("export result integration", () => {
     mocks.listContentFolders.mockResolvedValue({ folders: [{ id: "compose-folder", owner_teacher_id: "teacher-a", scope: "compose", parent_id: null, kind: "category", name: "已归档" }] });
     mocks.moveContentItemsToFolder.mockRejectedValue(new Error("move rejected"));
     renderWorkspace({ accountId: "teacher-a", projectRoot: "C:/project-a" });
+    await userEvent.click(await screen.findByRole("button", { name: "历史" }));
 
     const checkbox = await screen.findByRole("checkbox", { name: "选择草稿 Draft math" });
     await userEvent.click(checkbox);
@@ -500,5 +506,73 @@ describe("export result integration", () => {
     await waitFor(() => expect(mocks.download).toHaveBeenCalledTimes(1));
     expect(localStorage.getItem(cacheKey)).toBe(before);
     expect(screen.getByTestId("compose-draft-recovery-banner")).toBeInTheDocument();
+  });
+});
+
+describe("compose workspace navigation", () => {
+  beforeAll(async () => { await setupTestI18n("zh"); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
+    templates = [template("original")];
+    mocks.listContentFolders.mockResolvedValue({ folders: [{ id: "compose-folder", owner_teacher_id: "teacher-a", scope: "compose", parent_id: null, kind: "category", name: "归档" }] });
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/api/templates") return { templates };
+      if (path === "/api/questions") return { questions: [] };
+      if (path === "/api/bank/subjects") return { subjects: ["数学"] };
+      if (path === "/api/exams") return { exams: [{ exam_id: "Draft/Math", name: "Draft math", status: "draft" }] };
+      if (path.startsWith("/api/exams/")) return { exam: { exam_id: "Draft/Math", name: "Draft math", export_label: "Draft math", subject: "数学", template_ref: "original", template_path: "templates/original.yaml", selected_items: [] } };
+      if (path.startsWith("/api/exam/export-tasks?")) return { tasks: [] };
+      return {};
+    });
+    mocks.apiPost.mockResolvedValue({});
+  });
+
+  it("keeps the editor reachable and hides bank tools while history is open", async () => {
+    const user = userEvent.setup();
+    const { container } = renderWorkspace();
+    const workspace = container.querySelector<HTMLElement>(".or-g49-compose-workspace");
+    await screen.findByRole("button", { name: "历史" });
+
+    expect(workspace).toHaveAttribute("data-active-panel", "paper");
+    expect(screen.queryByRole("button", { name: "补齐空缺" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "题库" }));
+    expect(workspace).toHaveAttribute("data-active-panel", "bank");
+    expect(screen.getAllByRole("button", { name: "补齐空缺" }).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "历史" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(await screen.findByRole("checkbox", { name: "选择草稿 Draft math" }));
+    const batchMoveSelect = screen.getByRole("combobox", { name: "批量移动到文件夹" });
+    await user.click(batchMoveSelect);
+    expect(await screen.findByRole("option", { name: "归档" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByTitle("归档 · 归类文件夹"));
+    const moveFolderSelect = screen.getByRole("combobox", { name: "移动文件夹到" });
+    await user.click(moveFolderSelect);
+    expect(await screen.findByRole("option", { name: "根目录" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "补齐空缺" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "关闭历史试卷" }));
+    await waitFor(() => expect(workspace).toHaveAttribute("data-active-panel", "bank"));
+    expect(screen.getAllByRole("button", { name: "补齐空缺" }).length).toBeGreaterThan(0);
+
+    const mobileEditorBack = container.querySelector<HTMLButtonElement>(".or-g49-bank-actions button:last-child");
+    expect(mobileEditorBack).toHaveTextContent("编辑试卷");
+    fireEvent.click(mobileEditorBack!);
+    expect(workspace).toHaveAttribute("data-active-panel", "paper");
+    expect(screen.queryByRole("button", { name: "补齐空缺" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "历史" }));
+    await user.click(screen.getByRole("button", { name: "全部内容" }));
+    await user.click(await screen.findByRole("button", { name: /Draft math/ }));
+    await waitFor(() => expect(workspace).toHaveAttribute("data-active-panel", "paper"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });

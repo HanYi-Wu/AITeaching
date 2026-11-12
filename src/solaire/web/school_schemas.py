@@ -18,6 +18,17 @@ class UserCreateBody(BaseModel):
     email: str | None = None
 
 
+class SchoolUserUpdateBody(BaseModel):
+    username: str | None = None
+    display_name: str | None = None
+    email: str | None = None
+    status: str | None = None
+
+
+class SchoolUserResetPasswordBody(BaseModel):
+    password: str = Field(..., min_length=6)
+
+
 class TeacherCreateBody(UserCreateBody):
     subjects: list[str] = Field(default_factory=list)
 

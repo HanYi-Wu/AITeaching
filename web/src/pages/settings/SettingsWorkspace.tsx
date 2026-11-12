@@ -15,7 +15,7 @@ import {
 } from "../../components/settings/AgentModelSettingsForm";
 import { ExtensionsPanel } from "../../components/ExtensionsPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
-import { useAgentContext } from "../../contexts/AgentContext";
+import { useAgentActions } from "../../contexts/AgentContext";
 import { changeAppLanguage } from "../../i18n/changeLanguage";
 import type { AppLang } from "../../i18n/tauriLocale";
 import { SOLAIRE_SAVE_EVENT } from "../../lib/saveEvents";
@@ -49,7 +49,7 @@ export function SettingsWorkspace({
   onProfileUpdated?: (profile: PlatformUser) => void;
 }) {
   const { t, i18n } = useTranslation(["settings", "common"]);
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<AgentLlmSettingsResponse | null>(null);
@@ -254,10 +254,6 @@ export function SettingsWorkspace({
     document.documentElement.style.fontSize = `${nextScale * 100}%`;
     scheduleAutoSavePersonalization(450);
   }, [scheduleAutoSavePersonalization]);
-
-  async function savePersonalization() {
-    await persistPersonalization({ silent: false });
-  }
 
   async function savePassword() {
     if (newPassword.length < 6) {
@@ -478,17 +474,6 @@ export function SettingsWorkspace({
           />
         </label>
       ) : null}
-
-      <div className="mt-5">
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => void savePersonalization()}
-          className="or-button or-button-primary w-full sm:w-auto rounded-[10px] px-4 py-2 text-sm font-semibold"
-        >
-          保存个性化设置
-        </button>
-      </div>
 
       <div className="mt-6 border-t border-[var(--or-outline)] pt-5">
         <h3 className="text-base font-semibold text-[var(--or-text)]">修改登录密码</h3>

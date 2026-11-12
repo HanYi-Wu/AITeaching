@@ -31,11 +31,17 @@ class BaseChart:
     def get_picture(self, width: int = 640, height: int = 320) -> str:
         raise NotImplementedError
 
+    def to_payload_and_picture(self) -> tuple[dict[str, Any], str]:
+        return self.to_payload(), self.get_picture()
+
 
 class HistogramChart(BaseChart):
     chart_type = "bar"
 
     def to_payload(self) -> dict[str, Any]:
+        return self._payload_from_points(self._series_points())
+
+    def _payload_from_points(self, points: list[dict[str, float | str]]) -> dict[str, Any]:
         sid = "script_histogram_series"
         return {
             "summary": {"title": self.title, "status": "succeeded"},
@@ -50,13 +56,20 @@ class HistogramChart(BaseChart):
                     "y": "value",
                 }
             ],
-            "series": [{"id": sid, "points": self._series_points()}],
+            "series": [{"id": sid, "points": points}],
             "logs": [],
             "warnings": [],
         }
 
     def get_picture(self, width: int = 640, height: int = 320) -> str:
-        points = self._series_points()
+        return self._picture_from_points(self._series_points(), width, height)
+
+    def _picture_from_points(
+        self,
+        points: list[dict[str, float | str]],
+        width: int,
+        height: int,
+    ) -> str:
         if not points:
             return "<svg xmlns='http://www.w3.org/2000/svg' width='640' height='320'></svg>"
         max_v = max(abs(float(p["value"])) for p in points) or 1.0
@@ -78,11 +91,18 @@ class HistogramChart(BaseChart):
             f"{''.join(bars)}{''.join(labels)}</svg>"
         )
 
+    def to_payload_and_picture(self) -> tuple[dict[str, Any], str]:
+        points = self._series_points()
+        return self._payload_from_points(points), self._picture_from_points(points, 640, 320)
+
 
 class PieChart(BaseChart):
     chart_type = "pie"
 
     def to_payload(self) -> dict[str, Any]:
+        return self._payload_from_points(self._series_points())
+
+    def _payload_from_points(self, points: list[dict[str, float | str]]) -> dict[str, Any]:
         sid = "script_pie_series"
         return {
             "summary": {"title": self.title, "status": "succeeded"},
@@ -97,13 +117,20 @@ class PieChart(BaseChart):
                     "y": "value",
                 }
             ],
-            "series": [{"id": sid, "points": self._series_points()}],
+            "series": [{"id": sid, "points": points}],
             "logs": [],
             "warnings": [],
         }
 
     def get_picture(self, width: int = 640, height: int = 320) -> str:
-        points = self._series_points()
+        return self._picture_from_points(self._series_points(), width, height)
+
+    def _picture_from_points(
+        self,
+        points: list[dict[str, float | str]],
+        width: int,
+        height: int,
+    ) -> str:
         total = sum(max(0.0, float(p["value"])) for p in points)
         if total <= 0:
             return "<svg xmlns='http://www.w3.org/2000/svg' width='640' height='320'></svg>"
@@ -133,3 +160,7 @@ class PieChart(BaseChart):
             f"<text x='16' y='20' font-size='14' fill='#0f172a'>{self.title}</text>"
             f"{''.join(paths)}</svg>"
         )
+
+    def to_payload_and_picture(self) -> tuple[dict[str, Any], str]:
+        points = self._series_points()
+        return self._payload_from_points(points), self._picture_from_points(points, 640, 320)

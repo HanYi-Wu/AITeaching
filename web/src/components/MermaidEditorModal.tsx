@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
+  BackgroundVariant,
   Controls,
+  MarkerType,
   ReactFlow,
   ReactFlowProvider,
   addEdge,
@@ -14,6 +16,7 @@ import {
 
 import "@xyflow/react/dist/style.css";
 
+import "./MermaidEditorModal.css";
 import { FlowchartFlowNode } from "./FlowchartFlowNode";
 import { initMermaid } from "../lib/mermaidInit";
 import { serializeFlowchartFromFlow, tryParseFlowchartForReactFlow } from "../lib/mermaidFlowchart";
@@ -22,6 +25,80 @@ import { Select as AppSelect } from "./ui/select";
 const DEFAULT_SOURCE = "flowchart TD\n  A[开始] --> B[结束]";
 
 const nodeTypes = { flowchart: FlowchartFlowNode };
+
+type FlowEdgeTone = "primary" | "success" | "warning";
+
+function getOutcomeTone(label: unknown): FlowEdgeTone | null {
+  if (typeof label !== "string") {
+    return null;
+  }
+  const value = label.trim();
+  if (/^(是|全对|正确|通过|成功|合格|yes|true|pass(?:ed)?|success)(?:\b|\s|$)/i.test(value)) {
+    return "success";
+  }
+  if (/^(否|错题|错误|未通过|不通过|no|false|fail(?:ed)?|retry)(?:\b|\s|$)/i.test(value)) {
+    return "warning";
+  }
+  return null;
+}
+
+function decorateFlowEdges(edges: Edge[]): Edge[] {
+  const adjacency = new Map<string, Array<{ nodeId: string; edgeId: string }>>();
+  for (const edge of edges) {
+    const outgoing = adjacency.get(edge.source) ?? [];
+    outgoing.push({ nodeId: edge.target, edgeId: edge.id });
+    adjacency.set(edge.source, outgoing);
+  }
+
+  const reachesNode = (from: string, target: string, skipEdgeId: string) => {
+    const pending = [from];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      if (current === target) {
+        return true;
+      }
+      if (visited.has(current)) {
+        continue;
+      }
+      visited.add(current);
+      for (const next of adjacency.get(current) ?? []) {
+        if (next.edgeId !== skipEdgeId && !visited.has(next.nodeId)) {
+          pending.push(next.nodeId);
+        }
+      }
+    }
+    return false;
+  };
+
+  const cycleEdgeIds = new Set(
+    edges
+      .filter((edge) => reachesNode(edge.target, edge.source, edge.id))
+      .map((edge) => edge.id),
+  );
+
+  return edges.map((edge) => {
+    const isCycle = cycleEdgeIds.has(edge.id);
+    const tone = getOutcomeTone(edge.label) ?? (isCycle ? "warning" : "primary");
+    const color = `var(--or-${tone})`;
+    return {
+      ...edge,
+      type: "smoothstep",
+      animated: true,
+      className: `mermaid-editor-edge mermaid-editor-edge--${tone}${isCycle ? " mermaid-editor-edge--cycle" : ""}`,
+      style: { ...edge.style, stroke: color },
+      labelStyle: { ...edge.labelStyle, fill: color, fontWeight: 600 },
+      labelBgStyle: {
+        ...edge.labelBgStyle,
+        fill: `var(--or-${tone}-container)`,
+        fillOpacity: 1,
+      },
+      labelBgPadding: edge.labelBgPadding ?? ([6, 3] as [number, number]),
+      labelBgBorderRadius: edge.labelBgBorderRadius ?? 6,
+      markerEnd: { type: MarkerType.ArrowClosed, color },
+    };
+  });
+}
 
 type MermaidEditorModalProps = {
   open: boolean;
@@ -40,6 +117,7 @@ function MermaidFlowInner({ onClose, onConfirm }: Pick<MermaidEditorModalProps, 
   const parsed = useMemo(() => tryParseFlowchartForReactFlow(source), [source]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(parsed?.nodes ?? []);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(parsed?.edges ?? []);
+  const visualEdges = useMemo(() => decorateFlowEdges(edges), [edges]);
 
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
@@ -81,7 +159,7 @@ function MermaidFlowInner({ onClose, onConfirm }: Pick<MermaidEditorModalProps, 
           previewRef.current.innerHTML = svg;
         }
       } catch {
-        if (previewRef.current) {
+        if (!cancelled && previewRef.current) {
           previewRef.current.textContent = "预览无法渲染（仍可插入源码，导出 PDF 需本机安装 mmdr）";
         }
       }
@@ -235,7 +313,7 @@ function MermaidFlowInner({ onClose, onConfirm }: Pick<MermaidEditorModalProps, 
           <p className="text-sm font-medium text-[var(--or-muted)]">实时预览（mermaid.js）</p>
           <div
             ref={previewRef}
-            className="mt-1 flex min-h-[12rem] items-center justify-center overflow-auto rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_40%,transparent)] p-2.5 text-[13px] text-[var(--or-muted)]"
+            className="mermaid-editor-live-preview mt-1 flex min-h-[12rem] items-center justify-center overflow-auto rounded-xl border border-[var(--or-outline)] p-2.5 text-[13px] text-[var(--or-muted)]"
           />
         </div>
       </div>
@@ -265,10 +343,10 @@ function MermaidFlowInner({ onClose, onConfirm }: Pick<MermaidEditorModalProps, 
             {flowHint && <span className="text-[13px] text-[var(--or-on-warning)]">{flowHint}</span>}
           </div>
         </div>
-        <div className="mt-2 h-56 w-full overflow-hidden rounded-2xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_30%,transparent)] sm:h-72">
+        <div className="mermaid-editor-canvas-shell mt-2 h-56 w-full overflow-hidden rounded-2xl border border-[var(--or-outline)] sm:h-72">
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={visualEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -283,7 +361,7 @@ function MermaidFlowInner({ onClose, onConfirm }: Pick<MermaidEditorModalProps, 
             elementsSelectable
             deleteKeyCode={["Backspace", "Delete"]}
           >
-            <Background />
+            <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="var(--or-outline)" />
             <Controls />
           </ReactFlow>
         </div>

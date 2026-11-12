@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { test, expect, vi } from 'vitest';
 import { BankFolderExplorer } from './BankFolderExplorer';
 import { apiPost } from '../api/client';
@@ -29,9 +30,52 @@ test('selects all from partial selection, toggles off and opens file manager', (
   expect(selected).toHaveBeenLastCalledWith([]);
   view.rerender(<BankFolderExplorer {...props} selectedIds={[]} />);
   fireEvent.click(screen.getByRole('button', { name: '文件管理器' }));
-  expect(screen.getByRole('dialog', { name: /^题库文件管理器/ })).toBeInTheDocument();
-  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '全选 / 取消全选' }));
+  const dialog = screen.getByRole('dialog', { name: /^题库文件管理器/ });
+  expect(dialog).toBeInTheDocument();
+  expect(dialog).not.toHaveClass('or-dialog', 'or-g48-dialog');
+  const surface = dialog.querySelector('.or-g48-dialog');
+  expect(surface).not.toBeNull();
+  expect(surface).toHaveClass('h-full', 'max-h-full', 'min-h-0');
+  expect(dialog).not.toHaveClass('or-dialog');
+  expect(dialog.parentElement).toHaveClass('fixed', 'inset-0', 'flex', 'items-center', 'justify-center', 'overflow-y-auto');
+  fireEvent.click(within(dialog).getByRole('button', { name: '全选 / 取消全选' }));
   expect(selected).toHaveBeenLastCalledWith(['q1', 'q2']);
+});
+
+test('keeps the file manager select popup in the dialog focus scope and supports mouse and keyboard selection', async () => {
+  const user = userEvent.setup();
+  render(
+    <BankFolderExplorer
+      data={{ folders: ['数学', '物理'], assignments: {} }}
+      items={[]}
+      selectedIds={[]}
+      onChange={vi.fn()}
+      onError={vi.fn()}
+      onSelectIds={vi.fn()}
+      renderItem={() => null}
+    />
+  );
+  await user.click(screen.getByRole('button', { name: '文件管理器' }));
+  const dialog = screen.getByRole('dialog', { name: /^题库文件管理器/ });
+  const select = within(dialog).getByRole('combobox', { name: '文件管理器移动目标' });
+
+  select.focus();
+  await user.keyboard('{ArrowDown}');
+  const keyboardList = await screen.findByRole('listbox');
+  const keyboardPopup = keyboardList.closest<HTMLElement>('[data-or-select-content]');
+  const surface = dialog.querySelector<HTMLElement>('.or-g48-dialog');
+  expect(surface).not.toBeNull();
+  expect(dialog).toContainElement(keyboardPopup);
+  expect(surface).not.toContainElement(keyboardPopup);
+  expect(['top', 'bottom']).toContain(keyboardPopup?.getAttribute('data-side'));
+  await user.keyboard('{ArrowDown}{Enter}');
+  expect(select).toHaveTextContent('数学');
+
+  await user.click(select);
+  const mouseList = await screen.findByRole('listbox');
+  await user.click(within(mouseList).getByRole('option', { name: '物理' }));
+  expect(select).toHaveTextContent('物理');
+  expect(dialog).toBeInTheDocument();
 });
 
 test('blank cancels selection, right click cuts and drag moves into a folder', () => {

@@ -375,7 +375,7 @@ describe("AnalysisWorkspace", () => {
     await act(async () => resolveA(result("online-a", "试卷 A", 2)));
 
     expect(screen.getByRole("heading", { name: "试卷 B" })).toBeInTheDocument();
-    expect(screen.getByText("9")).toBeInTheDocument();
+    expect(await screen.findByText("9")).toBeInTheDocument();
     expect(screen.queryByText("2", { selector: ".text-2xl" })).not.toBeInTheDocument();
   });
 

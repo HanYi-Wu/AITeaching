@@ -10,7 +10,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 18
 
 CLASS_MEMBERSHIP_VIEW_SQL = """
 CREATE VIEW IF NOT EXISTS attempt_class_memberships AS
@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS users (
   teacher_guide_step INTEGER NOT NULL DEFAULT 0,
   avatar_data_url TEXT,
   preferences_json TEXT,
+  school_access_mode TEXT NOT NULL DEFAULT 'full' CHECK(school_access_mode IN ('full', 'custom')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -188,6 +189,10 @@ CREATE TABLE IF NOT EXISTS exam_publications (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_exam_publications_paper_status
+  ON exam_publications(paper_id, status);
+CREATE INDEX IF NOT EXISTS idx_exam_publications_teacher_paper_status
+  ON exam_publications(teacher_id, paper_id, status);
 
 CREATE TABLE IF NOT EXISTS publication_classes (
   publication_id TEXT NOT NULL REFERENCES exam_publications(id) ON DELETE CASCADE,
@@ -214,6 +219,8 @@ CREATE TABLE IF NOT EXISTS student_attempts (
   grading_completed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   UNIQUE(publication_id, student_id)
 );
+CREATE INDEX IF NOT EXISTS idx_student_attempts_publication_state
+  ON student_attempts(publication_id, status, submitted_at, grading_completed_at);
 
 CREATE TABLE IF NOT EXISTS student_answers (
   id TEXT PRIMARY KEY,
@@ -352,6 +359,67 @@ CREATE TABLE IF NOT EXISTS platform_sessions (
   expires_at TEXT NOT NULL,
   revoked_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS management_roles (
+  id TEXT PRIMARY KEY,
+  school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+  permissions_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(school_id, name)
+);
+CREATE TABLE IF NOT EXISTS management_user_roles (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_id TEXT NOT NULL REFERENCES management_roles(id) ON DELETE CASCADE,
+  PRIMARY KEY(user_id, role_id)
+);
+CREATE INDEX IF NOT EXISTS idx_management_user_roles_role ON management_user_roles(role_id, user_id);
+
+CREATE TABLE IF NOT EXISTS management_audit_events (
+  id TEXT PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  actor_role TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  actor_school_id TEXT REFERENCES schools(id) ON DELETE SET NULL,
+  school_id TEXT REFERENCES schools(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT,
+  outcome TEXT NOT NULL CHECK(outcome IN ('success', 'denied', 'failure')),
+  affected_count INTEGER NOT NULL DEFAULT 0,
+  request_id TEXT NOT NULL,
+  http_status INTEGER NOT NULL,
+  method TEXT NOT NULL,
+  route_path TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_management_audit_school_time ON management_audit_events(school_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_management_audit_actor_time ON management_audit_events(actor_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_management_audit_action_time ON management_audit_events(action, occurred_at);
+
+CREATE TABLE IF NOT EXISTS management_dictionary_items (
+  id TEXT PRIMARY KEY,
+  scope_key TEXT NOT NULL,
+  school_id TEXT REFERENCES schools(id) ON DELETE CASCADE,
+  category TEXT NOT NULL CHECK(category IN ('subjects', 'grades')),
+  value TEXT NOT NULL,
+  label TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(scope_key, category, value)
+);
+CREATE TABLE IF NOT EXISTS management_settings (
+  scope_key TEXT PRIMARY KEY,
+  school_id TEXT REFERENCES schools(id) ON DELETE CASCADE,
+  default_page_size INTEGER CHECK(default_page_size IN (10, 20, 50)),
+  activity_default_days INTEGER CHECK(activity_default_days IN (7, 30, 90)),
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -405,6 +473,7 @@ def init_platform_db(root: Path) -> None:
         _ensure_column(con, "users", "teacher_guide_step", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(con, "users", "avatar_data_url", "TEXT")
         _ensure_column(con, "users", "preferences_json", "TEXT")
+        _ensure_column(con, "users", "school_access_mode", "TEXT NOT NULL DEFAULT 'full' CHECK(school_access_mode IN ('full', 'custom'))")
         _ensure_column(con, "students", "user_id", "TEXT REFERENCES users(id) ON DELETE SET NULL")
         _ensure_column(con, "students", "initial_password", "TEXT")
         _ensure_column(con, "exam_publications", "submission_mode", "TEXT NOT NULL DEFAULT 'online'")

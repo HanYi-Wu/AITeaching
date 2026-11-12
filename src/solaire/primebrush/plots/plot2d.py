@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from functools import cache
 from typing import Any
 
 import numpy as np
@@ -9,6 +10,26 @@ from solaire.primebrush.common.style import merge_style
 from solaire.primebrush.common.svg_util import escape_text, svg_root
 from solaire.primebrush.plots.expr import eval_expr, eval_expr_scalar
 from solaire.primebrush.common.models import Plot2DModel
+
+
+@cache
+def _get_rust_plot2d_path() -> Any:
+    """Resolve the optional native formatter once; older extensions omit it."""
+    try:
+        from primebrush_rs import plot2d_path  # type: ignore[import-not-found]
+    except (ImportError, NotImplementedError):
+        return None
+    return plot2d_path
+
+
+@cache
+def _get_rust_plot2d_paths_batch() -> Any:
+    """Resolve the optional bounded buffer-based path batch helper."""
+    try:
+        from primebrush_rs import plot2d_paths_batch  # type: ignore[import-not-found]
+    except (ImportError, NotImplementedError):
+        return None
+    return plot2d_paths_batch
 
 
 def _nice_step(span: float, target_ticks: int = 6) -> float:
@@ -54,6 +75,45 @@ def _format_tick(v: float) -> str:
     return s
 
 
+def _format_plot2d_path_python(
+    xs: np.ndarray,
+    ys: np.ndarray,
+    sample_count: int,
+    x_min: float,
+    x_span: float,
+    y_max: float,
+    y_span: float,
+    plot_w: float,
+    plot_h: float,
+    margin_l: float,
+    margin_t: float,
+) -> str:
+    if (
+        type(xs) is np.ndarray
+        and type(ys) is np.ndarray
+        and xs.dtype == np.dtype(np.float64)
+        and ys.dtype == np.dtype(np.float64)
+        and xs.ndim == ys.ndim == 1
+        and len(xs) == len(ys) == sample_count
+    ):
+        # Convert once in NumPy's C loop; repeated ndarray[i] creates a NumPy
+        # scalar object for every coordinate before Python formats each point.
+        x_values = xs.tolist()
+        y_values = ys.tolist()
+        points = [
+            f"{margin_l + (x_values[i] - x_min) / x_span * plot_w:.2f},"
+            f"{margin_t + (y_max - y_values[i]) / y_span * plot_h:.2f}"
+            for i in range(sample_count)
+        ]
+    else:
+        points = [
+            f"{margin_l + (float(xs[i]) - x_min) / x_span * plot_w:.2f},"
+            f"{margin_t + (y_max - float(ys[i])) / y_span * plot_h:.2f}"
+            for i in range(sample_count)
+        ]
+    return "M " + " L ".join(points)
+
+
 def render_plot2d_svg(
     model: Plot2DModel,
     width: float,
@@ -78,12 +138,14 @@ def render_plot2d_svg(
     margin_t, margin_b = 24.0, 52.0
     plot_w = width - margin_l - margin_r
     plot_h = height - margin_t - margin_b
+    x_span = x_max - x_min
+    y_span = y_max - y_min
 
     def x_to_px(xv: float) -> float:
-        return margin_l + (xv - x_min) / (x_max - x_min) * plot_w
+        return margin_l + (xv - x_min) / x_span * plot_w
 
     def y_to_px(yv: float) -> float:
-        return margin_t + (y_max - yv) / (y_max - y_min) * plot_h
+        return margin_t + (y_max - yv) / y_span * plot_h
 
     parts: list[str] = []
 
@@ -174,27 +236,155 @@ def render_plot2d_svg(
             curves.append(el)
 
     colors = ["#1a5fb4", "#c01c28", "#26a269", "#e5a50a"]
-    for idx, el in enumerate(curves):
-        fstr = str(el["f"])
-        dom = el.get("domain") or [x_min, x_max]
-        d0, d1 = float(dom[0]), float(dom[1])
-        n = 200
-        xs = np.linspace(d0, d1, n)
-        ys = eval_expr(fstr, xs)
-        pts = []
-        for i in range(n):
-            xv, yv = float(xs[i]), float(ys[i])
-            pts.append(f"{x_to_px(xv):.2f},{y_to_px(yv):.2f}")
-        if len(pts) < 2:
-            continue
-        color = el.get("color") or colors[idx % len(colors)]
-        wline = float(el.get("width") or 2)
-        st = (el.get("style") or "solid").lower()
-        dash = ' stroke-dasharray="4,3"' if st == "dotted" else ""
-        path_d = "M " + " L ".join(pts)
-        parts.append(
-            f'<path d="{path_d}" fill="none" stroke="{escape_text(str(color))}" stroke-width="{wline:.2f}"{dash}/>'
-        )
+    native_batch = _get_rust_plot2d_paths_batch()
+    if native_batch is None:
+        # Keep the legacy call shape for older extensions and pure-Python installs.
+        for idx, el in enumerate(curves):
+            fstr = str(el["f"])
+            dom = el.get("domain") or [x_min, x_max]
+            d0, d1 = float(dom[0]), float(dom[1])
+            n = 200
+            xs = np.linspace(d0, d1, n)
+            ys = eval_expr(fstr, xs)
+            if len(xs) < 2:
+                continue
+            native_path = _get_rust_plot2d_path()
+            if native_path is None:
+                path_d = _format_plot2d_path_python(
+                    xs,
+                    ys,
+                    n,
+                    x_min,
+                    x_span,
+                    y_max,
+                    y_span,
+                    plot_w,
+                    plot_h,
+                    margin_l,
+                    margin_t,
+                )
+            else:
+                path_d = native_path(
+                    xs,
+                    ys,
+                    x_min,
+                    x_span,
+                    y_max,
+                    y_span,
+                    plot_w,
+                    plot_h,
+                    margin_l,
+                    margin_t,
+                )
+            color = el.get("color") or colors[idx % len(colors)]
+            wline = float(el.get("width") or 2)
+            st = (el.get("style") or "solid").lower()
+            dash = ' stroke-dasharray="4,3"' if st == "dotted" else ""
+            parts.append(
+                f'<path d="{path_d}" fill="none" stroke="{escape_text(str(color))}" stroke-width="{wline:.2f}"{dash}/>'
+            )
+    else:
+        # Limit each native call and its temporary flat arrays to 32 paths.
+        # Equal finite domains share the same NumPy sample array within a chunk.
+        batch_size = 32
+        sample_count = 200
+        for batch_start in range(0, len(curves), batch_size):
+            batch_samples: list[tuple[np.ndarray, np.ndarray]] = []
+            batch_styles: list[tuple[str, str, str]] = []
+            domain_samples: dict[tuple[str, str], np.ndarray] = {}
+
+            for idx in range(batch_start, min(batch_start + batch_size, len(curves))):
+                el = curves[idx]
+                fstr = str(el["f"])
+                dom = el.get("domain") or [x_min, x_max]
+                d0, d1 = float(dom[0]), float(dom[1])
+                key = (d0.hex(), d1.hex()) if math.isfinite(d0) and math.isfinite(d1) else None
+                xs = domain_samples.get(key) if key is not None else None
+                if xs is None:
+                    xs = np.linspace(d0, d1, sample_count)
+                    if key is not None:
+                        domain_samples[key] = xs
+                ys = eval_expr(fstr, xs)
+                if len(xs) < 2:
+                    continue
+
+                color = el.get("color") or colors[idx % len(colors)]
+                width_text = f"{float(el.get('width') or 2):.2f}"
+                st = (el.get("style") or "solid").lower()
+                dash = ' stroke-dasharray="4,3"' if st == "dotted" else ""
+                batch_samples.append((xs, ys))
+                batch_styles.append((escape_text(str(color)), width_text, dash))
+
+            if not batch_samples:
+                continue
+
+            if len(batch_samples) == 1:
+                xs_flat = np.ascontiguousarray(batch_samples[0][0], dtype=np.float64)
+                ys_flat = np.ascontiguousarray(batch_samples[0][1], dtype=np.float64)
+            else:
+                xs_flat = np.concatenate([sample[0] for sample in batch_samples])
+                ys_flat = np.concatenate([sample[1] for sample in batch_samples])
+            offsets = np.empty(len(batch_samples) + 1, dtype=np.int64)
+            offsets[0] = 0
+            for i, (xs, _) in enumerate(batch_samples, start=1):
+                offsets[i] = offsets[i - 1] + len(xs)
+
+            try:
+                paths = native_batch(
+                    xs_flat,
+                    ys_flat,
+                    offsets,
+                    x_min,
+                    x_span,
+                    y_max,
+                    y_span,
+                    plot_w,
+                    plot_h,
+                    margin_l,
+                    margin_t,
+                )
+                if len(paths) != len(batch_styles):
+                    raise ValueError("native plot2d batch returned an invalid path count")
+            except (BufferError, TypeError, ValueError):
+                native_path = _get_rust_plot2d_path()
+                paths = []
+                for xs, ys in batch_samples:
+                    if native_path is None:
+                        paths.append(
+                            _format_plot2d_path_python(
+                                xs,
+                                ys,
+                                len(xs),
+                                x_min,
+                                x_span,
+                                y_max,
+                                y_span,
+                                plot_w,
+                                plot_h,
+                                margin_l,
+                                margin_t,
+                            )
+                        )
+                    else:
+                        paths.append(
+                            native_path(
+                                xs,
+                                ys,
+                                x_min,
+                                x_span,
+                                y_max,
+                                y_span,
+                                plot_w,
+                                plot_h,
+                                margin_l,
+                                margin_t,
+                            )
+                        )
+
+            for path_d, (color, width_text, dash) in zip(paths, batch_styles):
+                parts.append(
+                    f'<path d="{path_d}" fill="none" stroke="{color}" stroke-width="{width_text}"{dash}/>'
+                )
 
     for el in model.elements:
         if el.get("op") != "point_on_f":

@@ -25,18 +25,10 @@ from .contracts import (
 from .registry import list_builtins as registry_list_builtins
 from .executor import build_runtime_dataset, execute_python_script
 from .storage import (
-    append_audit_record,
-    bind_request_to_job,
+    AnalysisStorage,
     delete_script,
-    get_job_for_request,
-    list_jobs,
     list_scripts,
-    load_job,
-    load_output,
     load_script,
-    save_job,
-    save_output,
-    save_script,
 )
 
 _EXECUTOR_SEMAPHORE = threading.BoundedSemaphore(EXECUTOR_DEFAULT_LIMITS["max_concurrent_jobs"])
@@ -55,6 +47,44 @@ def _safe_project_analysis_job(project_root: Path, job: dict[str, Any], **kwargs
         project_analysis_job(project_root, job, **kwargs)
     except Exception:
         pass
+
+
+def _request_result(storage: AnalysisStorage, job_id: str) -> dict[str, Any]:
+    existing = storage.load_job(job_id)
+    _safe_project_analysis_job(storage.project_root, existing)
+    out: dict[str, Any] = {
+        "job_id": job_id,
+        "status": str(existing.get("status", "unknown")),
+    }
+    if existing.get("output_ref"):
+        out["output"] = storage.load_output(existing["output_ref"])
+    if existing.get("error"):
+        out["error"] = existing["error"]
+    if existing.get("error_code"):
+        out["error_code"] = existing["error_code"]
+    return out
+
+
+def _claim_saved_request_job(storage: AnalysisStorage, request_id: str, job_id: str) -> str:
+    """Claim an idempotency key and discard only this call's losing job file."""
+    try:
+        winner = storage.claim_request_for_job(request_id, job_id)
+    except Exception:
+        # A failed transaction normally leaves no binding.  Check before
+        # cleaning up so an error after commit cannot strand the winner's key.
+        try:
+            registered_job_id = storage.get_job_for_request(request_id)
+        except Exception:
+            registered_job_id = job_id  # Commit state is unknown; preserve its target.
+        if registered_job_id != job_id:
+            try:
+                storage.delete_job(job_id)
+            except OSError:
+                pass
+        raise
+    if winner != job_id:
+        storage.delete_job(job_id)
+    return winner
 
 
 def list_tools() -> list[dict[str, Any]]:
@@ -133,21 +163,11 @@ def run_builtin(
     recompute: bool = False,
     request_id: str | None = None,
 ) -> dict[str, Any]:
+    storage = AnalysisStorage(project_root)
     if request_id:
-        existing_job_id = get_job_for_request(project_root, request_id)
+        existing_job_id = storage.get_job_for_request(request_id)
         if existing_job_id:
-            existing = get_job(project_root, job_id=existing_job_id, include_output=True)
-            out: dict[str, Any] = {
-                "job_id": existing_job_id,
-                "status": str(existing["job"].get("status", "unknown")),
-            }
-            if "output" in existing:
-                out["output"] = existing["output"]
-            if existing["job"].get("error"):
-                out["error"] = existing["job"]["error"]
-            if existing["job"].get("error_code"):
-                out["error_code"] = existing["job"]["error_code"]
-            return out
+            return _request_result(storage, existing_job_id)
 
     job_id = uuid.uuid4().hex
     job = {
@@ -160,15 +180,17 @@ def run_builtin(
         "error": None,
         "output_ref": None,
     }
-    save_job(project_root, job)
+    storage.save_job(job)
+    if request_id:
+        claimed_job_id = _claim_saved_request_job(storage, request_id, job_id)
+        if claimed_job_id != job_id:
+            return _request_result(storage, claimed_job_id)
     try:
         from solaire.web.task_tracking.analysis_adapter import mark_analysis_job_active, mark_analysis_job_inactive
         mark_analysis_job_active(job_id)
     except Exception:
         mark_analysis_job_inactive = None
     _safe_project_analysis_job(project_root, job, event_version=1)
-    if request_id:
-        bind_request_to_job(project_root, request_id, job_id)
     start = time.perf_counter()
     try:
         if builtin_id == "builtin:exam_stats_v1":
@@ -195,14 +217,13 @@ def run_builtin(
             }
         else:
             raise ValueError(f"Unknown builtin_id: {builtin_id}")
-        output_ref = save_output(project_root, job_id, output)
+        output_ref = storage.save_output(job_id, output)
         job["status"] = "succeeded"
         job["output_ref"] = output_ref
         job["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        save_job(project_root, job)
+        storage.save_job(job)
         _safe_project_analysis_job(project_root, job, event_version=2)
-        append_audit_record(
-            project_root,
+        storage.append_audit_record(
             {
                 "job_id": job_id,
                 "script_id": None,
@@ -218,10 +239,9 @@ def run_builtin(
         job["error"] = str(e)
         job["error_code"] = "runtime_error"
         job["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        save_job(project_root, job)
+        storage.save_job(job)
         _safe_project_analysis_job(project_root, job, event_version=2)
-        append_audit_record(
-            project_root,
+        storage.append_audit_record(
             {
                 "job_id": job_id,
                 "script_id": None,
@@ -245,6 +265,7 @@ def save_script_doc(
     script_id: str | None = None,
     language: str = "python",
 ) -> dict[str, Any]:
+    storage = AnalysisStorage(project_root)
     sid = script_id or uuid.uuid4().hex
     payload = {
         "script_id": sid,
@@ -253,9 +274,9 @@ def save_script_doc(
         "code": code,
     }
     if script_id:
-        old = load_script(project_root, sid)
+        old = storage.load_script(sid)
         payload["created_at"] = old.get("created_at")
-    script = save_script(project_root, payload)
+    script = storage.save_script(payload)
     return {"script": script}
 
 
@@ -306,23 +327,13 @@ def run_script_with_request_id(
     batch_id: str,
     request_id: str | None = None,
 ) -> dict[str, Any]:
+    storage = AnalysisStorage(project_root)
     if request_id:
-        existing_job_id = get_job_for_request(project_root, request_id)
+        existing_job_id = storage.get_job_for_request(request_id)
         if existing_job_id:
-            existing = get_job(project_root, job_id=existing_job_id, include_output=True)
-            out: dict[str, Any] = {
-                "job_id": existing_job_id,
-                "status": str(existing["job"].get("status", "unknown")),
-            }
-            if "output" in existing:
-                out["output"] = existing["output"]
-            if existing["job"].get("error"):
-                out["error"] = existing["job"]["error"]
-            if existing["job"].get("error_code"):
-                out["error_code"] = existing["job"]["error_code"]
-            return out
+            return _request_result(storage, existing_job_id)
 
-    script = load_script(project_root, script_id)
+    script = storage.load_script(script_id)
     job_id = uuid.uuid4().hex
     job = {
         "job_id": job_id,
@@ -343,15 +354,17 @@ def run_script_with_request_id(
         "truncated": False,
         "killed_reason": None,
     }
-    save_job(project_root, job)
+    storage.save_job(job)
+    if request_id:
+        claimed_job_id = _claim_saved_request_job(storage, request_id, job_id)
+        if claimed_job_id != job_id:
+            return _request_result(storage, claimed_job_id)
     try:
         from solaire.web.task_tracking.analysis_adapter import mark_analysis_job_active, mark_analysis_job_inactive
         mark_analysis_job_active(job_id)
     except Exception:
         mark_analysis_job_inactive = None
     _safe_project_analysis_job(project_root, job, event_version=1)
-    if request_id:
-        bind_request_to_job(project_root, request_id, job_id)
     start = time.perf_counter()
     acquired = _EXECUTOR_SEMAPHORE.acquire(timeout=EXECUTOR_DEFAULT_LIMITS["timeout_seconds"])
     if not acquired:
@@ -389,7 +402,7 @@ def run_script_with_request_id(
     duration_ms = int((time.perf_counter() - start) * 1000)
     context = {"exam_id": exam_id, "batch_id": batch_id, "script_id": script_id}
     output = _normalize_protocol_output(execution, context)
-    output_ref = save_output(project_root, job_id, output)
+    output_ref = storage.save_output(job_id, output)
 
     if execution.get("status") == "succeeded":
         job["status"] = "succeeded"
@@ -397,10 +410,9 @@ def run_script_with_request_id(
         job["truncated"] = bool(execution.get("truncated", False))
         job["killed_reason"] = execution.get("killed_reason")
         job["duration_ms"] = duration_ms
-        save_job(project_root, job)
+        storage.save_job(job)
         _safe_project_analysis_job(project_root, job, event_version=2)
-        append_audit_record(
-            project_root,
+        storage.append_audit_record(
             {
                 "job_id": job_id,
                 "script_id": script_id,
@@ -421,10 +433,9 @@ def run_script_with_request_id(
     job["truncated"] = bool(execution.get("truncated", False))
     job["killed_reason"] = execution.get("killed_reason")
     job["duration_ms"] = duration_ms
-    save_job(project_root, job)
+    storage.save_job(job)
     _safe_project_analysis_job(project_root, job, event_version=2)
-    append_audit_record(
-        project_root,
+    storage.append_audit_record(
         {
             "job_id": job_id,
             "script_id": script_id,
@@ -446,11 +457,12 @@ def run_script_with_request_id(
 
 
 def get_job(project_root: Path, *, job_id: str, include_output: bool = True) -> dict[str, Any]:
-    job = load_job(project_root, job_id)
+    storage = AnalysisStorage(project_root)
+    job = storage.load_job(job_id)
     _safe_project_analysis_job(project_root, job)
     out: dict[str, Any] = {"job": job}
     if include_output and job.get("output_ref"):
-        out["output"] = load_output(project_root, job["output_ref"])
+        out["output"] = storage.load_output(job["output_ref"])
     return out
 
 
@@ -503,7 +515,8 @@ def delete_script_api(project_root: Path, script_id: str) -> dict[str, Any]:
 
 
 def list_jobs_api(project_root: Path, limit: int = 50) -> dict[str, Any]:
-    jobs = list_jobs(project_root, limit=limit)
+    storage = AnalysisStorage(project_root)
+    jobs = storage.list_jobs(limit=limit)
     for j in jobs:
         _safe_project_analysis_job(project_root, j)
     return {"jobs": jobs}

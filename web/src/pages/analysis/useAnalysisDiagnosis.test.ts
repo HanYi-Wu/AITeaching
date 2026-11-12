@@ -23,7 +23,7 @@ vi.mock("../../api/client", () => ({
 }));
 
 vi.mock("../../contexts/AgentContext", () => ({
-  useAgentContext: () => ({ requestAgentPrefill: mocks.requestAgentPrefill }),
+  useAgentActions: () => ({ requestAgentPrefill: mocks.requestAgentPrefill }),
 }));
 
 const emptyPreview = {

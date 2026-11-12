@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import array
 import ast
+import hashlib
 import inspect
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -14,6 +17,171 @@ from typing import Any
 from solaire.edu_analysis.ports import get_result_port
 
 from . import charts as charts_module
+
+
+_RATIO_SIDECAR_MIN_VALUES = 100_000
+_RATIO_SIDECAR_SAMPLE_ROWS = 8
+_RATIO_SIDECAR_MIN_COVERAGE_NUMERATOR = 3
+_RATIO_SIDECAR_MIN_COVERAGE_DENOMINATOR = 4
+
+
+def _is_compact_ratio_row(row: Any) -> bool:
+    if type(row) is not dict:
+        return False
+    ratios = row.get("ratios")
+    if type(ratios) is not list or not ratios:
+        return False
+    return all(type(value) is float and math.isfinite(value) for value in ratios)
+
+
+def _compact_student_ratio_rows(rawdata: Any) -> tuple[dict[str, Any], array.array, dict[str, Any]] | None:
+    """Build a copy with dense finite score rows represented by a binary sidecar."""
+    if type(rawdata) is not dict:
+        return None
+    rows = rawdata.get("student_mastery_rows")
+    if type(rows) is not list or not rows or array.array("d").itemsize != 8:
+        return None
+
+    ratio_slots = sum(
+        len(ratios)
+        for row in rows
+        if type(row) is dict and type(ratios := row.get("ratios")) is list
+    )
+    if ratio_slots < _RATIO_SIDECAR_MIN_VALUES:
+        return None
+
+    sample_count = min(_RATIO_SIDECAR_SAMPLE_ROWS, len(rows))
+    sample_indices = sorted(
+        {
+            0 if sample_count == 1 else index * (len(rows) - 1) // (sample_count - 1)
+            for index in range(sample_count)
+        }
+    )
+    compact_samples = sum(_is_compact_ratio_row(rows[index]) for index in sample_indices)
+    if compact_samples * _RATIO_SIDECAR_MIN_COVERAGE_DENOMINATOR < (
+        len(sample_indices) * _RATIO_SIDECAR_MIN_COVERAGE_NUMERATOR
+    ):
+        return None
+
+    packed_values = array.array("d")
+    compact_rows = list(rows)
+    manifest_rows: list[list[int]] = []
+    for row_index, row in enumerate(rows):
+        if type(row) is not dict:
+            continue
+        ratios = row.get("ratios")
+        if type(ratios) is not list or not ratios:
+            continue
+
+        offset = len(packed_values)
+        for value in ratios:
+            if type(value) is not float or not math.isfinite(value):
+                del packed_values[offset:]
+                break
+            packed_values.append(value)
+        else:
+            row_copy = row.copy()
+            row_copy["ratios"] = None
+            compact_rows[row_index] = row_copy
+            manifest_rows.append([row_index, len(ratios), offset])
+
+    compact_value_count = len(packed_values)
+    if compact_value_count * _RATIO_SIDECAR_MIN_COVERAGE_DENOMINATOR < (
+        ratio_slots * _RATIO_SIDECAR_MIN_COVERAGE_NUMERATOR
+    ):
+        return None
+    if compact_value_count < _RATIO_SIDECAR_MIN_VALUES:
+        return None
+
+    rawdata_copy = rawdata.copy()
+    rawdata_copy["student_mastery_rows"] = compact_rows
+    manifest = {
+        "version": 1,
+        "itemsize": packed_values.itemsize,
+        "value_count": compact_value_count,
+        "sha256": hashlib.sha256(packed_values).hexdigest(),
+        "rows": manifest_rows,
+    }
+    return rawdata_copy, packed_values, manifest
+
+
+def _restore_ratio_sidecar(request, sidecar_path) -> None:
+    """Validate and restore numeric rows in the child before user code runs."""
+    manifest = request.pop("_ratio_sidecar", None)
+    if manifest is None:
+        return
+
+    import array as array_module
+    import hashlib as hashlib_module
+    import os
+    from pathlib import Path
+
+    if (
+        type(manifest) is not dict
+        or type(manifest.get("version")) is not int
+        or manifest.get("version") != 1
+    ):
+        raise ValueError("unsupported numeric ratio sidecar")
+
+    itemsize = array_module.array("d").itemsize
+    rows = manifest.get("rows")
+    value_count = manifest.get("value_count")
+    expected_digest = manifest.get("sha256")
+    if (
+        itemsize != 8
+        or type(manifest.get("itemsize")) is not int
+        or manifest.get("itemsize") != itemsize
+    ):
+        raise ValueError("numeric ratio sidecar item size mismatch")
+    if type(value_count) is not int or value_count <= 0 or type(rows) is not list or not rows:
+        raise ValueError("invalid numeric ratio sidecar manifest")
+    if type(expected_digest) is not str or len(expected_digest) != 64:
+        raise ValueError("invalid numeric ratio sidecar digest")
+
+    rawdata = request.get("rawdata")
+    student_rows = rawdata.get("student_mastery_rows") if type(rawdata) is dict else None
+    if type(student_rows) is not list or len(rows) > len(student_rows):
+        raise ValueError("numeric ratio sidecar row list mismatch")
+
+    parsed_rows = []
+    expected_offset = 0
+    previous_row_index = -1
+    for entry in rows:
+        if type(entry) is not list or len(entry) != 3:
+            raise ValueError("invalid numeric ratio sidecar row entry")
+        row_index, count, offset = entry
+        if any(type(value) is not int for value in entry):
+            raise ValueError("numeric ratio sidecar indices must be integers")
+        if row_index <= previous_row_index or row_index < 0 or row_index >= len(student_rows):
+            raise ValueError("numeric ratio sidecar row index out of range")
+        if count <= 0 or offset != expected_offset:
+            raise ValueError("numeric ratio sidecar offsets are inconsistent")
+        row = student_rows[row_index]
+        if type(row) is not dict or "ratios" not in row or row["ratios"] is not None:
+            raise ValueError("numeric ratio sidecar placeholder mismatch")
+        parsed_rows.append((row_index, count))
+        expected_offset += count
+        previous_row_index = row_index
+    if expected_offset != value_count:
+        raise ValueError("numeric ratio sidecar count mismatch")
+
+    path = Path(sidecar_path)
+    expected_bytes = value_count * itemsize
+    digest = hashlib_module.sha256()
+    with path.open("rb") as stream:
+        if os.fstat(stream.fileno()).st_size != expected_bytes:
+            raise ValueError("numeric ratio sidecar file size mismatch")
+        for row_index, count in parsed_rows:
+            row_values = array_module.array("d")
+            row_values.fromfile(stream, count)
+            if len(row_values) != count:
+                raise ValueError("numeric ratio sidecar value count mismatch")
+            digest.update(row_values)
+            student_rows[row_index]["ratios"] = row_values.tolist()
+        if stream.read(1):
+            raise ValueError("numeric ratio sidecar contains trailing bytes")
+    if digest.hexdigest() != expected_digest:
+        raise ValueError("numeric ratio sidecar checksum mismatch")
 
 
 def _truncate_text(s: str, limit: int = 20000) -> tuple[str, bool]:
@@ -131,8 +299,25 @@ def _sandbox_runner() -> None:
 
     safe_builtins["__import__"] = guarded_import
 
-    rawdata = json.load(open("runtime_rawdata.json", "r", encoding="utf-8"))
-    graph = json.load(open("runtime_graph.json", "r", encoding="utf-8"))
+    request = json.load(open("runtime_request.json", "r", encoding="utf-8"))
+    try:
+        _restore_ratio_sidecar(request, "runtime_ratios.bin")
+    except Exception as e:
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "error_code": "runtime_error",
+                    "error": str(e),
+                    "stdout": "",
+                    "stderr": "",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+    rawdata = request["rawdata"]
+    graph = request["graph"]
     charts_path = Path("runtime_charts.py").resolve()
     charts_spec = importlib.util.spec_from_file_location("runtime_charts", charts_path)
     if charts_spec is None or charts_spec.loader is None:
@@ -142,6 +327,18 @@ def _sandbox_runner() -> None:
     base_chart = charts_mod.BaseChart
     histogram_chart = charts_mod.HistogramChart
     pie_chart = charts_mod.PieChart
+    renderer_methods = (
+        "to_payload",
+        "get_picture",
+        "to_payload_and_picture",
+        "_series_points",
+        "_payload_from_points",
+        "_picture_from_points",
+    )
+    builtin_chart_renderers = {
+        chart_type: tuple(getattr(chart_type, name) for name in renderer_methods)
+        for chart_type in (histogram_chart, pie_chart)
+    }
 
     ns = {"__builtins__": safe_builtins, "RESULT": None, "__name__": "__main__"}
     ns["BaseChart"] = base_chart
@@ -158,7 +355,7 @@ def _sandbox_runner() -> None:
     ns["get_graph"] = get_graph
     out = io.StringIO()
     err = io.StringIO()
-    code = open("user_script.py", "r", encoding="utf-8").read()
+    code = request["code"]
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             exec(compile(code, "<user_script>", "exec"), ns, ns)
@@ -167,8 +364,15 @@ def _sandbox_runner() -> None:
         picture = None
         result_kind = "value"
         if hasattr(result, "to_payload") and hasattr(result, "get_picture"):
-            payload = result.to_payload()
-            picture = result.get_picture()
+            chart_type = type(result)
+            expected_methods = builtin_chart_renderers.get(chart_type)
+            current_methods = tuple(getattr(chart_type, name) for name in renderer_methods) if expected_methods else ()
+            instance_methods = getattr(result, "__dict__", {})
+            if expected_methods == current_methods and not any(name in instance_methods for name in renderer_methods):
+                payload, picture = result.to_payload_and_picture()
+            else:
+                payload = result.to_payload()
+                picture = result.get_picture()
             result_kind = "chart"
         elif isinstance(result, dict):
             result_kind = "dict"
@@ -215,8 +419,9 @@ def _sandbox_runner() -> None:
 
 
 def _build_runner_source() -> str:
+    restore_source = inspect.getsource(_restore_ratio_sidecar)
     function_source = inspect.getsource(_sandbox_runner)
-    return f'{function_source}\n\nif __name__ == "__main__":\n    _sandbox_runner()\n'
+    return f'{restore_source}\n\n{function_source}\n\nif __name__ == "__main__":\n    _sandbox_runner()\n'
 
 
 def execute_python_script(
@@ -258,8 +463,6 @@ def execute_python_script(
 
     with tempfile.TemporaryDirectory(prefix="edu_analysis_") as td:
         temp_dir = Path(td)
-        (temp_dir / "runner.py").write_text(runner, encoding="utf-8")
-        (temp_dir / "user_script.py").write_text(code, encoding="utf-8")
         shutil.copyfile(Path(charts_module.__file__), temp_dir / "runtime_charts.py")
         (temp_dir / "runtime_policy.json").write_text(
             json.dumps(
@@ -271,15 +474,34 @@ def execute_python_script(
             ),
             encoding="utf-8",
         )
-        (temp_dir / "runtime_rawdata.json").write_text(
-            json.dumps(rawdata, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+        request_payload = {"rawdata": rawdata, "graph": graph, "code": code}
+        compact_request = _compact_student_ratio_rows(rawdata)
+        if compact_request is not None:
+            compact_rawdata, packed_values, sidecar_manifest = compact_request
+            try:
+                with (temp_dir / "runtime_ratios.bin").open("wb") as stream:
+                    packed_values.tofile(stream)
+            except OSError:
+                # The sidecar is an optional transport optimization.  A
+                # temporary-file problem falls back to the original JSON shape.
+                pass
+            else:
+                request_payload = {
+                    "rawdata": compact_rawdata,
+                    "graph": graph,
+                    "code": code,
+                    "_ratio_sidecar": sidecar_manifest,
+                }
+        (temp_dir / "runtime_request.json").write_text(
+            json.dumps(request_payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
         )
-        (temp_dir / "runtime_graph.json").write_text(
-            json.dumps(graph, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
-        )
+        if compact_request is not None:
+            del packed_values, compact_request, compact_rawdata, sidecar_manifest
+        del request_payload
         try:
             p = subprocess.run(
-                [sys.executable, "-I", "-X", "utf8", "runner.py"],
+                [sys.executable, "-I", "-X", "utf8", "-c", runner],
                 cwd=temp_dir,
                 capture_output=True,
                 text=True,

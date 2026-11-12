@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentWithPrimeBrush";
-import { useAgentContext } from "../../../contexts/AgentContext";
+import { useAgentActions } from "../../../contexts/AgentContext";
 import { SelectionIndicator } from "../../../design-system/SelectionIndicator";
 import { cn } from "../../../lib/utils";
 import {
@@ -59,7 +59,7 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssign
   const [loading, setLoading] = useState(true);
   const studentListRequestIdRef = useRef(0);
   const profileRequestIdRef = useRef(0);
-  const { setPageContext } = useAgentContext();
+  const { setPageContext } = useAgentActions();
 
   useEffect(() => {
     let active = true;

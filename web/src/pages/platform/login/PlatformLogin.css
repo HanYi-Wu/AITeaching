@@ -10,6 +10,55 @@
   --or-login-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/*
+ * iOS Safari 状态栏 / 底部地址栏着色（见 design-system/safariChromeTint.ts）：
+ * 开屏阶段（data-chrome-bottom="accent"）整屏为品牌黑，html/body 取品牌黑，上下两条同为黑色；
+ * 幕布抬起与表单阶段（data-chrome-bottom="paper"）html/body 取纸色 #f2f2f2（使底部地址栏与键盘弹出时的底衬均为白色），
+ * 顶部状态栏则由固定在黑色弧形幕布内的 60px .or-login-chrome-top 保持品牌黑。
+ */
+:root:has(.or-login[data-chrome-bottom="accent"]) {
+  --or-chrome-top-override: var(--or-login-accent-color, #000000);
+}
+
+:root:has(.or-login[data-chrome-bottom="paper"]) {
+  --or-chrome-top-override: var(--or-login-paper, #f2f2f2);
+}
+
+@media (max-width: 899.98px) {
+  :root:has(.or-login[data-chrome-bottom="accent"]),
+  :root:has(.or-login[data-chrome-bottom="accent"]) body {
+    background-color: var(--or-login-accent-color, #000000);
+  }
+
+  :root:has(.or-login[data-chrome-bottom="paper"]),
+  :root:has(.or-login[data-chrome-bottom="paper"]) body,
+  :root:has(.or-login[data-chrome-bottom="paper"]) #root,
+  :root:has(.or-login[data-chrome-bottom="paper"]) .or-app {
+    background-color: var(--or-login-paper, #f2f2f2);
+  }
+}
+
+.or-login-chrome-top {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  height: 60px;
+  pointer-events: auto;
+  background: var(--or-login-accent-color, #000000);
+}
+
+.or-login:focus-within .or-login-chrome-top {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .or-login-chrome-top {
+    display: none;
+  }
+}
+
 .or-login,
 .or-login *,
 .or-login *::before,
@@ -69,7 +118,7 @@
   padding-top: max(clamp(204px, 30.1dvh, 254px), calc(min(100vw, 520px) * 0.61 + 16px));
   padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
   overflow: clip;
-  background: var(--or-login-paper);
+  background: transparent;
 }
 
 .or-login-mobile-canopy {

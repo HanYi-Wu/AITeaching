@@ -28,16 +28,10 @@ import {
 import { useTranslation } from "react-i18next";
 import { Plus, Link as LinkIcon, RefreshCw, X } from "lucide-react";
 import { CircleChordEdge } from "./CircleChordEdge";
-import {
-  assignStraightEdges,
-  layoutWithDagre,
-  layoutWithForceDirected,
-  mergeSavedLayout,
-  nodeBoxSizeFromMaterialCount,
-  removeNodeOverlaps,
-} from "./layoutGraph";
-import { OVERLAP_DEFAULT } from "./layoutParams";
+import { nodeBoxSizeFromMaterialCount } from "./layoutGraph";
 import { canvasGeometry, sameCanvasGeometry, updateCanvasLabels, type CanvasGeometry } from "./canvas-layout/canvasGeometry";
+import { computeCanvasLayout, type CanvasLayoutInput } from "./canvas-layout/layoutComputation";
+import { LayoutTaskClient } from "./canvas-layout/layoutTaskClient";
 import { cn } from "../lib/utils";
 import type { GraphNodeRow, GraphRelationRow } from "./useGraphStore";
 import i18n from "../i18n/i18n";
@@ -139,6 +133,7 @@ function KnowledgeNode({ data, selected }: NodeProps) {
 
 const nodeTypes = { knowledge: KnowledgeNode };
 const edgeTypes = { circleChord: CircleChordEdge };
+const WORKER_LAYOUT_MIN_NODES = 40;
 
 interface Props {
   graphScope?: string;
@@ -218,6 +213,8 @@ export function GraphCanvas({
   const nonFocusForceBootstrappedRef = useRef(false);
   const geometryRef = useRef<CanvasGeometry | null>(null);
   const rfRef = useRef<{ fitView: (opts?: { nodes?: { id: string }[]; duration?: number; padding?: number }) => void } | null>(null);
+  const layoutClientRef = useRef<LayoutTaskClient | null>(null);
+  const layoutRequestRef = useRef(0);
 
   const filteredRelations = useMemo(() => {
     const nodeIds = new Set(graphNodes.filter((n) => nodeKindFilter[n.node_kind ?? "concept"] !== false).map((n) => n.id));
@@ -256,17 +253,37 @@ export function GraphCanvas({
     [focusCenterId, focusHops, filteredRelations],
   );
 
+  useEffect(() => () => {
+    layoutRequestRef.current += 1;
+    layoutClientRef.current?.dispose();
+    layoutClientRef.current = null;
+  }, []);
+
   useEffect(() => {
     const gn = filteredGraphNodes;
     const rel = filteredRelations;
-    if (!gn.length) { setNodes([]); setEdges([]); geometryRef.current = null; return; }
+    if (!gn.length) {
+      layoutRequestRef.current += 1;
+      layoutClientRef.current?.cancel();
+      setNodes([]);
+      setEdges([]);
+      geometryRef.current = null;
+      return;
+    }
 
     const geometry = canvasGeometry(gn, rel, nodeSizes, focusForceLayout, layoutNonce, graphScope);
     if (sameCanvasGeometry(geometryRef.current, geometry)) {
       setNodes((current) => updateCanvasLabels(current, gn));
       return;
     }
-    if (geometryRef.current?.scope !== graphScope) nonFocusForceBootstrappedRef.current = false;
+    const scopeChanged = geometryRef.current !== null && geometryRef.current.scope !== graphScope;
+    if (scopeChanged) {
+      // Do not show the previous project's graph while its replacement is
+      // being solved in a Worker.  Same-scope relayouts keep the old frame.
+      setNodes([]);
+      setEdges([]);
+      nonFocusForceBootstrappedRef.current = false;
+    }
 
     const baseEdges: Edge[] = rel.map((r) => ({
       id: r.id,
@@ -296,33 +313,40 @@ export function GraphCanvas({
       };
     });
 
-    const rfEdges = assignStraightEdges(baseEdges);
-    let laid: Node[];
-    if (!focusForceLayout) {
-      laid = layoutWithDagre(rfNodes, rfEdges, nodeSizes);
-      if (savedPositions.size > 0) laid = mergeSavedLayout(laid, savedPositions);
-      const runNonFocusForce = !nonFocusForceBootstrappedRef.current || layoutNonce > 0;
-      if (runNonFocusForce) {
-        const seedMap = new Map<string, { x: number; y: number }>();
-        for (const n of laid) seedMap.set(n.id, n.position);
-        laid = layoutWithForceDirected(laid, rfEdges, { seed: seedMap, sizes: nodeSizes });
-        laid = removeNodeOverlaps(laid, undefined, undefined, OVERLAP_DEFAULT.canvasPadding, OVERLAP_DEFAULT.maxPasses, nodeSizes);
-        nonFocusForceBootstrappedRef.current = true;
-      } else {
-        laid = removeNodeOverlaps(laid, undefined, undefined, OVERLAP_DEFAULT.canvasPadding, OVERLAP_DEFAULT.maxPasses, nodeSizes);
+    const runNonFocusForce = !nonFocusForceBootstrappedRef.current || layoutNonce > 0;
+    const input: CanvasLayoutInput = {
+      nodes: rfNodes,
+      edges: baseEdges,
+      nodeSizes: Array.from(nodeSizes.entries()),
+      savedPositions: Array.from(savedPositions.entries()),
+      focusForceLayout,
+      runNonFocusForce,
+    };
+    const requestId = ++layoutRequestRef.current;
+    const commit = (result: ReturnType<typeof computeCanvasLayout>) => {
+      if (requestId !== layoutRequestRef.current) return;
+      setNodes(result.nodes);
+      setEdges(result.edges);
+      geometryRef.current = geometry;
+      if (runNonFocusForce && !focusForceLayout) nonFocusForceBootstrappedRef.current = true;
+    };
+
+    if (gn.length >= WORKER_LAYOUT_MIN_NODES) {
+      const client = layoutClientRef.current ?? new LayoutTaskClient();
+      layoutClientRef.current = client;
+      const workerRequestId = client.request(
+        input,
+        commit,
+        () => commit(computeCanvasLayout(input)),
+      );
+      if (workerRequestId !== null) {
+        return () => {
+          if (requestId === layoutRequestRef.current) layoutClientRef.current?.cancel();
+        };
       }
-    } else {
-      let seed = layoutWithDagre(rfNodes, rfEdges, nodeSizes);
-      if (savedPositions.size > 0) seed = mergeSavedLayout(seed, savedPositions);
-      const seedMap = new Map<string, { x: number; y: number }>();
-      for (const n of seed) seedMap.set(n.id, n.position);
-      laid = layoutWithForceDirected(seed, rfEdges, { seed: seedMap, sizes: nodeSizes });
-      laid = removeNodeOverlaps(laid, undefined, undefined, OVERLAP_DEFAULT.canvasPadding, OVERLAP_DEFAULT.maxPasses, nodeSizes);
     }
 
-    setNodes(laid);
-    setEdges(rfEdges);
-    geometryRef.current = geometry;
+    commit(computeCanvasLayout(input));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredGraphNodes, filteredRelations, savedPositions, focusForceLayout, layoutNonce, nodeSizes, graphScope]);
 

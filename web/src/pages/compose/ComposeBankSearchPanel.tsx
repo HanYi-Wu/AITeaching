@@ -1,8 +1,6 @@
-import { memo, type MouseEvent } from "react";
+import { type MouseEvent, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { KatexPlainPreview } from "../../components/KatexText";
 import { MetadataFilterControls } from "../../components/MetadataFilterControls";
-import { QuestionHoverDetails } from "../../components/QuestionHoverDetails";
 import { isImeComposingKeyboardEvent } from "../../lib/ime";
 import {
   hasActiveMetadataFilters,
@@ -10,9 +8,13 @@ import {
   type MetadataFilters,
 } from "../../lib/metadataFilters";
 import { QUESTION_TYPE_OPTIONS } from "../../lib/questionTypes";
-import { cn } from "../../lib/utils";
 import type { QuestionRow } from "../../types/compose";
 import { Select as AppSelect } from "../../components/ui/select";
+import {
+  BankSelectionStore,
+  BankQuestionList,
+  useSelectedBankIds,
+} from "./bank-search/rewrite-list";
 
 export type ComposeBankSearchPanelProps = {
   subject: string;
@@ -23,10 +25,9 @@ export type ComposeBankSearchPanelProps = {
   namespaces: string[];
   typeFilter: string;
   onTypeFilterChange: (type: string) => void;
-  searchInput: string;
-  onSearchInputChange: (value: string) => void;
   search: string;
   onCommitSearch: (value: string) => void;
+  searchDraftResetVersion: number;
   metadataFilterDefinitions: MetadataFilterDefinition[];
   metadataFilters: MetadataFilters;
   onMetadataFiltersChange: (filters: MetadataFilters) => void;
@@ -35,110 +36,11 @@ export type ComposeBankSearchPanelProps = {
   contentSyncing: boolean;
   totalQuestionCount: number;
   filteredQuestions: QuestionRow[];
-  selectedLeftIds: string[];
-  selectedLeftIdsSet: ReadonlySet<string>;
+  bankSelectionStore: BankSelectionStore;
   onLeftBankClick: (q: QuestionRow, index: number, e: MouseEvent<HTMLButtonElement>) => void;
   onDropPaperItemToRemove: (sectionId: string, qid: string) => void;
   onError: (msg: string | null) => void;
 };
-
-type ComposeQuestionListProps = Pick<
-  ComposeBankSearchPanelProps,
-  "contentSyncing" | "totalQuestionCount" | "filteredQuestions" | "selectedLeftIds" | "selectedLeftIdsSet" | "onLeftBankClick"
->;
-
-const ComposeQuestionList = memo(function ComposeQuestionList({
-  contentSyncing,
-  totalQuestionCount,
-  filteredQuestions,
-  selectedLeftIds,
-  selectedLeftIdsSet,
-  onLeftBankClick,
-}: ComposeQuestionListProps) {
-  const { t } = useTranslation(["compose", "common", "lib"]);
-
-  return (
-    <ul className="min-h-0 flex-1 space-y-1.5 overflow-auto p-2.5">
-      {contentSyncing ? (
-        <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-primary-container)_80%,transparent)] p-4 text-sm font-medium text-[var(--or-on-container)]">
-          正在更新内容库...
-        </div>
-      ) : totalQuestionCount === 0 ? (
-        <li className="rounded-xl border border-dashed border-[var(--or-outline)] bg-[var(--or-page)] px-4 py-8 text-center text-sm text-[var(--or-muted)]">
-          <p className="font-semibold text-[var(--or-text)] text-[15px]">{t("compose:emptyBank")}</p>
-          <p className="mt-2 text-sm leading-relaxed text-[var(--or-muted)]">
-            {t("compose:emptyBankHint")}
-          </p>
-        </li>
-      ) : filteredQuestions.length === 0 ? (
-        <li className="rounded-xl border border-dashed border-[var(--or-outline)] bg-[var(--or-page)] px-4 py-8 text-center text-sm text-[var(--or-muted)]">
-          <p className="font-semibold text-[var(--or-text)] text-[15px]">{t("compose:emptyFilter")}</p>
-          <p className="mt-2 text-sm text-[var(--or-muted)]">{t("compose:emptyFilterHint")}</p>
-        </li>
-      ) : (
-        filteredQuestions.map((q, index) => {
-          const isBundle = q.type === "group";
-          const isSelected = selectedLeftIdsSet.has(q.qualified_id);
-          return (
-            <li key={q.qualified_id}>
-              <button
-                type="button"
-                draggable
-                onDragStart={(event) =>
-                  event.dataTransfer.setData(
-                    "application/x-originreach-bank-qids",
-                    JSON.stringify(
-                      selectedLeftIdsSet.has(q.qualified_id) ? selectedLeftIds : [q.qualified_id],
-                    ),
-                  )
-                }
-                onClick={(e) => onLeftBankClick(q, index, e)}
-                className={cn(
-                  "w-full rounded-xl border p-2.5 text-left text-sm transition-all duration-150",
-                  isSelected
-                    ? "border-[var(--or-primary)] bg-[var(--or-block)] shadow-sm"
-                    : "border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[var(--or-card)] hover:border-[var(--or-outline)] hover:bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)]",
-                )}
-              >
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="or-g49-pill bg-[var(--or-block)] text-[var(--or-muted)] font-medium">
-                    {t(`lib:questionTypes.${q.type}`, { defaultValue: q.type })}
-                  </span>
-                  {isBundle ? (
-                    <span className="or-g49-pill bg-[var(--or-success-container)] text-[var(--or-on-success)] font-medium">
-                      {t("compose:bundleBadge")}
-                    </span>
-                  ) : null}
-                  <span data-question-id={q.qualified_id} className="min-w-0 font-mono text-[13px] text-[var(--or-muted)] [overflow-wrap:anywhere]">
-                    {q.qualified_id}
-                  </span>
-                </div>
-                <QuestionHoverDetails id={q.qualified_id}>
-                  <KatexPlainPreview
-                    text={q.content_preview}
-                    className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-[var(--or-muted)] [&_.katex]:text-[0.95em]"
-                  />
-                </QuestionHoverDetails>
-                {Object.keys(q.metadata ?? {}).length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {Object.entries(q.metadata ?? {}).map(([k, v]) => (
-                      <span
-                        key={k}
-                        className="or-g49-pill bg-[var(--or-block)] text-[var(--or-muted)] text-[13px] px-2 py-0.5"
-                      >
-                        {k}:{String(v)}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </button>
-            </li>
-          );
-        })
-      )}
-    </ul>
-  );
-});
 
 export function ComposeBankSearchPanel({
   subject,
@@ -149,10 +51,9 @@ export function ComposeBankSearchPanel({
   namespaces,
   typeFilter,
   onTypeFilterChange,
-  searchInput,
-  onSearchInputChange,
   search,
   onCommitSearch,
+  searchDraftResetVersion,
   metadataFilterDefinitions,
   metadataFilters,
   onMetadataFiltersChange,
@@ -161,13 +62,27 @@ export function ComposeBankSearchPanel({
   contentSyncing,
   totalQuestionCount,
   filteredQuestions,
-  selectedLeftIds,
-  selectedLeftIdsSet,
   onLeftBankClick,
   onDropPaperItemToRemove,
   onError,
+  bankSelectionStore,
 }: ComposeBankSearchPanelProps) {
   const { t } = useTranslation(["compose", "common", "lib"]);
+  const searchDraftRef = useRef(search);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const committedSearchRef = useRef(search);
+  committedSearchRef.current = search;
+  useLayoutEffect(() => {
+    const resetValue = committedSearchRef.current;
+    searchDraftRef.current = resetValue;
+    if (searchInputRef.current) searchInputRef.current.value = resetValue;
+  }, [searchDraftResetVersion]);
+
+  const commitSearchDraft = (value: string) => {
+    searchDraftRef.current = value;
+    onCommitSearch(value);
+  };
+
   const activeFilterCount =
     Number(namespaceFilter !== "__all__") +
     Number(typeFilter !== "__all__") +
@@ -300,17 +215,18 @@ export function ComposeBankSearchPanel({
                 <label className="block text-sm font-medium text-[var(--or-muted)]">
                   {t("compose:search")}
                   <input
+                    ref={searchInputRef}
                     className="or-g49-input mt-1 w-full placeholder:text-[var(--or-muted)]"
                     placeholder={t("compose:searchPlaceholder")}
-                    value={searchInput}
-                    onChange={(e) => onSearchInputChange(e.target.value)}
+                    defaultValue={searchDraftRef.current}
+                    onChange={(e) => { searchDraftRef.current = e.target.value; }}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" || isImeComposingKeyboardEvent(e)) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      onCommitSearch(e.currentTarget.value);
+                      commitSearchDraft(e.currentTarget.value);
                     }}
-                    onBlur={(e) => onCommitSearch(e.currentTarget.value)}
+                    onBlur={(e) => commitSearchDraft(e.currentTarget.value)}
                   />
                 </label>
                 <MetadataFilterControls
@@ -332,14 +248,58 @@ export function ComposeBankSearchPanel({
           </div>
         )}
       </div>
-      <ComposeQuestionList
+      <BankQuestionList
         contentSyncing={contentSyncing}
         totalQuestionCount={totalQuestionCount}
         filteredQuestions={filteredQuestions}
-        selectedLeftIds={selectedLeftIds}
-        selectedLeftIdsSet={selectedLeftIdsSet}
+        store={bankSelectionStore}
         onLeftBankClick={onLeftBankClick}
       />
     </section>
+  );
+}
+
+export function ComposeBankActionBar({
+  store,
+  disabled,
+  onAdd,
+  onFill,
+  onEditPaper,
+}: {
+  store: BankSelectionStore;
+  disabled: boolean;
+  onAdd: () => void;
+  onFill: () => void;
+  onEditPaper: () => void;
+}) {
+  const { t } = useTranslation(["compose"]);
+  const selectedIds = useSelectedBankIds(store);
+
+  return (
+    <div className="or-g49-bank-actions">
+      <button
+        type="button"
+        className="or-g49-btn or-g49-btn-secondary"
+        disabled={disabled}
+        onClick={onFill}
+      >
+        补齐空缺
+      </button>
+      <button
+        type="button"
+        className="or-g49-btn or-g49-btn-primary"
+        disabled={!selectedIds.length || disabled}
+        onClick={onAdd}
+      >
+        {t("compose:addToSection")}（{selectedIds.length}）
+      </button>
+      <button
+        type="button"
+        className="or-g49-btn or-g49-btn-secondary"
+        onClick={onEditPaper}
+      >
+        编辑试卷
+      </button>
+    </div>
   );
 }

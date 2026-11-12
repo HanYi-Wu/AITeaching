@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -8,7 +9,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { ChevronDown, Filter, Plus, Upload, Download, Save } from "lucide-react";
 import { MetadataFilterControls } from "../../components/MetadataFilterControls";
-import { useToolBar } from "../../contexts/ToolBarContext";
+import { useToolBarActions } from "../../contexts/ToolBarContext";
 import { QUESTION_TYPE_OPTIONS } from "../../lib/questionTypes";
 import { isImeComposingKeyboardEvent } from "../../lib/ime";
 import { cn } from "../../lib/utils";
@@ -132,7 +133,13 @@ export function BankToolbar(props: BankToolbarProps) {
   } = props;
 
   const { t } = useTranslation(["bank", "lib", "common"]);
-  const { setToolBar, clearToolBar } = useToolBar();
+  const { setToolBar, clearToolBar } = useToolBarActions();
+  const searchDraftRef = useRef(searchInput);
+  const commitSearchDraft = useCallback((value: string) => {
+    searchDraftRef.current = value;
+    setSearchInput(value);
+    commitSearch(value);
+  }, [commitSearch, setSearchInput]);
 
   const callbacksRef = useRef({
     onExport,
@@ -306,15 +313,17 @@ export function BankToolbar(props: BankToolbarProps) {
                   {t("search")}
                   <input
                     className="or-input or-g48-input mt-1 w-full"
-                    value={searchInput}
-                    onChange={(e) => setSearchInput(e.target.value)}
+                    defaultValue={searchDraftRef.current}
+                    onChange={(e) => {
+                      searchDraftRef.current = e.currentTarget.value;
+                    }}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" || isImeComposingKeyboardEvent(e)) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      commitSearch(e.currentTarget.value);
+                      commitSearchDraft(e.currentTarget.value);
                     }}
-                    onBlur={(e) => commitSearch(e.currentTarget.value)}
+                    onBlur={(e) => commitSearchDraft(e.currentTarget.value)}
                     placeholder={t("searchPlaceholder")}
                   />
                 </label>
@@ -688,7 +697,7 @@ export function BankToolbar(props: BankToolbarProps) {
     filterType,
     filterCategory,
     searchInput,
-    commitSearch,
+    commitSearchDraft,
     metadataFilterDefinitions,
     metadataFilters,
     subjects,

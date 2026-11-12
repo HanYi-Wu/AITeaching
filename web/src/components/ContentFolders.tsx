@@ -17,6 +17,7 @@ type Props = {
   dropItemsBusy?: boolean;
   onError: (message: string) => void;
   allowPaperFolder?: boolean;
+  portalContainer?: HTMLElement | null;
 };
 
 export function ContentFolderHelp({ paper = false }: { paper?: boolean }) {
@@ -77,6 +78,7 @@ export function ContentFolders({
   dropItemsBusy = false,
   onError,
   allowPaperFolder = false,
+  portalContainer,
 }: Props) {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
@@ -251,7 +253,7 @@ export function ContentFolders({
       >
         全部内容
       </button>
-      <div className="max-h-56 overflow-auto py-1">{nodes(null)}</div>
+      <div className={`max-h-56 overflow-auto py-1${scope === "paper" ? " lg:min-h-10" : ""}`}>{nodes(null)}</div>
 
       {selected ? (
         <div className="mt-2 space-y-1.5 rounded-[10px] bg-[var(--or-block)] p-2 text-xs sm:text-[13px]">
@@ -274,6 +276,7 @@ export function ContentFolders({
               <Trash2 className="h-3 w-3" />删除
             </button>
             <AppSelect
+              portalContainer={portalContainer}
               aria-label="移动文件夹到"
               disabled={busy}
               value=""
@@ -360,6 +363,7 @@ export function ContentFolders({
             placeholder="文件夹名称"
           />
           <AppSelect
+            portalContainer={portalContainer}
             aria-label="上级文件夹"
             className="or-select w-full rounded-[8px] border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 py-1.5 text-xs sm:text-[13px]"
             value={parentId}
@@ -376,6 +380,7 @@ export function ContentFolders({
           </AppSelect>
           {allowPaperFolder ? (
             <AppSelect
+              portalContainer={portalContainer}
               aria-label="文件夹类型"
               className="or-select w-full rounded-[8px] border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 py-1.5 text-xs sm:text-[13px]"
               value={kind}

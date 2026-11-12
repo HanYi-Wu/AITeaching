@@ -47,7 +47,7 @@ vi.mock("../../components/ContentTags", () => ({
 }));
 
 vi.mock("../../contexts/AgentContext", () => ({
-  useAgentContext: () => ({ setPageContext: mocks.context }),
+  useAgentActions: () => ({ setPageContext: mocks.context }),
 }));
 
 function deferred<T>() {
