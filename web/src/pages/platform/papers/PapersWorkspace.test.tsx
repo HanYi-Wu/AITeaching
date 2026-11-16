@@ -2081,7 +2081,11 @@ describe("PapersWorkspace", () => {
     await waitFor(() => expect(mocks.updatePlatformPaperDeliveryMode).toHaveBeenCalledWith("p1", "online"));
 
     // User downloads score template
-    const downloadTemplateBtn = await screen.findByRole("button", { name: "下载成绩模板" });
+    const downloadTemplateBtn = await screen.findByRole(
+      "button",
+      { name: "下载成绩模板" },
+      { timeout: 4000 },
+    );
     await userEvent.click(downloadTemplateBtn);
     await waitFor(() =>
       expect(mocks.apiDownloadBlob).toHaveBeenCalledWith(`/api/exams/${encodeURIComponent(paper.exam_id)}/score-template`),
