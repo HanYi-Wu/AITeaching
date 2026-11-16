@@ -115,3 +115,30 @@ def act(root: Path, action: str, *, path: str = '', target: str = '', qualified_
         else:
             raise ValueError('未知目录操作')
         return _snapshot(db)
+
+
+def rename_question_assignment(root: Path, old_qid: str, new_qid: str) -> None:
+    """Migrate folder assignments in existing SQLite stores when a question ID is renamed."""
+    if old_qid == new_qid:
+        return
+    solaire_dir = root / '.solaire'
+    if not solaire_dir.is_dir():
+        return
+    candidates = [solaire_dir / 'bank-folders.sqlite3', *solaire_dir.glob('bank_organization/*/bank-folders.sqlite3')]
+    for db_path in candidates:
+        if not db_path.is_file():
+            continue
+        db = sqlite3.connect(db_path, timeout=15)
+        try:
+            has_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='assignments'"
+            ).fetchone()
+            if not has_table:
+                continue
+            with db:
+                row = db.execute('SELECT folder FROM assignments WHERE qid=?', (old_qid,)).fetchone()
+                if row is not None:
+                    db.execute('DELETE FROM assignments WHERE qid=?', (old_qid,))
+                    db.execute('INSERT OR REPLACE INTO assignments VALUES (?, ?)', (new_qid, row[0]))
+        finally:
+            db.close()

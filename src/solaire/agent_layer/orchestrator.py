@@ -438,6 +438,8 @@ async def run_agent_turn(
     _desc = tool_descriptions_for_prompt(tools_selected)
     tools_block_txt = build_tools_system_block(_desc)
     _need_rebuild_prompts = False
+    _need_rebuild_tools = False
+    _need_rebuild_dynamic_hashes = False
 
     # 缓存 system_parts：仅当 tools/focus/plan_mode/task_plan 变化时才重建，
     # 避免每轮都产生不同的字节序列破坏 DeepSeek KV Cache 前缀匹配。
@@ -455,9 +457,61 @@ async def run_agent_turn(
         page_context_brief=None,
         include_focus_info=_include_focus,
     )
-    _last_tp = hashlib.sha256(
-        json.dumps(session.task_plan, sort_keys=True, ensure_ascii=False).encode()
-    ).hexdigest()
+    # Values that survive across rounds are prepared once. Their dependencies are
+    # turn-local: project context, skills, page context and provider settings do
+    # not change while a single run_agent_turn is active.
+    _wh_ctx = whitelist_project_ctx_for_prompt(public_ctx)
+    task_blk = build_task_plan_dynamic_block(session)
+    dyn_hs = dynamic_source_hashes(
+        project_ctx=_wh_ctx,
+        skill_catalog=skill_catalog,
+        task_plan_block=task_blk,
+        page_context_brief=page_context_brief,
+        plan_mode_active=session.plan_mode_active,
+        execution_plan_path=session.execution_plan_path,
+    )
+    stable_sha12 = hash_text_sha12(stable_txt)
+    tools_block_sha12 = hash_text_sha12(tools_block_txt)
+    tool_schema_sha12 = hash_tools_payload_sha12(tools_payload)
+    tool_count = len(tools_payload)
+
+    is_anthropic_adapter = _is_loaded_adapter_instance(
+        adapter, "solaire.agent_layer.llm.anthropic_messages", "AnthropicMessagesAdapter"
+    )
+    is_openai_responses_adapter = _is_loaded_adapter_instance(
+        adapter, "solaire.agent_layer.llm.openai_responses", "OpenAIResponsesAdapter"
+    )
+    provider_system_shape = "dual_system_messages"
+    if is_anthropic_adapter:
+        provider_system_shape = "merged_system"
+    elif is_openai_responses_adapter:
+        provider_system_shape = "responses_instructions"
+    context_limit = context_limit_for_provider(settings.provider, settings.base_url)
+
+    def _refresh_system_diagnostics() -> tuple[str, str, int, int, str | None]:
+        return (
+            hash_text_sha12(_sys_prefix),
+            hash_text_sha12(_sys_suffix),
+            len(_sys_prefix) + len(_sys_suffix),
+            len(_sys_prefix),
+            hash_text_sha12(f"{_sys_prefix}\n\n{_sys_suffix}") if is_openai_responses_adapter else None,
+        )
+
+    (
+        cacheable_prefix_sha12,
+        dynamic_sha12,
+        system_chars,
+        cacheable_prefix_chars,
+        instructions_sha12,
+    ) = _refresh_system_diagnostics()
+    est_system_tokens = estimate_messages_tokens(
+        [{"role": "system", "content": _sys_prefix}, {"role": "system", "content": _sys_suffix}]
+    )
+    last_prompt_dependencies = (
+        session.current_focus,
+        session.plan_mode_active,
+        session.execution_plan_path,
+    )
 
     while True:
         loop_round += 1
@@ -473,21 +527,31 @@ async def run_agent_turn(
 
         await emit("thinking", {"message": _thinking_for_round(loop_round)})
 
-        _rebuild = _need_rebuild_prompts
+        task_blk_now = build_task_plan_dynamic_block(session)
+        if task_blk_now != task_blk:
+            task_blk = task_blk_now
+            _need_rebuild_prompts = True
+            _need_rebuild_dynamic_hashes = True
+
+        current_prompt_dependencies = (
+            session.current_focus,
+            session.plan_mode_active,
+            session.execution_plan_path,
+        )
+        if current_prompt_dependencies != last_prompt_dependencies:
+            _need_rebuild_prompts = True
+            _need_rebuild_dynamic_hashes = True
+            last_prompt_dependencies = current_prompt_dependencies
 
         if _need_rebuild_prompts:
-            _desc = tool_descriptions_for_prompt(tools_selected)
-            tools_block_txt = build_tools_system_block(_desc)
-            _need_rebuild_prompts = False
+            if _need_rebuild_tools:
+                _desc = tool_descriptions_for_prompt(tools_selected)
+                tools_block_txt = build_tools_system_block(_desc)
+                tools_block_sha12 = hash_text_sha12(tools_block_txt)
+                tool_schema_sha12 = hash_tools_payload_sha12(tools_payload)
+                tool_count = len(tools_payload)
+                _need_rebuild_tools = False
 
-        _tp_now = hashlib.sha256(
-            json.dumps(session.task_plan, sort_keys=True, ensure_ascii=False).encode()
-        ).hexdigest()
-        if _tp_now != _last_tp:
-            _rebuild = True
-            _last_tp = _tp_now
-
-        if _rebuild:
             _sys_prefix, _sys_suffix = cm.build_system_parts(
                 full_ctx,
                 session=session,
@@ -500,6 +564,31 @@ async def run_agent_turn(
                 page_context_brief=None,
                 include_focus_info=_include_focus,
             )
+            (
+                cacheable_prefix_sha12,
+                dynamic_sha12,
+                system_chars,
+                cacheable_prefix_chars,
+                instructions_sha12,
+            ) = _refresh_system_diagnostics()
+            est_system_tokens = estimate_messages_tokens(
+                [
+                    {"role": "system", "content": _sys_prefix},
+                    {"role": "system", "content": _sys_suffix},
+                ]
+            )
+            _need_rebuild_prompts = False
+
+        if _need_rebuild_dynamic_hashes:
+            dyn_hs = dynamic_source_hashes(
+                project_ctx=_wh_ctx,
+                skill_catalog=skill_catalog,
+                task_plan_block=task_blk,
+                page_context_brief=page_context_brief,
+                plan_mode_active=session.plan_mode_active,
+                execution_plan_path=session.execution_plan_path,
+            )
+            _need_rebuild_dynamic_hashes = False
 
         api_messages = cm.build_messages(
             system_prefix=_sys_prefix,
@@ -540,46 +629,17 @@ async def run_agent_turn(
             await emit("done", _pack_done_event(settings, usage_acc, peak_context_est))
             return
 
-        provider_system_shape = "dual_system_messages"
-        is_anthropic_adapter = _is_loaded_adapter_instance(
-            adapter, "solaire.agent_layer.llm.anthropic_messages", "AnthropicMessagesAdapter"
-        )
-        is_openai_responses_adapter = _is_loaded_adapter_instance(
-            adapter, "solaire.agent_layer.llm.openai_responses", "OpenAIResponsesAdapter"
-        )
-        if is_anthropic_adapter:
-            provider_system_shape = "merged_system"
-        elif is_openai_responses_adapter:
-            provider_system_shape = "responses_instructions"
-
-        instructions_sha12: str | None = None
-        if is_openai_responses_adapter:
-            instructions_sha12 = hash_text_sha12(f"{_sys_prefix}\n\n{_sys_suffix}")
-
-        task_blk = build_task_plan_dynamic_block(session)
-        wh_ctx = whitelist_project_ctx_for_prompt(public_ctx)
-        dyn_hs = dynamic_source_hashes(
-            project_ctx=wh_ctx,
-            skill_catalog=skill_catalog,
-            task_plan_block=task_blk,
-            page_context_brief=page_context_brief,
-            plan_mode_active=session.plan_mode_active,
-            execution_plan_path=session.execution_plan_path,
-        )
-
         round_metrics: dict[str, Any] = {
             "round_index": loop_round,
-            "stable_sha12": hash_text_sha12(stable_txt),
-            "cacheable_prefix_sha12": hash_text_sha12(_sys_prefix),
-            "tools_block_sha12": hash_text_sha12(tools_block_txt),
-            "dynamic_sha12": hash_text_sha12(_sys_suffix),
-            "tool_schema_sha12": hash_tools_payload_sha12(tools_payload),
-            "tool_count": len(tools_payload),
-            "system_chars": len(_sys_prefix) + len(_sys_suffix),
-            "cacheable_prefix_chars": len(_sys_prefix),
-            "est_prompt_tokens": estimate_messages_tokens(
-                [{"role": "system", "content": _sys_prefix}, {"role": "system", "content": _sys_suffix}]
-            ),
+            "stable_sha12": stable_sha12,
+            "cacheable_prefix_sha12": cacheable_prefix_sha12,
+            "tools_block_sha12": tools_block_sha12,
+            "dynamic_sha12": dynamic_sha12,
+            "tool_schema_sha12": tool_schema_sha12,
+            "tool_count": tool_count,
+            "system_chars": system_chars,
+            "cacheable_prefix_chars": cacheable_prefix_chars,
+            "est_prompt_tokens": est_system_tokens,
             "history_sha12": hash_messages_slice_sha12(api_messages, start=2),
             "provider_system_shape": provider_system_shape,
             **dyn_hs,
@@ -588,9 +648,8 @@ async def run_agent_turn(
             round_metrics["instructions_sha12"] = instructions_sha12
 
         round_metrics["context_tokens_est"] = prompt_token_est
-        ctx_lim_round = context_limit_for_provider(settings.provider, settings.base_url)
-        if ctx_lim_round is not None:
-            round_metrics["context_limit"] = ctx_lim_round
+        if context_limit is not None:
+            round_metrics["context_limit"] = context_limit
 
         for uk in (
             "prompt_cache_hit_tokens",
@@ -667,6 +726,7 @@ async def run_agent_turn(
                 )
                 dtc.tools = tools_selected  # keep dtc in sync for tool validation
                 _need_rebuild_prompts = True
+                _need_rebuild_tools = True
                 prev_plan_mode_for_tools = session.plan_mode_active
                 if focus_switched:
                     await emit("focus_changed", {"focus": session.current_focus})

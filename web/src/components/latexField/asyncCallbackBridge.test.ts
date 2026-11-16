@@ -28,13 +28,13 @@ describe("asyncCallbackBridge", () => {
       sourceTa.selectionStart = 3;
       sourceTa.selectionEnd = 7;
 
-      const getOffsetMock = vi.fn();
-      const sel = getFieldSelection(null, hiddenTa, sourceTa, "source", getOffsetMock);
+      const getOffsetsMock = vi.fn();
+      const sel = getFieldSelection(null, hiddenTa, sourceTa, "source", getOffsetsMock);
 
       expect(sel).toEqual({ start: 3, end: 7 });
       expect(hiddenTa.selectionStart).toBe(3);
       expect(hiddenTa.selectionEnd).toBe(7);
-      expect(getOffsetMock).not.toHaveBeenCalled();
+      expect(getOffsetsMock).not.toHaveBeenCalled();
     });
 
     it("falls back to hidden textarea when no active selection in DOM", () => {
@@ -45,6 +45,35 @@ describe("asyncCallbackBridge", () => {
 
       const sel = getFieldSelection(null, hiddenTa, null, "visual", vi.fn());
       expect(sel).toEqual({ start: 2, end: 4 });
+    });
+
+    it("maps both visual selection endpoints with one serialized projection", () => {
+      const editor = document.createElement("div");
+      editor.appendChild(document.createTextNode("abcdef"));
+      document.body.appendChild(editor);
+      const hiddenTa = document.createElement("textarea");
+      hiddenTa.value = "abcdef";
+      const range = document.createRange();
+      range.setStart(editor.firstChild!, 1);
+      range.setEnd(editor.firstChild!, 5);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      const getOffsets = vi.fn(() => ({ start: 1, end: 5 }));
+
+      const result = getFieldSelection(
+        editor,
+        hiddenTa,
+        null,
+        "visual",
+        getOffsets,
+      );
+
+      expect(result).toEqual({ start: 1, end: 5 });
+      expect(hiddenTa.selectionStart).toBe(1);
+      expect(hiddenTa.selectionEnd).toBe(5);
+      expect(getOffsets).toHaveBeenCalledTimes(1);
+      editor.remove();
     });
   });
 

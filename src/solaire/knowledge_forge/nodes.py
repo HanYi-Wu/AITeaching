@@ -8,10 +8,10 @@ from solaire.knowledge_forge.models import GraphState
 from solaire.knowledge_forge.models import NodeRelation
 from pathlib import Path
 from solaire.knowledge_forge.models import _ALLOWED_NODE_KINDS
-from solaire.knowledge_forge.node_index import _find_node_slug
+from solaire.knowledge_forge.node_index import _find_node_state
 from solaire.knowledge_forge.paths import _legacy_state_path
 from solaire.knowledge_forge.storage import _load_meta
-from solaire.knowledge_forge.storage import _load_subject_state
+from solaire.knowledge_forge.storage import _load_subject_state_snapshot
 from solaire.knowledge_forge.migration import _migrate_legacy_graph_state
 from solaire.knowledge_forge.models import _now_utc
 from solaire.knowledge_forge.node_index import _resolve_target_subject_slug
@@ -44,29 +44,41 @@ def list_concept_nodes(
                     if isinstance(data, dict):
                         state = GraphState.model_validate(data)
                         _migrate_legacy_graph_state(state)
-                        rows = [n.model_dump(mode="json") for n in state.nodes]
                         if node_kind:
-                            rows = [r for r in rows if r.get("node_kind") == node_kind]
-                        return rows
+                            return [
+                                node.model_dump(mode="json")
+                                for node in state.nodes
+                                if node.node_kind == node_kind
+                            ]
+                        return [node.model_dump(mode="json") for node in state.nodes]
             return []
 
     all_nodes: list[ConceptNode] = []
-    all_file_counts: dict[str, int] = {}
+    states: list[GraphState] = []
     for slug in slugs:
-        state = _load_subject_state(project_root, slug)
+        state = _load_subject_state_snapshot(project_root, slug)
+        states.append(state)
         all_nodes.extend(state.nodes)
-        for l in state.file_links:
-            all_file_counts[l.node_id] = all_file_counts.get(l.node_id, 0) + 1
 
-    rows = [n.model_dump(mode="json") for n in all_nodes]
+    filter_kind: str | None = None
     if node_kind is not None:
-        nk = node_kind.strip()
-        if nk not in _ALLOWED_NODE_KINDS:
+        filter_kind = node_kind.strip()
+        if filter_kind not in _ALLOWED_NODE_KINDS:
             raise ValueError(f"Invalid node_kind filter: {node_kind}")
-        rows = [r for r in rows if r.get("node_kind") == nk]
 
-    for r in rows:
-        r["file_link_count"] = all_file_counts.get(r["id"], 0)
+    matching_nodes = [node for node in all_nodes if filter_kind is None or node.node_kind == filter_kind]
+    matching_ids = {node.id for node in matching_nodes}
+    all_file_counts: dict[str, int] = {}
+    for state in states:
+        for link in state.file_links:
+            if link.node_id in matching_ids:
+                all_file_counts[link.node_id] = all_file_counts.get(link.node_id, 0) + 1
+
+    rows = []
+    for node in matching_nodes:
+        row = node.model_dump(mode="json")
+        row["file_link_count"] = all_file_counts.get(node.id, 0)
+        rows.append(row)
     return rows
 
 
@@ -74,13 +86,13 @@ def count_nodes_by_kind(project_root: Path, *, graph: str | None = None) -> dict
     ensure_graph_layout(project_root)
     out: dict[str, int] = {k: 0 for k in sorted(_ALLOWED_NODE_KINDS)}
     if graph:
-        state = _load_subject_state(project_root, graph)
+        state = _load_subject_state_snapshot(project_root, graph)
         for n in state.nodes:
             out[n.node_kind] = out.get(n.node_kind, 0) + 1
     else:
         meta = _load_meta(project_root)
         for sm in meta.subjects:
-            state = _load_subject_state(project_root, sm.slug)
+            state = _load_subject_state_snapshot(project_root, sm.slug)
             for n in state.nodes:
                 out[n.node_kind] = out.get(n.node_kind, 0) + 1
     return out
@@ -89,18 +101,14 @@ def count_nodes_by_kind(project_root: Path, *, graph: str | None = None) -> dict
 def get_concept_node(project_root: Path, node_id: str, *, graph: str | None = None) -> dict[str, Any]:
     ensure_graph_layout(project_root)
     if graph:
-        state = _load_subject_state(project_root, graph)
+        state = _load_subject_state_snapshot(project_root, graph)
         for n in state.nodes:
             if n.id == node_id:
                 return n.model_dump(mode="json")
         raise FileNotFoundError(f"Node not found: {node_id}")
-    slug = _find_node_slug(project_root, node_id)
-    if slug is None:
-        raise FileNotFoundError(f"Node not found: {node_id}")
-    state = _load_subject_state(project_root, slug)
-    for n in state.nodes:
-        if n.id == node_id:
-            return n.model_dump(mode="json")
+    match = _find_node_state(project_root, node_id)
+    if match is not None:
+        return match[2].model_dump(mode="json")
     raise FileNotFoundError(f"Node not found: {node_id}")
 
 

@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   resetAgentContext: vi.fn(),
   loadSchoolWorkspace: vi.fn(),
   composeRender: vi.fn(),
+  bankRender: vi.fn(),
+  analysisRender: vi.fn(),
+  invalidateWarmCaches: vi.fn(),
+  scheduleWarmup: vi.fn((_options?: unknown) => () => undefined),
   failStudentWorkspaceRender: false,
   sidebarOpen: false,
 }));
@@ -37,14 +41,33 @@ vi.mock("./components/TeacherFirstUseGuide", () => ({ TeacherFirstUseGuide: () =
 vi.mock("./pages/platform/papers/PapersWorkspace", () => ({
   PapersWorkspace: ({ projectScope }: { projectScope?: unknown }) => <div data-testid="paper-project-scope">{JSON.stringify(projectScope)}</div>,
 }));
+vi.mock("./app/preloadTeacherModules", () => ({
+  preloadTeacherWorkspaceChunks: () => [],
+  scheduleTeacherWorkspaceWarmup: (options: unknown) => mocks.scheduleWarmup(options),
+  invalidateTeacherWarmCaches: () => mocks.invalidateWarmCaches(),
+}));
 vi.mock("./app/routes", () => ({
-  BankRoute: () => null,
+  BankRoute: memo(function MockBankRoute({ active }: { active?: boolean }) {
+    mocks.bankRender(active);
+    return <div data-testid="mock-bank" data-active={String(Boolean(active))} />;
+  }),
   ComposeRoute: memo(function MockComposeRoute({ onRefreshInfo }: { onRefreshInfo: () => Promise<void> }) {
     mocks.composeRender();
     return <button onClick={() => void onRefreshInfo()}>刷新项目范围</button>;
   }),
   GraphRoute: () => null,
   TemplateRoute: () => null,
+}));
+vi.mock("./pages/analysis/AnalysisWorkspace", () => ({
+  AnalysisWorkspace: memo(function MockAnalysisWorkspace({ active }: { active?: boolean }) {
+    mocks.analysisRender(active);
+    return <div data-testid="mock-analysis" data-active={String(Boolean(active))} />;
+  }),
+}));
+vi.mock("./pages/tools/ClassroomToolsWorkspace", () => ({
+  ClassroomToolsWorkspace: memo(function MockClassroomToolsWorkspace({ active }: { active?: boolean }) {
+    return <div data-testid="mock-tools" data-active={String(Boolean(active))} />;
+  }),
 }));
 vi.mock("./pages/platform/school/SchoolWorkspace", async () => {
   await mocks.loadSchoolWorkspace();
@@ -333,5 +356,54 @@ describe("role-specific project requests", () => {
     await user.click(screen.getByRole("button", { name: "以学校身份登录" }));
     await screen.findByText("学校工作区");
     expect(document.documentElement.dataset.ehDensity).toBe("comfortable");
+  });
+
+  it("keeps visited bank and analysis workspaces mounted across tab switches and triggers teacher warmup", async () => {
+    mocks.getCurrentUser.mockResolvedValue({ user: { ...school, id: "teacher-user", role: "teacher" } });
+    const user = userEvent.setup();
+    renderApp();
+
+    await waitFor(() =>
+      expect(mocks.scheduleWarmup).toHaveBeenCalledWith({
+        ownerId: "teacher-user",
+        projectId: "/teacher-project",
+        warmBank: true,
+      }),
+    );
+
+    expect(screen.queryByTestId("mock-bank")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("mock-analysis")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("mock-tools")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "题库" }));
+    const bankEl = await screen.findByTestId("mock-bank");
+    expect(bankEl).toHaveAttribute("data-active", "true");
+
+    await user.click(screen.getByRole("button", { name: "分析" }));
+    const analysisEl = await screen.findByTestId("mock-analysis");
+    expect(analysisEl).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("mock-bank")).toBe(bankEl);
+    expect(screen.getByTestId("mock-bank")).toHaveAttribute("data-active", "false");
+
+    await user.click(screen.getByRole("button", { name: "课堂工具" }));
+    const toolsEl = await screen.findByTestId("mock-tools");
+    expect(toolsEl).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("mock-analysis")).toBe(analysisEl);
+    expect(screen.getByTestId("mock-analysis")).toHaveAttribute("data-active", "false");
+
+    await user.click(screen.getByRole("button", { name: "题库" }));
+    expect(screen.getByTestId("mock-bank")).toBe(bankEl);
+    expect(screen.getByTestId("mock-bank")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("mock-analysis")).toBe(analysisEl);
+    expect(screen.getByTestId("mock-analysis")).toHaveAttribute("data-active", "false");
+    expect(screen.getByTestId("mock-tools")).toBe(toolsEl);
+    expect(screen.getByTestId("mock-tools")).toHaveAttribute("data-active", "false");
+
+    await user.click(screen.getByRole("button", { name: "退出" }));
+    await screen.findByText("登录页");
+    expect(mocks.invalidateWarmCaches).toHaveBeenCalled();
+    expect(screen.queryByTestId("mock-bank")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("mock-analysis")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("mock-tools")).not.toBeInTheDocument();
   });
 });

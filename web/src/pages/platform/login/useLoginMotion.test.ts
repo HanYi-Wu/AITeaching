@@ -76,13 +76,13 @@ describe("useLoginMotion", () => {
     const { result } = renderHook(() => useLoginMotion());
     expect(result.current.phase).toBe("splash");
 
-    await act(async () => vi.advanceTimersByTimeAsync(1400));
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(result.current.phase).toBe("brand-exit");
 
-    await act(async () => vi.advanceTimersByTimeAsync(640));
+    await act(async () => vi.advanceTimersByTimeAsync(440));
     expect(result.current.phase).toBe("revealing");
 
-    await act(async () => vi.advanceTimersByTimeAsync(820));
+    await act(async () => vi.advanceTimersByTimeAsync(730));
     expect(result.current.phase).toBe("ready");
   });
 
@@ -126,7 +126,7 @@ describe("useLoginMotion", () => {
     expect(noAnimationFrame.result.current.phase).toBe("ready");
   });
 
-  it("waits 1620ms before the successful PC crack and keeps it through a breakpoint change", async () => {
+  it("waits 880ms before the successful PC crack and keeps it through a breakpoint change", async () => {
     vi.useFakeTimers();
     const media = setupMedia();
     const frames = setupAnimationFrames();
@@ -143,7 +143,7 @@ describe("useLoginMotion", () => {
     act(() => media.setMobile(true));
     expect(result.current.phase).toBe("splash");
 
-    await act(async () => vi.advanceTimersByTimeAsync(1619));
+    await act(async () => vi.advanceTimersByTimeAsync(879));
     expect(result.current.phase).toBe("splash");
     expect(completed).toBe(false);
 
@@ -152,9 +152,9 @@ describe("useLoginMotion", () => {
     expect(completed).toBe(false);
 
     const splitStartedAt = performance.now();
-    act(() => frames.frame(splitStartedAt + 221));
+    act(() => frames.frame(splitStartedAt + 186));
     expect(completed).toBe(false);
-    act(() => frames.frame(splitStartedAt + 371));
+    act(() => frames.frame(splitStartedAt + 316));
     await act(async () => handoff);
     expect(completed).toBe(true);
   });
@@ -166,7 +166,7 @@ describe("useLoginMotion", () => {
 
     const { result } = renderHook(() => useLoginMotion());
     expect(result.current.phase).toBe("splash");
-    await act(async () => vi.advanceTimersByTimeAsync(1700));
+    await act(async () => vi.advanceTimersByTimeAsync(1220));
     expect(frames.callbacks.size).toBeGreaterThan(0);
 
     act(() => media.setReduced(true));

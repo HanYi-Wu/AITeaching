@@ -94,29 +94,41 @@ function scanTextSegment(
 
 /* ── $/$$ 定界符平衡检查（在 tokenizeContent 之前，用于检测未匹配的 $） ── */
 
-/**
- * 计算字符串中未转义的 `$` 个数。
- */
-function countUnescapedDollars(s: string): number {
-  let n = 0;
-  let i = 0;
-  while (i < s.length) {
-    if (s[i] === "\\" && i + 1 < s.length) {
-      i += 2;
+function countUnescapedDollars(text: string, start: number, end: number): number {
+  let count = 0;
+  let index = start;
+  while (index < end) {
+    if (text[index] === "\\" && index + 1 < end) {
+      index += 2;
       continue;
     }
-    if (s[i] === "$") n++;
-    i++;
+    if (text[index] === "$") count += 1;
+    index += 1;
   }
-  return n;
+  return count;
 }
 
 function checkDollarBalance(text: string): MathLintResult[] {
   const results: MathLintResult[] = [];
 
-  // 先检查 $$ 个数是否为奇数
-  const ddCount = (text.match(/\$\$/g) ?? []).length;
-  if (ddCount % 2 !== 0) {
+  // Search display pairs natively, then scan only the text outside them.
+  let displayCount = 0;
+  let inlineOdd = false;
+  let outsideStart = 0;
+  let searchFrom = 0;
+  while (true) {
+    const pairStart = text.indexOf("$$", searchFrom);
+    if (pairStart === -1) break;
+    displayCount += 1;
+    if (displayCount % 2 === 1) {
+      if (countUnescapedDollars(text, outsideStart, pairStart) % 2 !== 0) inlineOdd = true;
+    } else {
+      outsideStart = pairStart + 2;
+    }
+    searchFrom = pairStart + 2;
+  }
+
+  if (displayCount % 2 !== 0) {
     results.push({
       code: "math_delimiter_display",
       severity: "error",
@@ -125,18 +137,13 @@ function checkDollarBalance(text: string): MathLintResult[] {
     return results; // 严重不平衡，不再做行内检查
   }
 
-  // 去掉 $$ 段，检查剩余的单 $ 是否成对
-  const outsideDisplay = text.split("$$");
-  for (let i = 0; i < outsideDisplay.length; i += 2) {
-    const seg = outsideDisplay[i];
-    if (countUnescapedDollars(seg) % 2 !== 0) {
-      results.push({
-        code: "math_delimiter_inline",
-        severity: "error",
-        message: "行内公式 `$...$` 定界符不成对，存在未闭合的行内公式。",
-      });
-      break;
-    }
+  if (countUnescapedDollars(text, outsideStart, text.length) % 2 !== 0) inlineOdd = true;
+  if (inlineOdd) {
+    results.push({
+      code: "math_delimiter_inline",
+      severity: "error",
+      message: "行内公式 `$...$` 定界符不成对，存在未闭合的行内公式。",
+    });
   }
 
   return results;

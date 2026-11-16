@@ -18,6 +18,7 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "../ui-redesign/g50/g50.css";
 import {
   useCallback,
   useEffect,
@@ -28,8 +29,11 @@ import {
 import { useTranslation } from "react-i18next";
 import { Plus, Link as LinkIcon, RefreshCw, X } from "lucide-react";
 import { CircleChordEdge } from "./CircleChordEdge";
+import { buildFlowAriaLabelConfig } from "./flowAriaLabels";
 import { nodeBoxSizeFromMaterialCount } from "./layoutGraph";
 import { canvasGeometry, sameCanvasGeometry, updateCanvasLabels, type CanvasGeometry } from "./canvas-layout/canvasGeometry";
+import { computeKHopNodes } from "./canvas-layout/focusNeighborhood";
+import { projectCanvasNodes } from "./canvas-layout/canvasProjection";
 import { computeCanvasLayout, type CanvasLayoutInput } from "./canvas-layout/layoutComputation";
 import { LayoutTaskClient } from "./canvas-layout/layoutTaskClient";
 import { cn } from "../lib/utils";
@@ -153,33 +157,6 @@ interface Props {
   onCancelConnect: () => void;
 }
 
-function computeKHopNodes(
-  centerId: string | null,
-  hops: 0 | 1 | 2,
-  edgePairs: { from_node_id: string; to_node_id: string }[],
-): Set<string> | null {
-  if (!centerId || hops === 0) return null;
-  const adj = new Map<string, string[]>();
-  for (const e of edgePairs) {
-    if (!adj.has(e.from_node_id)) adj.set(e.from_node_id, []);
-    if (!adj.has(e.to_node_id)) adj.set(e.to_node_id, []);
-    adj.get(e.from_node_id)!.push(e.to_node_id);
-    adj.get(e.to_node_id)!.push(e.from_node_id);
-  }
-  const dist = new Map<string, number>();
-  const q: string[] = [centerId];
-  dist.set(centerId, 0);
-  while (q.length) {
-    const u = q.shift()!;
-    const d = dist.get(u)!;
-    if (d >= hops) continue;
-    for (const v of adj.get(u) ?? []) {
-      if (!dist.has(v)) { dist.set(v, d + 1); q.push(v); }
-    }
-  }
-  return new Set(dist.keys());
-}
-
 export function GraphCanvas({
   graphScope = "",
   graphNodes,
@@ -198,6 +175,7 @@ export function GraphCanvas({
   onCancelConnect,
 }: Props) {
   const { t } = useTranslation("graph");
+  const ariaLabelConfig = useMemo(() => buildFlowAriaLabelConfig(t), [t]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [focusHops, setFocusHops] = useState<0 | 1 | 2>(0);
@@ -271,11 +249,11 @@ export function GraphCanvas({
       return;
     }
 
-    const geometry = canvasGeometry(gn, rel, nodeSizes, focusForceLayout, layoutNonce, graphScope);
-    if (sameCanvasGeometry(geometryRef.current, geometry)) {
+    if (sameCanvasGeometry(geometryRef.current, gn, rel, nodeSizes, focusForceLayout, layoutNonce, graphScope)) {
       setNodes((current) => updateCanvasLabels(current, gn));
       return;
     }
+    const geometry = canvasGeometry(gn, rel, nodeSizes, focusForceLayout, layoutNonce, graphScope);
     const scopeChanged = geometryRef.current !== null && geometryRef.current.scope !== graphScope;
     if (scopeChanged) {
       // Do not show the previous project's graph while its replacement is
@@ -356,12 +334,7 @@ export function GraphCanvas({
   }, [graphNodes]);
 
   const nodesForRender = useMemo(
-    () => nodes.map((n) => ({
-      ...n,
-      zIndex: 1,
-      style: { ...n.style, zIndex: 1 },
-      data: { ...n.data, focusDimmed: focusSet !== null && !focusSet.has(n.id) },
-    })),
+    () => projectCanvasNodes(nodes, focusSet),
     [nodes, focusSet],
   );
 
@@ -504,6 +477,8 @@ export function GraphCanvas({
       {/* ReactFlow canvas */}
       <div className="relative flex-1">
         <ReactFlow
+          className="or-g50-flow"
+          ariaLabelConfig={ariaLabelConfig}
           nodes={nodesForRender}
           edges={edgesForRender}
           onInit={(inst) => { rfRef.current = inst; }}

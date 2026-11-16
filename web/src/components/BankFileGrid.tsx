@@ -274,7 +274,7 @@ export function BankFileGrid<T extends BankFileGridItem>({
                   }
                 }}
               >
-                <p className="mb-1.5 font-mono font-semibold text-[var(--or-text)] text-sm">{item.qualified_id}</p>
+                <p className="mb-1.5 font-semibold text-[var(--or-text)] text-sm">{item.qualified_id}</p>
                 <p className="line-clamp-4 text-sm leading-relaxed text-[var(--or-muted)]">{item.content_preview}</p>
               </div>
             );

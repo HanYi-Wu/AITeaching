@@ -10,6 +10,7 @@ from solaire.knowledge_forge.storage import _get_default_slug
 from solaire.knowledge_forge.cache import _graph_root_key
 from solaire.knowledge_forge.storage import _load_meta
 from solaire.knowledge_forge.storage import _load_subject_state
+from solaire.knowledge_forge.storage import _load_subject_state_snapshot
 from solaire.knowledge_forge.paths import _safe_slug
 from solaire.knowledge_forge.storage import _save_meta
 from solaire.knowledge_forge.storage import _save_subject_state
@@ -30,7 +31,7 @@ def list_graphs(project_root: Path) -> list[dict[str, Any]]:
     meta = _load_meta(project_root)
     result = []
     for sm in meta.subjects:
-        state = _load_subject_state(project_root, sm.slug)
+        state = _load_subject_state_snapshot(project_root, sm.slug)
         result.append(
             {
                 "slug": sm.slug,
@@ -137,7 +138,7 @@ def export_graph(project_root: Path, slug: str) -> dict[str, Any]:
     subject = next((sm for sm in meta.subjects if sm.slug == slug), None)
     if subject is None:
         raise FileNotFoundError(f"科目图谱不存在: {slug!r}")
-    state = _load_subject_state(project_root, slug)
+    state = _load_subject_state_snapshot(project_root, slug)
     return {
         "kind": "solaire.graph",
         "version": 1,
@@ -181,11 +182,11 @@ def get_taxonomy(project_root: Path) -> dict[str, Any]:
     subjects_list = [sm.display_name for sm in meta.subjects]
     levels = meta.levels
     if slug:
-        state = _load_subject_state(project_root, slug)
+        state = _load_subject_state_snapshot(project_root, slug)
         if state.taxonomy.subjects:
-            subjects_list = state.taxonomy.subjects
+            subjects_list = list(state.taxonomy.subjects)
         if state.taxonomy.levels:
-            levels = state.taxonomy.levels
+            levels = list(state.taxonomy.levels)
     return {"subjects": subjects_list, "levels": levels}
 
 

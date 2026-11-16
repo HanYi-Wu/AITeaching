@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMetadataFilterDefinitions,
+  compileMetadataFilters,
   hasActiveMetadataFilters,
   matchesMetadataFilters,
   type MetadataFilters,
@@ -43,6 +44,42 @@ describe("metadataFilters", () => {
     expect(matchesMetadataFilters({ difficulty: "high" }, { difficulty: { kind: "enum", selected: [], includeMissing: true } })).toBe(false);
     expect(matchesMetadataFilters({}, { novelty: { kind: "number", includeMissing: true } })).toBe(true);
     expect(matchesMetadataFilters({ novelty: 0.5 }, { novelty: { kind: "number", includeMissing: true } })).toBe(false);
+  });
+
+  it("compiles the filter clauses once and preserves nested primitive matching", () => {
+    const filters: MetadataFilters = {
+      topic: { kind: "enum", selected: ["代数"] },
+      score: { kind: "number", min: "3", max: "5" },
+    };
+    const matcher = compileMetadataFilters(filters);
+
+    expect(matcher).not.toBeNull();
+    expect(matcher?.({ topic: [["几何", "代数"]], score: [[2, [4]], "5"] })).toBe(true);
+    expect(matcher?.({ topic: ["代数"], score: [2, "4"] })).toBe(false);
+    expect(compileMetadataFilters({ topic: { kind: "enum", selected: [] } })).toBeNull();
+    expect(compileMetadataFilters({ score: { kind: "number", min: "invalid" } })).toBeNull();
+  });
+
+  it("builds numeric bounds from large repeated-key inputs without spreading into Math.min/max", () => {
+    const items = Array.from({ length: 140_000 }, () => ({ metadata: { score: 0.5 } }));
+
+    expect(buildMetadataFilterDefinitions(items)).toEqual([
+      { key: "score", kind: "number", min: 0.5, max: 0.5 },
+    ]);
+  });
+
+  it("preserves signed zero when finding numeric bounds", () => {
+    const definitions = buildMetadataFilterDefinitions([
+      { metadata: { score: -0 } },
+      { metadata: { score: 0 } },
+    ]);
+    const numeric = definitions[0];
+
+    expect(numeric).toEqual({ key: "score", kind: "number", min: -0, max: 0 });
+    if (numeric?.kind === "number") {
+      expect(Object.is(numeric.min, -0)).toBe(true);
+      expect(Object.is(numeric.max, 0)).toBe(true);
+    }
   });
 
 });

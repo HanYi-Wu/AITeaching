@@ -102,16 +102,45 @@ def _build_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, 
     return out
 
 
+def _build_messages_request(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    system: str | None,
+    temperature: float,
+    max_tokens: int,
+    tools: list[dict[str, Any]] | None = None,
+    stream: bool = False,
+) -> dict[str, Any]:
+    """Compose shared Messages API options without changing per-call defaults."""
+    req: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if system:
+        req["system"] = system
+    if tools:
+        req["tools"] = tools
+        req["tool_choice"] = {"type": "auto"}
+    if stream:
+        req["stream"] = True
+    return req
+
+
 def _anthropic_response_to_chat(resp: Any) -> ChatResponse:
     text_parts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
-    reasoning: str | None = None
+    reasoning_parts: list[str] = []
+    has_reasoning = False
     for block in resp.content:
         btype = getattr(block, "type", None)
         if btype == "text":
             text_parts.append(getattr(block, "text", "") or "")
         elif btype == "thinking":
-            reasoning = (reasoning or "") + (getattr(block, "thinking", None) or "")
+            has_reasoning = True
+            reasoning_parts.append(getattr(block, "thinking", None) or "")
         elif btype == "tool_use":
             inp = getattr(block, "input", None) or {}
             tool_calls.append(
@@ -125,6 +154,7 @@ def _anthropic_response_to_chat(resp: Any) -> ChatResponse:
                 }
             )
     content = "".join(text_parts) if text_parts else None
+    reasoning = "".join(reasoning_parts) if has_reasoning else None
     sr = getattr(resp, "stop_reason", None)
     if sr == "tool_use":
         finish_reason = "tool_calls"
@@ -184,17 +214,14 @@ class AnthropicMessagesAdapter:
         amsg = _build_anthropic_messages(rest)
         atools = _openai_tools_to_anthropic(tools)
         mt = max_tokens if max_tokens is not None else 4096
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": mt,
-            "messages": amsg,
-            "temperature": temperature,
-        }
-        if system:
-            kwargs["system"] = system
-        if atools:
-            kwargs["tools"] = atools
-            kwargs["tool_choice"] = {"type": "auto"}
+        kwargs = _build_messages_request(
+            model=self.model,
+            messages=amsg,
+            system=system,
+            temperature=temperature,
+            max_tokens=mt,
+            tools=atools,
+        )
         resp = await self._client.messages.create(**kwargs)
         return _anthropic_response_to_chat(resp)
 
@@ -206,15 +233,14 @@ class AnthropicMessagesAdapter:
     ) -> AsyncIterator[str]:
         system, rest = _split_system(messages)
         amsg = _build_anthropic_messages(rest)
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": 4096,
-            "messages": amsg,
-            "temperature": temperature,
-            "stream": True,
-        }
-        if system:
-            kwargs["system"] = system
+        kwargs = _build_messages_request(
+            model=self.model,
+            messages=amsg,
+            system=system,
+            temperature=temperature,
+            max_tokens=4096,
+            stream=True,
+        )
         stream = await self._client.messages.create(**kwargs)
         async for event in stream:
             if getattr(event, "type", None) == "content_block_delta":
@@ -236,21 +262,18 @@ class AnthropicMessagesAdapter:
         amsg = _build_anthropic_messages(rest)
         atools = _openai_tools_to_anthropic(tools)
         mt = max_tokens if max_tokens is not None else 4096
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": mt,
-            "messages": amsg,
-            "temperature": temperature,
-            "stream": True,
-        }
-        if system:
-            kwargs["system"] = system
-        if atools:
-            kwargs["tools"] = atools
-            kwargs["tool_choice"] = {"type": "auto"}
+        kwargs = _build_messages_request(
+            model=self.model,
+            messages=amsg,
+            system=system,
+            temperature=temperature,
+            max_tokens=mt,
+            tools=atools,
+            stream=True,
+        )
         stream = await self._client.messages.create(**kwargs)
 
-        reasoning_buf = ""
+        reasoning_parts: list[str] = []
         async for event in stream:
             et = getattr(event, "type", None)
             if et == "content_block_delta":
@@ -262,7 +285,7 @@ class AnthropicMessagesAdapter:
                         yield ChatChunk(delta_content=piece)
                 elif dt == "thinking_delta":
                     piece = getattr(delta, "thinking", None) or ""
-                    reasoning_buf += str(piece)
+                    reasoning_parts.append(str(piece))
                     if piece:
                         yield ChatChunk(delta_reasoning=str(piece))
 
@@ -280,5 +303,5 @@ class AnthropicMessagesAdapter:
             finish_reason=fr,
             raw_tool_calls=assembled,
             usage=u if u else None,
-            accumulated_reasoning=reasoning_buf or chat_resp.reasoning_content or None,
+            accumulated_reasoning="".join(reasoning_parts) or chat_resp.reasoning_content or None,
         )

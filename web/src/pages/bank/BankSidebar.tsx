@@ -28,6 +28,7 @@ export interface BankSidebarProps {
   taggedItems: Record<string, ContentTag[]>;
   onOpenGraphNode?: (nodeId: string) => void;
   onRequestDelete: (item: BankListItem) => void;
+  loading?: boolean;
 }
 
 const MemoizedKatexPlainPreview = memo(KatexPlainPreview);
@@ -48,6 +49,7 @@ export const BankSidebar = memo(function BankSidebar({
   taggedItems,
   onOpenGraphNode,
   onRequestDelete,
+  loading = false,
 }: BankSidebarProps) {
   const { t } = useTranslation(["bank", "lib", "common"]);
   const selectionAnchors = useRef(new Map<string, string>());
@@ -77,7 +79,7 @@ export const BankSidebar = memo(function BankSidebar({
           {t("title")}
         </h2>
         <span className="or-pill rounded-full bg-[var(--or-block)] px-2.5 py-0.5 text-[13px] font-medium text-[var(--or-muted)]">
-          {filteredItems.length} 题
+          {loading ? t("common:loading") : `${filteredItems.length} 题`}
         </span>
       </div>
       <BankFolderExplorer
@@ -85,6 +87,7 @@ export const BankSidebar = memo(function BankSidebar({
         items={filteredItems}
         allItems={allItems}
         selectedIds={selectedExportIds}
+        loading={loading}
         onOpenItem={onOpenItem}
         onRefresh={onRefresh}
         onSelectIds={onSelectExportIds}
@@ -136,7 +139,7 @@ export const BankSidebar = memo(function BankSidebar({
                       <span className="or-pill shrink-0 rounded-full bg-[var(--or-block)] px-2.5 py-0.5 text-[13px] font-semibold text-[var(--or-muted)]">
                         {t(`lib:questionTypes.${it.type}`, { defaultValue: it.type })}
                       </span>
-                      <span className="min-w-0 flex-1 truncate font-mono text-[13px] font-normal leading-snug text-[var(--or-muted)]">
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-snug text-[var(--or-muted)]">
                         {it.qualified_id}
                       </span>
                     </div>

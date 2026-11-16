@@ -81,6 +81,7 @@
   "removeGroup": "Delete whole group",
   "remove": "Delete",
   "deleteQuestionTitle": "Delete question",
+  "deleteQuestionConfirm": "Are you sure you want to delete question {{id}}? This action cannot be undone.",
   "livePreview": "Preview",
   "previewEmpty": "Select a question to preview formulas and layout.",
   "sharedMaterialLabel": "Shared material",

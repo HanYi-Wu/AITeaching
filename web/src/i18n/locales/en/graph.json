@@ -147,5 +147,11 @@
   "defaultSubject": "Mathematics",
   "defaultLevel1": "Senior high",
   "defaultLevel2": "College entrance",
-  "rename": "Rename"
+  "rename": "Rename",
+  "canvasControlsAria": "Canvas controls",
+  "zoomInCanvas": "Zoom in",
+  "zoomOutCanvas": "Zoom out",
+  "fitViewCanvas": "Fit view",
+  "toggleInteractiveCanvas": "Toggle canvas interactivity",
+  "minimapAria": "Mini map"
 }

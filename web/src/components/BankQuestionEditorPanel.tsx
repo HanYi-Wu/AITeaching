@@ -10,8 +10,10 @@ import { ImagePlus, Plus, Minus } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { QUESTION_TYPE_OPTIONS, isChoiceQuestionType } from "../lib/questionTypes";
 import { ChoiceOptionsFields } from "./ChoiceOptionsFields";
+import { ImeInput } from "./ImeFields";
 import { LatexRichTextField } from "./LatexRichTextField";
 import { readAnswerLogic } from '../lib/answerLogic';
+import { extractQuestionNamespace, validateQuestionIdInCollection } from "../pages/bank/bankModel";
 import { AnswerRelationEditor } from './AnswerRelationEditor';
 import { KatexText } from './KatexText';
 import type {
@@ -23,9 +25,11 @@ import {
   getUnifiedUiInfo,
   giFieldId,
   parseGroupMemberIndex,
+  readDifficultyMetaSelectValue,
   removeLastGroupSubItem,
   resolveEditorSaveAction,
   updateCategoryMetaRow,
+  updateDifficultyMetaRow,
   updateGroupMaterial,
   updateGroupMemberField,
   updateGroupMemberOptions,
@@ -100,6 +104,7 @@ export function BankQuestionEditorPanel({
   panelMode = "full",
   detail: initialDetail,
   setDetail: initialSetDetail,
+  existingItems,
   draftStore,
   busy,
   editorTab,
@@ -150,6 +155,15 @@ export function BankQuestionEditorPanel({
   const memberIdx = useMemo(() => parseGroupMemberIndex(detail.question.id), [detail.question.id]);
 
   const { unifiedUi, innerTypeForItems } = useMemo(() => getUnifiedUiInfo(qg), [qg]);
+  const singleIdError = useMemo(() => {
+    if (qg) return null;
+    return validateQuestionIdInCollection({
+      items: existingItems ?? [],
+      subject: extractQuestionNamespace(detail.qualified_id),
+      rawId: detail.question.id,
+      excludeQualifiedId: detail.qualified_id,
+    });
+  }, [qg, existingItems, detail.qualified_id, detail.question.id]);
 
   const tabsValue =
     panelMode === "full" ? editorTab : panelMode === "form" ? "form" : "yaml";
@@ -170,7 +184,7 @@ export function BankQuestionEditorPanel({
       {!embedded ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--or-outline)] pb-4">
           <div className="min-w-0 flex-1">
-            <p className="break-all font-mono text-sm font-semibold text-[var(--or-text)] sm:text-base">{detail.qualified_id}</p>
+            <p className="break-all text-sm font-semibold text-[var(--or-text)] sm:text-base">{detail.qualified_id}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {onClose && (
@@ -193,7 +207,7 @@ export function BankQuestionEditorPanel({
             <button
               type="button"
               className="or-button or-button-primary or-pill inline-flex h-9 items-center justify-center rounded-full bg-[var(--or-primary)] px-4 text-sm font-medium text-[var(--or-on-primary)] shadow-sm hover:bg-[var(--or-primary)] active:bg-slate-950 transition-colors disabled:opacity-50"
-              disabled={busy}
+              disabled={busy || (resolveEditorSaveAction(panelMode, editorTab) !== "yaml" && Boolean(singleIdError))}
               onClick={() => void runSave()}
             >
               {t("components:bankEditor.save")}
@@ -245,16 +259,32 @@ export function BankQuestionEditorPanel({
             </button>
           </div>
           {!qg && (
-            <label className="block text-sm font-medium text-[var(--or-muted)]">
-              分类（可自定义）
-              <input
-                aria-label="题目分类"
-                className="or-input mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-sm text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
-                placeholder="例如：课前练习、单元复习、易错题"
-                value={metaRows.find((row) => row.key === 'category')?.value ?? ''}
-                onChange={(e) => setMetaRows(updateCategoryMetaRow(metaRows, e.target.value))}
-              />
-            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm font-medium text-[var(--or-muted)]">
+                分类（可自定义）
+                <input
+                  aria-label="题目分类"
+                  className="or-input mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-sm text-[var(--or-text)] placeholder:text-[var(--or-muted)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
+                  placeholder="例如：课前练习、单元复习、易错题"
+                  value={metaRows.find((row) => row.key === 'category')?.value ?? ''}
+                  onChange={(e) => setMetaRows(updateCategoryMetaRow(metaRows, e.target.value))}
+                />
+              </label>
+              <label className="block text-sm font-medium text-[var(--or-muted)]">
+                难度
+                <AppSelect
+                  aria-label="题目难度"
+                  className="or-select mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-2 text-sm text-[var(--or-text)] focus:border-[var(--or-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--or-focus)]"
+                  value={readDifficultyMetaSelectValue(metaRows)}
+                  onValueChange={(value) => setMetaRows(updateDifficultyMetaRow(metaRows, value))}
+                >
+                  <option value="__unset__">未设置</option>
+                  <option value="easy">简单</option>
+                  <option value="medium">中等</option>
+                  <option value="hard">较难</option>
+                </AppSelect>
+              </label>
+            </div>
           )}
           {qg ? (
             <>
@@ -264,7 +294,7 @@ export function BankQuestionEditorPanel({
               <label className="block text-sm font-medium text-[var(--or-muted)]">
                 {t("components:bankEditor.groupRootId")}
                 <input
-                  className="or-input mt-1 w-full cursor-not-allowed rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-3 py-2 font-mono text-sm text-[var(--or-muted)]"
+                  className="or-input mt-1 w-full cursor-not-allowed rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-3 py-2 text-sm text-[var(--or-muted)]"
                   readOnly
                   value={qg.id}
                 />
@@ -526,15 +556,35 @@ export function BankQuestionEditorPanel({
             </>
           ) : (
             <>
-              <label className="block text-sm font-medium text-[var(--or-muted)]">
-                {t("components:bankEditor.fieldId")}
-                <input
-                  className="mt-1 w-full rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-3 py-2 font-mono text-sm text-[var(--or-muted)] cursor-not-allowed"
-                  value={detail.question.id}
-                  readOnly
-                  title="题目编号创建后不可在此修改，避免与题库路径不一致"
-                />
-              </label>
+              <div>
+                <label className="block text-sm font-medium text-[var(--or-muted)]">
+                  {t("components:bankEditor.fieldId")}
+                  <ImeInput
+                    aria-label={t("components:bankEditor.fieldId")}
+                    aria-invalid={Boolean(singleIdError)}
+                    className={`mt-1 w-full rounded-xl border bg-[var(--or-card)] px-3 py-2 text-sm text-[var(--or-text)] focus:outline-none focus:ring-1 ${
+                      singleIdError
+                        ? "border-[var(--or-error)] focus:border-[var(--or-error)] focus:ring-[var(--or-error)]"
+                        : "border-[var(--or-outline)] focus:border-[var(--or-primary)] focus:ring-[var(--or-focus)]"
+                    }`}
+                    value={detail.question.id}
+                    onValueChange={(nextId) => {
+                      setDetail({
+                        ...detail,
+                        question: {
+                          ...detail.question,
+                          id: nextId,
+                        },
+                      });
+                    }}
+                  />
+                </label>
+                {singleIdError ? (
+                  <p role="alert" className="mt-1 text-xs font-medium text-[var(--or-error)]">
+                    {singleIdError}
+                  </p>
+                ) : null}
+              </div>
               <label className="block text-sm font-medium text-[var(--or-muted)]">
                 {t("components:bankEditor.fieldType")}
                 <AppSelect

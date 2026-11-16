@@ -2,12 +2,12 @@ import { useDeferredValue, useMemo } from "react";
 import { collapseGroupRowsForList } from "../../lib/groupQuestions";
 import {
   buildMetadataFilterDefinitions,
+  compileMetadataFilters,
   hasActiveMetadataFilters,
   type MetadataFilters,
 } from "../../lib/metadataFilters";
 import type { QuestionRow } from "../../types/compose";
 import { questionTypeMatchesSection } from "./composeHelpers";
-import { compileMetadataFilters } from "./bank-search/metadataFilterMatcher";
 import { getQuestionSearchText } from "./bank-search/questionSearchIndex";
 
 /** Keep metadata choices scoped to the subject, collection, and question type. */

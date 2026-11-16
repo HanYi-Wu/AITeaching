@@ -1,0 +1,98 @@
+{
+  "title": "课堂工具",
+  "subtitle": "随机抽学号与课堂倒计时，支持切换标签页后台保持运行",
+  "tabs": {
+    "rollCall": "抽学号",
+    "timer": "计时器"
+  },
+  "badges": {
+    "timerRunning": "计时中 {{time}}",
+    "timerPaused": "已暂停 {{time}}",
+    "timerFinished": "计时结束"
+  },
+  "rollCall": {
+    "title": "随机抽学号",
+    "subtitle": "公平随机抽取，支持学号区间、任教班级名单与自定义名单",
+    "placeholder": "?",
+    "rolling": "抽取中…",
+    "resultHintNumber": "学号 #{{label}}",
+    "resultHintClass": "{{className}}",
+    "resultHintCustom": "自定义名单",
+    "sourceLabel": "抽取来源",
+    "sources": {
+      "range": "学号区间",
+      "class": "班级名单",
+      "custom": "自定义名单"
+    },
+    "rangeFrom": "从",
+    "rangeTo": "至",
+    "rangeUnit": "号",
+    "classSelectLabel": "选择任教班级",
+    "classLoading": "正在加载班级名单…",
+    "classEmpty": "当前账号暂无任教班级或名单不可用，可改用学号区间或自定义名单",
+    "classNoStudents": "该班级暂无启用学生，请选择其他班级或改用其他来源",
+    "classRetry": "刷新名单",
+    "classOptionCount": "{{name}}（{{count}}人）",
+    "customLabel": "输入名单或学号（换行、逗号或空格分隔）",
+    "customPlaceholder": "例如：\n张一\n李二\n2024001 王三",
+    "customCount": "共识别 {{count}} 项",
+    "drawCountLabel": "抽取人数",
+    "drawCountOption": "{{count}} 人",
+    "noRepeat": "不重复抽取",
+    "noRepeatHint": "开启后已抽中项在本轮不会重复出现",
+    "soundEnabled": "提示音效",
+    "remainingBadge": "剩余 {{remaining}} / {{total}}",
+    "pickedBadge": "已抽 {{count}}",
+    "startDraw": "开始抽取",
+    "redraw": "再抽一次",
+    "resetPool": "重置状态",
+    "exhaustedWarning": "所有候选人已抽取完毕，请点击“重置状态”开始新一轮，或关闭“不重复抽取”。",
+    "emptyPoolWarning": "请至少配置 1 个有效学号或名单成员后再抽取。",
+    "historyTitle": "本轮抽取记录",
+    "historyEmpty": "暂无抽取记录，点击“开始抽取”即可开始。",
+    "historyClear": "清空记录",
+    "historyRound": "第 {{round}} 次",
+    "multiResultTitle": "本次抽中（{{count}} 人）",
+    "keyboardHint": "快捷键：Enter / Space 抽取"
+  },
+  "timer": {
+    "title": "课堂倒计时",
+    "subtitle": "高精度时钟同步，剩 30 秒与最后 3 秒自动声音提醒",
+    "hours": "时",
+    "minutes": "分",
+    "seconds": "秒",
+    "hoursLabel": "小时",
+    "minutesLabel": "分钟",
+    "secondsLabel": "秒钟",
+    "increase": "增加{{unit}}",
+    "decrease": "减少{{unit}}",
+    "fromLabel": "从",
+    "presetsLabel": "常用时长",
+    "presetMinutes": "{{count}} 分钟",
+    "status": {
+      "stopped": "就绪",
+      "running": "计时中",
+      "paused": "已暂停",
+      "finished": "时间到"
+    },
+    "actions": {
+      "start": "开始计时",
+      "pause": "暂停计时",
+      "resume": "继续计时",
+      "restart": "重新计时",
+      "reset": "重置",
+      "focusEnter": "专注大屏",
+      "focusExit": "退出大屏"
+    },
+    "sound": {
+      "on": "提示音开启",
+      "off": "已静音",
+      "ruleHint": "剩 30 秒与 3-2-1 秒自动提示，结束连响三声"
+    },
+    "warnings": {
+      "zeroDuration": "请设置大于 0 秒的倒计时时长。",
+      "finishedBanner": "倒计时结束！"
+    },
+    "shortcutsHint": "快捷键：Space 开始/暂停 · R 重置"
+  }
+}

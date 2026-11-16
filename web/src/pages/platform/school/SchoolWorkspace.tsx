@@ -62,7 +62,7 @@ export function SchoolWorkspace({ user, onLogout, onError, onProfileUpdated }: P
     { id: "ai", label: "AI", permission: "school.ai.read" },
     { id: "audit", label: "操作日志", permission: "school.audit.read" },
     { id: "access", label: "权限管理", permission: "school.access.read" },
-    { id: "settings", label: "参数字典", permission: "school.settings.read" },
+    { id: "settings", label: "学科与设置", permission: "school.settings.read" },
     { id: "activity", label: "管理活动", permission: "school.activity.read" },
   ];
   const pages = pageOptions.filter((page) => canManage(user, page.permission));

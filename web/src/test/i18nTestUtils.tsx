@@ -19,6 +19,7 @@ const namespaces = [
   "agent",
   "components",
   "lib",
+  "tools",
 ] as const;
 
 export async function setupTestI18n(lng: "zh" | "en" = "zh") {

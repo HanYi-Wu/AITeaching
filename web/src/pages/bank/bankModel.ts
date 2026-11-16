@@ -219,3 +219,231 @@ export function buildBankFolderIndex<T extends { qualified_id: string }>(
 
   return { children, questions, knownFolders };
 }
+
+const CN_DIGITS = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"] as const;
+const CN_DIGIT_VALUES: Record<string, number> = {
+  零: 0,
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+
+/** Converts positive integers (1-999+) to standard Chinese ordinal text without English characters. */
+export function formatChineseQuestionNumber(n: number): string {
+  const num = Math.max(1, Math.floor(n));
+  if (num < 10) {
+    return `第${CN_DIGITS[num]}题`;
+  }
+  if (num < 100) {
+    const tens = Math.floor(num / 10);
+    const ones = num % 10;
+    const tensText = tens === 1 ? "十" : `${CN_DIGITS[tens]}十`;
+    return ones === 0 ? `第${tensText}题` : `第${tensText}${CN_DIGITS[ones]}题`;
+  }
+  if (num < 1000) {
+    const hundreds = Math.floor(num / 100);
+    const rem = num % 100;
+    if (rem === 0) {
+      return `第${CN_DIGITS[hundreds]}百题`;
+    }
+    if (rem < 10) {
+      return `第${CN_DIGITS[hundreds]}百零${CN_DIGITS[rem]}题`;
+    }
+    const tens = Math.floor(rem / 10);
+    const ones = rem % 10;
+    const mid = `${CN_DIGITS[hundreds]}百${CN_DIGITS[tens]}十${ones === 0 ? "" : CN_DIGITS[ones]}`;
+    return `第${mid}题`;
+  }
+  return `第${num}题`;
+}
+
+function parseChinesePositiveInt(raw: string): number | null {
+  const s = raw.trim();
+  if (!s) return null;
+  if (/^\d+$/.test(s)) {
+    const parsed = Number.parseInt(s, 10);
+    return parsed > 0 ? parsed : null;
+  }
+  if (!/^[一二三四五六七八九十百零两]+$/.test(s)) return null;
+  let total = 0;
+  let current = 0;
+  for (const ch of s) {
+    if (ch in CN_DIGIT_VALUES) {
+      current = CN_DIGIT_VALUES[ch]!;
+    } else if (ch === "十") {
+      total += (current === 0 ? 1 : current) * 10;
+      current = 0;
+    } else if (ch === "百") {
+      if (current === 0) return null;
+      total += current * 100;
+      current = 0;
+    }
+  }
+  const value = total + current;
+  return value > 0 ? value : null;
+}
+
+export function parseQuestionSequenceNumber(id: string): number | null {
+  const trimmed = id.trim();
+  const wrapped = trimmed.match(/^第(.+)题$/);
+  if (wrapped) {
+    return parseChinesePositiveInt(wrapped[1]!);
+  }
+  return /^\d+$/.test(trimmed) ? parseChinesePositiveInt(trimmed) : null;
+}
+
+export function extractQuestionNamespace(qualifiedId: string): string {
+  const slashIdx = qualifiedId.lastIndexOf("/");
+  return slashIdx >= 0 ? qualifiedId.slice(0, slashIdx) : "";
+}
+
+export function itemMatchesNamespace(
+  item: Pick<BankListItem, "qualified_id" | "subject" | "collection">,
+  namespaceOrSubject: string,
+  collection?: string,
+): boolean {
+  const subj = namespaceOrSubject.trim();
+  const coll = collection?.trim() ?? "";
+  const ns = collection !== undefined ? (subj && coll ? `${subj}/${coll}` : subj) : subj;
+  if (!ns) return true;
+  if (item.qualified_id.startsWith(`${ns}/`) || item.collection === ns) {
+    return true;
+  }
+  if (collection !== undefined) {
+    return (item.subject ?? "") === subj && (item.collection === coll || item.collection === ns);
+  }
+  return false;
+}
+
+export function validateQuestionIdFormat(rawId: string): string | null {
+  const qid = rawId.trim();
+  if (!qid) return "题号不能为空";
+  if (qid.includes("/") || qid.includes("\\")) return "题号不能包含斜杠（/ 或 \\）";
+  return null;
+}
+
+export function findDuplicateQuestionItem(
+  items: readonly Pick<BankListItem, "id" | "qualified_id" | "subject" | "collection" | "group_member_qualified_ids">[],
+  namespaceOrSubject: string,
+  collectionOrUndefined: string | undefined,
+  rawQid: string,
+  excludeQualifiedId?: string | null,
+): Pick<BankListItem, "id" | "qualified_id" | "subject" | "collection" | "group_member_qualified_ids"> | null {
+  const qid = rawQid.trim();
+  if (!qid) return null;
+  const qidFold = qid.toLocaleLowerCase();
+  const subj = namespaceOrSubject.trim();
+  const coll = collectionOrUndefined?.trim() ?? "";
+  const ns = collectionOrUndefined !== undefined ? (subj && coll ? `${subj}/${coll}` : subj) : subj;
+  const fullFold = (ns ? `${ns}/${qid}` : qid).toLocaleLowerCase();
+
+  for (const item of items) {
+    if (excludeQualifiedId && item.qualified_id === excludeQualifiedId) {
+      continue;
+    }
+    const inSameScope = itemMatchesNamespace(item, namespaceOrSubject, collectionOrUndefined);
+    if (!inSameScope && item.qualified_id.toLocaleLowerCase() !== fullFold) {
+      continue;
+    }
+    if (
+      item.id.trim().toLocaleLowerCase() === qidFold ||
+      item.qualified_id.toLocaleLowerCase() === fullFold
+    ) {
+      return item;
+    }
+    if (
+      item.group_member_qualified_ids?.some(
+        (memberQid) => memberQid.split("/").at(-1)?.trim().toLocaleLowerCase() === qidFold,
+      )
+    ) {
+      return item;
+    }
+  }
+  return null;
+}
+
+export function validateQuestionIdInCollection(params: {
+  items: readonly Pick<BankListItem, "id" | "qualified_id" | "subject" | "collection" | "group_member_qualified_ids">[];
+  subject: string;
+  collection?: string;
+  rawId: string;
+  excludeQualifiedId?: string | null;
+  groupMemberCount?: number;
+}): string | null {
+  const formatError = validateQuestionIdFormat(params.rawId);
+  if (formatError) return formatError;
+  const qid = params.rawId.trim();
+  const dup = findDuplicateQuestionItem(
+    params.items,
+    params.subject,
+    params.collection,
+    qid,
+    params.excludeQualifiedId,
+  );
+  if (dup) {
+    return `题号“${qid}”已存在，请使用其他题号`;
+  }
+  if ((params.groupMemberCount ?? 0) > 0) {
+    for (let idx = 1; idx <= (params.groupMemberCount ?? 0); idx += 1) {
+      const memberId = `${qid}__${String(idx).padStart(2, "0")}`;
+      if (
+        findDuplicateQuestionItem(
+          params.items,
+          params.subject,
+          params.collection,
+          memberId,
+          params.excludeQualifiedId,
+        )
+      ) {
+        return `题组编号“${qid}”的小题标识“${memberId}”与现有题号冲突`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Generates the next sequential Chinese question ID (第一题, 第二题, ...)
+ * within the target subject + collection scope without colliding with existing items.
+ */
+export function nextSequentialQuestionId(
+  items: readonly Pick<BankListItem, "id" | "qualified_id" | "subject" | "collection">[],
+  subject: string,
+  collection: string,
+): string {
+  const subj = subject.trim();
+  const coll = collection.trim();
+  const targetNs = subj && coll ? `${subj}/${coll}` : "";
+
+  const scoped = targetNs ? items.filter((item) => itemMatchesNamespace(item, subj, coll)) : items;
+
+  const usedIds = new Set(scoped.map((item) => item.id.trim().toLocaleLowerCase()));
+  let maxNumber = 0;
+  for (const item of scoped) {
+    const n = parseQuestionSequenceNumber(item.id);
+    if (n !== null && n > maxNumber) {
+      maxNumber = n;
+    }
+  }
+
+  let candidateIndex = Math.max(maxNumber, scoped.length) + 1;
+  while (candidateIndex < 100_000) {
+    const candidate = formatChineseQuestionNumber(candidateIndex);
+    const fullTarget = (targetNs ? `${targetNs}/${candidate}` : candidate).toLocaleLowerCase();
+    if (
+      !usedIds.has(candidate.toLocaleLowerCase()) &&
+      !items.some((item) => item.qualified_id.toLocaleLowerCase() === fullTarget)
+    ) {
+      return candidate;
+    }
+    candidateIndex += 1;
+  }
+  return formatChineseQuestionNumber(scoped.length + 1);
+}

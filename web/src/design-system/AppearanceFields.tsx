@@ -20,11 +20,8 @@ export function AppearanceFields({ value, onChange }: { value: Appearance; onCha
   ] as const;
   return (
     <div className="or-appearance-fields">
-      <fieldset aria-description={en ? "Live preview · Auto-saved" : "实时生效 · 自动保存"}>
-        <legend className="mb-2.5 w-full text-sm font-medium">
-          <span>{en ? "Appearance" : "颜色模式"}</span>
-          <span className="float-right font-normal text-[var(--or-muted)]" aria-hidden="true">{en ? "Live preview · Auto-saved" : "实时生效 · 自动保存"}</span>
-        </legend>
+      <fieldset>
+        <legend className="mb-2.5 text-sm font-medium">{en ? "Appearance" : "颜色模式"}</legend>
         <div className="or-mode-options" style={{ "--selected-index": modes.findIndex((item) => item.id === value.mode) } as CSSProperties}>
           <span className="or-mode-indicator" aria-hidden="true" />
           {modes.map(({ id, label, Icon }) => (

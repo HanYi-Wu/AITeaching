@@ -12,6 +12,12 @@ def _seg(ax: float, ay: float, bx: float, by: float) -> str:
     return f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}"'
 
 
+def _seg_formatted(
+    ax: str, ay: str, bx: str, by: str
+) -> str:
+    return f'<line x1="{ax}" y1="{ay}" x2="{bx}" y2="{by}"'
+
+
 def render_geometry_svg(
     model: Geometry2DModel,
     width: float,
@@ -26,6 +32,9 @@ def render_geometry_svg(
 
     result = solve_geometry(model.constructions, width, height, rng)
     pts = result.points
+    point_coordinates = {
+        name: (f"{x:.2f}", f"{y:.2f}") for name, (x, y) in pts.items()
+    }
     constructions = model.constructions
 
     parts: list[str] = []
@@ -49,10 +58,10 @@ def render_geometry_svg(
     if tri_nodes and len(tri_nodes) == 3:
         a, b, c = tri_nodes
         for u, v in ((a, b), (b, c), (c, a)):
-            x1, y1 = pts[u]
-            x2, y2 = pts[v]
+            x1, y1 = point_coordinates[u]
+            x2, y2 = point_coordinates[v]
             parts.append(
-                f'{_seg(x1, y1, x2, y2)} stroke="#222" stroke-width="{sw:.2f}" fill="none"/>'
+                f'{_seg_formatted(x1, y1, x2, y2)} stroke="#222" stroke-width="{sw:.2f}" fill="none"/>'
             )
 
     # Draw construction lines (classic line op)
@@ -62,8 +71,10 @@ def render_geometry_svg(
         dash = ' stroke-dasharray="6,4"' if st == "dashed" else ""
         x1, y1 = pts[src[0]]
         x2, y2 = pts[src[1]]
+        x1_text, y1_text = point_coordinates[src[0]]
+        x2_text, y2_text = point_coordinates[src[1]]
         parts.append(
-            f'{_seg(x1, y1, x2, y2)} stroke="#444" stroke-width="{sw:.2f}"{dash} fill="none"/>'
+            f'{_seg_formatted(x1_text, y1_text, x2_text, y2_text)} stroke="#444" stroke-width="{sw:.2f}"{dash} fill="none"/>'
         )
         lab = item.get("label")
         if isinstance(lab, dict) and "text" in lab:
@@ -98,22 +109,24 @@ def render_geometry_svg(
                 )
         elif kind == "circle":
             cx, cy, r = d["cx"], d["cy"], d["r"]
+            cx_text, cy_text = f"{cx:.2f}", f"{cy:.2f}"
             fill = d.get("fill")
             fill_attr = ' fill="none"' if fill is None else f' fill="{escape_text(str(fill))}"'
             parts.append(
-                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r:.2f}" stroke="#1d3557" stroke-width="{sw:.2f}"{fill_attr}/>'
+                f'<circle cx="{cx_text}" cy="{cy_text}" r="{r:.2f}" stroke="#1d3557" stroke-width="{sw:.2f}"{fill_attr}/>'
             )
         elif kind == "ellipse":
             cx, cy = d["cx"], d["cy"]
+            cx_text, cy_text = f"{cx:.2f}", f"{cy:.2f}"
             rx, ry = d["rx"], d["ry"]
             rot = float(d.get("rotation_deg", 0))
             fill = d.get("fill")
             fill_attr = ' fill="none"' if fill is None else f' fill="{escape_text(str(fill))}"'
             tf = ""
             if abs(rot) > 1e-6:
-                tf = f' transform="rotate({rot:.2f} {cx:.2f} {cy:.2f})"'
+                tf = f' transform="rotate({rot:.2f} {cx_text} {cy_text})"'
             parts.append(
-                f'<ellipse cx="{cx:.2f}" cy="{cy:.2f}" rx="{rx:.2f}" ry="{ry:.2f}" '
+                f'<ellipse cx="{cx_text}" cy="{cy_text}" rx="{rx:.2f}" ry="{ry:.2f}" '
                 f'stroke="#6a4c93" stroke-width="{sw:.2f}"{fill_attr}{tf}/>'
             )
 
@@ -123,8 +136,9 @@ def render_geometry_svg(
             for n in item["nodes"]:
                 n = str(n)
                 x, y = pts[n]
+                x_text, y_text = point_coordinates[n]
                 parts.append(
-                    f'<circle cx="{x:.2f}" cy="{y:.2f}" r="3" fill="#111"/>'
+                    f'<circle cx="{x_text}" cy="{y_text}" r="3" fill="#111"/>'
                 )
                 hint = (item.get("label") or {}).get(n)
                 if hint:
@@ -141,8 +155,9 @@ def render_geometry_svg(
         elif item.get("op") == "in_line":
             pid = str(item["id"])
             x, y = pts[pid]
+            x_text, y_text = point_coordinates[pid]
             parts.append(
-                f'<circle cx="{x:.2f}" cy="{y:.2f}" r="2.5" fill="#c00"/>'
+                f'<circle cx="{x_text}" cy="{y_text}" r="2.5" fill="#c00"/>'
             )
             lab = item.get("label")
             if lab:
@@ -156,8 +171,9 @@ def render_geometry_svg(
     for name, (x, y) in pts.items():
         if name in tri_set or name in in_line_ids:
             continue
+        x_text, y_text = point_coordinates[name]
         parts.append(
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="2.8" fill="#0d47a1" stroke="#111" stroke-width="0.4"/>'
+            f'<circle cx="{x_text}" cy="{y_text}" r="2.8" fill="#0d47a1" stroke="#111" stroke-width="0.4"/>'
         )
         parts.append(
             f'<text x="{x + 7:.2f}" y="{y - 7:.2f}" font-size="{fs * 0.9:.1f}" '

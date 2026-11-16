@@ -16,7 +16,6 @@ import {
 } from "../../api/client";
 import {
   analyzePlatformPaper,
-  listPlatformPapers,
   type PlatformPaperAnalysis,
   type PlatformPaperRecord,
 } from "../../platform/auth";
@@ -63,6 +62,14 @@ import { AnalysisDiagnosisPanel } from "./AnalysisDiagnosisPanel";
 import { AnalysisResultView } from "./AnalysisResultView";
 import { AnalysisFoldersPanel, ANALYSIS_ITEMS_MIME, type AnalysisFolderFilter } from "./AnalysisFoldersPanel";
 import { useAnalysisFolders } from "./useAnalysisFolders";
+import {
+  fetchAllOnlinePapers,
+  fetchAnalysisExams,
+  invalidateAnalysisPrefetch,
+  normalizeAnalysisProjectId,
+  peekAnalysisPrefetch,
+  peekInFlightAnalysisStreams,
+} from "./analysisPrefetch";
 import { G52StatCard } from "../../ui-redesign/g52/G52UIComponents";
 import "../../ui-redesign/g52/g52-design-tokens.css";
 import { Select as AppSelect } from "../../components/ui/select";
@@ -72,34 +79,38 @@ import "./analysisDashboard.css";
 // Main component
 // ---------------------------------------------------------------------------
 
-function normalizeAnalysisProjectId(projectId: string | null | undefined): string | null {
-  const normalized = projectId?.trim().replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
-  return normalized || null;
-}
-
 export function AnalysisWorkspace({
   onOpenExamInCompose,
   allowHostTools = false,
   ownerId = null,
   projectId = null,
+  active = true,
 }: {
   onOpenExamInCompose?: (examId: string) => void;
   allowHostTools?: boolean;
   ownerId?: string | null;
   projectId?: string | null;
+  active?: boolean;
 } = {}) {
   const { t } = useTranslation("analysis");
-  const [exams, setExams] = useState<ExamResult[]>([]);
+  const initialPrefetch = peekAnalysisPrefetch(ownerId, projectId);
+  const [exams, setExams] = useState<ExamResult[]>(() => initialPrefetch?.exams ?? []);
   const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
   const [examSummary, setExamSummary] = useState<ExamSummary | null>(null);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<ScoreAnalysis | null>(null);
-  const [onlinePapers, setOnlinePapers] = useState<PlatformPaperRecord[]>([]);
+  const [onlinePapers, setOnlinePapers] = useState<PlatformPaperRecord[]>(() => initialPrefetch?.onlinePapers ?? []);
   const [selectedOnlinePaperId, setSelectedOnlinePaperId] = useState<string | null>(null);
   const [onlineAnalysis, setOnlineAnalysis] = useState<PlatformPaperAnalysis | null>(null);
   const [chartReplay, setChartReplay] = useState(0);
-  const [loadingExams, setLoadingExams] = useState(false);
-  const [loadingOnlinePapers, setLoadingOnlinePapers] = useState(false);
+  const [loadingExams, setLoadingExams] = useState(() => !(initialPrefetch?.examsLoaded ?? false));
+  const [loadingOnlinePapers, setLoadingOnlinePapers] = useState(
+    () => !(initialPrefetch?.onlinePapersLoaded ?? false),
+  );
+  const [hasLoadedExams, setHasLoadedExams] = useState(() => Boolean(initialPrefetch?.examsLoaded));
+  const [hasLoadedOnlinePapers, setHasLoadedOnlinePapers] = useState(
+    () => Boolean(initialPrefetch?.onlinePapersLoaded),
+  );
   const [loadingOnlineAnalysis, setLoadingOnlineAnalysis] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [browsePdfBusyId, setBrowsePdfBusyId] = useState<string | null>(null);
@@ -151,15 +162,27 @@ export function AnalysisWorkspace({
   const allowHostToolsRef = useRef(allowHostTools);
   allowHostToolsRef.current = allowHostTools;
   const { setPageContext } = useAgentActions();
+  const ownerIdRef = useRef(ownerId);
+  ownerIdRef.current = ownerId;
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  const prevActiveRef = useRef(active);
 
-  const loadExams = useCallback(async () => {
+  const loadExams = useCallback(async (options?: { reusePrefetch?: boolean }) => {
     const requestId = ++examListRequestIdRef.current;
     const scopeKey = ownerProjectScopeKey;
+    const reusePrefetch = Boolean(options && typeof options === "object" && options.reusePrefetch);
     setLoadingExams(true);
     try {
-      const data = await apiGet<{ exams: ExamResult[] }>("/api/exams/analysis-list");
+      const inFlight = reusePrefetch
+        ? peekInFlightAnalysisStreams(ownerIdRef.current, projectIdRef.current)?.examsPromise ?? null
+        : null;
+      if (!reusePrefetch) {
+        invalidateAnalysisPrefetch();
+      }
+      const list = await (inFlight ?? fetchAnalysisExams());
       if (examListRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
-        setExams(data.exams ?? []);
+        setExams(list);
       }
     } catch (e) {
       if (examListRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
@@ -168,6 +191,7 @@ export function AnalysisWorkspace({
     } finally {
       if (examListRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
         setLoadingExams(false);
+        setHasLoadedExams(true);
       }
     }
   }, [ownerProjectScopeKey]);
@@ -236,8 +260,10 @@ export function AnalysisWorkspace({
     setImportError(null);
     setImportWarnings([]);
     setImporting(false);
-    setLoadingExams(false);
-    setLoadingOnlinePapers(false);
+    setLoadingExams(true);
+    setLoadingOnlinePapers(true);
+    setHasLoadedExams(false);
+    setHasLoadedOnlinePapers(false);
     setLoadingOnlineAnalysis(false);
     setLoadingDetail(false);
     setAnalysisFolderFilter("all");
@@ -258,6 +284,7 @@ export function AnalysisWorkspace({
   }, [metadataScopeKey, allowHostTools]);
 
   useEffect(() => {
+    if (!active) return;
     const onlinePaper = onlinePapers.find((paper) => paper.paper_id === selectedOnlinePaperId);
     if (ownerProjectScopeReady && selectedOnlinePaperId && onlinePaper) {
       const submitted = onlinePaper.submitted_student_count ?? onlineAnalysis?.summary.completed_students ?? 0;
@@ -282,20 +309,21 @@ export function AnalysisWorkspace({
       });
     }
     return () => setPageContext(null);
-  }, [ownerProjectScopeReady, selectedExamId, examSummary, selectedOnlinePaperId, onlinePapers, onlineAnalysis, setPageContext, t]);
+  }, [active, ownerProjectScopeReady, selectedExamId, examSummary, selectedOnlinePaperId, onlinePapers, onlineAnalysis, setPageContext, t]);
 
-  const loadOnlinePapers = useCallback(async () => {
+  const loadOnlinePapers = useCallback(async (options?: { reusePrefetch?: boolean }) => {
     const requestId = ++onlinePapersRequestIdRef.current;
     const scopeKey = ownerProjectScopeKey;
+    const reusePrefetch = Boolean(options && typeof options === "object" && options.reusePrefetch);
     setLoadingOnlinePapers(true);
     try {
-      const first = await listPlatformPapers({ deliveryMode: "all", status: "all", page: 1, pageSize: 100 });
-      const papers = [...(first.papers ?? [])];
-      for (let page = 2; page <= (first.total_pages ?? 1); page += 1) {
-        if (onlinePapersRequestIdRef.current !== requestId || ownerProjectScopeKeyRef.current !== scopeKey) return;
-        const next = await listPlatformPapers({ deliveryMode: "all", status: "all", page, pageSize: 100 });
-        papers.push(...(next.papers ?? []));
+      const inFlight = reusePrefetch
+        ? peekInFlightAnalysisStreams(ownerIdRef.current, projectIdRef.current)?.onlinePapersPromise ?? null
+        : null;
+      if (!reusePrefetch) {
+        invalidateAnalysisPrefetch();
       }
+      const papers = await (inFlight ?? fetchAllOnlinePapers());
       if (onlinePapersRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
         setOnlinePapers(papers);
       }
@@ -306,14 +334,43 @@ export function AnalysisWorkspace({
     } finally {
       if (onlinePapersRequestIdRef.current === requestId && ownerProjectScopeKeyRef.current === scopeKey) {
         setLoadingOnlinePapers(false);
+        setHasLoadedOnlinePapers(true);
       }
     }
   }, [ownerProjectScopeKey]);
 
   useEffect(() => {
-    void loadExams();
-    void loadOnlinePapers();
+    const snapshot = peekAnalysisPrefetch(ownerIdRef.current, projectIdRef.current);
+    if (snapshot) {
+      if (snapshot.examsLoaded) {
+        setExams(snapshot.exams ?? []);
+        setLoadingExams(false);
+        setHasLoadedExams(true);
+      } else {
+        void loadExams({ reusePrefetch: true });
+      }
+      if (snapshot.onlinePapersLoaded) {
+        setOnlinePapers(snapshot.onlinePapers ?? []);
+        setLoadingOnlinePapers(false);
+        setHasLoadedOnlinePapers(true);
+      } else {
+        void loadOnlinePapers({ reusePrefetch: true });
+      }
+      return;
+    }
+    void loadExams({ reusePrefetch: true });
+    void loadOnlinePapers({ reusePrefetch: true });
   }, [loadExams, loadOnlinePapers]);
+
+  useEffect(() => {
+    const wasActive = prevActiveRef.current;
+    prevActiveRef.current = active;
+    if (!wasActive && active) {
+      void loadExams();
+      void loadOnlinePapers();
+      void analysisFolders.refresh();
+    }
+  }, [active, loadExams, loadOnlinePapers, analysisFolders.refresh]);
 
   const selectedOnlinePaper = useMemo(
     () => onlinePapers.find((paper) => paper.paper_id === selectedOnlinePaperId) ?? null,
@@ -383,6 +440,11 @@ export function AnalysisWorkspace({
     ...filteredOnlinePapers.map((paper) => `paper:${paper.paper_id}`),
     ...filteredLegacyExams.map((exam) => `exam:${exam.exam_id}`),
   ], [filteredLegacyExams, filteredOnlinePapers]);
+  const isInitialListLoading =
+    (!hasLoadedExams || !hasLoadedOnlinePapers)
+    && filteredOnlinePapers.length === 0
+    && filteredLegacyExams.length === 0
+    && (loadingExams || loadingOnlinePapers);
   const selectAnalysisRange = (itemId: string) => {
     setSelectedAnalysisItemIds((current) => {
       const next = rangeSelection(current, filteredAnalysisItemIds, analysisSelectionAnchor.current, itemId);
@@ -919,6 +981,7 @@ export function AnalysisWorkspace({
             selectedItemIds={selectedAnalysisItemIds}
             busy={analysisFolders.busy}
             loading={analysisFolders.loading}
+            countsLoading={isInitialListLoading}
             error={analysisFolders.error}
             onCreateFolder={analysisFolders.createFolder}
             onRenameFolder={analysisFolders.renameFolder}
@@ -928,10 +991,23 @@ export function AnalysisWorkspace({
           <div>
             <div className="mb-2 flex items-center justify-between gap-2 px-1">
               <h4 className="text-xs font-semibold text-[var(--or-muted)]">考试记录与分析</h4>
-              {loadingOnlinePapers || loadingExams ? <RefreshCw className="h-3 w-3 animate-spin text-[var(--or-muted)]" /> : null}
+              {!isInitialListLoading && (loadingOnlinePapers || loadingExams) ? (
+                <RefreshCw className="h-3 w-3 animate-spin text-[var(--or-muted)]" />
+              ) : null}
             </div>
             {filteredOnlinePapers.length === 0 && filteredLegacyExams.length === 0 ? (
-              <p className="px-2 py-4 text-center text-xs text-[var(--or-muted)]">暂无考试记录</p>
+              isInitialListLoading ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="flex items-center justify-center gap-2 px-2 py-6 text-xs text-[var(--or-muted)]"
+                >
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  <span>{t("loading")}</span>
+                </div>
+              ) : (
+                <p className="px-2 py-4 text-center text-xs text-[var(--or-muted)]">暂无考试记录</p>
+              )
             ) : (
               <div className="space-y-1">
                 {filteredOnlinePapers.map((paper) => {

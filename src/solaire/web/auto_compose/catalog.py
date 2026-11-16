@@ -89,7 +89,7 @@ def _difficulty(metadata: object) -> str:
     labels = {
         "easy": "easy", "low": "easy", "低": "easy", "简单": "easy", "容易": "easy",
         "medium": "medium", "中": "medium", "中等": "medium", "适中": "medium",
-        "hard": "hard", "high": "hard", "高": "hard", "难": "hard", "困难": "hard",
+        "hard": "hard", "high": "hard", "高": "hard", "难": "hard", "困难": "hard", "较难": "hard",
     }
     if value in labels:
         return labels[value]

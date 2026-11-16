@@ -220,4 +220,35 @@ describe("AutoComposeDialog", () => {
       type_distribution: { single_choice: 1, fill: 2 },
     }));
   });
+
+  it("offers simple easy/medium/hard difficulty choices that are optional and reversible", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await screen.findByLabelText(/函数与导数/);
+
+    const difficultyGroup = screen.getByRole("group", { name: "难度" });
+    expect(within(difficultyGroup).queryByRole("spinbutton")).not.toBeInTheDocument();
+    const easy = within(difficultyGroup).getByRole("checkbox", { name: "简单" });
+    const medium = within(difficultyGroup).getByRole("checkbox", { name: "中等" });
+    const hard = within(difficultyGroup).getByRole("checkbox", { name: "较难" });
+    expect(easy).not.toBeChecked();
+    expect(medium).not.toBeChecked();
+    expect(hard).not.toBeChecked();
+
+    await user.click(easy);
+    await user.click(hard);
+    await user.click(screen.getByRole("button", { name: "生成并应用" }));
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPost.mock.calls[0][1]).toEqual(expect.objectContaining({
+      difficulty_distribution: { easy: 1, hard: 1 },
+    }));
+
+    await user.click(easy);
+    await user.click(hard);
+    await user.click(screen.getByRole("button", { name: "生成并应用" }));
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledTimes(2));
+    expect(mocks.apiPost.mock.calls[1][1]).toEqual(expect.objectContaining({
+      difficulty_distribution: {},
+    }));
+  });
 });

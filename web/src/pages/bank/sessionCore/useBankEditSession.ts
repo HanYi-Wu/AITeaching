@@ -44,8 +44,10 @@ export interface UseBankEditSessionOptions {
     qid: string,
     payload: unknown,
     headers?: Record<string, string>
-  ) => Promise<{ version?: string }>;
+  ) => Promise<{ version?: string; qualified_id?: string }>;
   refreshListApi: () => Promise<void>;
+  onQuestionRenamed?: (oldQid: string, newQid: string) => void;
+  validateBeforeSave?: (detail: BankDetailState, source: BankEditorTab) => string | null;
 }
 
 export function useBankEditSession(options: UseBankEditSessionOptions) {
@@ -54,6 +56,8 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
     fetchDetailApi,
     putItemApi,
     refreshListApi,
+    onQuestionRenamed,
+    validateBeforeSave,
   } = options;
 
   const [selectedId, setSelectedIdState] = useState<string | null>(null);
@@ -274,6 +278,11 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
     }
 
     const qid = currentDetail.qualified_id;
+    const precheckError = validateBeforeSave?.(currentDetail, source);
+    if (precheckError) {
+      onError(precheckError);
+      return false;
+    }
     const requestSeq = detailRequestSeqRef.current;
     const session = loadSessionToken();
     const isCurrent = () =>
@@ -295,7 +304,9 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
     onError(null);
 
     let committed = false;
-    let saveResult: { version?: string } | undefined;
+    let saveResult: { version?: string; qualified_id?: string } | undefined;
+    let savedQid = qid;
+    let renamed = false;
     const refreshCommittedQuestion = async () => {
       if (!mountedRef.current || session !== loadSessionToken()) {
         return;
@@ -317,8 +328,14 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
       const headers = currentDetail.version ? { "If-Match": currentDetail.version } : undefined;
       saveResult = await putItemApi(qid, body, headers);
       committed = true;
+      savedQid = saveResult?.qualified_id?.trim() || qid;
+      renamed = savedQid !== qid;
 
       if (!isCurrent()) {
+        if (renamed) {
+          removeBaseline(qid);
+          onQuestionRenamed?.(qid, savedQid);
+        }
         await refreshCommittedQuestion();
         return false;
       }
@@ -326,12 +343,28 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
       setSaveConflict(null);
       let serverDetail: BankDetailState;
       try {
-        serverDetail = await fetchDetailApi(qid);
+        serverDetail = await fetchDetailApi(savedQid);
       } catch (readErr) {
-        if (isCurrent() && saveResult.version) {
-          setDetail((current) =>
-            current?.qualified_id === qid ? { ...current, version: saveResult!.version } : current
-          );
+        if (isCurrent()) {
+          if (renamed) {
+            removeBaseline(qid);
+            onQuestionRenamed?.(qid, savedQid);
+            setSelectedId(savedQid);
+          }
+          if (saveResult.version || renamed) {
+            setDetail((current) =>
+              current?.qualified_id === qid || current?.qualified_id === savedQid
+                ? {
+                    ...current,
+                    qualified_id: savedQid,
+                    ...(saveResult!.version ? { version: saveResult!.version } : {}),
+                  }
+                : current
+            );
+          }
+        } else if (renamed) {
+          removeBaseline(qid);
+          onQuestionRenamed?.(qid, savedQid);
         }
         await refreshCommittedQuestion();
         if (isCurrent()) {
@@ -341,12 +374,17 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
         return true;
       }
       if (!isCurrent()) {
+        if (renamed) {
+          removeBaseline(qid);
+          onQuestionRenamed?.(qid, savedQid);
+        }
         await refreshCommittedQuestion();
         return false;
       }
 
       const reconciled = reconcileSavedDetail({
-        qid,
+        qid: savedQid,
+        previousQid: qid,
         serverDetail,
         currentDetail: draftRef.current.detail,
         currentMetaRows: draftRef.current.metaRows,
@@ -357,10 +395,17 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
         savedVersion: saveResult?.version,
       });
 
-      setDetailBaseline(qid, serverDetail, computeDetailMetaRows(serverDetail));
+      if (renamed) {
+        removeBaseline(qid);
+      }
+      setDetailBaseline(savedQid, serverDetail, computeDetailMetaRows(serverDetail));
       setDetail(reconciled.nextDetail);
       setMetaRows(reconciled.nextMetaRows);
       setRawYaml(reconciled.nextRawYaml);
+      if (renamed) {
+        onQuestionRenamed?.(qid, savedQid);
+        setSelectedId(savedQid);
+      }
       if (reconciled.nextEditorTab) {
         setEditorTab(reconciled.nextEditorTab);
       }
@@ -377,10 +422,26 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
       return true;
     } catch (e) {
       if (committed) {
-        if (isCurrent() && saveResult?.version) {
-          setDetail((current) =>
-            current?.qualified_id === qid ? { ...current, version: saveResult!.version } : current
-          );
+        if (isCurrent()) {
+          if (renamed) {
+            removeBaseline(qid);
+            onQuestionRenamed?.(qid, savedQid);
+            setSelectedId(savedQid);
+          }
+          if (saveResult?.version || renamed) {
+            setDetail((current) =>
+              current?.qualified_id === qid || current?.qualified_id === savedQid
+                ? {
+                    ...current,
+                    qualified_id: savedQid,
+                    ...(saveResult!.version ? { version: saveResult!.version } : {}),
+                  }
+                : current
+            );
+          }
+        } else if (renamed) {
+          removeBaseline(qid);
+          onQuestionRenamed?.(qid, savedQid);
         }
         await refreshCommittedQuestion();
         if (isCurrent()) {
@@ -391,7 +452,13 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
       }
       if (isCurrent()) {
         if (e instanceof ApiError && e.status === 409) {
-          setSaveConflict({ qid, latest: null, message: e.message });
+          const isDuplicateIdConflict =
+            e.message.includes("题号") || e.message.includes("题目已存在");
+          if (isDuplicateIdConflict) {
+            setSaveConflict(null);
+          } else {
+            setSaveConflict({ qid, latest: null, message: e.message });
+          }
         }
         onError(e instanceof Error ? e.message : String(e));
       }
@@ -409,6 +476,9 @@ export function useBankEditSession(options: UseBankEditSessionOptions) {
     fetchDetailApi,
     onError,
     setDetailBaseline,
+    removeBaseline,
+    onQuestionRenamed,
+    setSelectedId,
     refreshDirtyNow,
     setDetail,
     setMetaRows,

@@ -43,8 +43,8 @@ type DesktopDoorNodes = {
 const MOBILE_REST = { right: 66, control: 330, left: 176 };
 const MOBILE_MARGIN = 28;
 const DESKTOP_OPENING_COVER = 620;
-const DESKTOP_SPLIT_DELAY = 1620;
-const MOBILE_HANDOFF_DELAY = 340;
+const DESKTOP_SPLIT_DELAY = 880;
+const MOBILE_HANDOFF_DELAY = 220;
 
 function mobileCanopyPath(height: number, progress: number, shapeScale: number): string {
   const full = height + MOBILE_MARGIN;
@@ -198,16 +198,16 @@ export function useLoginMotion() {
     const startedAt = performance.now();
     const frame = (now: number) => {
       const elapsed = now - startedAt;
-      if (elapsed <= 220) {
-        const laserProgress = Math.min(1, elapsed / 190);
+      if (elapsed <= 185) {
+        const laserProgress = Math.min(1, elapsed / 160);
         setSeamLaser(easeOutQuart(laserProgress), Math.min(1, laserProgress * 1.4));
         setPartingDistance(0, 0);
-      } else if (elapsed <= 370) {
-        const crackProgress = Math.min(1, (elapsed - 220) / 95);
+      } else if (elapsed <= 315) {
+        const crackProgress = Math.min(1, (elapsed - 185) / 85);
         const crackDistance = crackProgress < 0.7
           ? (crackProgress / 0.7) * 14.5
           : 14.5 - ((crackProgress - 0.7) / 0.3) * 1.5;
-        setSeamLaser(1, Math.max(0, 1 - (elapsed - 220) / 110));
+        setSeamLaser(1, Math.max(0, 1 - (elapsed - 185) / 95));
         setPartingDistance(crackDistance, 1);
       } else {
         setSeamLaser(1, 0);
@@ -324,21 +324,21 @@ export function useLoginMotion() {
         mobileProgressRef.current = 0;
         mobilePathRef.current?.setAttribute("d", mobileCanopyPath(sceneHeightRef.current, 0, shapeScaleRef.current));
         changePhase("splash");
-        later(() => changePhase("brand-exit"), 1750);
+        later(() => changePhase("brand-exit"), 1000);
         later(() => {
           changePhase("revealing");
-          animateMobile(0, 1, 700);
-        }, 2120);
-        later(() => changePhase("ready"), 3420);
+          animateMobile(0, 1, 500);
+        }, 1290);
+        later(() => changePhase("ready"), 2490);
       } else {
         modeRef.current = "desktop";
         resetDesktopDoors();
         setOpeningCover(DESKTOP_OPENING_COVER);
         changePhase("splash");
-        later(() => changePhase("brand-exit"), 1400);
-        later(() => animateOpeningCover(DESKTOP_OPENING_COVER, 740), 1700);
-        later(() => changePhase("revealing"), 2040);
-        later(() => changePhase("ready"), 2860);
+        later(() => changePhase("brand-exit"), 1000);
+        later(() => animateOpeningCover(DESKTOP_OPENING_COVER, 520), 1220);
+        later(() => changePhase("revealing"), 1440);
+        later(() => changePhase("ready"), 2170);
       }
     } catch {
       cancelTimers();
@@ -412,7 +412,7 @@ export function useLoginMotion() {
     later(() => {
       if (modeRef.current === "mobile") {
         changePhase("leaving");
-        animateMobile(mobileProgressRef.current, 0, 540, () => finishResolverRef.current?.());
+        animateMobile(mobileProgressRef.current, 0, 380, () => finishResolverRef.current?.());
       } else {
         animateDesktopSubmitCrack();
       }

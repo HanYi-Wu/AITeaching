@@ -779,6 +779,79 @@ export type AgentChatStreamBody = {
   skip_memory_write?: boolean | null;
 };
 
+function createAgentSseParser(
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+): { push: (text: string) => void } {
+  let lineParts: string[] = [];
+  let dataLines: string[] = [];
+  let eventName = "message";
+
+  const dispatch = () => {
+    if (dataLines.length === 0) {
+      eventName = "message";
+      return;
+    }
+
+    const raw = dataLines.join("\n");
+    const event = eventName;
+    dataLines = [];
+    eventName = "message";
+
+    let data: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      data = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { raw };
+    } catch {
+      data = { raw };
+    }
+    // Keep user callback failures separate from JSON parsing: a consumer error
+    // is propagated once and must never be retried as a raw-data event.
+    onEvent(event, data);
+  };
+
+  const processLine = (line: string) => {
+    if (line === "") {
+      dispatch();
+      return;
+    }
+    if (line.startsWith(":")) return;
+    const separator = line.indexOf(":");
+    if (separator < 0) return;
+    const field = line.slice(0, separator);
+    const value = line.slice(separator + 1).trim();
+    if (field === "event") eventName = value;
+    else if (field === "data") dataLines.push(value);
+  };
+
+  return {
+    push(text: string) {
+      let lineStart = 0;
+      for (;;) {
+        const newline = text.indexOf("\n", lineStart);
+        if (newline < 0) break;
+
+        let line: string;
+        if (lineParts.length > 0) {
+          lineParts.push(text.slice(lineStart, newline));
+          line = lineParts.join("");
+          lineParts = [];
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+        } else {
+          const lineEnd = newline > lineStart && text.charCodeAt(newline - 1) === 13
+            ? newline - 1
+            : newline;
+          line = text.slice(lineStart, lineEnd);
+        }
+        processLine(line);
+        lineStart = newline + 1;
+      }
+      if (lineStart < text.length) lineParts.push(text.slice(lineStart));
+    },
+  };
+}
+
 /** Parse SSE lines; invokes onEvent(eventName, dataObj) for each complete event. */
 export async function apiAgentChatStream(
   body: AgentChatStreamBody,
@@ -798,32 +871,26 @@ export async function apiAgentChatStream(
   const reader = r.body?.getReader();
   if (!reader) throw new Error(i18n.t("noResponseStream", { ns: "common" }));
   const dec = new TextDecoder();
-  let buf = "";
+  const parser = createAgentSseParser(onEvent);
+  let streamComplete = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        const block = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        let ev = "message";
-        const dataLines: string[] = [];
-        for (const line of block.split("\n")) {
-          if (line.startsWith("event:")) ev = line.slice(6).trim();
-          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-        }
-        if (dataLines.length === 0) continue;
-        try {
-          const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
-          onEvent(ev, data);
-        } catch {
-          onEvent(ev, { raw: dataLines.join("\n") });
-        }
+      if (done) {
+        streamComplete = true;
+        break;
+      }
+      parser.push(dec.decode(value, { stream: true }));
+    }
+    parser.push(dec.decode());
+  } finally {
+    if (!streamComplete) {
+      try {
+        await reader.cancel();
+      } catch {
+        // The fetch may already have aborted or errored the response stream.
       }
     }
-  } finally {
     reader.releaseLock();
   }
 }

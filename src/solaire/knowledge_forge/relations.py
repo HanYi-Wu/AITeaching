@@ -7,7 +7,7 @@ from solaire.knowledge_forge.models import NodeRelation
 from pathlib import Path
 from solaire.knowledge_forge.models import _ALLOWED_RELATION_TYPES
 from solaire.knowledge_forge.storage import _load_meta
-from solaire.knowledge_forge.storage import _load_subject_state
+from solaire.knowledge_forge.storage import _load_subject_state_snapshot
 from solaire.knowledge_forge.migration import ensure_graph_layout
 from solaire.knowledge_forge.concurrency import graph_mutation
 from solaire.knowledge_forge.mutation_session import GraphMutationSession
@@ -18,7 +18,7 @@ def _find_relation_slug(project_root: Path, relation_id: str) -> str | None:
     """找到关系所在的科目 slug。"""
     meta = _load_meta(project_root)
     for sm in meta.subjects:
-        state = _load_subject_state(project_root, sm.slug)
+        state = _load_subject_state_snapshot(project_root, sm.slug)
         if any(r.id == relation_id for r in state.relations):
             return sm.slug
     return None
@@ -38,6 +38,22 @@ def _is_equivalent_relation(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return payload_a == payload_b
 
 
+def _relation_signature(item: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Return the complete current relation payload key when it is hashable.
+
+    Persisted NodeRelation rows contain these four fields. Unknown extension
+    fields use the equality fallback so their semantic comparison stays intact.
+    """
+    if not set(item).issubset({"id", "from_node_id", "to_node_id", "relation_type", "conflict", "conflict_reason"}):
+        return None
+    signature = (item.get("id"), item.get("from_node_id"), item.get("to_node_id"), item.get("relation_type"))
+    try:
+        hash(signature)
+    except TypeError:
+        return None
+    return signature
+
+
 def _deduplicate_relations(relations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """对稳定身份、端点及全部语义 payload 完全相同的记录做幂等去重，保留现有排序。
 
@@ -45,6 +61,8 @@ def _deduplicate_relations(relations: list[dict[str, Any]]) -> list[dict[str, An
     """
     result: list[dict[str, Any]] = []
     by_id: dict[str, list[dict[str, Any]]] = {}
+    signatures_by_id: dict[str, set[tuple[Any, ...]]] = {}
+    conflicted_ids: set[str] = set()
 
     for item in relations:
         rel_id = item.get("id")
@@ -52,25 +70,37 @@ def _deduplicate_relations(relations: list[dict[str, Any]]) -> list[dict[str, An
             result.append(dict(item))
             continue
 
-        if rel_id not in by_id:
+        signature = _relation_signature(item)
+        existing_entries = by_id.get(rel_id)
+        if existing_entries is None:
             entry = dict(item)
             by_id[rel_id] = [entry]
+            if signature is not None:
+                signatures_by_id[rel_id] = {signature}
             result.append(entry)
             continue
 
-        existing_entries = by_id[rel_id]
-        if any(_is_equivalent_relation(existing, item) for existing in existing_entries):
-            # 身份、端点及全部 payload 均一致：幂等收敛，不重复追加
+        if signature is not None:
+            signatures = signatures_by_id.setdefault(rel_id, set())
+            if signature in signatures:
+                # Persisted relation records have a fixed four-field payload.
+                continue
+        elif any(_is_equivalent_relation(existing, item) for existing in existing_entries):
+            # Unknown extension fields keep the original full-payload comparison.
             continue
 
         # 同 ID 但 payload 冲突：两份均保留并显式暴露冲突标记
         entry = dict(item)
         entry["conflict"] = True
         entry["conflict_reason"] = "duplicate_id_conflicting_payload"
-        for existing in existing_entries:
-            existing["conflict"] = True
-            existing["conflict_reason"] = "duplicate_id_conflicting_payload"
+        if rel_id not in conflicted_ids:
+            for existing in existing_entries:
+                existing["conflict"] = True
+                existing["conflict_reason"] = "duplicate_id_conflicting_payload"
+            conflicted_ids.add(rel_id)
         existing_entries.append(entry)
+        if signature is not None:
+            signatures_by_id.setdefault(rel_id, set()).add(signature)
         result.append(entry)
 
     return result
@@ -79,12 +109,12 @@ def _deduplicate_relations(relations: list[dict[str, Any]]) -> list[dict[str, An
 def list_node_relations(project_root: Path, *, graph: str | None = None) -> list[dict[str, Any]]:
     ensure_graph_layout(project_root)
     if graph:
-        state = _load_subject_state(project_root, graph)
+        state = _load_subject_state_snapshot(project_root, graph)
         return _deduplicate_relations([r.model_dump(mode="json") for r in state.relations])
     meta = _load_meta(project_root)
     all_rels: list[dict[str, Any]] = []
     for sm in meta.subjects:
-        state = _load_subject_state(project_root, sm.slug)
+        state = _load_subject_state_snapshot(project_root, sm.slug)
         all_rels.extend(r.model_dump(mode="json") for r in state.relations)
     return _deduplicate_relations(all_rels)
 

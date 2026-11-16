@@ -22,6 +22,67 @@ def _type_matches_section(entry_type: str, section_type: str) -> bool:
     return entry_type == section_type
 
 
+def _check_template_binding(exam: ExamConfig, template: ExamTemplate) -> None:
+    if template.template_id != exam.template_ref:
+        raise ValueError(
+            "试卷绑定的版式与当前打开的模板不一致，请重新选择模板后再试。"
+        )
+
+
+def _validate_section_selection(
+    sel: SelectedSection,
+    sec: TemplateSection,
+    loaded: LoadedQuestions,
+    *,
+    enforce_counts: bool,
+) -> None:
+    if sec.type == "text":
+        if len(sel.question_ids) != 0:
+            raise ValueError(
+                f"小节「{sel.section_id}」为卷面说明，不需要挂载题目，请移除本题小节下的选题。"
+            )
+        return
+
+    if enforce_counts and sec.type != "practice":
+        required_count = sel.required_count if sel.required_count is not None else sec.required_count
+        if len(sel.question_ids) != required_count:
+            raise ValueError(
+                f"小节「{sel.section_id}」需要 {required_count} 道题，当前已选 {len(sel.question_ids)} 道。"
+            )
+    for qid in sel.question_ids:
+        entry = loaded.by_qualified.get(qid)
+        if entry is None:
+            raise ValueError(f"题库中未找到题目「{qid}」，请检查是否已加载或题目是否已被删除。")
+        if sec.type == "practice":
+            continue
+        if sec.type == "group":
+            if not isinstance(entry, QuestionGroupRecord):
+                raise ValueError(
+                    f"小节「{sel.section_id}」须使用题组；「{qid}」不是题组条目。"
+                )
+            if entry.unified is not False:
+                raise ValueError(
+                    f"小节「{sec.section_id}」须选用混合题组；「{qid}」不符合该要求。"
+                )
+            continue
+        if isinstance(entry, QuestionGroupRecord):
+            if entry.unified is False:
+                raise ValueError(
+                    f"混合题组「{qid}」只能放在模板中题型为「题组」的小节里。"
+                )
+            if not _type_matches_section(str(entry.unified), sec.type):
+                raise ValueError(
+                    f"题组「{qid}」的题型为「{entry.unified}」，与小节「{sel.section_id}」要求的「{sec.type}」不一致。"
+                )
+        elif isinstance(entry, QuestionItem):
+            if not _type_matches_section(entry.type, sec.type):
+                raise ValueError(
+                    f"题目「{qid}」的题型为「{entry.type}」，与小节「{sel.section_id}」要求的「{sec.type}」不一致。"
+                )
+        else:
+            raise ValueError(f"题目「{qid}」数据异常，无法参与组卷。")
+
+
 def _validate_exam(
     exam: ExamConfig,
     template: ExamTemplate,
@@ -29,13 +90,16 @@ def _validate_exam(
     *,
     enforce_counts: bool,
 ) -> None:
-    if template.template_id != exam.template_ref:
-        raise ValueError(
-            "试卷绑定的版式与当前打开的模板不一致，请重新选择模板后再试。"
-        )
+    _check_template_binding(exam, template)
+
+    # Preserve first-match behavior for malformed duplicate template ids and
+    # reuse this map's keys for the structural comparison below.
+    sections_by_id: dict[str, TemplateSection] = {}
+    for section in template.sections:
+        sections_by_id.setdefault(section.section_id, section)
 
     selected_ids = {s.section_id for s in exam.selected_items}
-    template_ids = {s.section_id for s in template.sections}
+    template_ids = sections_by_id.keys()
     if selected_ids != template_ids:
         missing = template_ids - selected_ids
         extra = selected_ids - template_ids
@@ -46,60 +110,98 @@ def _validate_exam(
             parts.append("存在模板外的小节：" + "、".join(sorted(extra)))
         raise ValueError("选题结构与模板要求不一致（" + "；".join(parts) + "）。")
 
-    # Preserve first-match behavior if a malformed template contains duplicate ids.
+    for sel in exam.selected_items:
+        _validate_section_selection(
+            sel, sections_by_id[sel.section_id], loaded, enforce_counts=enforce_counts
+        )
+
+
+def _normalize_preview_sections(
+    exam: ExamConfig,
+    template: ExamTemplate,
+    *,
+    loaded: LoadedQuestions | None = None,
+) -> tuple[ExamConfig, list[str]]:
+    """Normalize preview selections, optionally validating them as they are built.
+
+    The preparation path supplies ``loaded`` to avoid a second template/index pass
+    over the normalized exam. The public normalization entrypoint leaves it unset.
+    """
+    if loaded is not None:
+        _check_template_binding(exam, template)
+
+    warnings: list[str] = []
+    sel_by_id = {s.section_id: s for s in exam.selected_items}
+    # Keep the first-match lookup used by validation when malformed templates
+    # contain duplicate section ids.
     sections_by_id: dict[str, TemplateSection] = {}
     for section in template.sections:
         sections_by_id.setdefault(section.section_id, section)
 
-    for sel in exam.selected_items:
-        sec = sections_by_id.get(sel.section_id)
-        if sec is None:
-            raise ValueError(
-                f"当前模板中不存在小节「{sel.section_id}」（模板：{template.template_id}）。"
+    for sid in sel_by_id:
+        if sid not in sections_by_id:
+            warnings.append(f"模板外的小节「{sid}」已在预览中忽略。")
+
+    new_items: list[SelectedSection] = []
+    for sec in template.sections:
+        sel = sel_by_id.get(sec.section_id)
+        if sel is None:
+            normalized = SelectedSection(
+                section_id=sec.section_id,
+                question_ids=[],
+                score_per_item=None,
+                score_overrides=None,
             )
-        if sec.type == "text":
-            if len(sel.question_ids) != 0:
-                raise ValueError(
-                    f"小节「{sel.section_id}」为卷面说明，不需要挂载题目，请移除本题小节下的选题。"
-                )
-            continue
-        required_count = sel.required_count if sel.required_count is not None else sec.required_count
-        if enforce_counts and sec.type != "practice" and len(sel.question_ids) != required_count:
-            raise ValueError(
-                f"小节「{sel.section_id}」需要 {required_count} 道题，当前已选 {len(sel.question_ids)} 道。"
-            )
-        for qid in sel.question_ids:
-            entry = loaded.by_qualified.get(qid)
-            if entry is None:
-                raise ValueError(f"题库中未找到题目「{qid}」，请检查是否已加载或题目是否已被删除。")
-            if sec.type == "practice":
-                continue
-            if sec.type == "group":
-                if not isinstance(entry, QuestionGroupRecord):
-                    raise ValueError(
-                        f"小节「{sel.section_id}」须使用题组；「{qid}」不是题组条目。"
-                    )
-                if entry.unified is not False:
-                    raise ValueError(
-                        f"小节「{sec.section_id}」须选用混合题组；「{qid}」不符合该要求。"
-                    )
-                continue
-            if isinstance(entry, QuestionGroupRecord):
-                if entry.unified is False:
-                    raise ValueError(
-                        f"混合题组「{qid}」只能放在模板中题型为「题组」的小节里。"
-                    )
-                if not _type_matches_section(str(entry.unified), sec.type):
-                    raise ValueError(
-                        f"题组「{qid}」的题型为「{entry.unified}」，与小节「{sel.section_id}」要求的「{sec.type}」不一致。"
-                    )
-            elif isinstance(entry, QuestionItem):
-                if not _type_matches_section(entry.type, sec.type):
-                    raise ValueError(
-                        f"题目「{qid}」的题型为「{entry.type}」，与小节「{sel.section_id}」要求的「{sec.type}」不一致。"
-                    )
+            warnings.append(f"小节「{sec.section_id}」尚未选题，预览中将以空小节占位。")
+        else:
+            if sec.type == "text":
+                # The preparation path receives a validated list. The public
+                # normalizer also materializes iterable selections from callers.
+                dropped = sel.question_ids if loaded is not None else list(sel.question_ids)
+                if dropped:
+                    warnings.append(f"小节「{sec.section_id}」为卷面说明，预览中已忽略其下的题目。")
+                qids = []
             else:
-                raise ValueError(f"题目「{qid}」数据异常，无法参与组卷。")
+                qids = list(sel.question_ids)
+            if sec.type not in ("text", "practice"):
+                required_count = sel.required_count if sel.required_count is not None else sec.required_count
+                if len(qids) > required_count:
+                    warnings.append(
+                        f"小节「{sec.section_id}」最多需要 {required_count} 道题，预览中已截断多余选题。"
+                    )
+                    qids = qids[: required_count]
+                if len(qids) < required_count:
+                    warnings.append(
+                        f"小节「{sec.section_id}」需要 {required_count} 道题，当前已选 {len(qids)} 道（预览仍可生成）。"
+                    )
+            normalized = SelectedSection(
+                section_id=sec.section_id,
+                question_ids=qids,
+                score_per_item=sel.score_per_item,
+                score_overrides=sel.score_overrides,
+                required_count=sel.required_count,
+            )
+
+        new_items.append(normalized)
+        if loaded is not None:
+            validation_section = sections_by_id[sec.section_id]
+            _validate_section_selection(
+                normalized,
+                validation_section,
+                loaded,
+                enforce_counts=False,
+            )
+
+    return exam.model_copy(update={"selected_items": new_items}), warnings
+
+
+def _normalize_and_validate_exam_preview(
+    exam: ExamConfig,
+    template: ExamTemplate,
+    loaded: LoadedQuestions,
+) -> tuple[ExamConfig, list[str]]:
+    """Build the relaxed preview exam and validate kept references in one pass."""
+    return _normalize_preview_sections(exam, template, loaded=loaded)
 
 
 def validate_exam(exam: ExamConfig, template: ExamTemplate, loaded: LoadedQuestions) -> None:
@@ -112,76 +214,7 @@ def normalize_exam_for_preview(exam: ExamConfig, template: ExamTemplate) -> tupl
     Align selected_items with the template (order + missing sections), relax counts for preview.
     Returns a new ExamConfig and human-readable warning lines.
     """
-    warnings: list[str] = []
-    sel_by_id = {s.section_id: s for s in exam.selected_items}
-    template_ids = {s.section_id for s in template.sections}
-    for sid in sel_by_id:
-        if sid not in template_ids:
-            warnings.append(f"模板外的小节「{sid}」已在预览中忽略。")
-
-    new_items: list[SelectedSection] = []
-    for sec in template.sections:
-        if sec.section_id not in sel_by_id:
-            new_items.append(
-                SelectedSection(section_id=sec.section_id, question_ids=[], score_per_item=None, score_overrides=None)
-            )
-            warnings.append(f"小节「{sec.section_id}」尚未选题，预览中将以空小节占位。")
-            continue
-
-        sel = sel_by_id[sec.section_id]
-        qids = list(sel.question_ids)
-        spo = sel.score_per_item
-        sov = sel.score_overrides
-        required_count = sel.required_count if sel.required_count is not None else sec.required_count
-
-        if sec.type == "text":
-            if len(qids) != 0:
-                warnings.append(f"小节「{sec.section_id}」为卷面说明，预览中已忽略其下的题目。")
-            new_items.append(
-                SelectedSection(
-                    section_id=sec.section_id,
-                    question_ids=[],
-                    score_per_item=spo,
-                    score_overrides=sov,
-                    required_count=sel.required_count,
-                )
-            )
-            continue
-
-        if sec.type == "practice":
-            new_items.append(
-                SelectedSection(
-                    section_id=sec.section_id,
-                    question_ids=qids,
-                    score_per_item=spo,
-                    score_overrides=sov,
-                    required_count=sel.required_count,
-                )
-            )
-            continue
-
-        if len(qids) > required_count:
-            warnings.append(
-                f"小节「{sec.section_id}」最多需要 {required_count} 道题，预览中已截断多余选题。"
-            )
-            qids = qids[: required_count]
-
-        if len(qids) < required_count:
-            warnings.append(
-                f"小节「{sec.section_id}」需要 {required_count} 道题，当前已选 {len(qids)} 道（预览仍可生成）。"
-            )
-
-        new_items.append(
-            SelectedSection(
-                section_id=sec.section_id,
-                question_ids=qids,
-                score_per_item=spo,
-                score_overrides=sov,
-                required_count=sel.required_count,
-            )
-        )
-
-    return exam.model_copy(update={"selected_items": new_items}), warnings
+    return _normalize_preview_sections(exam, template)
 
 
 def validate_exam_preview(exam: ExamConfig, template: ExamTemplate, loaded: LoadedQuestions) -> list[str]:

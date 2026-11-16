@@ -30,6 +30,7 @@ export function BankFolderExplorer<T extends Item>({
   items,
   allItems,
   selectedIds,
+  loading = false,
   onChange,
   onError,
   renderItem,
@@ -41,6 +42,7 @@ export function BankFolderExplorer<T extends Item>({
   items: T[];
   allItems?: T[];
   selectedIds: string[];
+  loading?: boolean;
   onChange: (data: BankFolders) => void;
   onError: (message: string | null) => void;
   renderItem: (item: T) => ReactNode;
@@ -549,13 +551,20 @@ export function BankFolderExplorer<T extends Item>({
           onDrop={e => drop(e, '')}
           onClick={() => { setSelectedFolder(''); setName(''); }}
         >
-          全部目录 · {items.length} 道匹配题目
+          全部目录 · {loading && !items.length ? '加载中…' : `${items.length} 道匹配题目`}
         </button>
         {branch('')}
         {!items.length ? (
-          <p className="flex min-h-48 flex-1 items-center justify-center p-4 text-center text-sm text-[var(--or-muted)]">
-            暂无匹配题目；可调整搜索与筛选，或新建题目。
-          </p>
+          loading ? (
+            <div className="flex min-h-48 flex-1 items-center justify-center gap-2 p-4 text-center text-sm text-[var(--or-muted)]" role="status">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] border-t-[var(--or-primary)]" aria-hidden="true" />
+              <span>正在加载题目…</span>
+            </div>
+          ) : (
+            <p className="flex min-h-48 flex-1 items-center justify-center p-4 text-center text-sm text-[var(--or-muted)]">
+              暂无匹配题目；可调整搜索与筛选，或新建题目。
+            </p>
+          )
         ) : null}
       </nav>
 

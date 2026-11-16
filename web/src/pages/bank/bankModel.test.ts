@@ -5,6 +5,7 @@ import {
   canMoveBankQuestions,
   isDescendantOrSelfFolder,
   validateBankFolderPath,
+  validateQuestionIdInCollection,
   type BankFolders,
 } from './bankModel';
 
@@ -152,5 +153,37 @@ describe('buildBankFolderIndex', () => {
     expect(index.questions.get('数学')?.map((q) => q.qualified_id)).toEqual(['q1']);
     // Questions in '数学/几何'
     expect(index.questions.get('数学/几何')?.map((q) => q.qualified_id)).toEqual(['q2']);
+  });
+});
+
+describe('validateQuestionIdInCollection', () => {
+  const items = [
+    { id: '第一题', qualified_id: '数学/默认/第一题', collection: '数学/默认', subject: '数学' },
+    { id: 'Alpha', qualified_id: '数学/默认/Alpha', collection: '数学/默认', subject: '数学' },
+    { id: '第一题', qualified_id: '物理/默认/第一题', collection: '物理/默认', subject: '物理' },
+    {
+      id: 'G1',
+      qualified_id: '数学/默认/G1',
+      collection: '数学/默认',
+      subject: '数学',
+      group_member_qualified_ids: ['数学/默认/G1__01'],
+    },
+  ];
+
+  it('rejects empty ids, slashes, case-folded duplicates, and group member collisions within the target collection', () => {
+    expect(validateQuestionIdInCollection({ items, subject: '数学', collection: '默认', rawId: '   ' })).toContain('不能为空');
+    expect(validateQuestionIdInCollection({ items, subject: '数学', collection: '默认', rawId: 'a/b' })).toContain('斜杠');
+    expect(validateQuestionIdInCollection({ items, subject: '数学', collection: '默认', rawId: ' 第一题 ' })).toContain('已存在');
+    expect(validateQuestionIdInCollection({ items, subject: '数学', collection: '默认', rawId: 'alpha' })).toContain('已存在');
+    expect(validateQuestionIdInCollection({ items, subject: '数学', collection: '默认', rawId: 'g1__01' })).toContain('已存在');
+    expect(
+      validateQuestionIdInCollection({
+        items,
+        subject: '数学/默认',
+        rawId: ' 第一题 ',
+        excludeQualifiedId: '数学/默认/第一题',
+      }),
+    ).toBeNull();
+    expect(validateQuestionIdInCollection({ items, subject: '数学', collection: '默认', rawId: '第二题' })).toBeNull();
   });
 });

@@ -38,7 +38,7 @@ def test_compiled_expression_matches_safe_interpreter(expr: str, dtype: type) ->
         expected = _eval_node(_parse_expr(normalized), x)
         actual = eval_expr(expr, x)
 
-    np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10, equal_nan=True)
+    np.testing.assert_array_equal(actual, expected)
     assert actual.shape == expected.shape
     assert actual.dtype == expected.dtype
 
@@ -177,11 +177,11 @@ def test_scalar_geometry_kernels_match_vector_reference() -> None:
             assert actual is None
         else:
             assert actual is not None
-            np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+            np.testing.assert_array_equal(actual, expected)
 
         expected_foot = _reference_foot(a, b, c)
         actual_foot = euclid.foot_on_line(a, b, c)
-        np.testing.assert_allclose(actual_foot, expected_foot, rtol=1e-10, atol=1e-10)
+        np.testing.assert_array_equal(actual_foot, expected_foot)
 
 
 def test_geometry_kernels_keep_degenerate_and_non_float64_fallbacks() -> None:

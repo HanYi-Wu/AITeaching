@@ -9,9 +9,12 @@ import yaml
 from solaire.common.security import assert_within_project
 from solaire.knowledge_forge.concurrency import graph_mutation
 from solaire.knowledge_forge.models import (
+    ConceptNode,
     GraphMeta,
     GraphState,
+    NodeFileLink,
     NodeRelation,
+    QuestionBinding,
     SubjectMeta,
 )
 from solaire.knowledge_forge.paths import (
@@ -51,7 +54,7 @@ def _migrate_legacy_graph_state(state: GraphState) -> bool:
     """将旧版 uses_skill 关系迁移为 related，并对完全一致的关系幂等收敛。"""
     changed = False
     new_rels: list[NodeRelation] = []
-    seen: dict[str, list[NodeRelation]] = {}
+    seen: dict[str, set[tuple[str, str, str]]] = {}
     for r in state.relations:
         current_r = r
         if r.relation_type == "uses_skill":
@@ -63,23 +66,65 @@ def _migrate_legacy_graph_state(state: GraphState) -> bool:
             )
             changed = True
 
-        existing_relations = seen.get(current_r.id)
-        if existing_relations:
-            if any(
-                existing.from_node_id == current_r.from_node_id
-                and existing.to_node_id == current_r.to_node_id
-                and existing.relation_type == current_r.relation_type
-                for existing in existing_relations
-            ):
-                changed = True
-                continue
-            existing_relations.append(current_r)
-            new_rels.append(current_r)
-        else:
-            seen[current_r.id] = [current_r]
-            new_rels.append(current_r)
+        signature = (current_r.from_node_id, current_r.to_node_id, current_r.relation_type)
+        signatures = seen.setdefault(current_r.id, set())
+        if signature in signatures:
+            changed = True
+            continue
+        signatures.add(signature)
+        new_rels.append(current_r)
     state.relations = new_rels
     return changed
+
+
+def _partition_legacy_graph_state(
+    old_state: GraphState,
+) -> tuple[
+    dict[str, set[str]],
+    dict[str, list[ConceptNode]],
+    dict[str, list[NodeRelation]],
+    dict[str, list[QuestionBinding]],
+    dict[str, list[NodeFileLink]],
+]:
+    """Partition source rows by subject in ordered passes, including duplicate IDs."""
+    groups: dict[str, set[str]] = {}
+    slugs_by_node_id: dict[str, list[str]] = {}
+    no_subject_slug = "_default"
+    for node in old_state.nodes:
+        subject = (node.subject or "").strip() or no_subject_slug
+        slug = _safe_slug(subject)
+        ids = groups.setdefault(slug, set())
+        if node.id in ids:
+            continue
+        ids.add(node.id)
+        slugs_by_node_id.setdefault(node.id, []).append(slug)
+
+    # The legacy implementation filtered every row against every subject's ID
+    # list. Distribute each source row once across the subjects containing its
+    # endpoint IDs, preserving subject order and per-file source order.
+    nodes_by_slug: dict[str, list[ConceptNode]] = {slug: [] for slug in groups}
+    relations_by_slug: dict[str, list[NodeRelation]] = {slug: [] for slug in groups}
+    bindings_by_slug: dict[str, list[QuestionBinding]] = {slug: [] for slug in groups}
+    file_links_by_slug: dict[str, list[NodeFileLink]] = {slug: [] for slug in groups}
+
+    for node in old_state.nodes:
+        for slug in slugs_by_node_id.get(node.id, ()):
+            nodes_by_slug[slug].append(node)
+    for relation in old_state.relations:
+        target_slugs = dict.fromkeys((
+            *slugs_by_node_id.get(relation.from_node_id, ()),
+            *slugs_by_node_id.get(relation.to_node_id, ()),
+        ))
+        for slug in target_slugs:
+            relations_by_slug[slug].append(relation)
+    for binding in old_state.bindings:
+        for slug in slugs_by_node_id.get(binding.node_id, ()):
+            bindings_by_slug[slug].append(binding)
+    for link in old_state.file_links:
+        for slug in slugs_by_node_id.get(link.node_id, ()):
+            file_links_by_slug[slug].append(link)
+
+    return groups, nodes_by_slug, relations_by_slug, bindings_by_slug, file_links_by_slug
 
 
 def _migrate_legacy_to_multi(project_root: Path) -> None:
@@ -113,29 +158,20 @@ def _migrate_legacy_to_multi(project_root: Path) -> None:
         if n.primary_parent_id is None and n.id in parent_map:
             n.primary_parent_id = parent_map[n.id]
 
-    # 按科目分组
-    groups: dict[str, list[str]] = {}
-    no_subject_slug = "_default"
-    for n in old_state.nodes:
-        subj = (n.subject or "").strip() or no_subject_slug
-        slug = _safe_slug(subj)
-        groups.setdefault(slug, [])
-        if n.id not in groups[slug]:
-            groups[slug].append(n.id)
+    groups, nodes_by_slug, relations_by_slug, bindings_by_slug, file_links_by_slug = (
+        _partition_legacy_graph_state(old_state)
+    )
 
     meta = GraphMeta(
         subjects=[],
         levels=list(old_state.taxonomy.levels) if old_state.taxonomy.levels else ["高中", "高考"],
     )
 
-    for slug, node_ids in groups.items():
-        id_set = set(node_ids)
-        nodes = [n for n in old_state.nodes if n.id in id_set]
-        relations = [
-            r for r in old_state.relations if r.from_node_id in id_set or r.to_node_id in id_set
-        ]
-        bindings = [b for b in old_state.bindings if b.node_id in id_set]
-        file_links = [l for l in old_state.file_links if l.node_id in id_set]
+    for slug in groups:
+        nodes = nodes_by_slug[slug]
+        relations = relations_by_slug[slug]
+        bindings = bindings_by_slug[slug]
+        file_links = file_links_by_slug[slug]
 
         new_state = GraphState(
             nodes=nodes,

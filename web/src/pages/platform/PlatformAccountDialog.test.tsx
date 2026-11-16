@@ -107,6 +107,8 @@ describe("PlatformAccountDialog", () => {
     renderDialog();
     await openDialog();
     expect(screen.getByLabelText("表格密度")).toBeInTheDocument();
+    expect(screen.queryByText(/实时生效/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/密码至少 6 位/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("radio", { name: /绿色|Green/i }));
     await act(async () => {

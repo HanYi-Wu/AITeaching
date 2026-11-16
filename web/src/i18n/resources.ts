@@ -26,6 +26,8 @@ import componentsZh from "./locales/zh/components.json";
 import componentsEn from "./locales/en/components.json";
 import libZh from "./locales/zh/lib.json";
 import libEn from "./locales/en/lib.json";
+import toolsZh from "./locales/zh/tools.json";
+import toolsEn from "./locales/en/tools.json";
 
 export const resources = {
   zh: {
@@ -43,6 +45,7 @@ export const resources = {
     agent: agentZh,
     components: componentsZh,
     lib: libZh,
+    tools: toolsZh,
   },
   en: {
     common: commonEn,
@@ -59,6 +62,7 @@ export const resources = {
     agent: agentEn,
     components: componentsEn,
     lib: libEn,
+    tools: toolsEn,
   },
 } as const;
 

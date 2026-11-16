@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 
 from solaire.agent_layer.tool_validator import (
+    ToolCatalog,
     ValidatedToolCall,
     _check_required_params,
     _name_matches,
+    compile_tool_catalog,
     validate_tool_call,
 )
 from solaire.agent_layer.tools.tool_definitions import RegisteredTool, ToolRisk
@@ -178,3 +180,28 @@ class TestValidateToolCall:
         result = validate_tool_call("any.tool", "{}", [])
         assert not result.is_valid
         assert result.error_code == "unknown_tool"
+
+    def test_compiled_catalog_reuses_sorted_name_and_lookup_indexes(self):
+        tools = [
+            _make_tool("zeta.read"),
+            _make_tool("alpha.read", required=["query"]),
+        ]
+        catalog = compile_tool_catalog(iter(tools))
+
+        assert isinstance(catalog, ToolCatalog)
+        assert catalog.names == ("alpha.read", "zeta.read")
+        assert compile_tool_catalog(catalog) is catalog
+
+        result = validate_tool_call("alpha.read", {"query": "x"}, catalog)
+        assert result.is_valid
+        assert result.tool_name == "alpha.read"
+
+    def test_error_payload_contains_validation_details(self):
+        result = validate_tool_call("file.read", "{}", [_make_tool("file.read", ["path"])])
+
+        assert not result.is_valid
+        assert result.error_payload() == {
+            "error": "缺少必填参数: path",
+            "error_code": "missing_required",
+            "suggestion": "工具 'file.read' 缺少必填参数: path。请补充后重新调用。",
+        }

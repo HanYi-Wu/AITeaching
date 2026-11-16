@@ -64,7 +64,7 @@
 
 @media (min-width: 900px) {
   .or-login-workspace-entering > :not(.or-login-handoff) {
-    animation: or-login-workspace-push-in 920ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: or-login-workspace-push-in 580ms cubic-bezier(0.16, 1, 0.3, 1) both;
     transform-origin: center center;
   }
 }

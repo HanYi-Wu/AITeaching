@@ -11,7 +11,7 @@ type Difficulty = "easy" | "medium" | "hard";
 const DIFFICULTIES: Array<{ id: Difficulty; label: string }> = [
   { id: "easy", label: "简单" },
   { id: "medium", label: "中等" },
-  { id: "hard", label: "困难" },
+  { id: "hard", label: "较难" },
 ];
 const typeLabels: Record<string, string> = {
   choice: "选择题（合计）",
@@ -25,7 +25,7 @@ const typeLabels: Record<string, string> = {
   group: "材料组题",
   practice: "练习题",
 };
-const difficultyLabels: Record<string, string> = { easy: "简单", medium: "中等", hard: "困难", unknown: "难度未标注" };
+const difficultyLabels: Record<string, string> = { easy: "简单", medium: "中等", hard: "较难", unknown: "难度未标注" };
 
 export type AutoComposeDialogProps = {
   open: boolean;
@@ -78,8 +78,7 @@ export function AutoComposeDialog({
   const [totalCount, setTotalCount] = useState("");
   const [knowledgePoints, setKnowledgePoints] = useState<string[]>([]);
   const [coveragePercent, setCoveragePercent] = useState("80");
-  const [difficultyEnabled, setDifficultyEnabled] = useState(false);
-  const [difficultyWeights, setDifficultyWeights] = useState<Record<Difficulty, string>>({ easy: "30", medium: "50", hard: "20" });
+  const [selectedDifficulties, setSelectedDifficulties] = useState<Difficulty[]>([]);
   const [typeEnabled, setTypeEnabled] = useState(false);
   const [typeWeights, setTypeWeights] = useState<Record<string, string>>({});
   const [avoidHistory, setAvoidHistory] = useState(false);
@@ -146,8 +145,9 @@ export function AutoComposeDialog({
     setGeneratedResult(null);
   }, [open]);
 
-  const setDifficultyWeight = (key: Difficulty, value: string) => {
-    setDifficultyWeights((previous) => ({ ...previous, [key]: value }));
+  const toggleDifficulty = (id: Difficulty) => {
+    setSelectedDifficulties((previous) =>
+      previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]);
   };
 
   const setTypeWeight = (key: string, value: string) => {
@@ -188,22 +188,9 @@ export function AutoComposeDialog({
       return;
     }
 
-    const difficultyDistribution: AutoComposeRequest["difficulty_distribution"] = {};
-    if (difficultyEnabled) {
-      for (const { id } of DIFFICULTIES) {
-        const raw = difficultyWeights[id];
-        const weight = readWeight(raw);
-        if (raw.trim() && (weight === undefined || weight < 0)) {
-          setSubmitError("难度比例只能填写 0 或正数。");
-          return;
-        }
-        if (weight !== undefined && weight > 0) difficultyDistribution[id] = weight;
-      }
-      if (Object.keys(difficultyDistribution).length === 0) {
-        setSubmitError("启用难度比例后，请至少填写一个大于 0 的比例。");
-        return;
-      }
-    }
+    const difficultyDistribution: AutoComposeRequest["difficulty_distribution"] = Object.fromEntries(
+      selectedDifficulties.map((id) => [id, 1]),
+    ) as AutoComposeRequest["difficulty_distribution"];
 
     const typeDistribution: Record<string, number> = {};
     if (typeEnabled) {
@@ -324,16 +311,20 @@ export function AutoComposeDialog({
               </fieldset>
 
               <fieldset className="rounded-xl border border-[var(--or-outline)] p-3 sm:p-4">
-                <legend className="px-1 text-sm font-semibold">难度比例</legend>
-                <label className="mb-3 flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={difficultyEnabled} onChange={(event) => setDifficultyEnabled(event.target.checked)} className="h-4 w-4 accent-[var(--or-primary)]" />
-                  指定简单、中等、困难的相对比例
-                </label>
+                <legend className="px-1 text-sm font-semibold">难度</legend>
                 <div className="grid gap-2 sm:grid-cols-3">
                   {DIFFICULTIES.map(({ id, label }) => (
-                    <label key={id} className="grid gap-1 text-sm text-[var(--or-muted)]">
-                      {label}权重
-                      <input type="number" min={0} step={1} disabled={!difficultyEnabled} value={difficultyWeights[id]} onChange={(event) => setDifficultyWeight(id, event.target.value)} className="or-g49-input min-h-10 w-full px-3 py-2 tabular-nums disabled:opacity-50" />
+                    <label
+                      key={id}
+                      className="flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--or-outline)] px-3 py-2 text-sm hover:bg-[var(--or-block)]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedDifficulties.includes(id)}
+                        onChange={() => toggleDifficulty(id)}
+                        className="h-4 w-4 accent-[var(--or-primary)]"
+                      />
+                      <span>{label}</span>
                     </label>
                   ))}
                 </div>

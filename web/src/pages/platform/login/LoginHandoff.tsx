@@ -6,8 +6,8 @@ import {
 } from "./loginMotionGeometry";
 import "./LoginHandoff.css";
 
-const DESKTOP_OPEN_DURATION = 920;
-const MOBILE_OPEN_DURATION = 680;
+const DESKTOP_OPEN_DURATION = 580;
+const MOBILE_OPEN_DURATION = 480;
 
 export function LoginHandoff({ onFinished }: { onFinished: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);

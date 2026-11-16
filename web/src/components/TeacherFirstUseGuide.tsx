@@ -34,7 +34,6 @@ export function TeacherFirstUseGuide({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const step = user.teacher_guide_step ?? 0;
   const requiredPassword = Boolean(user.must_change_password);
@@ -49,7 +48,6 @@ export function TeacherFirstUseGuide({
       try {
         const result = await apiPost<{ user: PlatformUser }>('/api/auth/teacher-guide', { step: 0 });
         onUpdated(result.user);
-        setCollapsed(false);
         setDismissed(false);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -87,6 +85,20 @@ export function TeacherFirstUseGuide({
     setError('');
     try {
       const result = await apiPost<{ user: PlatformUser }>('/api/auth/teacher-guide', { step: step + 1 });
+      onUpdated(result.user);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function dismissForever() {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await apiPost<{ user: PlatformUser }>('/api/auth/teacher-guide', { step: steps.length });
+      setDismissed(true);
       onUpdated(result.user);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -195,11 +207,11 @@ export function TeacherFirstUseGuide({
         </h2>
         <button
           type="button"
-          className="inline-flex h-11 shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-or-primary hover:bg-[var(--or-primary-container)]"
-          aria-expanded={!collapsed}
-          onClick={() => setCollapsed((value) => !value)}
+          disabled={busy}
+          className="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--or-error)_28%,transparent)] bg-[color-mix(in_srgb,var(--or-error)_12%,transparent)] px-3 text-xs font-medium text-[var(--or-error)] transition hover:bg-[color-mix(in_srgb,var(--or-error)_20%,transparent)] disabled:opacity-40"
+          onClick={() => void dismissForever()}
         >
-          {collapsed ? '展开说明' : '收起说明'}
+          不再提示
         </button>
         <button
           type="button"
@@ -212,14 +224,8 @@ export function TeacherFirstUseGuide({
           <span>稍后继续</span>
         </button>
       </div>
-      <div
-        className={`or-g55-guide-content grid transition-[grid-template-rows,opacity] duration-[220ms] ease-out motion-reduce:transition-none ${
-          collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'
-        }`}
-        aria-hidden={collapsed}
-      >
-        <div className="min-h-0 overflow-hidden">
-          <div className="space-y-3">
+      <div className="or-g55-guide-content">
+        <div className="space-y-3">
             <p className="text-sm leading-relaxed text-[var(--or-muted)]">{steps[step].text}</p>
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -262,7 +268,6 @@ export function TeacherFirstUseGuide({
             >
               {step === steps.length - 1 ? '完成引导' : '下一步'}
             </button>
-          </div>
         </div>
       </div>
     </section>

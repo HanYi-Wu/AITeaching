@@ -244,6 +244,41 @@ test('typing inside text input does not trigger explorer keyboard shortcuts', ()
   expect(onSelectIds).not.toHaveBeenCalled();
 });
 
+test('renders loading indicator instead of empty message while loading', () => {
+  const { rerender } = render(
+    <BankFolderExplorer<{ qualified_id: string }>
+      data={{ folders: [], assignments: {} }}
+      items={[]}
+      loading={true}
+      selectedIds={[]}
+      onChange={vi.fn()}
+      onError={vi.fn()}
+      onSelectIds={vi.fn()}
+      renderItem={(item) => <div>{item.qualified_id}</div>}
+    />
+  );
+
+  expect(screen.getByText('正在加载题目…')).toBeInTheDocument();
+  expect(screen.getByText('全部目录 · 加载中…')).toBeInTheDocument();
+  expect(screen.queryByText(/暂无匹配题目/)).not.toBeInTheDocument();
+
+  rerender(
+    <BankFolderExplorer<{ qualified_id: string }>
+      data={{ folders: [], assignments: {} }}
+      items={[]}
+      loading={false}
+      selectedIds={[]}
+      onChange={vi.fn()}
+      onError={vi.fn()}
+      onSelectIds={vi.fn()}
+      renderItem={(item) => <div>{item.qualified_id}</div>}
+    />
+  );
+
+  expect(screen.queryByText('正在加载题目…')).not.toBeInTheDocument();
+  expect(screen.getByText('暂无匹配题目；可调整搜索与筛选，或新建题目。')).toBeInTheDocument();
+});
+
 
 
 

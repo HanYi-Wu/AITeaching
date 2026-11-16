@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -105,35 +106,288 @@ def _circle_spec_radius(spec: dict[str, Any], points: dict[str, np.ndarray]) -> 
     return o, r
 
 
+def _cached_projection(
+    previous: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
+    point: np.ndarray,
+    a: np.ndarray,
+    b: np.ndarray,
+) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    if (
+        previous is not None
+        and previous[0] is point
+        and previous[1] is a
+        and previous[2] is b
+    ):
+        return previous[3], previous
+    foot = euclid.foot_on_line(point, a, b)
+    return foot, (point, a, b, foot)
+
+
+@dataclass
+class _GeometryBuilder:
+    """Mutable per-solve state and operation-specific construction handlers."""
+
+    width: float
+    height: float
+    rng: np.random.Generator
+    points: dict[str, np.ndarray] = field(default_factory=dict)
+    drawables: list[dict[str, Any]] = field(default_factory=list)
+
+    def apply(self, item: dict[str, Any]) -> None:
+        op = item.get("op")
+        handler = _OPERATION_HANDLERS.get(op) if isinstance(op, str) else None
+        if handler is None:
+            raise ValueError(f"unknown construction op: {op!r}")
+        handler(self, item)
+
+    def result(self) -> GeometrySolveResult:
+        resolved_points = {
+            name: (float(point[0]), float(point[1]))
+            for name, point in self.points.items()
+        }
+        return GeometrySolveResult(points=resolved_points, drawables=self.drawables)
+
+    def _triangle(self, item: dict[str, Any]) -> None:
+        nodes = item["nodes"]
+        attr = item.get("attr") or {}
+        triangle_type = (attr.get("type") or "random").lower()
+        min_angle = float(attr.get("min_angle", 25))
+        if triangle_type == "random":
+            a, b, c = _random_triangle(
+                self.width, self.height, self.rng, min_angle
+            )
+        else:
+            raise ValueError(f"unknown triangle attr.type: {triangle_type!r}")
+        if len(nodes) != 3:
+            raise ValueError("triangle requires exactly 3 nodes")
+        points = self.points
+        for name, point in zip(nodes, (a, b, c), strict=True):
+            points[str(name)] = point
+
+    def _line(self, item: dict[str, Any]) -> None:
+        for name in item["source"]:
+            if str(name) not in self.points:
+                raise ValueError(f"line references unknown point {name!r}")
+
+    def _draw_through_line(self, item: dict[str, Any], *, perpendicular: bool) -> None:
+        point = _as_vec(self.points, str(item["through"]))
+        a = _as_vec(self.points, item["to"][0])
+        b = _as_vec(self.points, item["to"][1])
+        dx, dy = float(b[0]) - float(a[0]), float(b[1]) - float(a[1])
+        direction_norm = math.sqrt(dx * dx + dy * dy)
+        if direction_norm < 1e-9:
+            message = (
+                "perpendicular: degenerate line"
+                if perpendicular
+                else "parallel: degenerate direction"
+            )
+            raise ValueError(message)
+        direction = (-dy, dx) if perpendicular else (dx, dy)
+        p1, p2 = _segment_far(
+            point, direction, self.width, self.height, direction_norm=direction_norm
+        )
+        _append_segment_drawable(self.drawables, p1, p2, item)
+
+    def _perpendicular(self, item: dict[str, Any]) -> None:
+        self._draw_through_line(item, perpendicular=True)
+
+    def _parallel(self, item: dict[str, Any]) -> None:
+        self._draw_through_line(item, perpendicular=False)
+
+    def _intersection_lines(self, item: dict[str, Any]) -> None:
+        pid = str(item["id"])
+        line1 = item["line1"]
+        line2 = item["line2"]
+        a, b = _as_vec(self.points, line1[0]), _as_vec(self.points, line1[1])
+        c, d = _as_vec(self.points, line2[0]), _as_vec(self.points, line2[1])
+        intersection = euclid.intersect_lines_infinite(a, b, c, d)
+        if intersection is None:
+            raise ValueError("intersection_lines: parallel lines")
+        self.points[pid] = intersection
+
+    def _intersection_line_circle(self, item: dict[str, Any]) -> None:
+        pid = str(item["id"])
+        line_a = _as_vec(self.points, item["line"][0])
+        line_b = _as_vec(self.points, item["line"][1])
+        spec = {
+            key: item[key]
+            for key in ("center", "radius", "through", "radius_from")
+            if key in item
+        }
+        if "center" not in spec:
+            raise ValueError(
+                "intersection_line_circle needs circle center (and radius / through / radius_from)"
+            )
+        center, radius = _circle_spec_radius(spec, self.points)
+        intersections = euclid.line_circle_intersections(
+            line_a, line_b, center, radius
+        )
+        if not intersections:
+            raise ValueError("intersection_line_circle: no intersection")
+        which = int(item.get("which", 0))
+        if which < 0 or which >= len(intersections):
+            raise ValueError(
+                f"intersection_line_circle: which={which} but got {len(intersections)} point(s)"
+            )
+        self.points[pid] = intersections[which]
+
+    def _intersection_circles(self, item: dict[str, Any]) -> None:
+        circle1 = item["circle1"]
+        circle2 = item["circle2"]
+        o1, r1 = _circle_spec_radius(circle1, self.points)
+        o2, r2 = _circle_spec_radius(circle2, self.points)
+        intersections = euclid.circle_circle_intersections(o1, r1, o2, r2)
+        if not intersections:
+            raise ValueError(
+                "intersection_circles: no intersection (check radii and centers)"
+            )
+        ids = item.get("ids")
+        if not ids:
+            raise ValueError("intersection_circles requires ids: [P, Q] or [P]")
+        ids = [str(value) for value in ids]
+        if len(intersections) == 1:
+            if len(ids) != 1:
+                raise ValueError(
+                    "intersection_circles: tangent case yields one point; use ids with one name"
+                )
+            self.points[ids[0]] = intersections[0]
+        else:
+            if len(ids) != 2:
+                raise ValueError(
+                    "intersection_circles: two intersections require ids: [P, Q]"
+                )
+            self.points[ids[0]] = intersections[0]
+            self.points[ids[1]] = intersections[1]
+
+    def _perpendicular_bisector(self, item: dict[str, Any]) -> None:
+        src = item["source"]
+        if len(src) != 2:
+            raise ValueError("perpendicular_bisector requires source: [A, B]")
+        a = _as_vec(self.points, src[0])
+        b = _as_vec(self.points, src[1])
+        ax, ay = float(a[0]), float(a[1])
+        bx, by = float(b[0]), float(b[1])
+        midpoint = np.array(
+            [(ax + bx) / 2.0, (ay + by) / 2.0], dtype=np.float64
+        )
+        dx, dy = bx - ax, by - ay
+        direction_norm = math.sqrt(dx * dx + dy * dy)
+        if direction_norm < 1e-9:
+            raise ValueError("perpendicular_bisector: segment has zero length")
+        p1, p2 = _segment_far(
+            midpoint,
+            (-dy, dx),
+            self.width,
+            self.height,
+            direction_norm=direction_norm,
+        )
+        _append_segment_drawable(self.drawables, p1, p2, item)
+
+    def _angle_bisector(self, item: dict[str, Any]) -> None:
+        src = item.get("source") or {}
+        vertex = str(src.get("vertex"))
+        arms = src.get("arms")
+        if not arms or len(arms) != 2:
+            raise ValueError(
+                "angle_bisector requires source: { vertex: B, arms: [A, C] }"
+            )
+        pa = _as_vec(self.points, arms[0])
+        pb = _as_vec(self.points, vertex)
+        pc = _as_vec(self.points, arms[1])
+        bax, bay = float(pa[0]) - float(pb[0]), float(pa[1]) - float(pb[1])
+        bcx, bcy = float(pc[0]) - float(pb[0]), float(pc[1]) - float(pb[1])
+        n1 = math.sqrt(bax * bax + bay * bay)
+        n2 = math.sqrt(bcx * bcx + bcy * bcy)
+        if n1 < 1e-9 or n2 < 1e-9:
+            raise ValueError("angle_bisector: degenerate arm")
+        u1x, u1y = bax / n1, bay / n1
+        u2x, u2y = bcx / n2, bcy / n2
+        dx, dy = u1x + u2x, u1y + u2y
+        norm = math.sqrt(dx * dx + dy * dy)
+        if norm < 1e-9:
+            dx, dy = -u1y, u1x
+        else:
+            dx, dy = dx / norm, dy / norm
+        direction_norm = math.sqrt(dx * dx + dy * dy)
+        p1, p2 = _segment_far(
+            pb, (dx, dy), self.width, self.height, direction_norm=direction_norm
+        )
+        _append_segment_drawable(self.drawables, p1, p2, item)
+
+    def _circle(self, item: dict[str, Any]) -> None:
+        center = str(item["center"])
+        if center not in self.points:
+            raise ValueError(f"circle: unknown center {center!r}")
+        point = _as_vec(self.points, center)
+        radius = euclid.resolve_circle_radius(item, self.points)
+        self.drawables.append(
+            {
+                "kind": "circle",
+                "cx": float(point[0]),
+                "cy": float(point[1]),
+                "r": radius,
+                "style": (item.get("style") or "solid").lower(),
+                "id": item.get("id"),
+                "fill": item.get("fill"),
+            }
+        )
+
+    def _ellipse(self, item: dict[str, Any]) -> None:
+        center = str(item["center"])
+        if center not in self.points:
+            raise ValueError(f"ellipse: unknown center {center!r}")
+        point = _as_vec(self.points, center)
+        rx = float(item.get("rx", 0))
+        ry = float(item.get("ry", 0))
+        if rx <= 0 or ry <= 0:
+            raise ValueError("ellipse: rx and ry must be positive")
+        rotation = float(item.get("rotation_deg", item.get("rotate_deg", 0)))
+        self.drawables.append(
+            {
+                "kind": "ellipse",
+                "cx": float(point[0]),
+                "cy": float(point[1]),
+                "rx": rx,
+                "ry": ry,
+                "rotation_deg": rotation,
+                "style": (item.get("style") or "solid").lower(),
+                "id": item.get("id"),
+                "fill": item.get("fill"),
+            }
+        )
+
+
+_OPERATION_HANDLERS = {
+    "triangle": _GeometryBuilder._triangle,
+    "line": _GeometryBuilder._line,
+    "perpendicular": _GeometryBuilder._perpendicular,
+    "parallel": _GeometryBuilder._parallel,
+    "intersection_lines": _GeometryBuilder._intersection_lines,
+    "intersection_line_circle": _GeometryBuilder._intersection_line_circle,
+    "intersection_circles": _GeometryBuilder._intersection_circles,
+    "perpendicular_bisector": _GeometryBuilder._perpendicular_bisector,
+    "angle_bisector": _GeometryBuilder._angle_bisector,
+    "circle": _GeometryBuilder._circle,
+    "ellipse": _GeometryBuilder._ellipse,
+}
+
+
 def solve_geometry(
     constructions: list[dict[str, Any]],
     width: float,
     height: float,
     rng: np.random.Generator,
 ) -> GeometrySolveResult:
-    """Resolve named points and collect drawable primitives."""
-    points: dict[str, np.ndarray] = {}
-    drawables: list[dict[str, Any]] = []
-    foot_cache: dict[
-        tuple[int, int, int], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-    ] = {}
-
+    """Resolve named points and collect drawable primitives in input order."""
+    builder = _GeometryBuilder(width=width, height=height, rng=rng)
+    triangle = builder._triangle
+    apply = builder.apply
+    points = builder.points
+    last_projection = None
     for item in constructions:
         op = item.get("op")
         if op == "triangle":
-            nodes = item["nodes"]
-            attr = item.get("attr") or {}
-            t = (attr.get("type") or "random").lower()
-            min_angle = float(attr.get("min_angle", 25))
-            if t == "random":
-                a, b, c = _random_triangle(width, height, rng, min_angle)
-            else:
-                raise ValueError(f"unknown triangle attr.type: {t!r}")
-            if len(nodes) != 3:
-                raise ValueError("triangle requires exactly 3 nodes")
-            for name, pt in zip(nodes, (a, b, c), strict=True):
-                points[str(name)] = pt
-
+            triangle(item)
         elif op == "in_line":
             pid = item["id"]
             src = item["source"]
@@ -141,219 +395,38 @@ def solve_geometry(
             a = _as_vec(points, src[0])
             b = _as_vec(points, src[1])
             ax, ay = float(a[0]), float(a[1])
-            p = np.array(
-                [ax + params * (float(b[0]) - ax), ay + params * (float(b[1]) - ay)],
+            point = np.array(
+                [
+                    ax + params * (float(b[0]) - ax),
+                    ay + params * (float(b[1]) - ay),
+                ],
                 dtype=np.float64,
             )
-            points[str(pid)] = p
-
-        elif op == "line":
-            src = item["source"]
-            for n in src:
-                if str(n) not in points:
-                    raise ValueError(f"line references unknown point {n!r}")
-
+            points[str(pid)] = point
         elif op == "foot":
             pid = str(item["id"])
-            p = _as_vec(points, str(item["point"]))
+            point = _as_vec(points, str(item["point"]))
             a = _as_vec(points, item["line"][0])
             b = _as_vec(points, item["line"][1])
-            projection_key = (id(p), id(a), id(b))
-            cached_projection = foot_cache.get(projection_key)
-            if cached_projection is None:
-                h = euclid.foot_on_line(p, a, b)
-                foot_cache[projection_key] = (p, a, b, h)
-            else:
-                h = cached_projection[3]
-            points[pid] = h
-
+            foot, last_projection = _cached_projection(
+                last_projection, point, a, b
+            )
+            points[pid] = foot
         elif op == "reflection":
             pid = str(item["id"])
-            p = _as_vec(points, str(item["point"]))
+            point = _as_vec(points, str(item["point"]))
             a = _as_vec(points, item["line"][0])
             b = _as_vec(points, item["line"][1])
-            projection_key = (id(p), id(a), id(b))
-            cached_projection = foot_cache.get(projection_key)
-            if cached_projection is None:
-                h = euclid.foot_on_line(p, a, b)
-                foot_cache[projection_key] = (p, a, b, h)
-            else:
-                h = cached_projection[3]
-            rp = np.array(
-                [2.0 * float(h[0]) - float(p[0]), 2.0 * float(h[1]) - float(p[1])],
+            foot, last_projection = _cached_projection(
+                last_projection, point, a, b
+            )
+            points[pid] = np.array(
+                [
+                    2.0 * float(foot[0]) - float(point[0]),
+                    2.0 * float(foot[1]) - float(point[1]),
+                ],
                 dtype=np.float64,
             )
-            points[pid] = rp
-
-        elif op == "perpendicular":
-            p = _as_vec(points, str(item["through"]))
-            a = _as_vec(points, item["to"][0])
-            b = _as_vec(points, item["to"][1])
-            dx, dy = float(b[0]) - float(a[0]), float(b[1]) - float(a[1])
-            direction_norm = math.sqrt(dx * dx + dy * dy)
-            if direction_norm < 1e-9:
-                raise ValueError("perpendicular: degenerate line")
-            p1, p2 = _segment_far(
-                p, (-dy, dx), width, height, direction_norm=direction_norm
-            )
-            _append_segment_drawable(drawables, p1, p2, item)
-
-        elif op == "parallel":
-            p = _as_vec(points, str(item["through"]))
-            a = _as_vec(points, item["to"][0])
-            b = _as_vec(points, item["to"][1])
-            dx, dy = float(b[0]) - float(a[0]), float(b[1]) - float(a[1])
-            direction_norm = math.sqrt(dx * dx + dy * dy)
-            if direction_norm < 1e-9:
-                raise ValueError("parallel: degenerate direction")
-            p1, p2 = _segment_far(
-                p, (dx, dy), width, height, direction_norm=direction_norm
-            )
-            _append_segment_drawable(drawables, p1, p2, item)
-
-        elif op == "intersection_lines":
-            pid = str(item["id"])
-            l1 = item["line1"]
-            l2 = item["line2"]
-            a, b = _as_vec(points, l1[0]), _as_vec(points, l1[1])
-            c, d = _as_vec(points, l2[0]), _as_vec(points, l2[1])
-            inter = euclid.intersect_lines_infinite(a, b, c, d)
-            if inter is None:
-                raise ValueError("intersection_lines: parallel lines")
-            points[pid] = inter
-
-        elif op == "intersection_line_circle":
-            pid = str(item["id"])
-            la = _as_vec(points, item["line"][0])
-            lb = _as_vec(points, item["line"][1])
-            spec = {k: item[k] for k in ("center", "radius", "through", "radius_from") if k in item}
-            if "center" not in spec:
-                raise ValueError("intersection_line_circle needs circle center (and radius / through / radius_from)")
-            o, r = _circle_spec_radius(spec, points)
-            pts = euclid.line_circle_intersections(la, lb, o, r)
-            if not pts:
-                raise ValueError("intersection_line_circle: no intersection")
-            which = int(item.get("which", 0))
-            if which < 0 or which >= len(pts):
-                raise ValueError(f"intersection_line_circle: which={which} but got {len(pts)} point(s)")
-            pt = pts[which]
-            points[pid] = pt
-
-        elif op == "intersection_circles":
-            c1 = item["circle1"]
-            c2 = item["circle2"]
-            o1, r1 = _circle_spec_radius(c1, points)
-            o2, r2 = _circle_spec_radius(c2, points)
-            pts = euclid.circle_circle_intersections(o1, r1, o2, r2)
-            if not pts:
-                raise ValueError("intersection_circles: no intersection (check radii and centers)")
-            ids = item.get("ids")
-            if not ids:
-                raise ValueError("intersection_circles requires ids: [P, Q] or [P]")
-            ids = [str(x) for x in ids]
-            if len(pts) == 1:
-                if len(ids) != 1:
-                    raise ValueError("intersection_circles: tangent case yields one point; use ids with one name")
-                points[ids[0]] = pts[0]
-            else:
-                if len(ids) != 2:
-                    raise ValueError("intersection_circles: two intersections require ids: [P, Q]")
-                points[ids[0]] = pts[0]
-                points[ids[1]] = pts[1]
-
-        elif op == "perpendicular_bisector":
-            src = item["source"]
-            if len(src) != 2:
-                raise ValueError("perpendicular_bisector requires source: [A, B]")
-            a = _as_vec(points, src[0])
-            b = _as_vec(points, src[1])
-            ax, ay = float(a[0]), float(a[1])
-            bx, by = float(b[0]), float(b[1])
-            mid = np.array([(ax + bx) / 2.0, (ay + by) / 2.0], dtype=np.float64)
-            dx, dy = bx - ax, by - ay
-            direction_norm = math.sqrt(dx * dx + dy * dy)
-            if direction_norm < 1e-9:
-                raise ValueError("perpendicular_bisector: segment has zero length")
-            p1, p2 = _segment_far(
-                mid, (-dy, dx), width, height, direction_norm=direction_norm
-            )
-            _append_segment_drawable(drawables, p1, p2, item)
-
-        elif op == "angle_bisector":
-            src = item.get("source") or {}
-            vertex = str(src.get("vertex"))
-            arms = src.get("arms")
-            if not arms or len(arms) != 2:
-                raise ValueError("angle_bisector requires source: { vertex: B, arms: [A, C] }")
-            pa = _as_vec(points, arms[0])
-            pb = _as_vec(points, vertex)
-            pc = _as_vec(points, arms[1])
-            bax, bay = float(pa[0]) - float(pb[0]), float(pa[1]) - float(pb[1])
-            bcx, bcy = float(pc[0]) - float(pb[0]), float(pc[1]) - float(pb[1])
-            n1 = math.sqrt(bax * bax + bay * bay)
-            n2 = math.sqrt(bcx * bcx + bcy * bcy)
-            if n1 < 1e-9 or n2 < 1e-9:
-                raise ValueError("angle_bisector: degenerate arm")
-            u1x, u1y = bax / n1, bay / n1
-            u2x, u2y = bcx / n2, bcy / n2
-            dx, dy = u1x + u2x, u1y + u2y
-            n = math.sqrt(dx * dx + dy * dy)
-            if n < 1e-9:
-                dx, dy = -u1y, u1x
-            else:
-                dx, dy = dx / n, dy / n
-            direction_norm = math.sqrt(dx * dx + dy * dy)
-            p1, p2 = _segment_far(
-                pb, (dx, dy), width, height, direction_norm=direction_norm
-            )
-            _append_segment_drawable(drawables, p1, p2, item)
-
-        elif op == "circle":
-            center = str(item["center"])
-            if center not in points:
-                raise ValueError(f"circle: unknown center {center!r}")
-            c = _as_vec(points, center)
-            r = euclid.resolve_circle_radius(item, points)
-            drawables.append(
-                {
-                    "kind": "circle",
-                    "cx": float(c[0]),
-                    "cy": float(c[1]),
-                    "r": r,
-                    "style": (item.get("style") or "solid").lower(),
-                    "id": item.get("id"),
-                    "fill": item.get("fill"),
-                }
-            )
-
-        elif op == "ellipse":
-            center = str(item["center"])
-            if center not in points:
-                raise ValueError(f"ellipse: unknown center {center!r}")
-            c = _as_vec(points, center)
-            rx = float(item.get("rx", 0))
-            ry = float(item.get("ry", 0))
-            if rx <= 0 or ry <= 0:
-                raise ValueError("ellipse: rx and ry must be positive")
-            rot = float(item.get("rotation_deg", item.get("rotate_deg", 0)))
-            drawables.append(
-                {
-                    "kind": "ellipse",
-                    "cx": float(c[0]),
-                    "cy": float(c[1]),
-                    "rx": rx,
-                    "ry": ry,
-                    "rotation_deg": rot,
-                    "style": (item.get("style") or "solid").lower(),
-                    "id": item.get("id"),
-                    "fill": item.get("fill"),
-                }
-            )
-
         else:
-            raise ValueError(f"unknown construction op: {op!r}")
-
-    resolved_points = {
-        name: (float(point[0]), float(point[1])) for name, point in points.items()
-    }
-    return GeometrySolveResult(points=resolved_points, drawables=drawables)
+            apply(item)
+    return builder.result()

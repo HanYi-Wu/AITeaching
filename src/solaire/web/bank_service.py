@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import uuid
@@ -32,6 +33,7 @@ from solaire.web.security import assert_within_project, safe_filename_component
 from solaire.web.teacher_bank import bank_resource_root, bank_export_root
 from solaire.web.bank_storage import (
     BankDocument,
+    BankLibraryIndex,
     BankVersionConflict,
     apply_bank_import,
     bank_record_version,
@@ -96,6 +98,9 @@ def bank_catalog(project_root: Path) -> tuple[list[dict[str, Any]], list[dict[st
                     u = rec.unified
                     typ = u if isinstance(u, str) else "group"
                     meta = {}
+                    group_members = [f"{ns}/{rec.id}__{idx:02d}" for idx in range(1, len(rec.items) + 1)]
+                if isinstance(rec, QuestionItem):
+                    group_members = []
                 out.append(
                     {
                         "qualified_id": f"{ns}/{rec.id}",
@@ -111,7 +116,7 @@ def bank_catalog(project_root: Path) -> tuple[list[dict[str, Any]], list[dict[st
                         "storage_path": rel,
                         "storage_kind": "single",
                         "group_id": None,
-                        "group_member_qualified_ids": [],
+                        "group_member_qualified_ids": group_members,
                         "group_material": rec.material if isinstance(rec, QuestionGroupRecord) else None,
                     }
                 )
@@ -504,6 +509,42 @@ def _dump_record_yaml(rec: BankRecord) -> dict[str, Any]:
     return question_item_to_author_dict(rec)
 
 
+def _ensure_no_duplicate_id_collision(
+    library_index: BankLibraryIndex,
+    target_qid: str,
+    *,
+    ns: str,
+    current_qid: str | None = None,
+    group_member_count: int = 0,
+) -> None:
+    target_norm = target_qid.strip().casefold()
+    display_qid = f"{ns}/{target_qid}" if ns else target_qid
+    group_sub_norms = (
+        {f"{target_qid}__{idx:02d}".casefold() for idx in range(1, group_member_count + 1)}
+        if group_member_count > 0
+        else set()
+    )
+    records = (
+        record
+        for document in library_index.documents
+        for record in document.records
+    )
+    for rec in records:
+        existing_id = rec.id
+        if existing_id == current_qid:
+            continue
+        existing_norm = existing_id.strip().casefold()
+        if existing_norm == target_norm:
+            raise FileExistsError(f"题号已存在: {display_qid}")
+        if existing_norm in group_sub_norms:
+            conflict_qid = f"{ns}/{existing_id}" if ns else existing_id
+            raise FileExistsError(f"题组编号的小题标识与现有题号冲突: {conflict_qid}")
+        if isinstance(rec, QuestionGroupRecord):
+            for member_idx in range(1, len(rec.items) + 1):
+                if f"{rec.id}__{member_idx:02d}".strip().casefold() == target_norm:
+                    raise FileExistsError(f"题号与题组小题编号冲突: {display_qid}")
+
+
 def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *, create_only: bool = False,
                      expected_version: str | None = None) -> dict[str, str]:
     from solaire.common.answer_logic import PREFIX, decode
@@ -512,8 +553,21 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *,
         if answer.startswith(PREFIX):
             decode(answer)
     ns, qid = split_qualified_id(qualified_id)
-    if body.id != qid:
-        raise ValueError("题目编号与保存路径不一致；请刷新题目后重试，不能直接修改已有题目的编号")
+    next_qid = str(body.id or "").strip()
+    if not next_qid or "/" in next_qid or "\\" in next_qid:
+        raise ValueError("题目编号不能为空，且不能包含斜杠")
+    if create_only:
+        qid = qid.strip()
+        qualified_id = f"{ns}/{qid}" if ns else qid
+    if next_qid != qid:
+        if create_only:
+            raise ValueError("题目编号与保存路径不一致；创建题目时请保持编号一致")
+        if isinstance(body, QuestionGroupRecord):
+            raise ValueError("题组根编号暂不支持直接修改")
+    if body.id != next_qid:
+        body = body.model_copy(update={"id": next_qid})
+    new_qualified_id = f"{ns}/{next_qid}" if ns else next_qid
+    renamed = next_qid != qid
     lib = library_root_for_namespace(project_root, ns)
     with bank_write_lock(lib):
         library_index = read_bank_library(project_root, lib)
@@ -522,24 +576,73 @@ def save_bank_record(project_root: Path, qualified_id: str, body: BankRecord, *,
             current = bank_record_version(project_root, *found) if found is not None else None
             if expected_version.strip().strip('"') != current:
                 raise BankVersionConflict(current)
-        data = _dump_record_yaml(body)
-        if found is not None:
-            if create_only:
-                raise FileExistsError(qualified_id)
+        _ensure_no_duplicate_id_collision(
+            library_index,
+            next_qid,
+            ns=ns,
+            current_qid=None if create_only else qid,
+            group_member_count=len(body.items) if isinstance(body, QuestionGroupRecord) else 0,
+        )
+        if renamed:
+            if found is None:
+                raise FileNotFoundError(qualified_id)
+            if library_index.find(next_qid) is not None:
+                raise FileExistsError(f"题号已存在: {new_qualified_id}")
+            library_index.require_identity_complete(next_qid)
             document, index = found
-            path = document.path
-            data = replace_record_data(document, index, data)
+            data = _dump_record_yaml(body)
+            if len(document.records) == 1:
+                path = lib / f"{_safe_filename_id(next_qid)}.yaml"
+                same_path = path.resolve() == document.path.resolve()
+                same_file = same_path or (
+                    path.exists() and document.path.exists() and os.path.samefile(path, document.path)
+                )
+                if not same_file and path.exists():
+                    raise FileExistsError(f"题号文件冲突: {new_qualified_id}")
+                text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+                if same_file:
+                    write_text_atomic(document.path, text)
+                    if document.path.name != path.name:
+                        document.path.replace(path)
+                else:
+                    write_text_atomic(path, text)
+                    document.path.unlink()
+                saved_index = 0
+            else:
+                path = document.path
+                data = replace_record_data(document, index, data)
+                text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+                write_text_atomic(path, text)
+                saved_index = index
         else:
-            path = lib / f"{_safe_filename_id(qid)}.yaml"
-            if path.exists():
-                raise FileExistsError(str(path))
-            library_index.require_identity_complete(qid)
-        text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-        write_text_atomic(path, text)
-        saved_index = index if found is not None else 0
+            data = _dump_record_yaml(body)
+            if found is not None:
+                if create_only:
+                    raise FileExistsError(f"题号已存在: {qualified_id}")
+                document, index = found
+                path = document.path
+                data = replace_record_data(document, index, data)
+            else:
+                path = lib / f"{_safe_filename_id(qid)}.yaml"
+                if path.exists():
+                    raise FileExistsError(f"题号文件冲突: {qualified_id}")
+                library_index.require_identity_complete(qid)
+            text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+            write_text_atomic(path, text)
+            saved_index = index if found is not None else 0
         saved = BankDocument(path, text, data, [])
-        return {"storage_path": _rel_to_resource(project_root, path),
-                "version": bank_record_version(project_root, saved, saved_index)}
+        result = {
+            "storage_path": _rel_to_resource(project_root, path),
+            "version": bank_record_version(project_root, saved, saved_index),
+            "qualified_id": new_qualified_id,
+        }
+    if renamed:
+        from solaire.web.bank_folders import rename_question_assignment
+        from solaire.knowledge_forge.bindings import rename_question_bindings
+
+        rename_question_assignment(project_root, qualified_id, new_qualified_id)
+        rename_question_bindings(project_root, qualified_id, new_qualified_id)
+    return result
 
 
 def save_question(project_root: Path, qualified_id: str, item: QuestionItem, *, create_only: bool = False) -> dict[str, str]:

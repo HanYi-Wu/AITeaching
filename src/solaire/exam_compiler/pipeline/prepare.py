@@ -9,7 +9,10 @@ import yaml
 from solaire.exam_compiler.loaders.questions import LoadedQuestions, load_all_questions
 from solaire.exam_compiler.loaders.template_loader import load_template, resolve_template_yaml_path
 from solaire.exam_compiler.models import ExamConfig, ExamTemplate
-from solaire.exam_compiler.pipeline.validate import normalize_exam_for_preview, validate_exam, validate_exam_preview
+from solaire.exam_compiler.pipeline.validate import (
+    _normalize_and_validate_exam_preview,
+    validate_exam,
+)
 
 
 @dataclass(frozen=True)
@@ -54,8 +57,7 @@ def prepare_exam(
     template_path = resolve_template_yaml_path(exam_yaml, exam)
     template = load_template(template_path)
     if preview_relaxed:
-        exam, warnings = normalize_exam_for_preview(exam, template)
-        validate_exam_preview(exam, template, loaded)
+        exam, warnings = _normalize_and_validate_exam_preview(exam, template, loaded)
     else:
         validate_exam(exam, template, loaded)
 

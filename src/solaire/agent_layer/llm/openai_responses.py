@@ -84,6 +84,36 @@ def _messages_to_responses_input(
     return instructions, input_items
 
 
+def _build_responses_request(
+    *,
+    model: str,
+    input_items: list[dict[str, Any]],
+    instructions: str | None,
+    temperature: float,
+    max_tokens: int | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    parallel_tool_calls: bool = False,
+    stream: bool = False,
+    include_usage: bool = False,
+) -> dict[str, Any]:
+    """Compose the Responses API payload while keeping endpoint options explicit."""
+    req: dict[str, Any] = {"model": model, "input": input_items, "temperature": temperature}
+    if parallel_tool_calls:
+        req["parallel_tool_calls"] = True
+    if stream:
+        req["stream"] = True
+    if instructions:
+        req["instructions"] = instructions
+    if max_tokens is not None:
+        req["max_output_tokens"] = max_tokens
+    if tools:
+        req["tools"] = tools
+        req["tool_choice"] = "auto"
+    if include_usage:
+        req["stream_options"] = {"include_usage": True}
+    return req
+
+
 def _parse_response_output(resp: Any) -> tuple[str | None, str | None, list[dict[str, Any]], str, dict[str, int]]:
     text_parts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
@@ -164,20 +194,16 @@ class OpenAIResponsesAdapter:
         if stream:
             raise NotImplementedError("use chat_stream")
         instructions, input_items = _messages_to_responses_input(messages)
-        req: dict[str, Any] = {
-            "model": self.model,
-            "input": input_items,
-            "temperature": temperature,
-            "parallel_tool_calls": True,
-        }
-        if instructions:
-            req["instructions"] = instructions
-        if max_tokens is not None:
-            req["max_output_tokens"] = max_tokens
         rtools = _tools_for_responses(tools)
-        if rtools:
-            req["tools"] = rtools
-            req["tool_choice"] = "auto"
+        req = _build_responses_request(
+            model=self.model,
+            input_items=input_items,
+            instructions=instructions,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=rtools,
+            parallel_tool_calls=True,
+        )
         resp = await self._client.responses.create(**req)
         content, reasoning, tool_calls, finish_reason, usage = _parse_response_output(resp)
         return ChatResponse(
@@ -195,14 +221,13 @@ class OpenAIResponsesAdapter:
         temperature: float = 0.3,
     ) -> AsyncIterator[str]:
         instructions, input_items = _messages_to_responses_input(messages)
-        req: dict[str, Any] = {
-            "model": self.model,
-            "input": input_items,
-            "temperature": temperature,
-            "stream": True,
-        }
-        if instructions:
-            req["instructions"] = instructions
+        req = _build_responses_request(
+            model=self.model,
+            input_items=input_items,
+            instructions=instructions,
+            temperature=temperature,
+            stream=True,
+        )
         stream = await self._client.responses.create(**req)
         async for event in stream:
             et = getattr(event, "type", None)
@@ -220,29 +245,25 @@ class OpenAIResponsesAdapter:
         max_tokens: int | None = None,
     ) -> AsyncIterator[ChatChunk]:
         instructions, input_items = _messages_to_responses_input(messages)
-        req: dict[str, Any] = {
-            "model": self.model,
-            "input": input_items,
-            "temperature": temperature,
-            "parallel_tool_calls": True,
-            "stream": True,
-        }
-        if instructions:
-            req["instructions"] = instructions
-        if max_tokens is not None:
-            req["max_output_tokens"] = max_tokens
         rtools = _tools_for_responses(tools)
-        if rtools:
-            req["tools"] = rtools
-            req["tool_choice"] = "auto"
+        req = _build_responses_request(
+            model=self.model,
+            input_items=input_items,
+            instructions=instructions,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=rtools,
+            parallel_tool_calls=True,
+            stream=True,
+            include_usage=True,
+        )
         try:
-            req["stream_options"] = {"include_usage": True}
             stream = await self._client.responses.create(**req)
         except TypeError:
             req.pop("stream_options", None)
             stream = await self._client.responses.create(**req)
 
-        reasoning_buf = ""
+        reasoning_parts: list[str] = []
         usage: dict[str, int] | None = None
         final_resp: Any | None = None
 
@@ -256,7 +277,7 @@ class OpenAIResponsesAdapter:
                 d = getattr(event, "delta", None)
                 if d:
                     piece = str(d)
-                    reasoning_buf += piece
+                    reasoning_parts.append(piece)
                     yield ChatChunk(delta_reasoning=piece)
             elif et == "response.completed":
                 final_resp = getattr(event, "response", None)
@@ -274,12 +295,12 @@ class OpenAIResponsesAdapter:
                 finish_reason=fr,
                 raw_tool_calls=tool_calls,
                 usage=usage,
-                accumulated_reasoning=reasoning_buf or None,
+                accumulated_reasoning="".join(reasoning_parts) or None,
             )
         else:
             yield ChatChunk(
                 finish_reason="stop",
                 raw_tool_calls=[],
                 usage=usage,
-                accumulated_reasoning=reasoning_buf or None,
+                accumulated_reasoning="".join(reasoning_parts) or None,
             )

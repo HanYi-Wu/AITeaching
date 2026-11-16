@@ -1,26 +1,54 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ChangeEvent,
-  type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, Filter, Plus, Upload, Download, Save } from "lucide-react";
+import { ImeInput, ImeTextarea } from "../../components/ImeFields";
 import { MetadataFilterControls } from "../../components/MetadataFilterControls";
 import { useToolBarActions } from "../../contexts/ToolBarContext";
 import { QUESTION_TYPE_OPTIONS } from "../../lib/questionTypes";
 import { isImeComposingKeyboardEvent } from "../../lib/ime";
 import { cn } from "../../lib/utils";
 import type { MetadataFilters, MetadataFilterDefinition } from "../../lib/metadataFilters";
-import type { BankListItem } from "./bankModel";
+import { validateQuestionIdInCollection, type BankListItem } from "./bankModel";
 import type { BankImportTransactionState } from "./sessionCore/types";
 import "../../ui-redesign/g48/g48-bank.css";
 import { Select as AppSelect } from "../../components/ui/select";
 
 function isBankSelectContentTarget(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest("[data-or-select-content]") !== null;
+}
+
+class BankToolbarPropsStore {
+  private snapshot: BankToolbarProps;
+  private listeners = new Set<() => void>();
+
+  constructor(initial: BankToolbarProps) {
+    this.snapshot = initial;
+  }
+
+  getSnapshot = () => this.snapshot;
+
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  setSnapshot(next: BankToolbarProps) {
+    this.snapshot = next;
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
 }
 
 export interface BankToolbarProps {
@@ -79,9 +107,37 @@ export interface BankToolbarProps {
   hasDetail: boolean;
   dirty: boolean;
   onSave: () => void | Promise<void>;
+  active?: boolean;
 }
 
-export function BankToolbar(props: BankToolbarProps) {
+/**
+ * Mounts persistent left/right toolbar slots once and pushes prop updates through an
+ * external store so typing never rebuilds the ToolBarContext DOM mid-composition.
+ */
+export function BankToolbar({ active = true, ...props }: BankToolbarProps) {
+  const { setToolBar, clearToolBar } = useToolBarActions();
+  const [store] = useState(() => new BankToolbarPropsStore(props));
+
+  useLayoutEffect(() => {
+    store.setSnapshot(props);
+  });
+
+  useEffect(() => {
+    if (!active) {
+      clearToolBar();
+      return;
+    }
+    setToolBar({
+      left: <BankToolbarLeft store={store} />,
+      right: <BankToolbarRight store={store} />,
+    });
+    return () => clearToolBar();
+  }, [active, clearToolBar, setToolBar, store]);
+
+  return null;
+}
+
+function BankToolbarLeft({ store }: { store: BankToolbarPropsStore }) {
   const {
     busy,
     selectedExportIds = [],
@@ -126,14 +182,9 @@ export function BankToolbar(props: BankToolbarProps) {
     onImportYaml,
     importTransaction,
     onRetryRefreshOnly,
-    selectedId,
-    hasDetail,
-    dirty,
-    onSave,
-  } = props;
+  } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 
   const { t } = useTranslation(["bank", "lib", "common"]);
-  const { setToolBar, clearToolBar } = useToolBarActions();
   const searchDraftRef = useRef(searchInput);
   const commitSearchDraft = useCallback((value: string) => {
     searchDraftRef.current = value;
@@ -147,7 +198,6 @@ export function BankToolbar(props: BankToolbarProps) {
     onImportFile,
     onImportYaml,
     onRetryRefreshOnly,
-    onSave,
   });
   callbacksRef.current = {
     onExport,
@@ -155,12 +205,7 @@ export function BankToolbar(props: BankToolbarProps) {
     onImportFile,
     onImportYaml,
     onRetryRefreshOnly,
-    onSave,
   };
-
-  useEffect(() => {
-    return () => clearToolBar();
-  }, [clearToolBar]);
 
   const [bankFilterMenuOpen, setBankFilterMenuOpen] = useState(false);
   const bankFilterDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -232,8 +277,18 @@ export function BankToolbar(props: BankToolbarProps) {
     };
   }, [bankImportOpen]);
 
-  useEffect(() => {
-    const left: ReactNode = (
+  const newIdError = useMemo(() => {
+    if (!newId.trim()) return null;
+    return validateQuestionIdInCollection({
+      items,
+      subject: newSubject,
+      collection: newCollection,
+      rawId: newId,
+      groupMemberCount: newType === "group" ? 1 : 0,
+    });
+  }, [items, newSubject, newCollection, newId, newType]);
+
+  return (
       <div className="flex flex-wrap items-center gap-2 py-0.5">
         {/* 筛选菜单 */}
         <div className="relative shrink-0" ref={bankFilterDropdownRef}>
@@ -410,23 +465,33 @@ export function BankToolbar(props: BankToolbarProps) {
                       <option value="__custom__">{t("otherSubject")}</option>
                     </AppSelect>
                     {newSubjectSelectValue === "__custom__" && (
-                      <input
+                      <ImeInput
                         className="or-input or-g48-input w-full"
                         value={newSubject}
-                        onChange={(e) => setNewSubject(e.target.value)}
+                        onValueChange={setNewSubject}
                         placeholder={t("newSubjectPh")}
                       />
                     )}
                   </div>
                 </label>
-                <label className="block text-sm font-medium text-[var(--or-muted)]">
-                  {t("newId")}
-                  <input
-                    className="or-input or-g48-input mt-1 w-full font-mono text-sm"
-                    value={newId}
-                    onChange={(e) => setNewId(e.target.value)}
-                  />
-                </label>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--or-muted)]">
+                    {t("newId")}
+                    <ImeInput
+                      aria-invalid={Boolean(newIdError)}
+                      className={`or-input or-g48-input mt-1 w-full text-sm ${
+                        newIdError ? "border-[var(--or-error)] focus:border-[var(--or-error)]" : ""
+                      }`}
+                      value={newId}
+                      onValueChange={setNewId}
+                    />
+                  </label>
+                  {newIdError ? (
+                    <p role="alert" className="mt-1 text-xs font-medium text-[var(--or-error)]">
+                      {newIdError}
+                    </p>
+                  ) : null}
+                </div>
                 <label className="block text-sm font-medium text-[var(--or-muted)]">
                   {t("newType")}
                   <AppSelect
@@ -460,11 +525,11 @@ export function BankToolbar(props: BankToolbarProps) {
                     </label>
                     <label className="block text-sm font-medium text-[var(--or-muted)]">
                       {t("sharedMaterial")}
-                      <textarea
+                      <ImeTextarea
                         className="or-input or-g48-input mt-1 w-full bg-[var(--or-card)] font-mono text-sm leading-relaxed"
                         rows={3}
                         value={newGroupMaterial}
-                        onChange={(e) => setNewGroupMaterial(e.target.value)}
+                        onValueChange={setNewGroupMaterial}
                         placeholder={t("sharedMaterialPh")}
                       />
                     </label>
@@ -473,7 +538,7 @@ export function BankToolbar(props: BankToolbarProps) {
                 <button
                   type="button"
                   className="or-button or-button-primary or-g48-pill-btn or-g48-pill-btn-primary mt-1 w-full justify-center py-2 text-sm"
-                  disabled={busy || !newSubject.trim() || !newCollection.trim() || !newId.trim()}
+                  disabled={busy || !newSubject.trim() || !newCollection.trim() || !newId.trim() || Boolean(newIdError)}
                   onClick={async () => {
                     const ok = await callbacksRef.current.onCreateQuestion();
                     if (ok !== false) {
@@ -551,19 +616,19 @@ export function BankToolbar(props: BankToolbarProps) {
                       <option value="__custom__">{t("otherSubject")}</option>
                     </AppSelect>
                     {importSubjectSelectValue === "__custom__" && (
-                      <input
+                      <ImeInput
                         className="or-input or-g48-input w-full"
                         value={importSubject}
-                        onChange={(e) => setImportSubject(e.target.value)}
+                        onValueChange={setImportSubject}
                         placeholder={t("folderNamePh")}
                       />
                     )}
                   </div>
                 ) : (
-                  <input
+                  <ImeInput
                     className="or-input or-g48-input mt-1 w-full"
                     value={importSubject}
-                    onChange={(e) => setImportSubject(e.target.value)}
+                    onValueChange={setImportSubject}
                     placeholder={t("folderNamePh")}
                   />
                 )}
@@ -594,12 +659,12 @@ export function BankToolbar(props: BankToolbarProps) {
                   {t("pasteYaml")}
                 </summary>
                 <p className="mt-1 text-[13px] text-[var(--or-muted)]">{t("pasteYamlHint")}</p>
-                <textarea
+                <ImeTextarea
                   className="or-input or-g48-input mt-2 w-full bg-[var(--or-card)] font-mono text-sm leading-relaxed"
                   rows={4}
                   placeholder={t("pasteYamlTextareaPh")}
                   value={importYaml}
-                  onChange={(e) => setImportYaml(e.target.value)}
+                  onValueChange={setImportYaml}
                 />
                 <button
                   type="button"
@@ -659,82 +724,42 @@ export function BankToolbar(props: BankToolbarProps) {
           <span className="h-4 w-4 shrink-0" aria-hidden />
         </button>
       </div>
-    );
+  );
+}
 
-    const right: ReactNode =
-      selectedId && hasDetail ? (
-        <div className="flex items-center gap-2.5 py-0.5">
-          {dirty ? (
-            <span className="flex items-center gap-1.5 text-[13px] font-medium text-[var(--or-on-warning)]">
-              <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-              {t("common:unsavedHint")}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            className={cn(
-              "or-button or-pill or-g48-pill-btn or-g48-pill-dropdown px-4 py-1.5 text-sm font-semibold",
-              dirty ? "or-button-primary or-g48-pill-btn-primary shadow-sm" : "opacity-40 cursor-not-allowed",
-            )}
-            disabled={busy || !dirty}
-            onClick={() => void callbacksRef.current.onSave()}
-          >
-            <Save className="h-4 w-4 shrink-0" aria-hidden />
-            <span className="text-center">{t("components:bankEditor.save")}</span>
-            <span className="h-4 w-4 shrink-0" aria-hidden />
-          </button>
-        </div>
-      ) : null;
+function BankToolbarRight({ store }: { store: BankToolbarPropsStore }) {
+  const { busy, selectedId, hasDetail, dirty, onSave } = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getSnapshot,
+  );
+  const { t } = useTranslation(["bank", "lib", "common"]);
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
 
-    setToolBar({ left, right });
-  }, [
-    t,
-    busy,
-    selectedExportIds,
-    bankFilterMenuOpen,
-    bankFilterSummary,
-    filterSubject,
-    filterType,
-    filterCategory,
-    searchInput,
-    commitSearchDraft,
-    metadataFilterDefinitions,
-    metadataFilters,
-    subjects,
-    items,
-    setFilterSubject,
-    setFilterCollection,
-    setFilterType,
-    setSearchInput,
-    setMetadataFilters,
-    setFilterCategory,
-    bankNewQuestionOpen,
-    newSubjectSelectValue,
-    importSubjectList,
-    newSubject,
-    newId,
-    newType,
-    newGroupUnified,
-    newGroupMaterial,
-    newCollection,
-    setNewSubject,
-    setNewId,
-    setNewType,
-    setNewGroupUnified,
-    setNewGroupMaterial,
-    bankImportOpen,
-    importSummaryHint,
-    importSubjectSelectValue,
-    importSubject,
-    importYaml,
-    importTransaction,
-    setImportSubject,
-    setImportYaml,
-    selectedId,
-    hasDetail,
-    dirty,
-    setToolBar,
-  ]);
+  if (!(selectedId && hasDetail)) return null;
 
-  return null;
+  return (
+    <div className="flex items-center gap-2.5 py-0.5">
+      {dirty ? (
+        <span className="flex items-center gap-1.5 text-[13px] font-medium text-[var(--or-on-warning)]">
+          <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+          {t("common:unsavedHint")}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        className={cn(
+          "or-button or-pill or-g48-pill-btn or-g48-pill-dropdown px-4 py-1.5 text-sm font-semibold",
+          dirty ? "or-button-primary or-g48-pill-btn-primary shadow-sm" : "opacity-40 cursor-not-allowed",
+        )}
+        disabled={busy || !dirty}
+        onClick={() => void onSaveRef.current()}
+      >
+        <Save className="h-4 w-4 shrink-0" aria-hidden />
+        <span className="text-center">{t("components:bankEditor.save")}</span>
+        <span className="h-4 w-4 shrink-0" aria-hidden />
+      </button>
+    </div>
+  );
 }

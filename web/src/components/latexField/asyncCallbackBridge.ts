@@ -1,4 +1,8 @@
-import { isWidget, widgetSerializedLength } from "./contentPreview";
+import {
+  isWidget,
+  widgetSerializedLength,
+  type SerializedSelectionOffsets,
+} from "./contentPreview";
 
 export type FieldSelection = { start: number; end: number };
 
@@ -133,7 +137,7 @@ export function getFieldSelection(
   hiddenTextareaEl: HTMLTextAreaElement | null,
   sourceTextareaEl: HTMLTextAreaElement | null,
   mode: "visual" | "source",
-  getSerializedCaretOffsetFn: (root: HTMLElement, range: Range) => number,
+  getSerializedSelectionOffsetsFn: (root: HTMLElement, range: Range) => SerializedSelectionOffsets,
 ): FieldSelection {
   if (mode === "source" && sourceTextareaEl) {
     const start = sourceTextareaEl.selectionStart ?? 0;
@@ -153,15 +157,7 @@ export function getFieldSelection(
     if (sel && sel.rangeCount > 0) {
       const r = sel.getRangeAt(0);
       if (editorEl.contains(r.commonAncestorContainer)) {
-        const rs = document.createRange();
-        rs.setStart(r.startContainer, r.startOffset);
-        rs.collapse(true);
-        const start = getSerializedCaretOffsetFn(editorEl, rs);
-
-        const re = document.createRange();
-        re.setStart(r.endContainer, r.endOffset);
-        re.collapse(true);
-        const end = r.collapsed ? start : getSerializedCaretOffsetFn(editorEl, re);
+        const { start, end } = getSerializedSelectionOffsetsFn(editorEl, r);
 
         const min = Math.min(start, end);
         const max = Math.max(start, end);

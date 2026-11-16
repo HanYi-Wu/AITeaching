@@ -55,7 +55,11 @@ export function buildQuestionFromForm(
   detail: BankDetailState,
   metaRows: MetaRow[]
 ): QuestionJson {
-  const q = { ...detail.question };
+  const nextId = detail.question.id.trim();
+  if (!nextId || nextId.includes("/") || nextId.includes("\\")) {
+    throw new Error("题号不能为空，且不能包含斜杠");
+  }
+  const q = { ...detail.question, id: nextId };
   const meta: Record<string, unknown> = {};
   for (const row of metaRows) {
     if (row.key.trim()) {
@@ -148,6 +152,7 @@ export interface ReconcileResult {
 
 export function reconcileSavedDetail(params: {
   qid: string;
+  previousQid?: string;
   serverDetail: BankDetailState;
   currentDetail: BankDetailState | null;
   currentMetaRows: MetaRow[];
@@ -159,6 +164,7 @@ export function reconcileSavedDetail(params: {
 }): ReconcileResult {
   const {
     qid,
+    previousQid,
     serverDetail,
     currentDetail,
     currentMetaRows,
@@ -172,7 +178,9 @@ export function reconcileSavedDetail(params: {
   const nextMetaRowsForServer = computeDetailMetaRows(serverDetail);
   const nextBaseline = createBaselineRecord(serverDetail, nextMetaRowsForServer);
 
-  const belongsToSameQuestion = currentDetail?.qualified_id === qid;
+  const belongsToSameQuestion =
+    currentDetail?.qualified_id === qid ||
+    (previousQid !== undefined && currentDetail?.qualified_id === previousQid);
   const formUnchanged =
     !belongsToSameQuestion ||
     (JSON.stringify(currentDetail) === submittedDetailJson &&
@@ -187,8 +195,12 @@ export function reconcileSavedDetail(params: {
   if (formUnchanged) {
     nextDetail = serverDetail;
     nextMetaRows = nextMetaRowsForServer;
-  } else if (savedVersion && currentDetail?.qualified_id === qid) {
-    nextDetail = { ...currentDetail, version: savedVersion };
+  } else if (belongsToSameQuestion && currentDetail) {
+    nextDetail = {
+      ...currentDetail,
+      qualified_id: qid,
+      ...(savedVersion ? { version: savedVersion } : {}),
+    };
   }
 
   if (yamlUnchanged) {

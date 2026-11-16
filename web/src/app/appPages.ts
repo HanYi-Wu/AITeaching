@@ -6,6 +6,7 @@ export type AppPage =
   | "template"
   | "graph"
   | "analysis"
+  | "tools"
   | "help"
   | "log"
   | "admin"

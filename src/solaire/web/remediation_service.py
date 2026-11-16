@@ -82,7 +82,11 @@ def _section_accepts(section_type: str, question_type: str | None) -> bool:
     return section_type == question_type
 
 
-def _load_project_questions(project_root: Path):
+def _load_project_questions(
+    project_root: Path,
+    *,
+    selected_qualified_ids: set[str] | None = None,
+):
     probe = ensure_probe_list_yaml(project_root)
     question_libraries = []
 
@@ -91,7 +95,13 @@ def _load_project_questions(project_root: Path):
     for lib in raw_probe.get("question_libraries") or []:
         if isinstance(lib, dict):
             question_libraries.append((str(lib.get("namespace") or ""), str(lib.get("path") or "")))
-    return load_all_questions(probe, question_libraries)
+    if selected_qualified_ids is None:
+        return load_all_questions(probe, question_libraries)
+    return load_all_questions(
+        probe,
+        question_libraries,
+        selected_qualified_ids=selected_qualified_ids,
+    )
 
 
 def _build_ai_assist_prompt(payload: dict[str, Any]) -> str:
@@ -139,17 +149,17 @@ def _node_gap_reason(selected: list[str], excluded_source: list[str], missing: l
     return "no_available_questions"
 
 
-def plan_remediation_draft(
+def _plan_remediation_draft_from_source(
     project_root: Path,
     *,
+    source_doc: dict[str, Any],
     exam_id: str,
     batch_id: str,
     weak_limit: int = 5,
     practice_per_node: int = 4,
     exclude_source_exam_questions: bool = True,
 ) -> dict[str, Any]:
-    """Preview the actual practice material that would be generated."""
-    source_doc = load_exam_workspace(project_root, exam_id)
+    """Build a draft plan from the source workspace already loaded by the caller."""
     suggestions = teaching_suggestions_v1(
         project_root,
         exam_id,
@@ -157,7 +167,21 @@ def plan_remediation_draft(
         weak_limit=max(1, int(weak_limit)),
         practice_per_node=max(1, int(practice_per_node)),
     )
-    loaded = _load_project_questions(project_root)
+    drafts_with_ids: list[tuple[dict[str, Any], list[str]]] = []
+    selected_question_ids: set[str] = set()
+    for draft in suggestions.get("practice_drafts") or []:
+        if not isinstance(draft, dict):
+            continue
+        suggested_ids = [str(qid) for qid in draft.get("suggested_question_ids") or []]
+        drafts_with_ids.append((draft, suggested_ids))
+        selected_question_ids.update(suggested_ids)
+
+    # The loader still parses every file and checks every id for compatibility;
+    # only the records that can appear in this plan are materialized.
+    loaded = _load_project_questions(
+        project_root,
+        selected_qualified_ids=selected_question_ids,
+    )
     source_qids = _source_question_ids(source_doc) if exclude_source_exam_questions else set()
 
     used: set[str] = set()
@@ -171,13 +195,10 @@ def plan_remediation_draft(
         if isinstance(x, dict) and x.get("node_id")
     }
 
-    for draft in suggestions.get("practice_drafts") or []:
-        if not isinstance(draft, dict):
-            continue
+    for draft, suggested_ids in drafts_with_ids:
         selected: list[str] = []
         excluded_source: list[str] = []
         missing: list[str] = []
-        suggested_ids = [str(qid) for qid in draft.get("suggested_question_ids") or []]
 
         for qid in suggested_ids:
             if qid in used:
@@ -245,6 +266,28 @@ def plan_remediation_draft(
         "prompt": _build_ai_assist_prompt(payload),
     }
     return payload
+
+
+def plan_remediation_draft(
+    project_root: Path,
+    *,
+    exam_id: str,
+    batch_id: str,
+    weak_limit: int = 5,
+    practice_per_node: int = 4,
+    exclude_source_exam_questions: bool = True,
+) -> dict[str, Any]:
+    """Preview the actual practice material that would be generated."""
+    source_doc = load_exam_workspace(project_root, exam_id)
+    return _plan_remediation_draft_from_source(
+        project_root,
+        source_doc=source_doc,
+        exam_id=exam_id,
+        batch_id=batch_id,
+        weak_limit=weak_limit,
+        practice_per_node=practice_per_node,
+        exclude_source_exam_questions=exclude_source_exam_questions,
+    )
 
 
 def ensure_remediation_practice_template(project_root: Path) -> tuple[str, str]:
@@ -388,8 +431,9 @@ def create_remediation_draft(
     source_doc = load_exam_workspace(project_root, exam_id)
     subject = _source_subject(source_doc, exam_id)
     source_label = _source_export_label(source_doc, exam_id)
-    plan = plan_remediation_draft(
+    plan = _plan_remediation_draft_from_source(
         project_root,
+        source_doc=source_doc,
         exam_id=exam_id,
         batch_id=batch_id,
         weak_limit=weak_limit,

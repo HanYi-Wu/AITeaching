@@ -498,7 +498,6 @@ export function PlatformAccountDialog({ accountUser, open, onOpenChange, onProfi
               <section className="management-panel">
                 <div>
                   <h3 className="text-base font-semibold text-[var(--or-text)]">修改登录密码</h3>
-                  <p className="mt-1 text-sm text-[var(--or-muted)]">密码至少 6 位</p>
                 </div>
                 <form className="mt-4 space-y-4" onSubmit={(event) => void submitPassword(event)}>
                   <div className="management-form-grid">

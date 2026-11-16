@@ -18,6 +18,7 @@ const namespaces = [
   "agent",
   "components",
   "lib",
+  "tools",
 ] as const;
 
 export async function initI18n(initialLng: AppLang) {

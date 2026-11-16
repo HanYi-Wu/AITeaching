@@ -217,4 +217,40 @@ describe("BankToolbar component", () => {
     fireEvent.click(screen.getByRole("button", { name: /筛选/ }));
     expect(screen.getByPlaceholderText("题号、题干摘要或标签")).toHaveValue("blur text");
   });
+
+  it("shows inline alert and disables create when new question id duplicates an existing item", async () => {
+    const items = [
+      {
+        id: "第一题",
+        qualified_id: "数学/默认/第一题",
+        collection: "数学/默认",
+        subject: "数学",
+        type: "single_choice",
+        content_preview: "",
+        metadata: {},
+        storage_path: "resource/数学/默认/第一题.yaml",
+        storage_kind: "single",
+      },
+    ];
+    const renderToolbar = (newId: string) => (
+      <TestI18nProvider>
+        <ToolBarProvider>
+          <Consumer />
+          <BankToolbar {...defaultProps} items={items} newSubject="数学" newCollection="默认" newId={newId} />
+        </ToolBarProvider>
+      </TestI18nProvider>
+    );
+
+    const { rerender } = render(renderToolbar(" 第一题 "));
+    await userEvent.click(screen.getByRole("button", { name: /新建题目/ }));
+
+    const idInput = screen.getByRole("textbox", { name: "题号" });
+    expect(idInput.className).not.toContain("font-mono");
+    expect(screen.getByRole("alert")).toHaveTextContent("题号“第一题”已存在");
+    expect(screen.getByRole("button", { name: "创建空白草稿" })).toBeDisabled();
+
+    rerender(renderToolbar("第二题"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建空白草稿" })).toBeEnabled();
+  });
 });

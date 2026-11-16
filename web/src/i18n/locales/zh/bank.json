@@ -81,6 +81,7 @@
   "removeGroup": "删除整组",
   "remove": "删除",
   "deleteQuestionTitle": "删除题目",
+  "deleteQuestionConfirm": "确定要删除题目 {{id}} 吗？此操作不可撤销。",
   "livePreview": "预览",
   "previewEmpty": "选中题目即可在此查看公式与排版效果。",
   "sharedMaterialLabel": "共用材料",

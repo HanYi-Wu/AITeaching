@@ -1,6 +1,6 @@
 import type { MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Redo2, Undo2 } from "lucide-react";
+import { AlertCircle, ChevronRight, Redo2, Undo2 } from "lucide-react";
 import { ContentTags } from "../../components/ContentTags";
 import { KatexPlainPreview } from "../../components/KatexText";
 import { QuestionHoverDetails } from "../../components/QuestionHoverDetails";
@@ -122,7 +122,6 @@ export function ComposePaperEditorPanel({
   onCancelConflictOverwrite,
   onConfirmConflictOverwrite,
   onError,
-  onOpenAutoCompose,
   onOpenDuplicateReport,
   duplicateReportStale = false,
   duplicateFlaggedCount = 0,
@@ -145,20 +144,12 @@ export function ComposePaperEditorPanel({
       <div className="or-g49-compose-actions flex w-full shrink-0 flex-row flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-y border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-block)_70%,transparent)] px-2 py-2.5 touch-pan-x">
         <button
           type="button"
-          disabled={busy || !selectedTpl}
-          onClick={onOpenAutoCompose}
-          className="or-g49-btn inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-2 text-xs font-semibold disabled:opacity-50"
-        >
-          按目标组卷
-        </button>
-        <button
-          type="button"
           disabled={busy || Object.values(bySection).every((ids) => ids.length === 0)}
           onClick={onOpenDuplicateReport}
           aria-label={`查重${duplicateReportStale ? "，报告已失效" : ""}${duplicateFlaggedCount ? `，涉及 ${duplicateFlaggedCount} 题` : ""}`}
-          className="inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 text-xs font-medium text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-50"
+          className="inline-flex h-10 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 text-center text-xs font-medium text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-50"
         >
-          查重
+          <span>查重</span>
           {duplicateFlaggedCount > 0 ? <span className="rounded-full bg-[var(--or-warning-container)] px-1.5 py-0.5 text-[var(--or-on-warning)]">{duplicateFlaggedCount}</span> : null}
           {duplicateReportStale ? <span className="text-[var(--or-on-warning)]">已失效</span> : null}
         </button>
@@ -188,32 +179,28 @@ export function ComposePaperEditorPanel({
         <button
           type="button"
           title={t("compose:removeFromPaper")}
-          aria-label={t("compose:removeFromPaper")}
           onClick={onRemoveFromRight}
-          className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-2 text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)]"
+          className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 text-center text-xs font-medium text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)]"
         >
-          <ChevronLeft className="h-4 w-4 shrink-0" />
-          <span className="or-g49-compose-action-label whitespace-nowrap text-xs">{t("compose:removeFromPaper")}</span>
+          <span className="whitespace-nowrap">{t("compose:removeShort")}</span>
         </button>
         <button
           type="button"
           title={t("compose:moveUp")}
-          aria-label={t("compose:moveUp")}
           disabled={!canMoveRight}
           onClick={() => onMoveSelectedRight("up")}
-          className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-40"
+          className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 text-center text-xs font-medium text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-40"
         >
-          <ArrowUp className="h-4 w-4" />
+          <span className="whitespace-nowrap">{t("compose:moveUpShort")}</span>
         </button>
         <button
           type="button"
           title={t("compose:moveDown")}
-          aria-label={t("compose:moveDown")}
           disabled={!canMoveRight}
           onClick={() => onMoveSelectedRight("down")}
-          className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-40"
+          className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 text-center text-xs font-medium text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)] disabled:opacity-40"
         >
-          <ArrowDown className="h-4 w-4" />
+          <span className="whitespace-nowrap">{t("compose:moveDownShort")}</span>
         </button>
       </div>
 
@@ -606,7 +593,7 @@ export function ComposePaperEditorPanel({
                                     : "border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] hover:border-[var(--or-outline)] hover:bg-[var(--or-card)]",
                                 )}
                               >
-                                <span title={qid} className="font-mono text-[13px] font-medium text-[var(--or-text)] [overflow-wrap:anywhere]">
+                                <span title={qid} className="text-[13px] font-medium text-[var(--or-text)] [overflow-wrap:anywhere]">
                                   {qid}
                                 </span>
                               {duplicateQuestionMap?.get(qid) ? <DuplicateBadge report={duplicateQuestionMap.get(qid)!} /> : null}

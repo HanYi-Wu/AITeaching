@@ -35,15 +35,20 @@ function sameFilterKeys(a: MetadataFilters, b: MetadataFilters) {
 function MetadataFilterControlsInner({ definitions, filters, onChange }: MetadataFilterControlsProps) {
   const [localFilters, setLocalFilters] = useState(filters);
   const [pendingRows, setPendingRows] = useState(0);
-  const definitionByKey = useMemo(() => new Map(definitions.map((definition) => [definition.key, definition])), [definitions]);
-  const activeDefinitions = useMemo(
-    () => definitions.filter((definition) => localFilters[definition.key]),
-    [definitions, localFilters],
-  );
-  const availableDefinitions = useMemo(
-    () => definitions.filter((definition) => !localFilters[definition.key]),
-    [definitions, localFilters],
-  );
+  const { definitionByKey, activeDefinitions, availableDefinitions } = useMemo(() => {
+    const byKey = new Map<string, MetadataFilterDefinition>();
+    const active: MetadataFilterDefinition[] = [];
+    const available: MetadataFilterDefinition[] = [];
+    for (const definition of definitions) {
+      byKey.set(definition.key, definition);
+      (localFilters[definition.key] ? active : available).push(definition);
+    }
+    return {
+      definitionByKey: byKey,
+      activeDefinitions: active,
+      availableDefinitions: available,
+    };
+  }, [definitions, localFilters]);
   const rowCount = activeDefinitions.length + pendingRows;
 
   useEffect(() => {
@@ -51,13 +56,15 @@ function MetadataFilterControlsInner({ definitions, filters, onChange }: Metadat
   }, [filters]);
 
   useEffect(() => {
-    const allowedKeys = new Set(definitions.map((definition) => definition.key));
-    const next = Object.fromEntries(Object.entries(localFilters).filter(([key]) => allowedKeys.has(key)));
-    if (Object.keys(next).length !== Object.keys(localFilters).length) {
+    const hasUnknownKey = Object.keys(localFilters).some((key) => !definitionByKey.has(key));
+    if (hasUnknownKey) {
+      const next = Object.fromEntries(
+        Object.entries(localFilters).filter(([key]) => definitionByKey.has(key)),
+      );
       setLocalFilters(next);
       onChange(next);
     }
-  }, [definitions, localFilters, onChange]);
+  }, [definitionByKey, localFilters, onChange]);
 
   useEffect(() => {
     setPendingRows((count) => Math.min(count, availableDefinitions.length));

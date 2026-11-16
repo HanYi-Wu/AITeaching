@@ -38,4 +38,15 @@ describe("solaire table model", () => {
   it("rejects row spans beyond the table", () => {
     expect(() => parseSolaireTable("version: 1\nrows:\n  - - text: A\n      rowSpan: 2\n")).toThrow(/height/);
   });
+
+  it("reports overlap before the final rectangularity check", () => {
+    const overlapping = {
+      version: 1 as const,
+      rows: [
+        [{ text: "left" }, { text: "middle" }, { text: "spans down", rowSpan: 2 }],
+        [{ text: "wide", colSpan: 3 }],
+      ],
+    };
+    expect(() => parseSolaireTable(JSON.stringify(overlapping))).toThrow("table cells overlap");
+  });
 });

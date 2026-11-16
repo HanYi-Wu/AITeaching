@@ -147,5 +147,11 @@
   "defaultSubject": "数学",
   "defaultLevel1": "高中",
   "defaultLevel2": "高考",
-  "rename": "重命名"
+  "rename": "重命名",
+  "canvasControlsAria": "画布视图控制",
+  "zoomInCanvas": "放大画布",
+  "zoomOutCanvas": "缩小画布",
+  "fitViewCanvas": "适应画布视图",
+  "toggleInteractiveCanvas": "锁定或解锁画布拖动",
+  "minimapAria": "画布缩略图"
 }

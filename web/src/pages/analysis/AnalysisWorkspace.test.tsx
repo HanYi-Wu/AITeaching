@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { AgentProvider, useAgentContext } from "../../contexts/AgentContext";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
+import { invalidateAnalysisPrefetch, prefetchAnalysisWorkspaceData } from "./analysisPrefetch";
 import { AnalysisWorkspace } from "./AnalysisWorkspace";
 import { selectOption } from "../../test/selectOption";
 
@@ -208,6 +209,7 @@ describe("AnalysisWorkspace", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    invalidateAnalysisPrefetch();
     primeDefaultApi();
   });
 
@@ -666,5 +668,91 @@ describe("AnalysisWorkspace", () => {
     expect(await screen.findByText("暂无考试记录")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("analysis-folder-all"));
     expect(await screen.findByRole("button", { name: /期末考试/ })).toBeInTheDocument();
+  });
+
+  it("shows loading state and ellipsis folder counts instead of empty text while initial requests are pending", async () => {
+    let resolveExams: (value: unknown) => void;
+    let resolvePapers: (value: unknown) => void;
+    const examsDeferred = new Promise((resolve) => { resolveExams = resolve; });
+    const papersDeferred = new Promise((resolve) => { resolvePapers = resolve; });
+
+    const baseApiGet = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/api/exams/analysis-list") return examsDeferred;
+      return baseApiGet(path);
+    });
+    mocks.listPlatformPapers.mockReturnValueOnce(papersDeferred as ReturnType<typeof mocks.listPlatformPapers>);
+
+    render(wsTree());
+
+    expect(
+      screen.getAllByRole("status").some((el) => within(el).queryByText("加载中…") !== null),
+    ).toBe(true);
+    expect(screen.queryByText("暂无考试记录")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("analysis-folder-all")).getByText("…")).toBeInTheDocument();
+    expect(within(screen.getByTestId("analysis-folder-unassigned")).getByText("…")).toBeInTheDocument();
+    expect(within(screen.getByTestId("analysis-folder-all")).queryByText("0")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveExams!(await baseApiGet("/api/exams/analysis-list"));
+      resolvePapers!({
+        papers: [],
+        total: 0,
+        page: 1,
+        page_size: 100,
+        total_pages: 1,
+      });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole("button", { name: /期末考试/ })).toBeInTheDocument();
+    expect(within(screen.getByTestId("analysis-folder-all")).getByText("1")).toBeInTheDocument();
+  });
+
+  it("hydrates immediately from prefetched analysis data and silently refreshes when reactivated", async () => {
+    await prefetchAnalysisWorkspaceData("teacher-a", "project-a");
+    mocks.apiGet.mockClear();
+    mocks.listPlatformPapers.mockClear();
+
+    const { rerender } = render(
+      <TestI18nProvider>
+        <AgentProvider>
+          <AnalysisWorkspace active={true} ownerId="teacher-a" projectId="project-a" />
+          <PageContextProbe />
+        </AgentProvider>
+      </TestI18nProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: /期末考试/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /演示线上答题/ })).toBeInTheDocument();
+    expect(screen.queryByText("暂无考试记录")).not.toBeInTheDocument();
+    expect(mocks.apiGet).not.toHaveBeenCalled();
+    expect(mocks.listPlatformPapers).not.toHaveBeenCalled();
+
+    rerender(
+      <TestI18nProvider>
+        <AgentProvider>
+          <AnalysisWorkspace active={false} ownerId="teacher-a" projectId="project-a" />
+          <PageContextProbe />
+        </AgentProvider>
+      </TestI18nProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("page-context-probe")).toHaveTextContent("null"));
+
+    rerender(
+      <TestI18nProvider>
+        <AgentProvider>
+          <AnalysisWorkspace active={true} ownerId="teacher-a" projectId="project-a" />
+          <PageContextProbe />
+        </AgentProvider>
+      </TestI18nProvider>,
+    );
+
+    await waitFor(() => expect(mocks.apiGet).toHaveBeenCalledWith("/api/exams/analysis-list"));
+    expect(mocks.listPlatformPapers).toHaveBeenCalled();
+    expect(mocks.apiGet).toHaveBeenCalledWith("/api/analysis/folders");
+    expect(screen.queryByText("暂无考试记录")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /期末考试/ })).toBeInTheDocument();
   });
 });

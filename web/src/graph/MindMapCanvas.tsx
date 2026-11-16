@@ -23,6 +23,7 @@ import {
   ConnectionLineType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "../ui-redesign/g50/g50.css";
 import {
   useCallback,
   useEffect,
@@ -33,6 +34,12 @@ import {
 import { useTranslation } from "react-i18next";
 import { Plus, Link as LinkIcon, RefreshCw, X } from "lucide-react";
 import { cn } from "../lib/utils";
+import { buildFlowAriaLabelConfig } from "./flowAriaLabels";
+import {
+  layoutMindMapPositions,
+  MIND_MAP_NODE_H as NODE_H,
+  MIND_MAP_NODE_W as NODE_W,
+} from "./mindMapLayout";
 import type { GraphNodeRow, GraphRelationRow } from "./useGraphStore";
 import { useGraphUndoStore } from "./useUndoStack";
 import { isImeComposingKeyboardEvent } from "../lib/ime";
@@ -51,85 +58,10 @@ const REL_COLOR: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Tree layout (LR, horizontal)
-// ---------------------------------------------------------------------------
-
-interface TreeNode {
-  id: string;
-  children: TreeNode[];
-  y: number;
-  x: number;
-  subtreeHeight: number;
-}
-
-const NODE_W = 168;
-const NODE_H = 48;
-const H_GAP = 80;
-const V_GAP = 16;
-
-function buildTree(
-  nodes: GraphNodeRow[],
-  rootId: string,
-  childrenByParent: Map<string, string[]>,
-  collapsed: Set<string>,
-): TreeNode {
-  const children = collapsed.has(rootId)
-    ? []
-    : (childrenByParent.get(rootId) ?? []).map((cid) =>
-        buildTree(nodes, cid, childrenByParent, collapsed),
-      );
-
-  const subtreeHeight =
-    children.length === 0
-      ? NODE_H
-      : children.reduce((acc, c) => acc + c.subtreeHeight + V_GAP, -V_GAP);
-
-  return { id: rootId, children, y: 0, x: 0, subtreeHeight };
-}
-
-function assignPositions(
-  node: TreeNode,
-  x: number,
-  y: number,
-  isVirtualRoot = false,
-): void {
-  node.x = x;
-  node.y = y + node.subtreeHeight / 2 - NODE_H / 2;
-
-  let curY = y;
-  for (const child of node.children) {
-    assignPositions(child, x + NODE_W + H_GAP, curY, isVirtualRoot);
-    curY += child.subtreeHeight + V_GAP;
-  }
-}
-
-function flattenTree(node: TreeNode): { id: string; x: number; y: number }[] {
-  const result: { id: string; x: number; y: number }[] = [];
-  const stack = [node];
-  while (stack.length) {
-    const n = stack.pop()!;
-    result.push({ id: n.id, x: n.x, y: n.y });
-    for (const c of n.children) stack.push(c);
-  }
-  return result;
-}
-
-type TreePosition = { id: string; x: number; y: number };
-
-/** Build an ID index with Array.find's first-match behavior for duplicate IDs. */
-function indexFirstPositionById(positions: TreePosition[]): Map<string, TreePosition> {
-  const byId = new Map<string, TreePosition>();
-  for (const position of positions) {
-    if (!byId.has(position.id)) byId.set(position.id, position);
-  }
-  return byId;
-}
-
-// ---------------------------------------------------------------------------
 // Node component
 // ---------------------------------------------------------------------------
 
-function MindMapNodeInner({ data, selected }: NodeProps) {
+function MindMapNodeInner({ id, data, selected }: NodeProps) {
   const kind = String(data.nodeKind ?? "concept");
   const isVirtualRoot = Boolean((data as { isVirtualRoot?: boolean }).isVirtualRoot);
   const isCollapsed = Boolean((data as { isCollapsed?: boolean }).isCollapsed);
@@ -138,7 +70,7 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
   const inlineValue = String((data as { inlineValue?: string }).inlineValue ?? data.label ?? "");
   const onInlineChange = (data as { onInlineChange?: (v: string) => void }).onInlineChange;
   const onInlineCommit = (data as { onInlineCommit?: (value: string) => void }).onInlineCommit;
-  const onToggleCollapse = (data as { onToggleCollapse?: () => void }).onToggleCollapse;
+  const onToggleCollapse = (data as { onToggleCollapse?: (nodeId: string) => void }).onToggleCollapse;
 
   if (isVirtualRoot) {
     return (
@@ -241,7 +173,7 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
           className="absolute -right-3 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--or-outline)] bg-[var(--or-card)] text-xs font-bold text-[var(--or-muted)] shadow-sm hover:bg-[var(--or-block)]    dark:hover:bg-slate-700"
           onClick={(e) => {
             e.stopPropagation();
-            onToggleCollapse?.();
+            onToggleCollapse?.(id);
           }}
         >
           <span className="inline-block transform -translate-y-[0.5px]">
@@ -254,6 +186,223 @@ function MindMapNodeInner({ data, selected }: NodeProps) {
 }
 
 const nodeTypes = { mindmap: MindMapNodeInner };
+
+type MindMapProjectionData = {
+  label: string;
+  sourceIndex?: number;
+  isVirtualRoot?: boolean;
+  nodeKind?: string;
+  hasChildren?: boolean;
+  isCollapsed?: boolean;
+  isInlineEditing?: boolean;
+  inlineValue?: string;
+  onInlineChange?: (value: string) => void;
+  onInlineCommit?: (value: string) => Promise<void>;
+  onToggleCollapse?: (nodeId: string) => void;
+};
+
+type MindMapTopology = {
+  childrenByParent: Map<string, string[]>;
+  primaryParentById: Map<string, string | null | undefined>;
+  treeEdges: Edge[];
+};
+
+const NODE_STYLE = { width: NODE_W, height: NODE_H, zIndex: 1 };
+
+function hasSameMindMapTopology(previous: GraphNodeRow[], current: GraphNodeRow[]) {
+  if (previous.length !== current.length) return false;
+  for (let index = 0; index < previous.length; index += 1) {
+    if (
+      previous[index].id !== current[index].id ||
+      previous[index].primary_parent_id !== current[index].primary_parent_id
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildMindMapTopology(graphNodes: GraphNodeRow[]): MindMapTopology {
+  const childrenByParent = new Map<string, string[]>();
+  childrenByParent.set(VIRTUAL_ROOT_ID, []);
+  const primaryParentById = new Map<string, string | null | undefined>();
+  const treeEdges: Edge[] = [];
+
+  for (const node of graphNodes) {
+    if (!node.primary_parent_id) {
+      childrenByParent.get(VIRTUAL_ROOT_ID)!.push(node.id);
+    } else {
+      if (!childrenByParent.has(node.primary_parent_id)) {
+        childrenByParent.set(node.primary_parent_id, []);
+      }
+      childrenByParent.get(node.primary_parent_id)!.push(node.id);
+    }
+    // Map.set intentionally keeps the same last-row-wins primary-parent lookup
+    // as the previous graphNodes-to-nodeById projection.
+    primaryParentById.set(node.id, node.primary_parent_id);
+    const parentId = node.primary_parent_id ?? VIRTUAL_ROOT_ID;
+    treeEdges.push({
+      id: `tree-${parentId}-${node.id}`,
+      source: parentId,
+      target: node.id,
+      sourceHandle: "s",
+      targetHandle: "t",
+      type: "default",
+      style: { stroke: "#94a3b8", strokeWidth: 1.5 },
+    });
+  }
+
+  return { childrenByParent, primaryParentById, treeEdges };
+}
+
+function buildCrossReferenceEdges(
+  graphHasNodes: boolean,
+  relations: GraphRelationRow[],
+  primaryParentById: Map<string, string | null | undefined>,
+  crossRelTypeFilter: Record<string, boolean>,
+  t: (key: string, options?: { defaultValue?: string }) => string,
+): Edge[] {
+  if (!graphHasNodes) return [];
+  const edges: Edge[] = [];
+  for (const relation of relations) {
+    const isPrimaryEdge =
+      relation.relation_type === "part_of" &&
+      primaryParentById.has(relation.to_node_id) &&
+      primaryParentById.get(relation.to_node_id) === relation.from_node_id;
+    if (isPrimaryEdge || crossRelTypeFilter[relation.relation_type] !== true) continue;
+
+    const color = REL_COLOR[relation.relation_type] ?? "#64748b";
+    edges.push({
+      id: `cross-${relation.id}`,
+      source: relation.from_node_id,
+      target: relation.to_node_id,
+      type: "default",
+      markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+      style: {
+        stroke: color,
+        strokeWidth: 1,
+        strokeDasharray: "5,4",
+        opacity: 0.6,
+      },
+      label: t(`edgeKind.${relation.relation_type}`, { defaultValue: relation.relation_type }),
+      labelStyle: { fontSize: 11, fill: color },
+      labelShowBg: true,
+      labelBgStyle: { fill: "white", opacity: 0.8 },
+    });
+  }
+  return edges;
+}
+
+function sameShallowStyle(left: unknown, right: unknown) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
+function sameEdgeProjection(previous: Edge, next: Edge) {
+  return previous.id === next.id &&
+    previous.source === next.source &&
+    previous.target === next.target &&
+    previous.sourceHandle === next.sourceHandle &&
+    previous.targetHandle === next.targetHandle &&
+    previous.type === next.type &&
+    previous.label === next.label &&
+    previous.labelShowBg === next.labelShowBg &&
+    sameShallowStyle(previous.markerEnd, next.markerEnd) &&
+    sameShallowStyle(previous.style, next.style) &&
+    sameShallowStyle(previous.labelStyle, next.labelStyle) &&
+    sameShallowStyle(previous.labelBgStyle, next.labelBgStyle);
+}
+
+function reconcileMindMapEdges(previous: Edge[], projected: Edge[]): Edge[] {
+  const previousById = new Map<string, Edge[]>();
+  for (const edge of previous) {
+    const matches = previousById.get(edge.id);
+    if (matches) matches.push(edge);
+    else previousById.set(edge.id, [edge]);
+  }
+
+  const offsetsById = new Map<string, number>();
+  let unchanged = previous.length === projected.length;
+  const next = projected.map((edge, index) => {
+    const matches = previousById.get(edge.id);
+    const offset = offsetsById.get(edge.id) ?? 0;
+    offsetsById.set(edge.id, offset + 1);
+    const prior = matches?.[offset];
+    if (!prior) {
+      unchanged = false;
+      return edge;
+    }
+    if (sameEdgeProjection(prior, edge)) {
+      if (prior !== previous[index]) unchanged = false;
+      return prior;
+    }
+    unchanged = false;
+    return { ...prior, ...edge, selected: prior.selected };
+  });
+  return unchanged ? previous : next;
+}
+
+function sameMindMapNodeData(previous: Node["data"], next: MindMapProjectionData) {
+  const current = previous as MindMapProjectionData;
+  if (Boolean(current.isVirtualRoot) !== Boolean(next.isVirtualRoot)) return false;
+  if (next.isVirtualRoot) {
+    return current.label === next.label &&
+      current.hasChildren === next.hasChildren &&
+      current.isCollapsed === next.isCollapsed &&
+      current.onToggleCollapse === next.onToggleCollapse;
+  }
+  return current.label === next.label &&
+    current.sourceIndex === next.sourceIndex &&
+    current.nodeKind === next.nodeKind &&
+    current.hasChildren === next.hasChildren &&
+    current.isCollapsed === next.isCollapsed &&
+    current.isInlineEditing === next.isInlineEditing &&
+    current.inlineValue === next.inlineValue &&
+    current.onInlineChange === next.onInlineChange &&
+    current.onInlineCommit === next.onInlineCommit &&
+    current.onToggleCollapse === next.onToggleCollapse;
+}
+
+function projectMindMapNode(
+  previous: Node | undefined,
+  id: string,
+  position: { x: number; y: number },
+  data: MindMapProjectionData,
+): Node {
+  if (
+    previous &&
+    previous.id === id &&
+    previous.type === "mindmap" &&
+    previous.position.x === position.x &&
+    previous.position.y === position.y &&
+    previous.width === NODE_W &&
+    previous.height === NODE_H &&
+    previous.zIndex === 1 &&
+    previous.style?.width === NODE_W &&
+    previous.style?.height === NODE_H &&
+    previous.style?.zIndex === 1 &&
+    sameMindMapNodeData(previous.data, data)
+  ) {
+    return previous;
+  }
+  return {
+    ...(previous ?? {}),
+    id,
+    type: "mindmap",
+    position,
+    data,
+    width: NODE_W,
+    height: NODE_H,
+    zIndex: 1,
+    style: NODE_STYLE,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -304,6 +453,7 @@ export function MindMapCanvas({
   onRenameNode,
 }: Props) {
   const { t } = useTranslation("graph");
+  const ariaLabelConfig = useMemo(() => buildFlowAriaLabelConfig(t), [t]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -319,178 +469,226 @@ export function MindMapCanvas({
   const [inlineEditGeneration, setInlineEditGeneration] = useState(0);
   const inlineEditGenerationRef = useRef(0);
   const rfRef = useRef<{ fitView: (opts?: any) => void } | null>(null);
+  const topologyCacheRef = useRef<{ rows: GraphNodeRow[]; topology: MindMapTopology } | null>(null);
+  const previousLayoutPositionsRef = useRef<Map<string, { x: number; y: number }> | null>(null);
+  const previousInlineEditIdRef = useRef<string | null>(null);
+  const graphNodesRef = useRef(graphNodes);
+  graphNodesRef.current = graphNodes;
+  const inlineCommitHandlersRef = useRef(new Map<number, {
+    nodeId: string;
+    canonicalName: string;
+    generation: number;
+    handler: (value: string) => Promise<void>;
+  }>());
+  const onRenameNodeRef = useRef(onRenameNode);
+  onRenameNodeRef.current = onRenameNode;
 
   const updateInlineEditValue = useCallback((value: string) => {
     inlineEditValueRef.current = value;
     setInlineEditValue(value);
   }, []);
 
-  // Build children map by primary_parent_id
-  const childrenByParent = useMemo(() => {
-    const m = new Map<string, string[]>();
-    // Virtual root children = nodes without primary_parent_id
-    m.set(VIRTUAL_ROOT_ID, []);
-    for (const n of graphNodes) {
-      if (!n.primary_parent_id) {
-        m.get(VIRTUAL_ROOT_ID)!.push(n.id);
-      } else {
-        if (!m.has(n.primary_parent_id)) m.set(n.primary_parent_id, []);
-        m.get(n.primary_parent_id)!.push(n.id);
-      }
+  const toggleCollapse = useCallback((nodeId: string) => {
+    setCollapsed((previous) => {
+      const next = new Set(previous);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  }, []);
+
+  const getInlineCommitHandler = useCallback((
+    node: GraphNodeRow,
+    sourceIndex: number,
+    isEditing: boolean,
+  ) => {
+    const previous = inlineCommitHandlersRef.current.get(sourceIndex);
+    const currentGeneration = inlineEditGenerationRef.current;
+    if (
+      previous &&
+      previous.nodeId === node.id &&
+      previous.canonicalName === node.canonical_name &&
+      (!isEditing || previous.generation === currentGeneration)
+    ) {
+      return previous.handler;
     }
-    return m;
+
+    const generation = isEditing ? currentGeneration : previous?.generation ?? currentGeneration;
+    const canonicalName = node.canonical_name;
+    const handler = async (value: string) => {
+      const nextName = value.trim();
+      if (nextName && nextName !== canonicalName) {
+        await onRenameNodeRef.current(node.id, nextName);
+      }
+      if (inlineEditGenerationRef.current === generation) setInlineEditId(null);
+    };
+    inlineCommitHandlersRef.current.set(sourceIndex, {
+      nodeId: node.id,
+      canonicalName,
+      generation,
+      handler,
+    });
+    return handler;
+  }, []);
+
+  // Keep topology, layout, tree edges, node data, and relation edges on separate
+  // dependency paths. Label and editor changes can then reuse the tree geometry.
+  const graphTopology = useMemo(() => {
+    const cached = topologyCacheRef.current;
+    if (cached && hasSameMindMapTopology(cached.rows, graphNodes)) return cached.topology;
+    return buildMindMapTopology(graphNodes);
   }, [graphNodes]);
 
-  // Layout
   useEffect(() => {
-    if (!graphNodes.length) {
-      setNodes([]);
-      setEdges([]);
-      return;
-    }
+    topologyCacheRef.current = { rows: graphNodes, topology: graphTopology };
+  }, [graphNodes, graphTopology]);
 
-    const nodeById = new Map(graphNodes.map((n) => [n.id, n]));
+  const positionById = useMemo(() => {
+    if (!graphNodes.length) return new Map<string, { x: number; y: number }>();
+    // layoutNonce remains an explicit relayout trigger; unrelated projections
+    // never call the layout engine.
+    return layoutMindMapPositions(VIRTUAL_ROOT_ID, graphTopology.childrenByParent, collapsed);
+  }, [graphNodes.length, graphTopology, collapsed, layoutNonce]);
 
-    // Build tree
-    const tree = buildTree(graphNodes, VIRTUAL_ROOT_ID, childrenByParent, collapsed);
-    assignPositions(tree, 0, 0, true);
-    const positions = flattenTree(tree);
-    const positionById = indexFirstPositionById(positions);
+  const crossReferenceEdges = useMemo(
+    () => buildCrossReferenceEdges(
+      graphNodes.length > 0,
+      relations,
+      graphTopology.primaryParentById,
+      crossRelTypeFilter,
+      t,
+    ),
+    [graphNodes.length, relations, graphTopology, crossRelTypeFilter, t],
+  );
 
-    // Build RF nodes
-    const rfNodes: Node[] = [
-      {
-        id: VIRTUAL_ROOT_ID,
-        type: "mindmap",
-        position: { x: 0, y: positionById.get(VIRTUAL_ROOT_ID)?.y ?? 0 },
-        data: {
+  const projectedEdges = useMemo(
+    () => [...graphTopology.treeEdges, ...crossReferenceEdges],
+    [graphTopology, crossReferenceEdges],
+  );
+
+  useEffect(() => {
+    setEdges((previous) => reconcileMindMapEdges(previous, projectedEdges));
+  }, [projectedEdges, setEdges]);
+
+  // inlineEditId is excluded so an editor transition patches only its old/new
+  // rows below instead of re-projecting the full graph.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const applyLayout = previousLayoutPositionsRef.current !== positionById;
+    setNodes((previous) => {
+      if (!graphNodes.length) return previous.length ? [] : previous;
+
+      const previousById = new Map<string, Node[]>();
+      for (const node of previous) {
+        const matches = previousById.get(node.id);
+        if (matches) matches.push(node);
+        else previousById.set(node.id, [node]);
+      }
+      const offsetsById = new Map<string, number>();
+      const takePrevious = (id: string) => {
+        const matches = previousById.get(id);
+        const offset = offsetsById.get(id) ?? 0;
+        offsetsById.set(id, offset + 1);
+        return matches?.[offset];
+      };
+
+      const next: Node[] = [];
+      const virtualRootPosition = positionById.get(VIRTUAL_ROOT_ID);
+      next.push(projectMindMapNode(
+        takePrevious(VIRTUAL_ROOT_ID),
+        VIRTUAL_ROOT_ID,
+        { x: 0, y: virtualRootPosition?.y ?? 0 },
+        {
           label: activeGraphName,
           isVirtualRoot: true,
-          hasChildren: (childrenByParent.get(VIRTUAL_ROOT_ID) ?? []).length > 0,
+          hasChildren: (graphTopology.childrenByParent.get(VIRTUAL_ROOT_ID) ?? []).length > 0,
           isCollapsed: collapsed.has(VIRTUAL_ROOT_ID),
-          onToggleCollapse: () =>
-            setCollapsed((prev) => {
-              const n = new Set(prev);
-              if (n.has(VIRTUAL_ROOT_ID)) n.delete(VIRTUAL_ROOT_ID);
-              else n.add(VIRTUAL_ROOT_ID);
-              return n;
-            }),
+          onToggleCollapse: toggleCollapse,
         },
-        width: NODE_W,
-        height: NODE_H,
-        zIndex: 1,
-        style: { width: NODE_W, height: NODE_H, zIndex: 1 },
-      },
-    ];
+      ));
 
-    const editGeneration = inlineEditGenerationRef.current;
-    for (const n of graphNodes) {
-      const pos = positionById.get(n.id);
-      if (!pos) continue;
-      const hasChildren = (childrenByParent.get(n.id) ?? []).length > 0;
-      const isCollapsedNode = collapsed.has(n.id);
-      const isEditing = inlineEditId === n.id;
-      rfNodes.push({
-        id: n.id,
-        type: "mindmap",
-        position: { x: pos.x, y: pos.y },
-        data: {
-          label: n.canonical_name,
-          nodeKind: n.node_kind ?? "concept",
+      graphNodes.forEach((node, sourceIndex) => {
+        const position = positionById.get(node.id);
+        if (!position) return;
+        const hasChildren = (graphTopology.childrenByParent.get(node.id) ?? []).length > 0;
+        const isEditing = inlineEditId === node.id;
+        const previousNode = takePrevious(node.id);
+        const nodePosition = previousNode && !applyLayout ? previousNode.position : position;
+        next.push(projectMindMapNode(previousNode, node.id, nodePosition, {
+          label: node.canonical_name,
+          sourceIndex,
+          nodeKind: node.node_kind ?? "concept",
           hasChildren,
-          isCollapsed: isCollapsedNode,
+          isCollapsed: collapsed.has(node.id),
           isInlineEditing: isEditing,
-          inlineValue: isEditing ? inlineEditValueRef.current : n.canonical_name,
+          inlineValue: isEditing ? inlineEditValueRef.current : node.canonical_name,
           onInlineChange: updateInlineEditValue,
-          onInlineCommit: async (value: string) => {
-            const nextName = value.trim();
-            if (nextName && nextName !== n.canonical_name) {
-              await onRenameNode(n.id, nextName);
-            }
-            if (inlineEditGenerationRef.current === editGeneration) setInlineEditId(null);
-          },
-          onToggleCollapse: () =>
-            setCollapsed((prev) => {
-              const ns = new Set(prev);
-              if (ns.has(n.id)) ns.delete(n.id);
-              else ns.add(n.id);
-              return ns;
-            }),
-        },
-        width: NODE_W,
-        height: NODE_H,
-        zIndex: 1,
-        style: { width: NODE_W, height: NODE_H, zIndex: 1 },
+          onInlineCommit: getInlineCommitHandler(node, sourceIndex, isEditing),
+          onToggleCollapse: toggleCollapse,
+        }));
       });
-    }
 
-    // Tree edges
-    const rfEdges: Edge[] = [];
-    for (const n of graphNodes) {
-      const parentId = n.primary_parent_id ?? VIRTUAL_ROOT_ID;
-      rfEdges.push({
-        id: `tree-${parentId}-${n.id}`,
-        source: parentId,
-        target: n.id,
-        sourceHandle: "s",
-        targetHandle: "t",
-        type: "default",
-        style: { stroke: "#94a3b8", strokeWidth: 1.5 },
-      });
-    }
+      for (const sourceIndex of inlineCommitHandlersRef.current.keys()) {
+        if (sourceIndex >= graphNodes.length) inlineCommitHandlersRef.current.delete(sourceIndex);
+      }
 
-    // Cross-reference edges (non-primary relations)
-    for (const r of relations) {
-      const isPrimaryEdge = (() => {
-        const targetNode = nodeById.get(r.to_node_id);
-        if (!targetNode) return false;
-        return (
-          r.relation_type === "part_of" &&
-          targetNode.primary_parent_id === r.from_node_id
-        );
-      })();
-
-      if (isPrimaryEdge) continue;
-      if (crossRelTypeFilter[r.relation_type] !== true) continue;
-
-      rfEdges.push({
-        id: `cross-${r.id}`,
-        source: r.from_node_id,
-        target: r.to_node_id,
-        type: "default",
-        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
-        style: {
-          stroke: REL_COLOR[r.relation_type] ?? "#64748b",
-          strokeWidth: 1,
-          strokeDasharray: "5,4",
-          opacity: 0.6,
-        },
-        label: t(`edgeKind.${r.relation_type}`, { defaultValue: r.relation_type }),
-        labelStyle: { fontSize: 11, fill: REL_COLOR[r.relation_type] ?? "#64748b" },
-        labelShowBg: true,
-        labelBgStyle: { fill: "white", opacity: 0.8 },
-      });
-    }
-
-    setNodes(rfNodes);
-    setEdges(rfEdges);
+      if (next.length === previous.length && next.every((node, index) => node === previous[index])) {
+        return previous;
+      }
+      return next;
+    });
+    previousLayoutPositionsRef.current = positionById;
   }, [
     graphNodes,
-    relations,
-    childrenByParent,
+    graphTopology,
+    positionById,
     collapsed,
-    crossRelTypeFilter,
-    inlineEditId,
-    inlineEditGeneration,
     activeGraphName,
-    layoutNonce,
-    t,
-    onRenameNode,
     updateInlineEditValue,
+    getInlineCommitHandler,
+    toggleCollapse,
+    setNodes,
   ]);
 
-  // Draft keystrokes update only the active custom node. Tree geometry and edges do not depend
-  // on the draft text, so keep their full rebuild tied to edit start/end and graph state changes.
+  // Editor open/close changes only the previous and current editor rows. The
+  // graph-node projection above handles actual graph data refreshes separately.
+  // The current graph rows are read only during the editor transition; graph
+  // data refreshes are handled by the projection effect above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const previousEditId = previousInlineEditIdRef.current;
+    const changedIds = new Set([previousEditId, inlineEditId].filter((id): id is string => id !== null));
+    if (!changedIds.size) return;
+    setNodes((previous) => {
+      let changed = false;
+      const next = previous.map((node) => {
+        if (!changedIds.has(node.id) || node.data.isVirtualRoot) return node;
+        const sourceIndex = Number(node.data.sourceIndex);
+        const graphNode = graphNodes[sourceIndex];
+        if (!graphNode || graphNode.id !== node.id) return node;
+        const isEditing = inlineEditId === node.id;
+        const inlineValue = isEditing ? inlineEditValueRef.current : graphNode.canonical_name;
+        const onInlineCommit = getInlineCommitHandler(graphNode, sourceIndex, isEditing);
+        if (
+          node.data.isInlineEditing === isEditing &&
+          node.data.inlineValue === inlineValue &&
+          node.data.onInlineCommit === onInlineCommit
+        ) {
+          return node;
+        }
+        changed = true;
+        return {
+          ...node,
+          data: { ...node.data, isInlineEditing: isEditing, inlineValue, onInlineCommit },
+        };
+      });
+      return changed ? next : previous;
+    });
+    previousInlineEditIdRef.current = inlineEditId;
+  }, [inlineEditId, inlineEditGeneration, setNodes, getInlineCommitHandler]);
+
+  // Draft keystrokes patch only the active custom node. Tree geometry and edges
+  // do not depend on draft text and stay on their own projection paths.
   useEffect(() => {
     if (!inlineEditId) return;
     setNodes((prev) => {
@@ -565,9 +763,9 @@ export function MindMapCanvas({
     inlineEditGenerationRef.current = nextEditGeneration;
     setInlineEditGeneration(nextEditGeneration);
     setInlineEditId(node.id);
-    const gn = graphNodes.find((n) => n.id === node.id);
+    const gn = graphNodesRef.current.find((n) => n.id === node.id);
     updateInlineEditValue(gn?.canonical_name ?? "");
-  }, [graphNodes, updateInlineEditValue]);
+  }, [updateInlineEditValue]);
 
   const handleEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     if (edge.id.startsWith("cross-")) {
@@ -666,6 +864,8 @@ export function MindMapCanvas({
 
       <div className="relative flex-1">
         <ReactFlow
+          className="or-g50-flow"
+          ariaLabelConfig={ariaLabelConfig}
           nodes={nodes}
           edges={edges}
           deleteKeyCode={null}

@@ -41,7 +41,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
     if (phase === "brand-exit") {
       // 在黑色幕布即将从底部上收前 120ms 提前将 html/body 切为纸色 #f2f2f2，
       // 顶部状态栏由 .or-login-chrome-top 固定条保持黑色，底部地址栏则在幕布抬起第一帧即为白色。
-      const timer = window.setTimeout(() => setChromeBottomPaper(true), 250);
+      const timer = window.setTimeout(() => setChromeBottomPaper(true), 170);
       return () => window.clearTimeout(timer);
     }
     setChromeBottomPaper(true);

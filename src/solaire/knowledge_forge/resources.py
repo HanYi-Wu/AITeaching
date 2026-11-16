@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 from solaire.knowledge_forge.models import NodeFileLink
 from pathlib import Path
-from solaire.knowledge_forge.node_index import _find_node_slug
+from solaire.knowledge_forge.node_index import _find_node_state
 from solaire.knowledge_forge.storage import _load_meta
-from solaire.knowledge_forge.storage import _load_subject_state
+from solaire.knowledge_forge.storage import _load_subject_state_snapshot
 from solaire.knowledge_forge.paths import _resolve_resource_path
 from solaire.common.security import assert_within_project
 from solaire.knowledge_forge.migration import ensure_graph_layout
@@ -54,10 +54,13 @@ def list_file_links_for_node(
     graph: str | None = None,
 ) -> list[dict[str, Any]]:
     ensure_graph_layout(project_root)
-    slug = graph or _find_node_slug(project_root, node_id)
-    if slug is None:
-        return []
-    state = _load_subject_state(project_root, slug)
+    if graph:
+        state = _load_subject_state_snapshot(project_root, graph)
+    else:
+        match = _find_node_state(project_root, node_id)
+        if match is None:
+            return []
+        state = match[1]
     return [l.model_dump(mode="json") for l in state.file_links if l.node_id == node_id]
 
 
@@ -93,7 +96,7 @@ def attach_file_to_node(
 def _find_file_link_slug(project_root: Path, link_id: str) -> str | None:
     meta = _load_meta(project_root)
     for sm in meta.subjects:
-        state = _load_subject_state(project_root, sm.slug)
+        state = _load_subject_state_snapshot(project_root, sm.slug)
         if any(l.id == link_id for l in state.file_links):
             return sm.slug
     return None

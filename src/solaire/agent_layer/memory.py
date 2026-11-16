@@ -80,7 +80,10 @@ def _token_set(text: str) -> set[str]:
 
 
 def _overlap_ratio(a: str, b: str) -> float:
-    ta, tb = _token_set(a), _token_set(b)
+    return _overlap_ratio_sets(_token_set(a), _token_set(b))
+
+
+def _overlap_ratio_sets(ta: set[str], tb: set[str]) -> float:
     if not ta or not tb:
         return 0.0
     inter = len(ta & tb)
@@ -126,10 +129,11 @@ def merge_index_bullet(
             rest.append(line)
 
     replaced = False
+    new_tokens = _token_set(new_bullet_text)
     new_bullets: list[str] = []
     for b in bullets:
         body = b.lstrip()[2:].strip() if b.lstrip().startswith("-") else b
-        if _overlap_ratio(body, new_bullet_text) >= overlap_threshold:
+        if _overlap_ratio_sets(_token_set(body), new_tokens) >= overlap_threshold:
             new_bullets.append(f"- {new_bullet_text}")
             replaced = True
         else:
@@ -190,7 +194,12 @@ def append_session_digest_line(project_root: Path, line: str) -> None:
 
 
 def search_topics(project_root: Path, query: str, *, max_hits: int = 20) -> list[dict[str, Any]]:
-    """Simple case-insensitive substring search across topic files."""
+    """Simple case-insensitive substring search across topic files.
+
+    Scan one physical line at a time and keep only the overlap needed to find a
+    query spanning line boundaries. The output still uses the first 400 text
+    characters exactly as before, without materializing every topic file.
+    """
     ensure_memory_layout(project_root)
     q = query.lower().strip()
     hits: list[dict[str, Any]] = []
@@ -198,10 +207,43 @@ def search_topics(project_root: Path, query: str, *, max_hits: int = 20) -> list
     if not topics_root.is_dir():
         return hits
     for p in sorted(topics_root.glob("*.md")):
-        text = p.read_text(encoding="utf-8", errors="replace")
-        if not q or q in text.lower():
-            snippet = text[:400].replace("\n", " ")
-            if len(text) > 400:
+        if not q:
+            with p.open("r", encoding="utf-8", errors="replace") as file:
+                preview = file.read(401)
+            snippet = preview[:400].replace("\n", " ")
+            if len(preview) > 400:
+                snippet += "…"
+            hits.append({"topic": p.name, "snippet": snippet})
+            if len(hits) >= max_hits:
+                break
+            continue
+
+        prefix_parts: list[str] = []
+        prefix_length = 0
+        text_length = 0
+        overlap = ""
+        found = False
+        overlap_length = len(q) - 1
+        with p.open("r", encoding="utf-8", errors="replace") as file:
+            for line in file:
+                if prefix_length < 401:
+                    prefix = line[: 401 - prefix_length]
+                    prefix_parts.append(prefix)
+                    prefix_length += len(prefix)
+                text_length += len(line)
+                if not found:
+                    lowered = line.lower()
+                    window = overlap + lowered
+                    if q in window:
+                        found = True
+                    if overlap_length > 0:
+                        overlap = window[-overlap_length:]
+                if found and text_length >= 401:
+                    break
+
+        if found:
+            snippet = "".join(prefix_parts)[:400].replace("\n", " ")
+            if text_length > 400:
                 snippet += "…"
             hits.append({"topic": p.name, "snippet": snippet})
             if len(hits) >= max_hits:

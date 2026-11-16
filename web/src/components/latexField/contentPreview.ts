@@ -305,70 +305,181 @@ export function buildEditorDom(root: HTMLElement, value: string, reuse = true): 
 
 /* ═══════════════════ Serializer ═══════════════════ */
 
-export function serializeEditor(root: HTMLElement): string {
-  let out = "";
-  function walk(n: Node): void {
-    if (n.nodeType === Node.TEXT_NODE) {
-      out += n.textContent ?? "";
-      return;
-    }
-    if (n.nodeType !== Node.ELEMENT_NODE) return;
-    const el = n as HTMLElement;
-    if (el.classList.contains(MATH_WIDGET_CLASS)) {
-      out += `$${el.dataset.latex ?? ""}$`;
-      return;
-    }
-    if (el.classList.contains(DISPLAY_MATH_WIDGET_CLASS)) {
-      out += `$$${el.dataset.latex ?? ""}$$`;
-      return;
-    }
-    if (el.classList.contains(MERMAID_WIDGET_CLASS)) {
-      const src = el.dataset.mermaidSource ?? "";
-      out += "```mermaid\n" + src + "\n```";
-      return;
-    }
-    if (el.classList.contains(IMAGE_WIDGET_CLASS)) {
-      const kind = el.dataset.imageKind ?? "EMBED_IMG";
-      const path = el.dataset.imagePath ?? "";
-      out += `:::${kind}:${path}:::`;
-      return;
-    }
-    if (el.classList.contains(TABLE_WIDGET_CLASS)) {
-      out += "```solaire-table\n" + (el.dataset.tableSource ?? "") + "\n```";
-      return;
-    }
-    if (el.tagName === "BR") {
-      out += "\n";
-      return;
-    }
-    for (const c of el.childNodes) walk(c);
+export type SerializedSelectionOffsets = { start: number; end: number };
+
+function serializedWidgetMarkup(el: HTMLElement): string | null {
+  if (el.classList.contains(MATH_WIDGET_CLASS)) {
+    return `$${el.dataset.latex ?? ""}$`;
   }
-  for (const c of root.childNodes) walk(c);
-  return out;
+  if (el.classList.contains(DISPLAY_MATH_WIDGET_CLASS)) {
+    return `$$${el.dataset.latex ?? ""}$$`;
+  }
+  if (el.classList.contains(MERMAID_WIDGET_CLASS)) {
+    return "```mermaid\n" + (el.dataset.mermaidSource ?? "") + "\n```";
+  }
+  if (el.classList.contains(IMAGE_WIDGET_CLASS)) {
+    return `:::${el.dataset.imageKind ?? "EMBED_IMG"}:${el.dataset.imagePath ?? ""}:::`;
+  }
+  if (el.classList.contains(TABLE_WIDGET_CLASS)) {
+    return "```solaire-table\n" + (el.dataset.tableSource ?? "") + "\n```";
+  }
+  return null;
+}
+
+type ProjectionEndpoint = {
+  container: Node;
+  offset: number;
+  value: number | null;
+};
+
+type ProjectionWalk = {
+  length: number;
+  start: ProjectionEndpoint | null;
+  end: ProjectionEndpoint | null;
+};
+
+function recordRootBoundary(endpoint: ProjectionEndpoint | null, root: HTMLElement, offset: number, length: number) {
+  if (endpoint?.container === root && endpoint.offset === offset && endpoint.value === null) {
+    endpoint.value = length;
+  }
+}
+
+function recordTextEndpoint(endpoint: ProjectionEndpoint | null, node: Node, length: number, textLength: number) {
+  if (endpoint?.container === node && endpoint.value === null) {
+    endpoint.value = length + Math.min(endpoint.offset, textLength);
+  }
+}
+
+function recordElementEndpoint(endpoint: ProjectionEndpoint | null, element: HTMLElement, length: number) {
+  if (endpoint?.container === element && endpoint.value === null) {
+    endpoint.value = length;
+  }
+}
+
+function recordWidgetEndpoint(endpoint: ProjectionEndpoint | null, element: HTMLElement, length: number, markupLength: number) {
+  if (!endpoint || endpoint.value !== null) return;
+  if (endpoint.container === element) {
+    endpoint.value = length + (endpoint.offset === 0 ? 0 : markupLength);
+  } else if (element.contains(endpoint.container)) {
+    endpoint.value = length + markupLength;
+  }
+}
+
+function projectionEndpointsKnown(walk: ProjectionWalk): boolean {
+  return (
+    walk.start !== null &&
+    walk.start.value !== null &&
+    (walk.end === null || walk.end.value !== null)
+  );
+}
+
+function walkSerializedNode(node: Node, walk: ProjectionWalk): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent ?? "";
+    if (walk.start) {
+      recordTextEndpoint(walk.start, node, walk.length, text.length);
+      recordTextEndpoint(walk.end, node, walk.length, text.length);
+    }
+    walk.length += text.length;
+    return projectionEndpointsKnown(walk);
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return false;
+
+  const element = node as HTMLElement;
+  const widgetMarkup = serializedWidgetMarkup(element);
+  if (widgetMarkup !== null) {
+    if (walk.start) {
+      recordWidgetEndpoint(walk.start, element, walk.length, widgetMarkup.length);
+      recordWidgetEndpoint(walk.end, element, walk.length, widgetMarkup.length);
+    }
+    walk.length += widgetMarkup.length;
+    return projectionEndpointsKnown(walk);
+  }
+  if (element.tagName === "BR") {
+    if (walk.start) {
+      recordElementEndpoint(walk.start, element, walk.length);
+      recordElementEndpoint(walk.end, element, walk.length);
+    }
+    walk.length += 1;
+    return projectionEndpointsKnown(walk);
+  }
+  for (const child of element.childNodes) {
+    if (walkSerializedNode(child, walk)) return true;
+  }
+  return false;
+}
+
+function projectSelection(
+  root: HTMLElement,
+  range: Range,
+  includeEnd = true,
+): SerializedSelectionOffsets {
+  const start: ProjectionEndpoint = {
+    container: range.startContainer,
+    offset: range.startOffset,
+    value: null,
+  };
+  const end: ProjectionEndpoint | null = includeEnd && !range.collapsed
+    ? { container: range.endContainer, offset: range.endOffset, value: null }
+    : null;
+  const walk: ProjectionWalk = {
+    length: 0,
+    start,
+    end,
+  };
+
+  let stopped = false;
+  for (let index = 0; index < root.childNodes.length; index++) {
+    recordRootBoundary(start, root, index, walk.length);
+    recordRootBoundary(end, root, index, walk.length);
+    if (projectionEndpointsKnown(walk)) {
+      stopped = true;
+      break;
+    }
+    if (walkSerializedNode(root.childNodes[index]!, walk)) {
+      stopped = true;
+      break;
+    }
+  }
+  if (!stopped) {
+    recordRootBoundary(start, root, root.childNodes.length, walk.length);
+    recordRootBoundary(end, root, root.childNodes.length, walk.length);
+  }
+
+  const startOffset = start.value ?? walk.length;
+  return {
+    start: startOffset,
+    end: end ? end.value ?? walk.length : startOffset,
+  };
+}
+
+export function serializeEditor(root: HTMLElement): string {
+  let value = "";
+  function appendNode(node: Node): void {
+    if (node.nodeType === Node.TEXT_NODE) {
+      value += node.textContent ?? "";
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const element = node as HTMLElement;
+    const widgetMarkup = serializedWidgetMarkup(element);
+    if (widgetMarkup !== null) {
+      value += widgetMarkup;
+    } else if (element.tagName === "BR") {
+      value += "\n";
+    } else {
+      for (const child of element.childNodes) appendNode(child);
+    }
+  }
+  for (const child of root.childNodes) appendNode(child);
+  return value;
 }
 
 /* ═══════════════════ Caret utilities ═══════════════════ */
 
 export function widgetSerializedLength(el: HTMLElement): number {
-  if (el.classList.contains(MATH_WIDGET_CLASS)) {
-    return `$${el.dataset.latex ?? ""}$`.length;
-  }
-  if (el.classList.contains(DISPLAY_MATH_WIDGET_CLASS)) {
-    return `$$${el.dataset.latex ?? ""}$$`.length;
-  }
-  if (el.classList.contains(MERMAID_WIDGET_CLASS)) {
-    const src = el.dataset.mermaidSource ?? "";
-    return ("```mermaid\n" + src + "\n```").length;
-  }
-  if (el.classList.contains(IMAGE_WIDGET_CLASS)) {
-    const kind = el.dataset.imageKind ?? "EMBED_IMG";
-    const path = el.dataset.imagePath ?? "";
-    return `:::${kind}:${path}:::`.length;
-  }
-  if (el.classList.contains(TABLE_WIDGET_CLASS)) {
-    return ("```solaire-table\n" + (el.dataset.tableSource ?? "") + "\n```").length;
-  }
-  return 0;
+  return serializedWidgetMarkup(el)?.length ?? 0;
 }
 
 export function isWidget(el: HTMLElement): boolean {
@@ -415,65 +526,22 @@ export function isCollapsedCaretAtEditorEnd(root: HTMLElement, range: Range): bo
 
 export function serializedLengthOfNode(n: Node | undefined | null): number {
   if (!n) return 0;
-  if (n.nodeType === Node.TEXT_NODE) return (n.textContent ?? "").length;
-  if (n.nodeType !== Node.ELEMENT_NODE) return 0;
-  const el = n as HTMLElement;
-  if (isWidget(el)) return widgetSerializedLength(el);
-  if (el.tagName === "BR") return 1;
-  let len = 0;
-  for (const c of el.childNodes) len += serializedLengthOfNode(c);
-  return len;
+  const walk: ProjectionWalk = {
+    length: 0,
+    start: null,
+    end: null,
+  };
+  walkSerializedNode(n, walk);
+  return walk.length;
+}
+
+export function getSerializedSelectionOffsets(
+  root: HTMLElement,
+  range: Range,
+): SerializedSelectionOffsets {
+  return projectSelection(root, range);
 }
 
 export function getSerializedCaretOffset(root: HTMLElement, range: Range): number {
-  if (range.startContainer === root) {
-    let total = 0;
-    for (let i = 0; i < range.startOffset; i++) {
-      total += serializedLengthOfNode(root.childNodes[i] ?? undefined);
-    }
-    return total;
-  }
-  let total = 0;
-  let done = false;
-  function walk(n: Node): boolean {
-    if (done) return true;
-    if (n.nodeType === Node.TEXT_NODE) {
-      const text = n.textContent ?? "";
-      if (range.startContainer === n) {
-        total += Math.min(range.startOffset, text.length);
-        done = true;
-        return true;
-      }
-      total += text.length;
-      return false;
-    }
-    if (n.nodeType !== Node.ELEMENT_NODE) return false;
-    const el = n as HTMLElement;
-    if (isWidget(el)) {
-      const wLen = widgetSerializedLength(el);
-      if (range.startContainer === el || el.contains(range.startContainer)) {
-        if (range.startContainer === el && range.startOffset === 0) {
-          /* before widget */
-        } else {
-          total += wLen;
-        }
-        done = true;
-        return true;
-      }
-      total += wLen;
-      return false;
-    }
-    if (el.tagName === "BR") {
-      if (range.startContainer === el) {
-        done = true;
-        return true;
-      }
-      total += 1;
-      return false;
-    }
-    for (const c of el.childNodes) if (walk(c)) return true;
-    return false;
-  }
-  for (const c of root.childNodes) if (walk(c)) break;
-  return total;
+  return projectSelection(root, range, false).start;
 }

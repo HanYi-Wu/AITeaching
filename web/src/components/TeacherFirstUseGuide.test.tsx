@@ -42,3 +42,24 @@ test('walkthrough can be postponed and reopened from settings without becoming a
   window.dispatchEvent(new Event('eh-replay-teacher-guide'));
   expect(await screen.findByLabelText('教师使用引导')).toBeInTheDocument();
 });
+
+test('dismissing forever removes collapse toggle, uses pale-red styling, and persists step 8', async () => {
+  const updated = vi.fn();
+  const doneUser: PlatformUser = { ...user, teacher_guide_step: 8 };
+  vi.mocked(apiPost).mockResolvedValue({ user: doneUser });
+  const { rerender } = render(
+    <TeacherFirstUseGuide user={user} onUpdated={updated} onNavigate={vi.fn()} onOpenAssistant={vi.fn()} />
+  );
+
+  expect(screen.queryByRole('button', { name: '收起说明' })).not.toBeInTheDocument();
+  const dismissBtn = screen.getByRole('button', { name: '不再提示' });
+  expect(dismissBtn.className).toContain('--or-error');
+
+  fireEvent.click(dismissBtn);
+  await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/auth/teacher-guide', { step: 8 }));
+  expect(updated).toHaveBeenCalledWith(doneUser);
+  expect(screen.queryByLabelText('教师使用引导')).not.toBeInTheDocument();
+
+  rerender(<TeacherFirstUseGuide user={doneUser} onUpdated={updated} onNavigate={vi.fn()} onOpenAssistant={vi.fn()} />);
+  expect(screen.queryByLabelText('教师使用引导')).not.toBeInTheDocument();
+});

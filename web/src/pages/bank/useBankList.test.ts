@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiGet, apiGraphQuestionBindingsIndex } from "../../api/client";
+import { invalidateBankPrefetch, prefetchBankListData } from "./bankPrefetch";
 import { useBankList } from "./useBankList";
 import type { BankListItem } from "./bankModel";
 
@@ -15,9 +16,13 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-vi.mock("../../lib/contentEvents", () => ({
-  useContentLibraryChanged: vi.fn(),
-}));
+vi.mock("../../lib/contentEvents", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/contentEvents")>();
+  return {
+    ...actual,
+    useContentLibraryChanged: vi.fn(),
+  };
+});
 
 describe("useBankList hook", () => {
   const mockOnError = vi.fn();
@@ -191,5 +196,58 @@ describe("useBankList hook", () => {
     expect(result.current.items).toEqual([]);
     expect(result.current.collections).toEqual([]);
     expect(apiGraphQuestionBindingsIndex).not.toHaveBeenCalled();
+  });
+
+  it("starts in loading state before initial fetch finishes and marks hasLoaded once complete", async () => {
+    invalidateBankPrefetch();
+    let resolveItems: (v: { items: BankListItem[] }) => void;
+    const itemsPromise = new Promise<{ items: BankListItem[] }>((r) => { resolveItems = r; });
+    vi.mocked(apiGet).mockImplementation(async (url) => {
+      if (url === "/api/bank/collections") return { collections: [{ id: "数学/一轮", label: "数学/一轮" }] };
+      if (url === "/api/bank/subjects") return { subjects: ["数学"] };
+      if (url === "/api/bank/folders") return { folders: [], assignments: {} };
+      if (url === "/api/bank/items") return itemsPromise;
+      throw new Error(`Unexpected GET ${url}`);
+    });
+    vi.mocked(apiGraphQuestionBindingsIndex).mockResolvedValue({ index: {} });
+
+    const { result } = renderHook(() => useBankList({ onError: mockOnError }));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.hasLoaded).toBe(false);
+
+    await act(async () => {
+      resolveItems!({ items: sampleItems });
+      await itemsPromise;
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.hasLoaded).toBe(true);
+    expect(result.current.items).toEqual(sampleItems);
+  });
+
+  it("hydrates immediately from prefetched snapshot without duplicating mount fetches", async () => {
+    invalidateBankPrefetch();
+    vi.mocked(apiGet).mockImplementation(async (url) => {
+      if (url === "/api/bank/collections") return { collections: [{ id: "数学/一轮", label: "数学/一轮" }] };
+      if (url === "/api/bank/subjects") return { subjects: ["数学"] };
+      if (url === "/api/bank/folders") return { folders: ["数学"], assignments: {} };
+      if (url === "/api/bank/items") return { items: sampleItems };
+      throw new Error(`Unexpected GET ${url}`);
+    });
+    vi.mocked(apiGraphQuestionBindingsIndex).mockResolvedValue({ index: {} });
+
+    await prefetchBankListData("/proj-a");
+    vi.mocked(apiGet).mockClear();
+    vi.mocked(apiGraphQuestionBindingsIndex).mockClear();
+
+    const { result } = renderHook(() => useBankList({ onError: mockOnError, projectScope: "/proj-a" }));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.hasLoaded).toBe(true);
+    expect(result.current.items).toEqual(sampleItems);
+    expect(result.current.folders).toEqual({ folders: ["数学"], assignments: {} });
+    expect(apiGet).not.toHaveBeenCalled();
+    expect(apiGraphQuestionBindingsIndex).not.toHaveBeenCalled();
+    invalidateBankPrefetch();
   });
 });

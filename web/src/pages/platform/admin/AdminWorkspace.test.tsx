@@ -153,7 +153,7 @@ describe("AdminWorkspace", () => {
     for (const [label, testId] of [
       ["操作日志", "admin-audit-panel"],
       ["权限管理", "admin-access-panel"],
-      ["参数字典", "admin-settings-panel"],
+      ["学科与设置", "admin-settings-panel"],
       ["管理活动", "admin-activity-panel"],
     ] as const) {
       await actor.click(screen.getByRole("tab", { name: label }));

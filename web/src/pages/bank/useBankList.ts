@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { apiGet, apiGraphQuestionBindingsIndex } from "../../api/client";
+import { apiGraphQuestionBindingsIndex } from "../../api/client";
 import { useContentLibraryChanged } from "../../lib/contentEvents";
 import { loadSessionToken } from "../../platform/session";
 import {
@@ -18,6 +18,13 @@ import {
 import type { BankFolders } from "../../components/BankFolderExplorer";
 import type { BankCollectionRow, BankListItem, BankReadDiagnostic } from "./bankModel";
 import {
+  fetchBankCorePayload,
+  getBankPrefetchScopeKey,
+  invalidateBankPrefetch,
+  peekBankPrefetchSnapshot,
+  peekInFlightBankPrefetch,
+} from "./bankPrefetch";
+import {
   filterBankList,
   filterMetadataScopeItems,
 } from "./listing/bankFilterPipeline";
@@ -25,15 +32,18 @@ import {
 export interface UseBankListOptions {
   onError: (msg: string | null) => void;
   ignoreContentChangeSource?: object;
+  projectScope?: string | null;
 }
 
-export function useBankList({ onError, ignoreContentChangeSource }: UseBankListOptions) {
+export function useBankList({ onError, ignoreContentChangeSource, projectScope }: UseBankListOptions) {
   const { t } = useTranslation(["bank", "lib", "common"]);
-  const [items, setItems] = useState<BankListItem[]>([]);
-  const [diagnostics, setDiagnostics] = useState<BankReadDiagnostic[]>([]);
-  const [folders, setFolders] = useState<BankFolders>({ folders: [], assignments: {} });
-  const [collections, setCollections] = useState<BankCollectionRow[]>([]);
-  const [subjects, setSubjects] = useState<string[]>([]);
+  const scopeKey = getBankPrefetchScopeKey(projectScope);
+  const [initialPrefetch] = useState(() => peekBankPrefetchSnapshot(scopeKey));
+  const [items, setItems] = useState<BankListItem[]>(() => initialPrefetch?.items ?? []);
+  const [diagnostics, setDiagnostics] = useState<BankReadDiagnostic[]>(() => initialPrefetch?.diagnostics ?? []);
+  const [folders, setFolders] = useState<BankFolders>(() => initialPrefetch?.folders ?? { folders: [], assignments: {} });
+  const [collections, setCollections] = useState<BankCollectionRow[]>(() => initialPrefetch?.collections ?? []);
+  const [subjects, setSubjects] = useState<string[]>(() => initialPrefetch?.subjects ?? []);
   const [filterSubject, setFilterSubject] = useState<string>("__all__");
   const [filterCollection, setFilterCollection] = useState<string>("__all__");
   const [filterType, setFilterType] = useState<string>("__all__");
@@ -43,45 +53,49 @@ export function useBankList({ onError, ignoreContentChangeSource }: UseBankListO
   const [search, setSearch] = useState("");
   const [graphLinkIndex, setGraphLinkIndex] = useState<
     Record<string, { id: string; canonical_name: string; node_kind: string }[]>
-  >({});
-  const [loading, setLoading] = useState(false);
+  >(() => initialPrefetch?.graphLinkIndex ?? {});
+  const [loading, setLoading] = useState(() => !initialPrefetch);
+  const [hasLoaded, setHasLoaded] = useState(() => Boolean(initialPrefetch));
 
   const reqSeqRef = useRef(0);
   const searchCache = useMemo(() => new WeakMap<BankListItem, string>(), [items]);
 
-  const loadList = useCallback(async () => {
+  const loadList = useCallback(async (options?: { reusePrefetch?: boolean }) => {
     const currentSeq = ++reqSeqRef.current;
     const session = loadSessionToken();
     const isCurrent = () => currentSeq === reqSeqRef.current && session === loadSessionToken();
     onError(null);
     setLoading(true);
     try {
-      const [c, it, sub, folderData] = await Promise.all([
-        apiGet<{
-          collections: { id: string; label: string; subject?: string; collection?: string }[];
-        }>("/api/bank/collections"),
-        apiGet<{ items: BankListItem[]; diagnostics?: BankReadDiagnostic[] }>("/api/bank/items"),
-        apiGet<{ subjects: string[] }>("/api/bank/subjects"),
-        apiGet<BankFolders>("/api/bank/folders"),
-      ]);
+      const inFlight = options?.reusePrefetch ? peekInFlightBankPrefetch(scopeKey) : null;
+      if (inFlight) {
+        const snapshot = await inFlight;
+        if (!isCurrent()) {
+          return;
+        }
+        setCollections(snapshot.collections);
+        setItems(snapshot.items);
+        setDiagnostics(snapshot.diagnostics);
+        setFolders(snapshot.folders);
+        setSubjects(snapshot.subjects);
+        setGraphLinkIndex(snapshot.graphLinkIndex);
+        return;
+      }
+
+      if (!options?.reusePrefetch) {
+        invalidateBankPrefetch();
+      }
+      const core = await fetchBankCorePayload();
 
       if (!isCurrent()) {
         return;
       }
 
-      const parsedCollections = c.collections.map((x) => {
-        const parts = x.id.split("/");
-        const subj = x.subject ?? parts[0] ?? "";
-        const coll =
-          x.collection ?? (parts.length > 1 ? parts.slice(1).join("/") : parts[0] ?? "");
-        return { id: x.id, label: x.label, subject: subj, collection: coll };
-      });
-
-      setCollections(parsedCollections);
-      setItems(it.items);
-      setDiagnostics(it.diagnostics ?? []);
-      setFolders(folderData);
-      setSubjects(sub.subjects);
+      setCollections(core.collections);
+      setItems(core.items);
+      setDiagnostics(core.diagnostics);
+      setFolders(core.folders);
+      setSubjects(core.subjects);
 
       try {
         const idx = await apiGraphQuestionBindingsIndex();
@@ -100,17 +114,20 @@ export function useBankList({ onError, ignoreContentChangeSource }: UseBankListO
     } finally {
       if (isCurrent()) {
         setLoading(false);
+        setHasLoaded(true);
       }
     }
-  }, [onError]);
+  }, [onError, scopeKey]);
 
   useEffect(() => {
-    void loadList();
+    if (!initialPrefetch) {
+      void loadList({ reusePrefetch: true });
+    }
     return () => {
       // Invalidate in-flight requests on unmount
       reqSeqRef.current++;
     };
-  }, [loadList]);
+  }, [initialPrefetch, loadList]);
 
   useContentLibraryChanged((kind) => {
     if (kind === "question") {
@@ -210,6 +227,7 @@ export function useBankList({ onError, ignoreContentChangeSource }: UseBankListO
     graphLinkIndex,
     setGraphLinkIndex,
     loading,
+    hasLoaded,
     loadList,
     collectionOptions,
     metadataScopeItems,

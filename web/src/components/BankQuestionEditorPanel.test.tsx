@@ -5,6 +5,7 @@ import { createRef, useState } from "react";
 
 import { setupTestI18n, TestI18nProvider } from "../test/i18nTestUtils";
 import { BankQuestionEditorPanel } from "./BankQuestionEditorPanel";
+import { ImeInput } from "./ImeFields";
 import { selectOption } from "../test/selectOption";
 import type { BankDetailState, BankQuestionEditorPanelProps, MetaRow } from "./bankEditorTypes";
 
@@ -74,6 +75,7 @@ function Wrapper(
         onSaveYaml={props.onSaveYaml ?? vi.fn()}
         onClose={props.onClose}
         panelMode={props.panelMode}
+        existingItems={props.existingItems}
       />
     </TestI18nProvider>
   );
@@ -150,6 +152,46 @@ describe("BankQuestionEditorPanel User Journeys", () => {
       expect(screen.getByText("返回简单模式")).toBeInTheDocument();
     });
 
+    it("allows editing single question id with Chinese IME composition instead of marking it readonly", () => {
+      render(<Wrapper initialDetail={singleDetail} />);
+
+      const idInput = screen.getByRole("textbox", { name: "题号" }) as HTMLInputElement;
+      expect(idInput).not.toHaveAttribute("readonly");
+      expect(idInput.className).not.toContain("cursor-not-allowed");
+      expect(idInput.className).not.toContain("font-mono");
+      expect(screen.getByText("test:q1").className).not.toContain("font-mono");
+
+      fireEvent.compositionStart(idInput);
+      fireEvent.input(idInput, { target: { value: "di" } });
+      fireEvent.compositionEnd(idInput, { target: { value: "第一题" } });
+
+      expect(screen.getByRole("textbox", { name: "题号" })).toBe(idInput);
+      expect(idInput).toHaveValue("第一题");
+    });
+
+    it("blocks saving and displays an inline alert when edited question id duplicates an existing item", () => {
+      const existingItems = [
+        { id: "q1", qualified_id: "数学/默认/q1", collection: "数学/默认", subject: "数学" },
+        { id: "第二题", qualified_id: "数学/默认/第二题", collection: "数学/默认", subject: "数学" },
+      ];
+      const mathDetail: BankDetailState = {
+        ...singleDetail,
+        qualified_id: "数学/默认/q1",
+      };
+      render(<Wrapper initialDetail={mathDetail} existingItems={existingItems} />);
+
+      const idInput = screen.getByRole("textbox", { name: "题号" });
+      fireEvent.change(idInput, { target: { value: " 第二题 " } });
+
+      expect(screen.getByRole("alert")).toHaveTextContent("题号“第二题”已存在");
+      expect(idInput).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+
+      fireEvent.change(idInput, { target: { value: "第三题" } });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+    });
+
     it("keeps a new question stem empty and shows the stem hint as a placeholder", () => {
       const blankDetail = {
         ...singleDetail,
@@ -199,6 +241,21 @@ describe("BankQuestionEditorPanel User Journeys", () => {
       // 1 initial (diff) + 1 updated (category) + 1 added row = 3 rows
       const keyInputs = screen.getAllByPlaceholderText("名称");
       expect(keyInputs.length).toBe(3);
+    });
+
+    it("lets teachers select and clear simple/medium/hard question difficulty", async () => {
+      render(<Wrapper initialDetail={singleDetail} />);
+
+      const diffSelect = screen.getByRole("combobox", { name: "题目难度" });
+      expect(diffSelect).toHaveTextContent("未设置");
+
+      await selectOption(diffSelect, "hard");
+      expect(diffSelect).toHaveTextContent("较难");
+      expect(screen.getByDisplayValue("hard")).toBeInTheDocument();
+
+      await selectOption(diffSelect, "__unset__");
+      expect(diffSelect).toHaveTextContent("未设置");
+      expect(screen.queryByDisplayValue("hard")).not.toBeInTheDocument();
     });
 
     it("dispatches onSave on form tab and onSaveYaml on yaml tab", async () => {
@@ -302,5 +359,70 @@ describe("BankQuestionEditorPanel User Journeys", () => {
       fireEvent.click(screen.getByRole("button", { name: "返回简单模式" }));
       expect(screen.getByText("简单编辑模式")).toBeInTheDocument();
     });
+  });
+
+  it("allows saving YAML tab in full mode even when form ID collides and syncs unfocused ImeInput resets", async () => {
+    const user = userEvent.setup();
+    const onSaveYaml = vi.fn();
+    const existingItems = [
+      {
+        id: "q1",
+        qualified_id: "test/q1",
+        collection: "test",
+        subject: "test",
+        type: "single_choice",
+        content_preview: "",
+        metadata: {},
+        storage_path: "questions/q1.yaml",
+        storage_kind: "single",
+      },
+      {
+        id: "dup_id",
+        qualified_id: "test/dup_id",
+        collection: "test",
+        subject: "test",
+        type: "single_choice",
+        content_preview: "",
+        metadata: {},
+        storage_path: "questions/dup_id.yaml",
+        storage_kind: "single",
+      },
+    ];
+    const conflictedDetail: BankDetailState = {
+      ...singleDetail,
+      qualified_id: "test/q1",
+    };
+
+    render(
+      <Wrapper
+        initialDetail={conflictedDetail}
+        panelMode="full"
+        existingItems={existingItems}
+        onSaveYaml={onSaveYaml}
+      />
+    );
+
+    const idInput = screen.getByRole("textbox", { name: "题号" }) as HTMLInputElement;
+    // Simulate interrupted IME composition followed by focus moving away
+    fireEvent.compositionStart(idInput);
+    fireEvent.change(idInput, { target: { value: "dup_id" } });
+    fireEvent.blur(idInput);
+    expect(await screen.findByText(/题号“dup_id”已存在/)).toBeInTheDocument();
+
+    const saveBtn = screen.getByRole("button", { name: "保存" });
+    expect(saveBtn).toBeDisabled();
+
+    await user.click(screen.getByRole("tab", { name: "源文件" }));
+    expect(saveBtn).toBeEnabled();
+    await user.click(saveBtn);
+    expect(onSaveYaml).toHaveBeenCalledTimes(1);
+
+    // Rerendering same ImeInput instance after abandoned composition syncs DOM value cleanly once unfocused
+    const imeView = render(<ImeInput aria-label="直接题号" value="alpha" onValueChange={vi.fn()} />);
+    const directInput = screen.getByRole("textbox", { name: "直接题号" }) as HTMLInputElement;
+    fireEvent.compositionStart(directInput);
+    directInput.value = "pin";
+    imeView.rerender(<ImeInput aria-label="直接题号" value="beta" onValueChange={vi.fn()} />);
+    expect(directInput.value).toBe("beta");
   });
 });

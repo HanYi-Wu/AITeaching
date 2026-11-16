@@ -9,6 +9,7 @@ import { ToolBarProvider, useToolBar } from "../../contexts/ToolBarContext";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
 import i18n from "../../i18n/i18n";
 import type { BankQuestionEditorPanelProps, QuestionJson } from "../../components/BankQuestionEditorPanel";
+import { invalidateBankPrefetch, prefetchBankListData } from "./bankPrefetch";
 import { BankWorkspace } from "./BankWorkspace";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn(), blob: vi.fn(), error: vi.fn(), context: vi.fn() }));
@@ -51,6 +52,7 @@ vi.mock("../../components/BankQuestionEditorPanel", async () => {
                 question: { ...current.question, content: event.target.value },
               } : current)}
             />
+            <input aria-label="编辑题号" value={detail.question.id} onChange={(event) => setDetail((current) => current ? { ...current, question: { ...current.question, id: event.target.value } } : current)} />
             <input aria-label="附加信息名称" value={draft.metaRows[0]?.key ?? ""} onChange={(event) => setMetaRows([{ key: event.target.value, value: draft.metaRows[0]?.value ?? "" }])} />
             <input aria-label="附加信息内容" value={draft.metaRows[0]?.value ?? ""} onChange={(event) => setMetaRows([{ key: draft.metaRows[0]?.key ?? "", value: event.target.value }])} />
           </>
@@ -81,6 +83,7 @@ describe("bank toolbar uses the current selection and edits", () => {
   beforeAll(async () => { await setupTestI18n("zh"); });
   beforeEach(() => {
     vi.clearAllMocks();
+    invalidateBankPrefetch();
     savedQuestion = { id: "q1", type: "fill", content: "Question one", answer: "7", analysis: "original", metadata: {} };
     mocks.get.mockImplementation(async (path: string) => {
       if (path === "/api/bank/collections") return { collections: [{ id: "数学/default", label: "数学/default" }] };
@@ -207,7 +210,7 @@ describe("bank toolbar uses the current selection and edits", () => {
     expect(screen.getByRole("button", { name: "创建空白草稿" })).toBeInTheDocument();
     expect(screen.queryByTestId("editor-question-id")).not.toBeInTheDocument();
     expect(mocks.get).not.toHaveBeenCalledWith(
-      `/api/bank/items/${encodeURIComponent("数学/默认/new_question_001")}`,
+      `/api/bank/items/${encodeURIComponent("数学/默认/第一题")}`,
     );
   });
 
@@ -253,10 +256,11 @@ describe("bank toolbar uses the current selection and edits", () => {
     expect(mocks.get).toHaveBeenCalledWith(`/api/bank/items/${encodeURIComponent(createdId)}`);
   });
 
-  it("keeps edits and the editor open after save failure, then returns to the list after success", async () => {
-    const createdId = "数学/默认/new_question_001";
+  it("keeps the input node and buffers Chinese IME composition in new question ID", async () => {
+    const questionId = "第一题";
+    const createdId = `数学/默认/${questionId}`;
     const createdQuestion: QuestionJson = {
-      id: "new_question_001",
+      id: questionId,
       type: "single_choice",
       content: "",
       options: { A: "", B: "", C: "", D: "" },
@@ -271,7 +275,62 @@ describe("bank toolbar uses the current selection and edits", () => {
           qualified_id: createdId,
           question: createdQuestion,
           file_yaml: yaml.dump(createdQuestion),
-          storage_path: "resource/数学/默认/new_question_001.yaml",
+          storage_path: `resource/数学/默认/${questionId}.yaml`,
+          storage_kind: "single",
+        };
+      }
+      return baseGet(path);
+    });
+    mocks.post.mockResolvedValueOnce({ ok: true, qualified_id: createdId });
+    mountWorkspace();
+
+    await userEvent.click(screen.getByRole("button", { name: /新建题目/ }));
+    const idInput = screen.getByRole("textbox", { name: "题号" }) as HTMLInputElement;
+    await userEvent.clear(idInput);
+
+    const createBtn = screen.getByRole("button", { name: "创建空白草稿" });
+    expect(createBtn).toBeDisabled();
+
+    fireEvent.compositionStart(idInput);
+    fireEvent.input(idInput, { target: { value: "d" } });
+    fireEvent.input(idInput, { target: { value: "di" } });
+    expect(screen.getByRole("textbox", { name: "题号" })).toBe(idInput);
+    expect(idInput.value).toBe("di");
+    expect(createBtn).toBeDisabled();
+
+    fireEvent.compositionEnd(idInput, { target: { value: questionId } });
+    expect(screen.getByRole("textbox", { name: "题号" })).toBe(idInput);
+    expect(idInput.value).toBe(questionId);
+    expect(createBtn).toBeEnabled();
+
+    await userEvent.click(createBtn);
+    expect(mocks.post).toHaveBeenCalledWith("/api/bank/items", expect.objectContaining({
+      subject: "数学",
+      collection: "默认",
+      question: expect.objectContaining({ id: questionId }),
+    }));
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent(createdId);
+  });
+
+  it("keeps edits and the editor open after save failure, then returns to the list after success", async () => {
+    const createdId = "数学/默认/第一题";
+    const createdQuestion: QuestionJson = {
+      id: "第一题",
+      type: "single_choice",
+      content: "",
+      options: { A: "", B: "", C: "", D: "" },
+      answer: "",
+      analysis: "",
+      metadata: {},
+    };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === `/api/bank/items/${encodeURIComponent(createdId)}`) {
+        return {
+          qualified_id: createdId,
+          question: createdQuestion,
+          file_yaml: yaml.dump(createdQuestion),
+          storage_path: "resource/数学/默认/第一题.yaml",
           storage_kind: "single",
         };
       }
@@ -289,7 +348,7 @@ describe("bank toolbar uses the current selection and edits", () => {
     expect(mocks.post).toHaveBeenCalledWith("/api/bank/items", expect.objectContaining({
       subject: "数学",
       collection: "默认",
-      question: expect.objectContaining({ id: "new_question_001", content: "" }),
+      question: expect.objectContaining({ id: "第一题", content: "" }),
     }));
 
     fireEvent.change(screen.getByRole("textbox", { name: "附加信息名称" }), { target: { value: "备注" } });
@@ -684,6 +743,11 @@ describe("bank toolbar uses the current selection and edits", () => {
     await openFirstQuestion();
     await userEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
     const dialog = await screen.findByRole("dialog", { name: "删除题目" });
+    expect(dialog.className).toContain("bg-black/45");
+    expect(dialog.className).not.toContain("var(--or-primary)");
+    expect(dialog).not.toHaveTextContent("deleteQuestionConfirm");
+    expect(dialog).toHaveTextContent(`确定要删除题目 ${qid} 吗？`);
+    expect(dialog.querySelector(".or-dialog")).toHaveClass("or-g48-dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "删除" }));
     await waitFor(() => expect(resolveDelete).toBeTypeOf("function"));
 
@@ -694,5 +758,180 @@ describe("bank toolbar uses the current selection and edits", () => {
       await Promise.resolve();
     });
     expect(screen.getByTestId("editor-question-id")).toHaveTextContent(q2);
+  });
+
+  it("opens blank draft modal centered without mt-4 or transform-overriding keyframes", async () => {
+    const createdId = "数学/默认/第一题";
+    const createdQuestion: QuestionJson = {
+      id: "第一题",
+      type: "single_choice",
+      content: "",
+      options: { A: "", B: "", C: "", D: "" },
+      answer: "",
+      analysis: "",
+      metadata: {},
+    };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === `/api/bank/items/${encodeURIComponent(createdId)}`) {
+        return {
+          qualified_id: createdId,
+          question: createdQuestion,
+          file_yaml: yaml.dump(createdQuestion),
+          storage_path: "resource/数学/默认/第一题.yaml",
+          storage_kind: "single",
+        };
+      }
+      return baseGet(path);
+    });
+    mocks.post.mockResolvedValueOnce({ ok: true, qualified_id: createdId });
+    mountWorkspace();
+
+    await userEvent.click(screen.getByRole("button", { name: /新建题目/ }));
+    await userEvent.click(screen.getByRole("button", { name: "创建空白草稿" }));
+
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent(createdId);
+    const editorDialog = screen.getByRole("dialog");
+    expect(editorDialog).toHaveClass("or-dialog", "or-g48-dialog");
+    expect(editorDialog).not.toHaveClass("mt-4");
+    expect(editorDialog.parentElement?.className).toContain("bg-black/40");
+    expect(editorDialog.parentElement?.className).not.toContain("var(--or-primary)");
+  });
+
+  it("auto-increments Chinese default question IDs from existing items and updates ID on save", async () => {
+    const currentItems = [
+      { id: "第一题", qualified_id: "数学/默认/第一题", collection: "数学/默认", subject: "数学", type: "single_choice", content_preview: "", metadata: {}, storage_path: "resource/数学/默认/第一题.yaml", storage_kind: "single" },
+      { id: "2", qualified_id: "数学/默认/2", collection: "数学/默认", subject: "数学", type: "single_choice", content_preview: "", metadata: {}, storage_path: "resource/数学/默认/2.yaml", storage_kind: "single" },
+    ];
+    let secondQ: QuestionJson = { id: "第三题", type: "single_choice", content: "", options: { A: "", B: "", C: "", D: "" }, answer: "", analysis: "", metadata: {} };
+    let renamedQ: QuestionJson = { ...secondQ, id: "重命名题" };
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === "/api/bank/items") return { items: currentItems.map((item) => ({ ...item })) };
+      if (path === `/api/bank/items/${encodeURIComponent("数学/默认/第三题")}`) {
+        return { qualified_id: "数学/默认/第三题", question: secondQ, file_yaml: yaml.dump(secondQ), storage_path: "resource/数学/默认/第三题.yaml", storage_kind: "single" };
+      }
+      if (path === `/api/bank/items/${encodeURIComponent("数学/默认/重命名题")}`) {
+        return { qualified_id: "数学/默认/重命名题", question: renamedQ, file_yaml: yaml.dump(renamedQ), storage_path: "resource/数学/默认/重命名题.yaml", storage_kind: "single" };
+      }
+      return baseGet(path);
+    });
+    mocks.post.mockImplementationOnce(async () => {
+      currentItems.push({ id: "第三题", qualified_id: "数学/默认/第三题", collection: "数学/默认", subject: "数学", type: "single_choice", content_preview: "", metadata: {}, storage_path: "resource/数学/默认/第三题.yaml", storage_kind: "single" });
+      return { ok: true, qualified_id: "数学/默认/第三题" };
+    });
+    mocks.put.mockImplementationOnce(async (_path: string, body: QuestionJson) => {
+      renamedQ = structuredClone(body);
+      currentItems[2] = { ...currentItems[2]!, id: "重命名题", qualified_id: "数学/默认/重命名题", storage_path: "resource/数学/默认/重命名题.yaml" };
+      return { ok: true, qualified_id: "数学/默认/重命名题", version: "v2" };
+    });
+
+    mountWorkspace();
+    await userEvent.click(await screen.findByRole("button", { name: /新建题目/ }));
+    expect(screen.getByRole("textbox", { name: "题号" })).toHaveValue("第三题");
+
+    await userEvent.click(screen.getByRole("button", { name: "创建空白草稿" }));
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent("数学/默认/第三题");
+
+    // Closing editor / reopening New menu advances default to 第四题 automatically
+    await userEvent.click(screen.getByRole("button", { name: "关闭" }));
+    await userEvent.click(screen.getByRole("button", { name: /新建题目/ }));
+    expect(screen.getByRole("textbox", { name: "题号" })).toHaveValue("第四题");
+    await userEvent.click(screen.getByRole("button", { name: /新建题目/ }));
+
+    // Reopen 第三题 from list and rename its 题号 inside editor
+    await userEvent.click(screen.getByRole("button", { name: /数学\/默认\/第三题/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存" })).toBeInTheDocument());
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑题号" }), { target: { value: "重命名题" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(mocks.put).toHaveBeenCalledWith(
+        `/api/bank/items/${encodeURIComponent("数学/默认/第三题")}`,
+        expect.objectContaining({ id: "重命名题" }),
+      ),
+    );
+    expect(await screen.findByTestId("editor-question-id")).toHaveTextContent("数学/默认/重命名题");
+    expect(screen.getByRole("tab", { name: "重命名题" })).toBeInTheDocument();
+
+    // Renaming to an existing question ID fails validation before sending PUT and avoids false version conflict UI
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑题号" }), { target: { value: "2" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    expect(mocks.error).toHaveBeenLastCalledWith("题号“2”已存在，请使用其他题号");
+    expect(screen.queryByRole("button", { name: "查看最新内容" })).not.toBeInTheDocument();
+
+    // Pressing Escape dismisses delete confirmation modal cleanly when idle
+    await userEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+    expect(await screen.findByRole("dialog", { name: "删除题目" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "删除题目" })).not.toBeInTheDocument());
+  });
+
+  it("shows loading prompt instead of empty state while initial bank requests are pending", async () => {
+    let resolveItems: (value: unknown) => void;
+    const itemsDeferred = new Promise((resolve) => { resolveItems = resolve; });
+    const baseImpl = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (path: string) => {
+      if (path === "/api/bank/items") return itemsDeferred;
+      return baseImpl(path);
+    });
+
+    mountWorkspace();
+
+    expect(screen.getByText("正在加载题目…")).toBeInTheDocument();
+    expect(screen.getByText("全部目录 · 加载中…")).toBeInTheDocument();
+    expect(screen.queryByText(/暂无匹配题目/)).not.toBeInTheDocument();
+    expect(screen.queryByText("0 题")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveItems!(await baseImpl("/api/bank/items"));
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole("button", { name: /数学\/default\/q1/ })).toBeInTheDocument();
+    expect(screen.queryByText("正在加载题目…")).not.toBeInTheDocument();
+  });
+
+  it("hydrates from prefetched bank data without flashing empty state and refreshes on reactivation", async () => {
+    await prefetchBankListData("/proj-bank");
+    mocks.get.mockClear();
+
+    const { rerender } = render(
+      <TestI18nProvider>
+        <ToolBarProvider>
+          <Toolbar />
+          <BankWorkspace active={true} projectScope="/proj-bank" onError={mocks.error} />
+        </ToolBarProvider>
+      </TestI18nProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: /数学\/default\/q1/ })).toBeInTheDocument();
+    expect(screen.queryByText(/暂无匹配题目/)).not.toBeInTheDocument();
+    expect(mocks.get).not.toHaveBeenCalled();
+
+    rerender(
+      <TestI18nProvider>
+        <ToolBarProvider>
+          <Toolbar />
+          <BankWorkspace active={false} projectScope="/proj-bank" onError={mocks.error} />
+        </ToolBarProvider>
+      </TestI18nProvider>,
+    );
+
+    await waitFor(() => expect(mocks.context).toHaveBeenLastCalledWith(null));
+
+    rerender(
+      <TestI18nProvider>
+        <ToolBarProvider>
+          <Toolbar />
+          <BankWorkspace active={true} projectScope="/proj-bank" onError={mocks.error} />
+        </ToolBarProvider>
+      </TestI18nProvider>,
+    );
+
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith("/api/bank/items"));
+    expect(screen.queryByText(/暂无匹配题目/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /数学\/default\/q1/ })).toBeInTheDocument();
   });
 });

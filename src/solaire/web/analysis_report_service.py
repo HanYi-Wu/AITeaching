@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from io import BytesIO
 from typing import Any
 
@@ -36,14 +37,121 @@ def _excel_value(value: Any) -> Any:
     return value
 
 
-def _write_table(ws, headers: list[str], rows: list[list[Any]]) -> None:
+def _project_grade_row(
+    student: dict[str, Any],
+    ranks: dict[float, int],
+    publication_title: Any,
+    publication_id: Any,
+    status_names: dict[str, str],
+) -> list[Any]:
+    score_percent = student.get("score_percent")
+    return [
+        ranks.get(float(student["score_percent"])) if score_percent is not None else None,
+        student.get("student_no"),
+        student.get("display_name"),
+        student.get("class_names"),
+        "已批改" if score_percent is not None else status_names.get(
+            student.get("status"), student.get("status")
+        ),
+        student.get("score") if score_percent is not None else None,
+        student.get("max_score"),
+        score_percent,
+        student.get("time_spent_seconds"),
+        student.get("screen_switch_count"),
+        publication_title,
+        publication_id,
+    ]
+
+
+def _project_question_score_row(
+    student: dict[str, Any], questions: Iterable[dict[str, Any]]
+) -> list[Any]:
+    scores = student.get("question_scores") or {}
+    return [
+        student.get("student_no"),
+        student.get("display_name"),
+        "已批改" if student.get("score_percent") is not None else "未完成批改",
+        *[scores.get(question["question_id"]) for question in questions],
+    ]
+
+
+def _project_student_row(item: dict[str, Any]) -> list[Any]:
+    return [
+        item.get("student_no"),
+        item.get("display_name"),
+        item.get("account_username"),
+        item.get("class_names"),
+        item.get("status"),
+        item.get("score"),
+        item.get("max_score"),
+        item.get("score_percent"),
+        item.get("time_spent_seconds"),
+        item.get("screen_switch_count"),
+        item.get("screen_switch_limit"),
+        item.get("screen_switch_exceeded"),
+    ]
+
+
+def _project_class_row(item: dict[str, Any]) -> list[Any]:
+    return [
+        item.get("class_name"),
+        item.get("class_grade"),
+        item.get("student_count"),
+        item.get("completed_count"),
+        item.get("in_progress_count"),
+        item.get("not_started_count"),
+        item.get("completion_rate"),
+        item.get("average_score"),
+        item.get("average_time_seconds"),
+        item.get("screen_switch_count"),
+    ]
+
+
+def _project_question_row(item: dict[str, Any]) -> list[Any]:
+    return [
+        item.get("question_id"),
+        item.get("header"),
+        item.get("section_id"),
+        item.get("type"),
+        item.get("score_per_item"),
+        item.get("answered_count"),
+        item.get("scored_count"),
+        item.get("correct_count"),
+        item.get("wrong_count"),
+        item.get("accuracy_rate"),
+        item.get("average_score_percent"),
+        item.get("risk_level"),
+    ]
+
+
+def _project_module_row(item: dict[str, Any]) -> list[Any]:
+    return [
+        item.get("module_id"),
+        item.get("label"),
+        item.get("question_count"),
+        item.get("student_count"),
+        item.get("answered_count"),
+        item.get("scored_count"),
+        item.get("correct_count"),
+        item.get("wrong_count"),
+        item.get("average_score_percent"),
+        item.get("accuracy_rate"),
+        item.get("risk_level"),
+    ]
+
+
+def _write_table(
+    ws, headers: list[str], rows: Iterable[Sequence[Any]]
+) -> None:
     ws.append(headers)
     row_number = ws.max_row
     widths = [max(12, min(42, len(header) + 4)) for header in headers]
     for row in rows:
-        ws.append([_excel_value(value) for value in row])
+        values = [_excel_value(value) for value in row]
+        ws.append(values)
         row_number += 1
-        for index, cell in enumerate(ws[row_number], start=1):
+        for index, value in enumerate(values, start=1):
+            cell = ws.cell(row=row_number, column=index)
             if isinstance(cell.value, str):
                 cell.data_type = "s"  # User-controlled names must never become Excel formulas.
             if index <= len(widths):
@@ -102,25 +210,56 @@ def build_paper_analysis_workbook(analysis: dict[str, Any]) -> bytes:
 
     publication = next((p for p in analysis.get('publications', []) if p['id'] == analysis.get('publication_id')), {})
     students = list(analysis.get('students') or [])
-    ranked = sorted((s for s in students if s.get('score_percent') is not None), key=lambda s: -float(s['score_percent']))
     ranks = {}
-    for position, student in enumerate(ranked, start=1):
-        ranks.setdefault(float(student['score_percent']), position)
+    grade_order = sorted(
+        students,
+        key=lambda student: (
+            student.get("score_percent") is None,
+            -float(student.get("score_percent") or 0),
+            str(student.get("student_no") or ""),
+        ),
+    )
+    rank_position = 0
+    for student in grade_order:
+        score_percent = student.get("score_percent")
+        if score_percent is not None:
+            rank_position += 1
+            ranks.setdefault(float(score_percent), rank_position)
     status_names = {'completed': '已提交待批改', 'in_progress': '答题中', 'not_started': '未开始'}
     report = wb.create_sheet('成绩单', 0)
-    _write_table(report, ['排名', '学号', '姓名', '班级', '批改状态', '得分', '卷面满分', '得分率（%）', '答题用时（秒）', '切屏次数', '发布批次', '批次编号'], [
-        [ranks.get(float(s['score_percent'])) if s.get('score_percent') is not None else None,
-         s.get('student_no'), s.get('display_name'), s.get('class_names'),
-         '已批改' if s.get('score_percent') is not None else status_names.get(s.get('status'), s.get('status')),
-         s.get('score') if s.get('score_percent') is not None else None, s.get('max_score'), s.get('score_percent'),
-         s.get('time_spent_seconds'), s.get('screen_switch_count'), publication.get('title'), analysis.get('publication_id')]
-        for s in sorted(students, key=lambda s: (s.get('score_percent') is None, -float(s.get('score_percent') or 0), str(s.get('student_no') or '')))
-    ])
+    grade_rows = (
+        _project_grade_row(
+            student,
+            ranks,
+            publication.get("title"),
+            analysis.get("publication_id"),
+            status_names,
+        )
+        for student in grade_order
+    )
+    _write_table(
+        report,
+        ['排名', '学号', '姓名', '班级', '批改状态', '得分', '卷面满分', '得分率（%）', '答题用时（秒）', '切屏次数', '发布批次', '批次编号'],
+        grade_rows,
+    )
     questions = analysis.get('questions') or []
-    _write_table(wb.create_sheet('逐题成绩', 1), ['学号', '姓名', '批改状态', *[f"{q.get('header') or q['question_id']}（满分{q.get('score_per_item', '-')}）" for q in questions]], [
-        [s.get('student_no'), s.get('display_name'), '已批改' if s.get('score_percent') is not None else '未完成批改',
-         *[(s.get('question_scores') or {}).get(q['question_id']) for q in questions]] for s in students
-    ])
+    question_score_headers = [
+        '学号',
+        '姓名',
+        '批改状态',
+        *[
+            f"{question.get('header') or question['question_id']}（满分{question.get('score_per_item', '-')}）"
+            for question in questions
+        ],
+    ]
+    question_score_rows = (
+        _project_question_score_row(student, questions) for student in students
+    )
+    _write_table(
+        wb.create_sheet('逐题成绩', 1),
+        question_score_headers,
+        question_score_rows,
+    )
     wb.active = 0
 
     ws = wb['Sheet']
@@ -143,24 +282,9 @@ def build_paper_analysis_workbook(analysis: dict[str, Any]) -> bytes:
     _write_table(ws, ["metric", "value"], summary_rows)
     _add_summary_chart(ws)
 
-    student_rows = []
-    for item in analysis.get("students") or []:
-        student_rows.append(
-            [
-                item.get("student_no"),
-                item.get("display_name"),
-                item.get("account_username"),
-                item.get("class_names"),
-                item.get("status"),
-                item.get("score"),
-                item.get("max_score"),
-                item.get("score_percent"),
-                item.get("time_spent_seconds"),
-                item.get("screen_switch_count"),
-                item.get("screen_switch_limit"),
-                item.get("screen_switch_exceeded"),
-            ]
-        )
+    student_rows = (
+        _project_student_row(item) for item in analysis.get("students") or []
+    )
     _write_table(
         wb.create_sheet("students"),
         [
@@ -180,22 +304,9 @@ def build_paper_analysis_workbook(analysis: dict[str, Any]) -> bytes:
         student_rows,
     )
 
-    class_rows = []
-    for item in analysis.get("classes") or []:
-        class_rows.append(
-            [
-                item.get("class_name"),
-                item.get("class_grade"),
-                item.get("student_count"),
-                item.get("completed_count"),
-                item.get("in_progress_count"),
-                item.get("not_started_count"),
-                item.get("completion_rate"),
-                item.get("average_score"),
-                item.get("average_time_seconds"),
-                item.get("screen_switch_count"),
-            ]
-        )
+    class_rows = (
+        _project_class_row(item) for item in analysis.get("classes") or []
+    )
     _write_table(
         wb.create_sheet("classes"),
         [
@@ -213,24 +324,9 @@ def build_paper_analysis_workbook(analysis: dict[str, Any]) -> bytes:
         class_rows,
     )
 
-    question_rows = []
-    for item in analysis.get("questions") or []:
-        question_rows.append(
-            [
-                item.get("question_id"),
-                item.get("header"),
-                item.get("section_id"),
-                item.get("type"),
-                item.get("score_per_item"),
-                item.get("answered_count"),
-                item.get("scored_count"),
-                item.get("correct_count"),
-                item.get("wrong_count"),
-                item.get("accuracy_rate"),
-                item.get("average_score_percent"),
-                item.get("risk_level"),
-            ]
-        )
+    question_rows = (
+        _project_question_row(item) for item in analysis.get("questions") or []
+    )
     _write_table(
         wb.create_sheet("questions"),
         [
@@ -250,23 +346,9 @@ def build_paper_analysis_workbook(analysis: dict[str, Any]) -> bytes:
         question_rows,
     )
 
-    module_rows = []
-    for item in analysis.get("modules") or []:
-        module_rows.append(
-            [
-                item.get("module_id"),
-                item.get("label"),
-                item.get("question_count"),
-                item.get("student_count"),
-                item.get("answered_count"),
-                item.get("scored_count"),
-                item.get("correct_count"),
-                item.get("wrong_count"),
-                item.get("average_score_percent"),
-                item.get("accuracy_rate"),
-                item.get("risk_level"),
-            ]
-        )
+    module_rows = (
+        _project_module_row(item) for item in analysis.get("modules") or []
+    )
     _write_table(
         wb.create_sheet("modules"),
         [
@@ -286,7 +368,10 @@ def build_paper_analysis_workbook(analysis: dict[str, Any]) -> bytes:
     )
 
     radar_ws = wb.create_sheet("radar")
-    radar_rows = [[item.get("label") or item.get("id"), item.get("value")] for item in analysis.get("radar") or []]
+    radar_rows = (
+        [item.get("label") or item.get("id"), item.get("value")]
+        for item in analysis.get("radar") or []
+    )
     _write_table(radar_ws, ["axis", "value"], radar_rows)
     _add_radar_chart(radar_ws)
 

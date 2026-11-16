@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import difflib
 import json
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from solaire.agent_layer.tools.tool_definitions import RegisteredTool
@@ -24,13 +25,50 @@ class ValidatedToolCall:
     suggestion: str | None = None  # corrective hint for the model
     raw_name: str = ""
     raw_arguments: Any = None
-    _dump: dict[str, Any] | None = None  # cached json.dumps
 
     def error_payload(self) -> dict[str, Any]:
         """Build a ToolResult-compatible error dict for draft_tool_results."""
-        if self._dump is None:
-            self._dump = {}
-        return self._dump
+        payload: dict[str, Any] = {}
+        if self.error_message:
+            payload["error"] = self.error_message
+        if self.error_code:
+            payload["error_code"] = self.error_code
+        if self.suggestion:
+            payload["suggestion"] = self.suggestion
+        return payload
+
+
+class ToolCatalog:
+    """Compiled name index for a stable set of tool definitions.
+
+    Building this once per draft turn avoids rebuilding the same dictionary
+    and sorting the same candidate names for every tool call. The input may be
+    any iterable; duplicate names keep the previous validator's last-entry
+    wins behavior.
+    """
+
+    __slots__ = ("_by_name", "_names", "_name_set")
+
+    def __init__(self, tools: Iterable[RegisteredTool]) -> None:
+        by_name = {tool.name: tool for tool in tools}
+        self._by_name = by_name
+        self._names = tuple(sorted(by_name))
+        self._name_set = frozenset(by_name)
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return self._names
+
+    def get(self, name: str) -> RegisteredTool | None:
+        return self._by_name.get(name)
+
+    def __len__(self) -> int:
+        return len(self._by_name)
+
+
+def compile_tool_catalog(tools: Iterable[RegisteredTool] | ToolCatalog) -> ToolCatalog:
+    """Return a reusable index, preserving an already compiled catalog."""
+    return tools if isinstance(tools, ToolCatalog) else ToolCatalog(tools)
 
 
 def _normalize_name(name: str) -> str:
@@ -38,18 +76,23 @@ def _normalize_name(name: str) -> str:
     return name.replace("_", ".")
 
 
-def _name_matches(raw: str, candidates: list[str]) -> tuple[str | None, str | None]:
+def _match_name(
+    raw: str,
+    candidates: Sequence[str],
+    candidate_set: frozenset[str] | set[str] | None = None,
+) -> tuple[str | None, str | None]:
     """Try to match raw tool name against candidates.
 
     Returns (corrected_name_or_None, suggestion_or_None).
     """
+    names = candidate_set if candidate_set is not None else set(candidates)
     # 1. Exact match
-    if raw in candidates:
+    if raw in names:
         return raw, None
 
     # 2. Dot/underscore normalization
     normalized = _normalize_name(raw)
-    if normalized != raw and normalized in candidates:
+    if normalized != raw and normalized in names:
         return normalized, f"工具名 '{raw}' 已自动纠正为 '{normalized}'"
 
     # 3. difflib close matches (edit distance)
@@ -66,6 +109,11 @@ def _name_matches(raw: str, candidates: list[str]) -> tuple[str | None, str | No
     if len(candidates) > 20:
         hint += f" …（共 {len(candidates)} 个）"
     return None, f"未知工具 '{raw}'。{hint}"
+
+
+def _name_matches(raw: str, candidates: list[str]) -> tuple[str | None, str | None]:
+    """Compatibility wrapper for callers/tests that pass a plain name list."""
+    return _match_name(raw, candidates)
 
 
 def _check_required_params(
@@ -85,7 +133,7 @@ def _check_required_params(
 def validate_tool_call(
     tool_name: str,
     raw_arguments: Any,
-    available_tools: list[RegisteredTool],
+    available_tools: Iterable[RegisteredTool] | ToolCatalog,
 ) -> ValidatedToolCall:
     """Validate and correct a single tool call from the LLM.
 
@@ -98,11 +146,11 @@ def validate_tool_call(
     When invalid, .error_payload() builds a result suitable for
     draft_tool_results so the model sees a clear error in the next turn.
     """
-    tool_map: dict[str, RegisteredTool] = {t.name: t for t in available_tools}
-    candidate_names = sorted(tool_map.keys())
+    catalog = compile_tool_catalog(available_tools)
+    candidate_names = catalog.names
 
     # --- Stage 1: Name resolution ---
-    corrected, suggestion = _name_matches(tool_name, candidate_names)
+    corrected, suggestion = _match_name(tool_name, candidate_names, catalog._name_set)
 
     if corrected is None:
         return ValidatedToolCall(
@@ -116,7 +164,19 @@ def validate_tool_call(
             raw_arguments=raw_arguments,
         )
 
-    rt = tool_map[corrected]
+    rt = catalog.get(corrected)
+    # A corrected name always comes from the catalog; keep a defensive guard in
+    # case a custom catalog implementation is introduced later.
+    if rt is None:
+        return ValidatedToolCall(
+            tool_name=tool_name,
+            arguments={},
+            is_valid=False,
+            error_code="unknown_tool",
+            error_message=f"未知工具: {tool_name}",
+            raw_name=tool_name,
+            raw_arguments=raw_arguments,
+        )
 
     # --- Stage 2: Argument parsing ---
     if isinstance(raw_arguments, dict):

@@ -11,11 +11,12 @@ from typing import Any
 from solaire.agent_layer.attachments import TEXT_SUFFIXES, extract_attachment
 from solaire.agent_layer.models import InvocationContext, ToolResult
 from solaire.agent_layer.plan_document import normalize_rel_path, validate_plan_markdown_body
-from solaire.agent_layer.tools._streaming_reader import read_file_window
+from solaire.agent_layer.tools._streaming_reader import iter_file_lines, read_file_window
 from solaire.common.security import assert_within_project
 
 # 计划模式：仅允许落盘到该目录（与 Cursor 类 harness 一致）
 _AGENT_PLANS_SEGMENTS = (".solaire", "agent", "plans")
+_SEARCH_SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", ".solaire"})
 
 
 def _norm(rel: str) -> str:
@@ -233,27 +234,30 @@ def tool_file_search(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult
         return ToolResult(status="failed", error_message=f"路径不存在: {rel}")
     matches: list[dict[str, Any]] = []
     max_matches = int(args.get("max_matches") or 50)
-    files_to_search: list[Path] = []
-    if base.is_file():
-        files_to_search = [base]
-    else:
-        for root_dir, _dirs, files in os.walk(base):
+
+    def _iter_search_files():
+        if base.is_file():
+            yield base
+            return
+        count = 0
+        for root_dir, dirs, files in os.walk(base):
+            dirs[:] = [directory for directory in dirs if directory not in _SEARCH_SKIP_DIRS]
             rd = Path(root_dir)
-            for skip in (".git", "__pycache__", "node_modules", ".solaire"):
-                if skip in _dirs:
-                    _dirs.remove(skip)
             for fname in files:
                 fp = rd / fname
                 try:
                     assert_within_project(ctx.project_root, fp)
                 except Exception:
                     continue
-                files_to_search.append(fp)
-                if len(files_to_search) > 5000:
-                    break
-            if len(files_to_search) > 5000:
-                break
-    for fp in files_to_search:
+                yield fp
+                count += 1
+                if count > 5000:
+                    return
+
+    if max_matches <= 0:
+        return ToolResult(data={"pattern": pattern_str, "matches": matches, "count": 0})
+
+    for fp in _iter_search_files():
         try:
             assert_within_project(ctx.project_root, fp)
             if _resolve(ctx, fp.relative_to(ctx.project_root).as_posix()) != fp.resolve():
@@ -263,13 +267,13 @@ def tool_file_search(ctx: InvocationContext, args: dict[str, Any]) -> ToolResult
         if len(matches) >= max_matches:
             break
         try:
-            text = fp.read_text(encoding="utf-8", errors="replace")
+            lines = iter_file_lines(fp, encoding="utf-8", errors="replace")
+            for line_no, line in enumerate(lines, 1):
+                if regex.search(line):
+                    rp = str(fp.relative_to(ctx.project_root)).replace("\\", "/")
+                    matches.append({"file": rp, "line": line_no, "text": line.rstrip()[:300]})
+                    if len(matches) >= max_matches:
+                        break
         except Exception:
             continue
-        for line_no, line in enumerate(text.splitlines(), 1):
-            if regex.search(line):
-                rp = str(fp.relative_to(ctx.project_root)).replace("\\", "/")
-                matches.append({"file": rp, "line": line_no, "text": line.rstrip()[:300]})
-                if len(matches) >= max_matches:
-                    break
     return ToolResult(data={"pattern": pattern_str, "matches": matches, "count": len(matches)})

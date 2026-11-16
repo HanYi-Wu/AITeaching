@@ -89,7 +89,7 @@ export function normalizeSolaireTableDoc(raw: unknown): SolaireTableDoc {
     return row.map(normalizeCell);
   });
   const doc: SolaireTableDoc = { version: 1, rows };
-  expandSolaireTable(doc);
+  placeSolaireTable(doc, false);
   return doc;
 }
 
@@ -145,9 +145,23 @@ export function defaultSolaireTable(rows = 3, cols = 3): SolaireTableDoc {
   };
 }
 
-export function expandSolaireTable(doc: SolaireTableDoc): ExpandedSolaireTable {
-  const slots: SolaireTableSlot[][] = Array.from({ length: doc.rows.length }, () => []);
-  const anchors: SolaireTableAnchor[] = [];
+type SolaireTableLayoutSummary = { width: number; height: number };
+
+function placeSolaireTable(doc: SolaireTableDoc, project: true): ExpandedSolaireTable;
+function placeSolaireTable(doc: SolaireTableDoc, project: false): SolaireTableLayoutSummary;
+function placeSolaireTable(
+  doc: SolaireTableDoc,
+  project: boolean,
+): ExpandedSolaireTable | SolaireTableLayoutSummary {
+  const slots = project
+    ? Array.from({ length: doc.rows.length }, () => [] as SolaireTableSlot[])
+    : undefined;
+  const anchors = project ? [] as SolaireTableAnchor[] : undefined;
+  const occupancy = project
+    ? undefined
+    : Array.from({ length: doc.rows.length }, () => [] as Array<boolean | undefined>);
+  const isOccupied = (row: number, col: number) =>
+    slots ? Boolean(slots[row][col]) : Boolean(occupancy![row][col]);
 
   doc.rows.forEach((row, r) => {
     let c = 0;
@@ -157,40 +171,52 @@ export function expandSolaireTable(doc: SolaireTableDoc): ExpandedSolaireTable {
       if (r + rowSpan > doc.rows.length) {
         throw new Error("rowSpan exceeds table height");
       }
-      while (slots[r][c]) c += 1;
+      while (isOccupied(r, c)) c += 1;
       for (let rr = r; rr < r + rowSpan; rr += 1) {
         for (let cc = c; cc < c + colSpan; cc += 1) {
-          if (slots[rr][cc]) {
+          if (isOccupied(rr, cc)) {
             throw new Error("table cells overlap");
           }
         }
       }
-      const normalizedCell = serializeCell(cell);
-      anchors.push({ row: r, col: c, sourceIndex, cell: normalizedCell });
+      const normalizedCell = project ? serializeCell(cell) : undefined;
+      if (anchors && normalizedCell) {
+        anchors.push({ row: r, col: c, sourceIndex, cell: normalizedCell });
+      }
       for (let rr = r; rr < r + rowSpan; rr += 1) {
         for (let cc = c; cc < c + colSpan; cc += 1) {
-          slots[rr][cc] = {
-            anchorRow: r,
-            anchorCol: c,
-            cell: normalizedCell,
-            covered: rr !== r || cc !== c,
-          };
+          if (slots && normalizedCell) {
+            slots[rr][cc] = {
+              anchorRow: r,
+              anchorCol: c,
+              cell: normalizedCell,
+              covered: rr !== r || cc !== c,
+            };
+          } else {
+            occupancy![rr][cc] = true;
+          }
         }
       }
       c += colSpan;
     });
   });
 
-  const width = Math.max(...slots.map((row) => row.length));
-  for (let r = 0; r < slots.length; r += 1) {
+  const rows = slots ?? occupancy!;
+  const width = Math.max(...rows.map((row) => row.length));
+  for (let r = 0; r < rows.length; r += 1) {
     for (let c = 0; c < width; c += 1) {
-      if (!slots[r][c]) {
+      if (!rows[r][c]) {
         throw new Error("table must be rectangular");
       }
     }
   }
 
+  if (!project) return { width, height: doc.rows.length };
   return { width, height: doc.rows.length, slots, anchors };
+}
+
+export function expandSolaireTable(doc: SolaireTableDoc): ExpandedSolaireTable {
+  return placeSolaireTable(doc, true);
 }
 
 export function anchorsToSolaireTable(

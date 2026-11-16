@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+from bisect import bisect_left, insort
 from collections.abc import Iterable
 from typing import Any
 
@@ -127,19 +128,21 @@ def register_tool(tool: RegisteredTool, *, replace: bool = False) -> None:
         InvalidToolSchemaError: If parameters_schema or metadata violates contract.
     """
     validate_registered_tool(tool)
-    if not replace and tool.name in _TOOL_BY_NAME:
+    existed = tool.name in _TOOL_BY_NAME
+    if not replace and existed:
         raise DuplicateToolError(f"Duplicate tool registration: '{tool.name}' is already registered")
     _TOOL_BY_NAME[tool.name] = tool
-    if tool.name not in _ALL_TOOL_NAMES:
-        _ALL_TOOL_NAMES.append(tool.name)
-        _ALL_TOOL_NAMES.sort()
+    if not existed:
+        insort(_ALL_TOOL_NAMES, tool.name)
 
 
 def unregister_tool(name: str) -> RegisteredTool | None:
     """Unregister a tool from the global registry (useful for testing or dynamic cleanup)."""
     removed = _TOOL_BY_NAME.pop(name, None)
-    if removed is not None and name in _ALL_TOOL_NAMES:
-        _ALL_TOOL_NAMES.remove(name)
+    if removed is not None:
+        index = bisect_left(_ALL_TOOL_NAMES, name)
+        if index < len(_ALL_TOOL_NAMES) and _ALL_TOOL_NAMES[index] == name:
+            del _ALL_TOOL_NAMES[index]
     return removed
 
 

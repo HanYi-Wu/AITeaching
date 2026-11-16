@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,7 @@ from solaire.agent_layer.session import save_session
 from solaire.agent_layer.subagent import run_subagent
 from solaire.agent_layer.tools import analysis_tools
 from solaire.agent_layer.tools.tool_definitions import RegisteredTool
-from solaire.agent_layer.tool_validator import validate_tool_call
+from solaire.agent_layer.tool_validator import ToolCatalog, compile_tool_catalog, validate_tool_call
 from solaire.agent_layer.utils import parse_tool_arguments as _parse_args
 from solaire.agent_layer.failure_recovery import (
     MAX_READ_RETRIES,
@@ -58,6 +59,18 @@ logger = logging.getLogger(__name__)
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
+def _arguments_for_batch_validation(raw: Any, parsed: Any, parse_error: str | None) -> Any:
+    """Reuse parsed JSON objects without changing scalar/list validation semantics."""
+    if parse_error is not None or not isinstance(parsed, dict):
+        return raw
+    return parsed
+
+
+def _copy_tool_event_arguments(arguments: Any) -> Any:
+    """Keep event consumers from mutating the arguments passed to a tool handler."""
+    return deepcopy(arguments)
+
+
 @dataclass
 class DraftToolContext:
     """Bundle of context needed to execute a tool-call draft loop."""
@@ -69,6 +82,16 @@ class DraftToolContext:
     fast_adapter: LLMAdapter
     emit: EmitFn
     tools: list[RegisteredTool] | None = None  # current turn's selected tools (for validation)
+    _tool_catalog: ToolCatalog | None = field(default=None, init=False, repr=False)
+    _tool_catalog_source: list[RegisteredTool] | None = field(default=None, init=False, repr=False)
+
+    def compiled_tool_catalog(self) -> ToolCatalog:
+        """Reuse the selected schema index until the current tool list is replaced."""
+        if self._tool_catalog is None or self._tool_catalog_source is not self.tools:
+            available = self.tools if self.tools is not None else all_registered_tools()
+            self._tool_catalog = compile_tool_catalog(available)
+            self._tool_catalog_source = self.tools
+        return self._tool_catalog
 
 
 def flush_draft_to_messages(session: SessionState) -> None:
@@ -108,6 +131,7 @@ def consecutive_read_tool_indices(
     start: int,
     ctx: InvocationContext,
     safety_mode: str,
+    parsed_arguments: dict[int, tuple[Any, str | None]] | None = None,
 ) -> list[int]:
     indices: list[int] = []
     j = start
@@ -120,7 +144,12 @@ def consecutive_read_tool_indices(
         rt = get_registered_tool(name)
         if not rt or rt.risk != ToolRisk.READ:
             break
-        args, _ = _parse_args(fn.get("arguments"))
+        if parsed_arguments is not None and j in parsed_arguments:
+            args, _ = parsed_arguments[j]
+        else:
+            args, parse_error = _parse_args(fn.get("arguments"))
+            if parsed_arguments is not None:
+                parsed_arguments[j] = (args, parse_error)
         dec = check_tool_call(name, args, ctx, safety_mode=safety_mode)
         if dec != GuardrailDecision.AUTO_APPROVE:
             break
@@ -182,7 +211,8 @@ async def _post_tool_events(
     extra_detail: dict[str, Any] | None = None,
 ) -> None:
     """Emit tool_result, append audit, emit task_update if needed (shared by all paths)."""
-    detail = {"summary": summarize_tool_result(name, payload)}
+    summary = summarize_tool_result(name, payload)
+    detail = {"summary": summary}
     if extra_detail:
         detail.update(extra_detail)
     append_audit(project_root, session_id=session_id, tool_name=name, status=status, detail=detail)
@@ -190,7 +220,7 @@ async def _post_tool_events(
         "tool_name": name,
         "tool_call_id": tid,
         "status": status,
-        "summary": summarize_tool_result(name, payload),
+        "summary": summary,
     }
     data = payload.get("data") if isinstance(payload, dict) else None
     if isinstance(data, dict) and isinstance(data.get("download_url"), str):
@@ -239,8 +269,7 @@ async def _execute_single_tool(
         return True, None
 
     # --- Stage 1: Validate ---
-    available = dtc.tools if dtc.tools is not None else all_registered_tools()
-    validated = validate_tool_call(raw_name, raw_args, available)
+    validated = validate_tool_call(raw_name, raw_args, dtc.compiled_tool_catalog())
     name = validated.tool_name
     args = validated.arguments
 
@@ -282,7 +311,11 @@ async def _execute_single_tool(
 
     # --- Stage 2: Emit start ---
     await emit("thinking", {"message": thinking_label_for_tool(name)})
-    await emit("tool_start", {"tool_name": name, "tool_call_id": tid, "arguments": args})
+    await emit("tool_start", {
+        "tool_name": name,
+        "tool_call_id": tid,
+        "arguments": _copy_tool_event_arguments(args),
+    })
 
     # --- Stage 3: Subagent ---
     if name == SUBTASK_TOOL_NAME:
@@ -406,6 +439,7 @@ async def run_draft_tool_loop(
         return False
     tcs = d.get("tool_calls") or []
     k = len(session.draft_tool_results)
+    parsed_read_arguments: dict[int, tuple[Any, str | None]] = {}
     while k < len(tcs):
         if is_cancelled(session.session_id):
             clear_cancel(session.session_id)
@@ -417,7 +451,9 @@ async def run_draft_tool_loop(
             return True
 
         # --- Batch read tools (parallel, skip guardrails) ---
-        read_batch = consecutive_read_tool_indices(tcs, k, ctx, safety_mode)
+        read_batch = consecutive_read_tool_indices(
+            tcs, k, ctx, safety_mode, parsed_arguments=parsed_read_arguments,
+        )
         if len(read_batch) >= 2:
             try:
                 verify_authoritative_actor_and_policy(ctx.platform_root or project_root, ctx.platform_user, is_ai_call=False)
@@ -436,8 +472,12 @@ async def run_draft_tool_loop(
                 raw_args = fn_i.get("arguments")
                 tid_i = tc_i.get("id") or f"call-{i}"
                 # Pre-validate for batch reads
-                available = dtc.tools if dtc.tools is not None else all_registered_tools()
-                validated = validate_tool_call(raw_name, raw_args, available)
+                parsed_args, parse_error = parsed_read_arguments[i]
+                # Preserve the original malformed JSON for its diagnostic; for
+                # all other inputs, reuse the parsed value instead of decoding it
+                # again after the tool_start event.
+                validation_args = _arguments_for_batch_validation(raw_args, parsed_args, parse_error)
+                validated = validate_tool_call(raw_name, validation_args, dtc.compiled_tool_catalog())
                 n = validated.tool_name
                 a = validated.arguments
                 if not validated.is_valid:
@@ -452,9 +492,13 @@ async def run_draft_tool_loop(
                 tc0 = tcs[idx]
                 fn0 = tc0.get("function") or {}
                 name0 = fn0.get("name") or ""
-                args0, _ = _parse_args(fn0.get("arguments"))
+                args0, _ = parsed_read_arguments[idx]
                 await emit("thinking", {"message": thinking_label_for_tool(name0)})
-                await emit("tool_start", {"tool_name": name0, "tool_call_id": tc0.get("id") or f"call-{idx}", "arguments": args0})
+                await emit("tool_start", {
+                    "tool_name": name0,
+                    "tool_call_id": tc0.get("id") or f"call-{idx}",
+                    "arguments": _copy_tool_event_arguments(args0),
+                })
 
             parts = await asyncio.gather(*[_invoke_read(i) for i in read_batch])
             for _i, name, tid, tr in sorted(parts, key=lambda x: x[0]):
@@ -482,18 +526,24 @@ async def run_draft_tool_loop(
                 save_session(project_root, session)
                 await emit("done", {"usage": {}})
                 return True
+            parsed_subtask_arguments: dict[int, Any] = {}
             for idx in subtask_batch:
                 tc0 = tcs[idx]
                 fn0 = tc0.get("function") or {}
                 name0 = fn0.get("name") or ""
                 args0, _ = _parse_args(fn0.get("arguments"))
+                parsed_subtask_arguments[idx] = args0
                 await emit("thinking", {"message": thinking_label_for_tool(name0)})
-                await emit("tool_start", {"tool_name": name0, "tool_call_id": tc0.get("id") or f"call-{idx}", "arguments": args0})
+                await emit("tool_start", {
+                    "tool_name": name0,
+                    "tool_call_id": tc0.get("id") or f"call-{idx}",
+                    "arguments": _copy_tool_event_arguments(args0),
+                })
 
             async def _run_subtask_one(i: int) -> tuple[int, str, str]:
                 tc_i = tcs[i]
                 fn_i = tc_i.get("function") or {}
-                a, _ = _parse_args(fn_i.get("arguments"))
+                a = parsed_subtask_arguments[i]
                 tid_i = tc_i.get("id") or f"call-{i}"
                 objective = str(a.get("objective") or "")
                 pfx = a.get("allowed_tool_prefixes")

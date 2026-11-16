@@ -35,7 +35,7 @@ import {
   buildEditorDom,
   createMathWidget,
   createTableWidget,
-  getSerializedCaretOffset,
+  getSerializedSelectionOffsets,
   isCollapsedCaretAtEditorEnd,
   isWidget,
   renderMathHtml,
@@ -123,6 +123,9 @@ export function LatexRichTextField({
   const [lintValue, setLintValue] = useState(value);
 
   const [mode, setMode] = useState<"visual" | "source">("visual");
+  const [sourceComposingValue, setSourceComposingValue] = useState<string | null>(null);
+  const sourceComposingValueRef = useRef<string | null>(null);
+  sourceComposingValueRef.current = sourceComposingValue;
 
   /* popup state */
   const [mathPopup, setMathPopup] = useState<MathPopupState>(null);
@@ -251,7 +254,7 @@ export function LatexRichTextField({
           hiddenTextarea,
           sourceTextareaRef.current,
           mode,
-          getSerializedCaretOffset,
+          getSerializedSelectionOffsets,
         );
       }
       return;
@@ -261,7 +264,7 @@ export function LatexRichTextField({
       hiddenTextarea,
       sourceTextareaRef.current,
       mode,
-      getSerializedCaretOffset,
+      getSerializedSelectionOffsets,
     );
   }, [mode, textAreaRef]);
   const handleSelectionEvent = useCallback(() => syncHiddenSelection(), [syncHiddenSelection]);
@@ -322,10 +325,43 @@ export function LatexRichTextField({
   const emitCompositionFromSource = useCallback((next: string) => {
     lastEmittedRef.current = next;
     compositionCommitTextRef.current = next;
+    setSourceComposingValue(null);
     onChangeRef.current(next);
     syncHiddenSelection();
     if (valueRef.current === next) acknowledgeCompositionValue(next);
   }, [syncHiddenSelection, acknowledgeCompositionValue]);
+
+  const handleSourceValueEvent = useCallback((nextValue: string) => {
+    if (composingRef.current) {
+      compositionSourceTextRef.current = nextValue;
+      setSourceComposingValue((prev) => (prev === nextValue ? prev : nextValue));
+      return;
+    }
+    const pendingComposition = (
+      compositionFrameRef.current !== null ||
+      compositionCommitTextRef.current !== null
+    );
+    if (nextValue === lastEmittedRef.current) return;
+    if (
+      sourceComposingValueRef.current === null &&
+      !pendingComposition &&
+      nextValue === valueRef.current
+    ) {
+      return;
+    }
+    setSourceComposingValue(null);
+    lastEmittedRef.current = nextValue;
+    onChangeRef.current(nextValue);
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "source") return;
+    const textarea = sourceTextareaRef.current;
+    if (!textarea) return;
+    const onNativeChange = () => handleSourceValueEvent(textarea.value);
+    textarea.addEventListener("change", onNativeChange);
+    return () => textarea.removeEventListener("change", onNativeChange);
+  }, [mode, handleSourceValueEvent]);
 
   const deleteWidgetWithUndo = useCallback(
     (widget: HTMLElement) => {
@@ -381,10 +417,12 @@ export function LatexRichTextField({
         cancelScheduledCompositionCommit();
         compositionCommitTextRef.current = null;
         compositionSourceTextRef.current = null;
+        setSourceComposingValue(null);
         resolveCompositionWaiters(false);
       }
     }
     if (mode === "visual") {
+      setSourceComposingValue(null);
       const root = editorRef.current;
       if (!root || composingRef.current) return;
       const isFocused = document.activeElement === root;
@@ -993,21 +1031,16 @@ export function LatexRichTextField({
           onMouseUp={handleSelectionEvent}
           className={`w-full border border-[var(--or-outline)] bg-[var(--or-card)] px-3.5 py-2.5 font-mono text-sm leading-relaxed text-[var(--or-text)] outline-none focus-visible:border-[var(--or-primary)] focus-visible:ring-1 focus-visible:ring-[var(--or-focus)] ${hideToolbar ? "rounded-2xl" : "rounded-b-2xl border-t-0"}`}
           style={{ minHeight: minH }}
-          value={value}
-          onChange={(e) => {
-            if (composingRef.current) {
-              compositionSourceTextRef.current = e.target.value;
-              return;
-            }
-            lastEmittedRef.current = e.target.value;
-            onChange(e.target.value);
-          }}
-          onCompositionStart={() => {
+          value={sourceComposingValue ?? value}
+          onInput={(e) => handleSourceValueEvent(e.currentTarget.value)}
+          onChange={(e) => handleSourceValueEvent(e.target.value)}
+          onCompositionStart={(e) => {
             cancelScheduledCompositionCommit();
             compositionBaseValueRef.current = valueRef.current;
             lastEmittedRef.current = null;
             compositionSourceTextRef.current = null;
             composingRef.current = true;
+            setSourceComposingValue(e.currentTarget.value);
           }}
           onCompositionEnd={(e) => {
             composingRef.current = false;
@@ -1016,6 +1049,7 @@ export function LatexRichTextField({
               ? targetValue
               : compositionSourceTextRef.current ?? targetValue;
             compositionSourceTextRef.current = null;
+            setSourceComposingValue(next);
             scheduleCompositionCommit(() => {
               emitCompositionFromSource(next);
             });

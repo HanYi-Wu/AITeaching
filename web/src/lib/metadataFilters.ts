@@ -34,59 +34,108 @@ type MetadataCarrier = {
   metadata?: MetadataRecord | null;
 };
 
-function primitiveValues(value: unknown): PrimitiveMetadataValue[] {
+function visitPrimitiveValues(value: unknown, visit: (value: PrimitiveMetadataValue) => void) {
   if (typeof value === "string" || typeof value === "boolean") {
-    return [value];
+    visit(value);
+    return;
   }
   if (typeof value === "number" && Number.isFinite(value)) {
-    return [value];
+    visit(value);
+    return;
   }
   if (Array.isArray(value)) {
-    return value.flatMap(primitiveValues);
+    for (const entry of value) {
+      visitPrimitiveValues(entry, visit);
+    }
   }
-  return [];
+}
+
+function somePrimitiveValue(value: unknown, matches: (value: PrimitiveMetadataValue) => boolean): boolean {
+  if (typeof value === "string" || typeof value === "boolean") {
+    return matches(value);
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return matches(value);
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (somePrimitiveValue(entry, matches)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function enumLabel(value: PrimitiveMetadataValue) {
   return String(value);
 }
 
-function compareLabels(a: string, b: string) {
-  return a.localeCompare(b, "zh-Hans-CN", { numeric: true, sensitivity: "base" });
-}
+const compareLabels = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" }).compare;
 
 export function buildMetadataFilterDefinitions(items: MetadataCarrier[]): MetadataFilterDefinition[] {
-  const byKey = new Map<string, PrimitiveMetadataValue[]>();
+  const byKey = new Map<
+    string,
+    {
+      allNumbers: boolean;
+      min: number;
+      max: number;
+      labels?: Set<string>;
+    }
+  >();
+  let hasEnumValues = false;
   for (const item of items) {
     for (const [key, raw] of Object.entries(item.metadata ?? {})) {
-      const values = primitiveValues(raw);
-      if (values.length === 0) {
-        continue;
+      visitPrimitiveValues(raw, (value) => {
+        let accumulator = byKey.get(key);
+        if (!accumulator) {
+          accumulator = {
+            allNumbers: true,
+            min: Number.POSITIVE_INFINITY,
+            max: Number.NEGATIVE_INFINITY,
+          };
+          byKey.set(key, accumulator);
+        }
+        if (typeof value === "number") {
+          accumulator.min = Math.min(accumulator.min, value);
+          accumulator.max = Math.max(accumulator.max, value);
+        } else {
+          accumulator.allNumbers = false;
+          hasEnumValues = true;
+        }
+      });
+    }
+  }
+
+  // Numeric-only keys need no retained value list. Collect labels only for keys
+  // that became enums after the first pass established their type.
+  if (hasEnumValues) {
+    for (const item of items) {
+      for (const [key, raw] of Object.entries(item.metadata ?? {})) {
+        const accumulator = byKey.get(key);
+        if (!accumulator || accumulator.allNumbers) {
+          continue;
+        }
+        visitPrimitiveValues(raw, (value) => {
+          (accumulator.labels ??= new Set<string>()).add(enumLabel(value));
+        });
       }
-      const bucket = byKey.get(key) ?? [];
-      bucket.push(...values);
-      byKey.set(key, bucket);
     }
   }
 
   return [...byKey.entries()]
-    .map(([key, values]): MetadataFilterDefinition | null => {
-      const numericValues = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-      if (numericValues.length === values.length && numericValues.length > 0) {
+    .map(([key, accumulator]): MetadataFilterDefinition => {
+      if (accumulator.allNumbers) {
         return {
           key,
           kind: "number",
-          min: Math.min(...numericValues),
-          max: Math.max(...numericValues),
+          min: accumulator.min,
+          max: accumulator.max,
         };
       }
-      const enumValues = [...new Set(values.map(enumLabel))].sort(compareLabels);
-      if (enumValues.length === 0) {
-        return null;
-      }
+      const enumValues = [...(accumulator.labels ?? [])].sort(compareLabels);
       return { key, kind: "enum", values: enumValues };
     })
-    .filter((definition): definition is MetadataFilterDefinition => definition !== null)
     .sort((a, b) => compareLabels(a.key, b.key));
 }
 
@@ -107,25 +156,24 @@ function parseBound(value: string | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function matchesMetadataFilters(metadata: MetadataRecord | null | undefined, filters: MetadataFilters) {
-  for (const [key, filter] of Object.entries(filters)) {
-    const values = primitiveValues(metadata?.[key]);
-    const hasValue = values.length > 0;
+export type MetadataMatcher = (metadata: MetadataRecord | null | undefined) => boolean;
 
+export function compileMetadataFilters(filters: MetadataFilters): MetadataMatcher | null {
+  const clauses: MetadataMatcher[] = [];
+
+  for (const [key, filter] of Object.entries(filters)) {
     if (filter.kind === "enum") {
       if (filter.selected.length === 0 && filter.includeMissing !== true) {
         continue;
       }
       if (filter.includeMissing === true) {
-        if (!hasValue) {
-          continue;
-        }
-        return false;
+        clauses.push((metadata) => !somePrimitiveValue(metadata?.[key], () => true));
+        continue;
       }
-      const labels = new Set(values.map(enumLabel));
-      if (!filter.selected.some((value) => labels.has(value))) {
-        return false;
-      }
+      const selected = new Set(filter.selected);
+      clauses.push((metadata) =>
+        somePrimitiveValue(metadata?.[key], (value) => selected.has(enumLabel(value))),
+      );
       continue;
     }
 
@@ -135,15 +183,35 @@ export function matchesMetadataFilters(metadata: MetadataRecord | null | undefin
       continue;
     }
     if (filter.includeMissing === true) {
-      if (!hasValue) {
-        continue;
-      }
-      return false;
+      clauses.push((metadata) => !somePrimitiveValue(metadata?.[key], () => true));
+      continue;
     }
-    const numericValues = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-    if (!numericValues.some((value) => (min === null || value >= min) && (max === null || value <= max))) {
-      return false;
-    }
+
+    clauses.push((metadata) =>
+      somePrimitiveValue(
+        metadata?.[key],
+        (value) =>
+          typeof value === "number" &&
+          (min === null || value >= min) &&
+          (max === null || value <= max),
+      ),
+    );
   }
-  return true;
+
+  if (clauses.length === 0) {
+    return null;
+  }
+
+  return (metadata) => {
+    for (const clause of clauses) {
+      if (!clause(metadata)) {
+        return false;
+      }
+    }
+    return true;
+  };
+}
+
+export function matchesMetadataFilters(metadata: MetadataRecord | null | undefined, filters: MetadataFilters) {
+  return compileMetadataFilters(filters)?.(metadata) ?? true;
 }

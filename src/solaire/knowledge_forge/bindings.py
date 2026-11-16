@@ -6,9 +6,10 @@ from typing import Any
 from solaire.knowledge_forge.models import ConceptNode
 from pathlib import Path
 from solaire.knowledge_forge.models import QuestionBinding
-from solaire.knowledge_forge.node_index import _find_node_slug
+from solaire.knowledge_forge.node_index import _find_node_state
+from solaire.knowledge_forge.paths import _meta_path
 from solaire.knowledge_forge.storage import _load_meta
-from solaire.knowledge_forge.storage import _load_subject_state
+from solaire.knowledge_forge.storage import _load_subject_state_snapshot
 from solaire.knowledge_forge.migration import ensure_graph_layout
 from solaire.knowledge_forge.concurrency import graph_mutation
 from solaire.knowledge_forge.mutation_session import GraphMutationSession
@@ -71,10 +72,13 @@ def list_questions_for_node(
     graph: str | None = None,
 ) -> list[str]:
     ensure_graph_layout(project_root)
-    slug = graph or _find_node_slug(project_root, node_id)
-    if slug is None:
-        return []
-    state = _load_subject_state(project_root, slug)
+    if graph:
+        state = _load_subject_state_snapshot(project_root, graph)
+    else:
+        match = _find_node_state(project_root, node_id)
+        if match is None:
+            return []
+        state = match[1]
     qids = [b.question_qualified_id for b in state.bindings if b.node_id == node_id]
     seen: set[str] = set()
     out: list[str] = []
@@ -96,7 +100,7 @@ def list_nodes_for_question(project_root: Path, question_qualified_id: str) -> l
     out: list[ConceptNode] = []
     seen: set[str] = set()
     for sm in meta.subjects:
-        state = _load_subject_state(project_root, sm.slug)
+        state = _load_subject_state_snapshot(project_root, sm.slug)
         node_ids = {b.node_id for b in state.bindings if b.question_qualified_id == qid}
         by_id = {n.id: n for n in state.nodes}
         for nid in sorted(node_ids):
@@ -105,7 +109,7 @@ def list_nodes_for_question(project_root: Path, question_qualified_id: str) -> l
             n = by_id.get(nid)
             if n is not None:
                 seen.add(nid)
-                out.append(n)
+                out.append(n.model_copy(deep=True))
     return out
 
 
@@ -240,3 +244,35 @@ def unbind_questions_batch(
         if removed:
             session.save(slug)
     return {"removed": removed}
+
+
+@graph_mutation
+def rename_question_bindings(project_root: Path, old_qid: str, new_qid: str) -> int:
+    """Update question_qualified_id across subject knowledge graphs after a rename."""
+    if not old_qid or not new_qid or old_qid == new_qid:
+        return 0
+    if not _meta_path(project_root).is_file():
+        return 0
+    ensure_graph_layout(project_root)
+    updated = 0
+    with GraphMutationSession(project_root) as session:
+        for subject in _load_meta(project_root).subjects:
+            state = session.state(subject.slug)
+            if not any(b.question_qualified_id == old_qid for b in state.bindings):
+                continue
+            seen: set[tuple[str, str]] = set()
+            next_bindings: list[QuestionBinding] = []
+            for binding in state.bindings:
+                if binding.question_qualified_id == old_qid:
+                    updated += 1
+                    candidate = binding.model_copy(update={"question_qualified_id": new_qid})
+                else:
+                    candidate = binding
+                pair = (candidate.question_qualified_id, candidate.node_id)
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                next_bindings.append(candidate)
+            state.bindings = next_bindings
+            session.save(subject.slug)
+    return updated

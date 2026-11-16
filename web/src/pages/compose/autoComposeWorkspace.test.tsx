@@ -229,4 +229,35 @@ describe("ComposeWorkspace automatic composition and duplicate scope", () => {
       similarity_threshold: 0.95,
     }));
   });
+
+  it("renders centered action buttons with two-character Chinese labels and omits 按目标组卷", async () => {
+    const user = userEvent.setup();
+    render(
+      <TestI18nProvider>
+        <ToolBarProvider>
+          <Toolbar />
+          <ComposeWorkspace onError={mocks.onError} accountId="teacher-a" projectRoot="C:/project-a" openExamId={exam.exam_id} />
+        </ToolBarProvider>
+      </TestI18nProvider>,
+    );
+
+    const checkBtn = await screen.findByRole("button", { name: /^查重$/ });
+    expect(screen.queryByRole("button", { name: "按目标组卷" })).toBeNull();
+    expect(checkBtn.className).toContain("justify-center");
+    expect(checkBtn.className).toContain("text-center");
+
+    const removeBtn = screen.getByRole("button", { name: "删除" });
+    const upBtn = screen.getByRole("button", { name: "上移" });
+    const downBtn = screen.getByRole("button", { name: "下移" });
+    expect(upBtn).toBeDisabled();
+    expect(downBtn).toBeDisabled();
+
+    // Selecting the item in the paper enables move controls and allows removing via 删除
+    const paperPanel = upBtn.closest(".or-g49-compose-paper-content") as HTMLElement;
+    await user.click(within(paperPanel).getByText("数学/main/q1"));
+    expect(upBtn).toBeEnabled();
+    expect(downBtn).toBeEnabled();
+    await user.click(removeBtn);
+    expect(within(paperPanel).queryByText("数学/main/q1")).toBeNull();
+  });
 });

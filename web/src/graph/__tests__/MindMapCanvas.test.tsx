@@ -18,9 +18,24 @@ type ProfileEdge = { id: string; source: string; target: string };
 const mocks = vi.hoisted(() => ({
   flowNodeRenders: 0,
   customNodeRenders: 0,
+  layoutCalls: 0,
+  setNodePosition: null as ((id: string, position: { x: number; y: number }) => void) | null,
   latestNodes: [] as ProfileNode[],
   latestEdges: [] as ProfileEdge[],
 }));
+
+vi.mock("../mindMapLayout", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../mindMapLayout")>();
+  return {
+    ...original,
+    layoutMindMapPositions: vi.fn((
+      ...args: Parameters<typeof original.layoutMindMapPositions>
+    ) => {
+      mocks.layoutCalls += 1;
+      return original.layoutMindMapPositions(...args);
+    }),
+  };
+});
 
 vi.mock("@xyflow/react", async () => {
   const React = await import("react");
@@ -48,6 +63,7 @@ vi.mock("@xyflow/react", async () => {
   function ReactFlow(props: any) {
     mocks.latestNodes = props.nodes;
     mocks.latestEdges = props.edges;
+    mocks.setNodePosition = (id, position) => props.onNodesChange?.([{ id, type: "position", position }]);
     const handleDoubleClick = React.useCallback((event: MouseEvent, node: ProfileNode) => props.onNodeDoubleClick?.(event, node), [props.onNodeDoubleClick]);
     return React.createElement(
       "div",
@@ -64,7 +80,19 @@ vi.mock("@xyflow/react", async () => {
   }
   const useNodesState = (initial: ProfileNode[]) => {
     const [nodes, setNodes] = React.useState(initial);
-    const onNodesChange = React.useCallback(() => undefined, []);
+    const onNodesChange = React.useCallback((changes: Array<{ id: string; type: string; position?: { x: number; y: number } }>) => {
+      setNodes((previous) => {
+        let changed = false;
+        const next = previous.map((node) => {
+          const change = changes.find((item) => item.id === node.id);
+          if (change?.type !== "position" || !change.position) return node;
+          if (node.position.x === change.position.x && node.position.y === change.position.y) return node;
+          changed = true;
+          return { ...node, position: change.position };
+        });
+        return changed ? next : previous;
+      });
+    }, []);
     return [nodes, setNodes, onNodesChange];
   };
   const useEdgesState = (initial: ProfileEdge[]) => {
@@ -146,6 +174,8 @@ describe("MindMapCanvas inline editing", () => {
   beforeEach(() => {
     mocks.flowNodeRenders = 0;
     mocks.customNodeRenders = 0;
+    mocks.layoutCalls = 0;
+    mocks.setNodePosition = null;
     mocks.latestNodes = [];
     mocks.latestEdges = [];
   });
@@ -187,6 +217,114 @@ describe("MindMapCanvas inline editing", () => {
     await act(async () => { finishRename(); });
     await waitFor(() => expect(screen.queryByDisplayValue("  新名  ")).not.toBeInTheDocument());
     expect(dataFor("child")?.isInlineEditing).toBe(false);
+  });
+
+  it("keeps 1,000-node geometry and unrelated projections stable across filters, editing, and label refresh", async () => {
+    const largeNodes: GraphNodeRow[] = Array.from({ length: 1_000 }, (_, index) => ({
+      id: "node-" + index,
+      canonical_name: "Node " + index,
+      primary_parent_id: index === 0 ? null : "node-" + (index - 1),
+      node_kind: "concept",
+    }));
+    const crossRelation: GraphRelationRow[] = [{
+      id: "cross-related",
+      from_node_id: "node-0",
+      to_node_id: "node-999",
+      relation_type: "related",
+    }];
+    const props: ComponentProps<typeof MindMapCanvas> = {
+      graphNodes: largeNodes,
+      relations: crossRelation,
+      selectedNodeId: null,
+      layoutNonce: 0,
+      connectingFromId: null,
+      activeGraphName: "Large graph",
+      onNodeClick: noOp,
+      onEdgeClick: noOp,
+      onPaneClick: noOp,
+      onNodeDragStop: noOp,
+      onConnect: noOp,
+      onAddNode: noOp,
+      onAddChildNode: noOp,
+      onAddSiblingNode: noOp,
+      onStartConnect: noOp,
+      onRelayout: noOp,
+      onCancelConnect: noOp,
+      onRenameNode: async () => undefined,
+    };
+    const mounted = render(<TestI18nProvider><MindMapCanvas {...props} /></TestI18nProvider>);
+    await waitFor(() => expect(mocks.latestNodes).toHaveLength(largeNodes.length + 1));
+
+    const automaticPosition = mocks.latestNodes.find((node) => node.id === "node-400")!.position;
+    await act(async () => {
+      mocks.setNodePosition!("node-400", { x: 1234, y: 4321 });
+    });
+    await waitFor(() => {
+      expect(mocks.latestNodes.find((node) => node.id === "node-400")?.position)
+        .toEqual({ x: 1234, y: 4321 });
+    });
+
+    const initialNodes = mocks.latestNodes;
+    const initialTreeEdge = mocks.latestEdges.find((edge) => edge.id === "tree-__virtual_root__-node-0");
+    const initialLayoutCalls = mocks.layoutCalls;
+    const initialNodeRenders = mocks.customNodeRenders;
+    expect(initialNodeRenders).toBe(largeNodes.length + 2);
+    expect(initialTreeEdge).toBeDefined();
+
+    fireEvent.click(screen.getAllByRole("checkbox")[2]);
+    await waitFor(() => expect(mocks.latestEdges.some((edge) => edge.id === "cross-cross-related")).toBe(true));
+    const filteredEdges = mocks.latestEdges;
+    expect(mocks.latestNodes).toBe(initialNodes);
+    expect(mocks.latestNodes.find((node) => node.id === "node-400")).toBe(
+      initialNodes.find((node) => node.id === "node-400"),
+    );
+    expect(mocks.latestEdges.find((edge) => edge.id === initialTreeEdge!.id)).toBe(initialTreeEdge);
+    expect(mocks.customNodeRenders).toBe(initialNodeRenders);
+    expect(mocks.layoutCalls).toBe(initialLayoutCalls);
+
+    const nodeBeforeEdit = mocks.latestNodes.find((node) => node.id === "node-400");
+    const rendersBeforeEdit = mocks.customNodeRenders;
+    fireEvent.doubleClick(nodeElement("node-500", mounted.container)!);
+    const input = await screen.findByDisplayValue("Node 500");
+    await waitFor(() => expect(dataFor("node-500")?.isInlineEditing).toBe(true));
+    expect(mocks.latestNodes.find((node) => node.id === "node-400")).toBe(nodeBeforeEdit);
+    expect(mocks.latestEdges).toBe(filteredEdges);
+    expect(mocks.customNodeRenders - rendersBeforeEdit).toBe(1);
+    expect(mocks.layoutCalls).toBe(initialLayoutCalls);
+
+    const nodeBeforeLabelRefresh = mocks.latestNodes.find((node) => node.id === "node-400");
+    const rendersBeforeLabelRefresh = mocks.customNodeRenders;
+    const refreshedNodes = largeNodes.map((node) => node.id === "node-700"
+      ? { ...node, canonical_name: "Node 700 renamed" }
+      : { ...node });
+    mounted.rerender(
+      <TestI18nProvider>
+        <MindMapCanvas {...props} graphNodes={refreshedNodes} />
+      </TestI18nProvider>,
+    );
+    await waitFor(() => {
+      expect(mocks.latestNodes.find((node) => node.id === "node-700")?.data.label)
+        .toBe("Node 700 renamed");
+    });
+    expect(mocks.latestNodes.find((node) => node.id === "node-400")).toBe(nodeBeforeLabelRefresh);
+    expect(mocks.latestEdges).toBe(filteredEdges);
+    expect(mocks.customNodeRenders - rendersBeforeLabelRefresh).toBe(1);
+    expect(mocks.layoutCalls).toBe(initialLayoutCalls);
+    expect(input).toHaveFocus();
+
+    const rendersBeforeExplicitRelayout = mocks.customNodeRenders;
+    mounted.rerender(
+      <TestI18nProvider>
+        <MindMapCanvas {...props} graphNodes={refreshedNodes} layoutNonce={1} />
+      </TestI18nProvider>,
+    );
+    await waitFor(() => {
+      expect(mocks.latestNodes.find((node) => node.id === "node-400")?.position)
+        .toEqual(automaticPosition);
+    });
+    expect(mocks.layoutCalls).toBe(initialLayoutCalls + 1);
+    expect(mocks.customNodeRenders - rendersBeforeExplicitRelayout).toBe(1);
+    expect(input).toHaveFocus();
   });
 
   it("keeps Escape and blur commit semantics, including blank and unchanged names", async () => {
@@ -397,10 +535,13 @@ describe("MindMapCanvas inline editing", () => {
     await userEvent.dblClick(nodeElement("__virtual_root__", mounted.container)!);
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 
+    const layoutCallsBeforeCollapse = mocks.layoutCalls;
     const parentNode = nodeElement("parent", mounted.container)!;
     await userEvent.click(within(parentNode).getByRole("button", { name: "−" }));
     await waitFor(() => expect(nodeElement("grandchild", mounted.container)).toBeNull());
+    expect(mocks.layoutCalls).toBe(layoutCallsBeforeCollapse + 1);
     await userEvent.click(within(nodeElement("parent", mounted.container)!).getByRole("button", { name: "+" }));
     await waitFor(() => expect(nodeElement("grandchild", mounted.container)).not.toBeNull());
+    expect(mocks.layoutCalls).toBe(layoutCallsBeforeCollapse + 2);
   });
 });

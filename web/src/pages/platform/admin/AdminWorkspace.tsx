@@ -639,7 +639,7 @@ export function AdminWorkspace({ user, onLogout, onError, onProfileUpdated }: Pr
             ["extensions", "扩展组件"],
             ["audit", "操作日志"],
             ["access", "权限管理"],
-            ["settings", "参数字典"],
+            ["settings", "学科与设置"],
             ["activity", "管理活动"],
           ] as const).map(([id, label]) => (
             <button

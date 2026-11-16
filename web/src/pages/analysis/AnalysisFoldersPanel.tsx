@@ -16,6 +16,7 @@ type AnalysisFoldersPanelProps = {
   selectedItemIds: string[];
   busy: boolean;
   loading: boolean;
+  countsLoading?: boolean;
   error: string | null;
   onCreateFolder: (name: string) => Promise<boolean>;
   onRenameFolder: (folderId: string, name: string) => Promise<boolean>;
@@ -45,6 +46,7 @@ export function AnalysisFoldersPanel({
   selectedItemIds,
   busy,
   loading,
+  countsLoading = false,
   error,
   onCreateFolder,
   onRenameFolder,
@@ -142,7 +144,7 @@ export function AnalysisFoldersPanel({
             <span>全部记录</span>
           </span>
           <span className="or-g52-pill or-g52-pill-neutral !text-[11px] !px-1.5 !min-h-[18px]">
-            {itemCount("all")}
+            {countsLoading && visibleItemIds.length === 0 ? "…" : itemCount("all")}
           </span>
         </div>
         <div
@@ -162,7 +164,7 @@ export function AnalysisFoldersPanel({
             <span>未归类</span>
           </span>
           <span className="or-g52-pill or-g52-pill-neutral !text-[11px] !px-1.5 !min-h-[18px]">
-            {itemCount(null)}
+            {countsLoading && visibleItemIds.length === 0 ? "…" : itemCount(null)}
           </span>
         </div>
         {folders.map((folder) => (

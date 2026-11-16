@@ -1,0 +1,98 @@
+{
+  "title": "Classroom tools",
+  "subtitle": "Random student selector and countdown timer that stay active across workspace tabs",
+  "tabs": {
+    "rollCall": "Roll call",
+    "timer": "Timer"
+  },
+  "badges": {
+    "timerRunning": "Running {{time}}",
+    "timerPaused": "Paused {{time}}",
+    "timerFinished": "Time is up"
+  },
+  "rollCall": {
+    "title": "Random Roll Call",
+    "subtitle": "Fair uniform sampling by number range, assigned class roster, or custom list",
+    "placeholder": "?",
+    "rolling": "Picking…",
+    "resultHintNumber": "Student #{{label}}",
+    "resultHintClass": "{{className}}",
+    "resultHintCustom": "Custom list",
+    "sourceLabel": "Source",
+    "sources": {
+      "range": "Number range",
+      "class": "Class roster",
+      "custom": "Custom list"
+    },
+    "rangeFrom": "From",
+    "rangeTo": "To",
+    "rangeUnit": "",
+    "classSelectLabel": "Assigned class",
+    "classLoading": "Loading class rosters…",
+    "classEmpty": "No assigned class rosters are available right now; use number range or custom list instead.",
+    "classNoStudents": "No active students in this class; select another class or source.",
+    "classRetry": "Refresh",
+    "classOptionCount": "{{name}} ({{count}})",
+    "customLabel": "Enter names or numbers (separated by line breaks, commas, or spaces)",
+    "customPlaceholder": "Example:\nAlice\nBob\n103 Charlie",
+    "customCount": "{{count}} entries detected",
+    "drawCountLabel": "Pick count",
+    "drawCountOption": "{{count}}",
+    "noRepeat": "No repeat",
+    "noRepeatHint": "Exclude already picked entries until reset",
+    "soundEnabled": "Sound cue",
+    "remainingBadge": "{{remaining}} / {{total}} left",
+    "pickedBadge": "{{count}} picked",
+    "startDraw": "Pick student",
+    "redraw": "Pick again",
+    "resetPool": "Reset",
+    "exhaustedWarning": "All candidates have been picked. Click Reset for a new round or turn off No repeat.",
+    "emptyPoolWarning": "Configure at least 1 valid number or roster entry first.",
+    "historyTitle": "Round history",
+    "historyEmpty": "No picks yet. Click Pick student to begin.",
+    "historyClear": "Clear history",
+    "historyRound": "Round {{round}}",
+    "multiResultTitle": "Selected ({{count}})",
+    "keyboardHint": "Shortcut: Enter / Space to pick"
+  },
+  "timer": {
+    "title": "Classroom Timer",
+    "subtitle": "Wall-clock synced countdown with automatic cues at 30s, 3-2-1s, and completion",
+    "hours": "hr",
+    "minutes": "min",
+    "seconds": "sec",
+    "hoursLabel": "Hours",
+    "minutesLabel": "Minutes",
+    "secondsLabel": "Seconds",
+    "increase": "Increase {{unit}}",
+    "decrease": "Decrease {{unit}}",
+    "fromLabel": "Set",
+    "presetsLabel": "Quick presets",
+    "presetMinutes": "{{count}} min",
+    "status": {
+      "stopped": "Ready",
+      "running": "Running",
+      "paused": "Paused",
+      "finished": "Finished"
+    },
+    "actions": {
+      "start": "Start timer",
+      "pause": "Pause timer",
+      "resume": "Resume timer",
+      "restart": "Restart",
+      "reset": "Reset",
+      "focusEnter": "Focus view",
+      "focusExit": "Exit focus"
+    },
+    "sound": {
+      "on": "Sound on",
+      "off": "Muted",
+      "ruleHint": "Chimes at 30s, 3-2-1s, and 3x on completion"
+    },
+    "warnings": {
+      "zeroDuration": "Set a duration longer than 0 seconds.",
+      "finishedBanner": "Time is up!"
+    },
+    "shortcutsHint": "Shortcuts: Space start/pause · R reset"
+  }
+}

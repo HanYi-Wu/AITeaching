@@ -207,6 +207,8 @@ def bank_item_put(qualified_id: str, body: BankRecordBody, response: Response,
     except BankVersionConflict as e:
         headers = {"ETag": f'"{e.current_version}"'} if e.current_version else None
         raise HTTPException(status_code=409, detail=str(e), headers=headers) from e
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=f"题号已存在：{e}") from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:
@@ -218,13 +220,19 @@ def bank_item_create(body: BankCreateBody) -> dict[str, Any]:
     root = _require_root()
     subj = body.subject.strip()
     coll = body.collection.strip()
-    qualified_id = f"{subj}/{coll}/{body.question.id}"
-    if question_exists(root, qualified_id):
-        raise HTTPException(status_code=409, detail=f"题目已存在: {qualified_id}")
+    qid = str(body.question.id or "").strip()
+    if not subj or "/" in subj or "\\" in subj:
+        raise HTTPException(status_code=400, detail="学科名称不能为空，且不能包含斜杠")
+    if not coll or "/" in coll or "\\" in coll:
+        raise HTTPException(status_code=400, detail="题集名称不能为空，且不能包含斜杠")
+    if not qid or "/" in qid or "\\" in qid:
+        raise HTTPException(status_code=400, detail="题目编号不能为空，且不能包含斜杠")
+    question = body.question if body.question.id == qid else body.question.model_copy(update={"id": qid})
+    qualified_id = f"{subj}/{coll}/{qid}"
     try:
-        save_bank_record(root, qualified_id, body.question, create_only=True)
+        saved = save_bank_record(root, qualified_id, question, create_only=True)
         ensure_probe_list_yaml(root)
-        return {"ok": True, "qualified_id": qualified_id}
+        return {"ok": True, "qualified_id": saved["qualified_id"]}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileExistsError as e:

@@ -146,28 +146,46 @@
 
 .or-login-brand {
   position: absolute;
-  inset: 0 auto auto 0;
+  inset: 0 0 auto 0;
   z-index: 4;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
   width: 100%;
   height: 0;
+  padding-right: 17%;
   color: var(--or-login-white);
   pointer-events: none;
 }
 
-.or-login-brand-mark {
-  position: absolute;
-  top: calc(57px + env(safe-area-inset-top, 0px));
-  left: clamp(18px, 6.15vw, 24px);
+.or-login-brand-heading {
   display: inline-flex;
-  width: 46px;
-  height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(11px, calc(min(100vw, 520px) * 0.035), 18px);
+  margin-top: max(
+    calc(min(100vw, 520px) * 0.215),
+    calc(24px + env(safe-area-inset-top, 0px))
+  );
+  transform-origin: center center;
+  opacity: 0;
+  transform: translate3d(0, 12px, 0) scale(0.76);
+  transition: opacity 420ms ease 180ms, transform 520ms cubic-bezier(0.22, 1.12, 0.36, 1) 180ms;
+}
+
+.or-login-brand-mark {
+  display: inline-flex;
+  width: clamp(48px, calc(min(100vw, 520px) * 0.145), 72px);
+  height: clamp(48px, calc(min(100vw, 520px) * 0.145), 72px);
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--or-login-accent-ink) 20%, transparent);
-  border-radius: 13px;
+  border-radius: clamp(13px, calc(min(100vw, 520px) * 0.038), 18px);
   background: #ffffff;
   color: var(--or-login-accent-ink);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.24);
 }
 
 .or-login-brand-mark img {
@@ -178,14 +196,11 @@
 }
 
 .or-login-brand-name {
-  position: absolute;
-  top: calc(67px + env(safe-area-inset-top, 0px));
-  left: calc(clamp(18px, 6.15vw, 24px) + 58px);
   color: var(--or-login-accent-ink);
-  font-size: 21px;
+  font-size: clamp(21px, calc(min(100vw, 520px) * 0.062), 32px);
   font-weight: 650;
   line-height: 1.25;
-  letter-spacing: 0.035em;
+  letter-spacing: 0.04em;
   white-space: nowrap;
 }
 
@@ -203,7 +218,7 @@
   opacity: 0;
   transform: translate3d(0, 8px, 0);
   pointer-events: none;
-  transition: opacity 480ms ease, transform 520ms var(--or-login-ease);
+  transition: opacity 360ms ease, transform 400ms var(--or-login-ease);
 }
 
 .or-login-splash-logo {
@@ -236,7 +251,7 @@
 .or-login[data-phase="splash"] .or-login-splash {
   opacity: 1;
   transform: translate3d(0, 0, 0);
-  transition-delay: 80ms;
+  transition-delay: 40ms;
 }
 
 .or-login[data-phase="brand-exit"] .or-login-splash {
@@ -561,29 +576,10 @@ html.tauri-shell .or-login .or-login-error-slot {
   opacity: 0;
 }
 
-.or-login[data-phase="revealing"] .or-login-brand-mark,
-.or-login[data-phase="revealing"] .or-login-brand-name,
-.or-login[data-phase="ready"] .or-login-brand-mark,
-.or-login[data-phase="ready"] .or-login-brand-name {
+.or-login[data-phase="revealing"] .or-login-brand-heading,
+.or-login[data-phase="ready"] .or-login-brand-heading {
   opacity: 1;
-  transform: translate3d(0, 0, 0);
-}
-
-.or-login-brand-mark,
-.or-login-brand-name {
-  opacity: 0;
-  transform: translate3d(0, 10px, 0);
-  transition: opacity 420ms ease, transform 460ms var(--or-login-ease);
-}
-
-.or-login[data-phase="revealing"] .or-login-brand-mark,
-.or-login[data-phase="ready"] .or-login-brand-mark {
-  transition-delay: 300ms;
-}
-
-.or-login[data-phase="revealing"] .or-login-brand-name,
-.or-login[data-phase="ready"] .or-login-brand-name {
-  transition-delay: 380ms;
+  transform: translate3d(0, 0, 0) scale(1);
 }
 
 .or-login-form > * {
@@ -765,7 +761,7 @@ html.tauri-shell .or-login .or-login-error-slot {
   .or-login[data-phase="splash"] .or-login-desktop-splash-title {
     opacity: 1;
     transform: translate3d(0, 0, 0);
-    transition: opacity 480ms ease 70ms, transform 520ms cubic-bezier(0.33, 1, 0.68, 1) 70ms;
+    transition: opacity 360ms ease 40ms, transform 400ms cubic-bezier(0.33, 1, 0.68, 1) 40ms;
   }
 
   .or-login[data-phase="brand-exit"] .or-login-desktop-splash-title {
@@ -1142,12 +1138,11 @@ html.tauri-shell .or-login .or-login-error-slot {
     padding-top: max(clamp(198px, 31dvh, 224px), calc(min(100vw, 520px) * 0.61 + 16px));
   }
 
-  .or-login-brand-mark {
-    top: calc(40px + env(safe-area-inset-top, 0px));
-  }
-
-  .or-login-brand-name {
-    top: calc(50px + env(safe-area-inset-top, 0px));
+  .or-login-brand-heading {
+    margin-top: max(
+      calc(min(100vw, 520px) * 0.195),
+      calc(20px + env(safe-area-inset-top, 0px))
+    );
   }
 
 }
@@ -1200,6 +1195,7 @@ html.tauri-shell .or-login .or-login-error-slot {
   }
 
   .or-login .or-login-form > *,
+  .or-login .or-login-brand-heading,
   .or-login .or-login-brand-mark,
   .or-login .or-login-brand-name {
     opacity: 1 !important;

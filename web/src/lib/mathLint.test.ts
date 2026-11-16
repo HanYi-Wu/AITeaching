@@ -76,4 +76,19 @@ describe("lintMathContent", () => {
     const results = lintMathContent("Broken blank ______.\n```yaml\nfoo_bar: 1\n```");
     expect(results.find((r) => r.code === "latex_underscore")).toBeDefined();
   });
+
+  it("preserves display-first delimiter counting for overlapping dollar runs", () => {
+    expect(lintMathContent("$$$").map((result) => result.code)).toEqual([
+      "math_delimiter_display",
+    ]);
+    expect(lintMathContent("$$x$$$y").map((result) => result.code)).toEqual([
+      "math_delimiter_inline",
+    ]);
+  });
+
+  it("recognizes a display pair after a trailing escape in the outside segment", () => {
+    expect(lintMathContent("\\$$").map((result) => result.code)).toEqual([
+      "math_delimiter_display",
+    ]);
+  });
 });

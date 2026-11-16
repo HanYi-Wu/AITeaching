@@ -5,9 +5,11 @@ import {
   getUnifiedUiInfo,
   giFieldId,
   parseGroupMemberIndex,
+  readDifficultyMetaSelectValue,
   removeLastGroupSubItem,
   resolveEditorSaveAction,
   updateCategoryMetaRow,
+  updateDifficultyMetaRow,
   updateGroupMaterial,
   updateGroupMemberField,
   updateGroupMemberOptions,
@@ -185,6 +187,22 @@ describe("bankEditorAdapters", () => {
     expect(nextRows).toEqual([
       { key: "diff", value: "easy" },
       { key: "category", value: "homework" },
+    ]);
+  });
+
+  it("normalizes and updates difficulty metadata rows", () => {
+    expect(readDifficultyMetaSelectValue([])).toBe("__unset__");
+    expect(readDifficultyMetaSelectValue([{ key: "difficulty", value: "较难" }])).toBe("hard");
+    expect(readDifficultyMetaSelectValue([{ key: "difficulty", value: "0.2" }])).toBe("easy");
+    expect(readDifficultyMetaSelectValue([{ key: "difficulty", value: "中等" }])).toBe("medium");
+
+    const updated = updateDifficultyMetaRow([{ key: "category", value: "月考" }], "hard");
+    expect(updated).toEqual([
+      { key: "category", value: "月考" },
+      { key: "difficulty", value: "hard" },
+    ]);
+    expect(updateDifficultyMetaRow(updated, "__unset__")).toEqual([
+      { key: "category", value: "月考" },
     ]);
   });
 });

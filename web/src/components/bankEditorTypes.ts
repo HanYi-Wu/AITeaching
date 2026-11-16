@@ -64,11 +64,21 @@ export type BankEditorDraftStore = {
 
 export type GiLatexMemberField = "content" | "answer" | "analysis";
 
+export type ExistingQuestionIdEntry = {
+  id: string;
+  qualified_id: string;
+  subject?: string;
+  collection: string;
+  group_member_qualified_ids?: string[];
+};
+
 export type BankQuestionEditorPanelProps = {
   /** full：表单+源码双 Tab；form / yaml：仅显示对应区块（用于外层「字段 / 源文件」分栏） */
   panelMode?: "full" | "form" | "yaml";
   detail: BankDetailState;
   setDetail: Dispatch<SetStateAction<BankDetailState | null>>;
+  /** Existing library items for live duplicate question ID validation. */
+  existingItems?: readonly ExistingQuestionIdEntry[];
   /** Stable snapshot store keeps high-frequency editor updates out of BankWorkspace renders. */
   draftStore?: BankEditorDraftStore;
   busy: boolean;

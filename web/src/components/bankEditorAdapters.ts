@@ -249,9 +249,52 @@ export function resolveEditorSaveAction(
   return editorTab === "yaml" ? "yaml" : "form";
 }
 
+const DIFFICULTY_ALIASES: Record<string, "easy" | "medium" | "hard"> = {
+  easy: "easy",
+  low: "easy",
+  低: "easy",
+  简单: "easy",
+  容易: "easy",
+  medium: "medium",
+  中: "medium",
+  中等: "medium",
+  适中: "medium",
+  hard: "hard",
+  high: "hard",
+  高: "hard",
+  难: "hard",
+  困难: "hard",
+  较难: "hard",
+};
+
 export function updateCategoryMetaRow(metaRows: MetaRow[], categoryValue: string): MetaRow[] {
   return [
     ...metaRows.filter((row) => row.key !== "category"),
     { key: "category", value: categoryValue },
   ];
+}
+
+/** Normalizes existing `difficulty` metadata to `"easy" | "medium" | "hard"` or `"__unset__"`. */
+export function readDifficultyMetaSelectValue(metaRows: MetaRow[]): string {
+  const raw = metaRows.find((row) => row.key.trim() === "difficulty")?.value?.trim() ?? "";
+  if (!raw) return "__unset__";
+  const normalized = raw.normalize("NFKC").toLowerCase();
+  if (normalized in DIFFICULTY_ALIASES) {
+    return DIFFICULTY_ALIASES[normalized];
+  }
+  const num = Number(normalized);
+  if (Number.isFinite(num) && num >= 0 && num <= 1) {
+    if (num <= 1 / 3) return "easy";
+    if (num <= 2 / 3) return "medium";
+    return "hard";
+  }
+  return "__unset__";
+}
+
+/** Sets or clears the `difficulty` metadata row while leaving unrelated rows untouched. */
+export function updateDifficultyMetaRow(metaRows: MetaRow[], difficultyValue: string): MetaRow[] {
+  const rest = metaRows.filter((row) => row.key.trim() !== "difficulty");
+  return difficultyValue && difficultyValue !== "__unset__"
+    ? [...rest, { key: "difficulty", value: difficultyValue }]
+    : rest;
 }

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+import os
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +37,8 @@ def _parse_yaml_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         data = yaml.safe_load(yaml_block) or {}
     except Exception:
         data = _simple_yaml_parse(yaml_block)
+    if not isinstance(data, dict):
+        return {}, body.strip()
     return data, body.strip()
 
 
@@ -53,21 +59,35 @@ def _simple_yaml_parse(block: str) -> dict[str, Any]:
 def _scan_skill_dir(directory: Path) -> list[SkillDescriptor]:
     """Scan a directory for */SKILL.md files and return descriptors."""
     skills: list[SkillDescriptor] = []
-    if not directory.is_dir():
+    try:
+        if not directory.is_dir():
+            return skills
+        children = sorted(directory.iterdir())
+    except OSError:
         return skills
-    for child in sorted(directory.iterdir()):
+
+    for child in children:
         skill_file = child / "SKILL.md"
-        if not skill_file.is_file():
-            continue
         try:
+            if not skill_file.is_file():
+                continue
             text = skill_file.read_text(encoding="utf-8")
         except Exception:
             continue
-        meta, body = _parse_yaml_frontmatter(text)
-        if not meta.get("name"):
+        try:
+            meta, body = _parse_yaml_frontmatter(text)
+        except Exception:
+            continue
+        if not isinstance(meta, dict):
+            continue
+        raw_name = meta.get("name")
+        if raw_name is None:
+            continue
+        name = str(raw_name).strip()
+        if not name:
             continue
         md = meta.get("metadata") or {}
-        if isinstance(md, str):
+        if not isinstance(md, dict):
             md = {}
         tp_raw = md.get("tool_patterns", "")
         if isinstance(tp_raw, str):
@@ -83,8 +103,8 @@ def _scan_skill_dir(directory: Path) -> list[SkillDescriptor]:
             description = str(desc_raw).strip()
 
         skills.append(SkillDescriptor(
-            name=str(meta["name"]).strip(),
-            label=str(md.get("label", meta.get("name", ""))).strip(),
+            name=name,
+            label=str(md.get("label", raw_name)).strip(),
             description=description,
             tool_patterns=tool_patterns,
             suggested_user_input=str(md.get("suggested_user_input", "")).strip(),
@@ -103,32 +123,88 @@ def _project_skills_dir(project_root: Path) -> Path:
 
 
 class _SkillCache:
+    _TTL_SECONDS = 10.0
+    _MAX_PROJECT_CATALOGS = 16
+    _MAX_PATH_ALIASES = 32
+
     def __init__(self):
-        self._skills: dict[str, SkillDescriptor] = {}
-        self._stamp: float = 0
+        self._builtin_skills: dict[str, SkillDescriptor] | None = None
+        self._builtin_stamp = 0.0
+        self._builtin_version = 0
+        self._project_catalogs: OrderedDict[
+            str, tuple[float, int, dict[str, SkillDescriptor]]
+        ] = OrderedDict()
+        self._path_aliases: OrderedDict[Path, tuple[float, str, Path]] = OrderedDict()
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _project_path_alias(project_root: Path) -> tuple[Path, Path]:
+        path = project_root if isinstance(project_root, Path) else Path(project_root)
+        if path.parts and path.parts[0].startswith("~"):
+            path = path.expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return path, path
+
+    @staticmethod
+    def _canonical_project_root(project_root: Path) -> tuple[str, Path]:
+        root = Path(project_root).expanduser().resolve()
+        key = os.path.normcase(os.path.normpath(str(root)))
+        return key, root
 
     def get(self, project_root: Path | None = None) -> dict[str, SkillDescriptor]:
-        import time
-
-        now = time.time()
-        if self._skills and (now - self._stamp) < 10:
-            return self._skills
-
-        builtin = _scan_skill_dir(_builtin_skills_dir())
-        result = {s.name: s for s in builtin}
-
+        path_alias: Path | None = None
+        unresolved_root: Path | None = None
         if project_root is not None:
-            project = _scan_skill_dir(_project_skills_dir(project_root))
-            for s in project:
-                result[s.name] = s
+            path_alias, unresolved_root = self._project_path_alias(project_root)
 
-        self._skills = result
-        self._stamp = now
-        return result
+        with self._lock:
+            now = time.monotonic()
+            if (self._builtin_skills is None or
+                    now - self._builtin_stamp >= self._TTL_SECONDS):
+                builtin = _scan_skill_dir(_builtin_skills_dir())
+                self._builtin_skills = {skill.name: skill for skill in builtin}
+                self._builtin_stamp = now
+                self._builtin_version += 1
+
+            if path_alias is None:
+                return self._builtin_skills
+            assert unresolved_root is not None
+
+            alias = self._path_aliases.get(path_alias)
+            if alias is not None and now - alias[0] < self._TTL_SECONDS:
+                project_key, canonical_root = alias[1], alias[2]
+                self._path_aliases.move_to_end(path_alias)
+            else:
+                project_key, canonical_root = self._canonical_project_root(unresolved_root)
+                self._path_aliases[path_alias] = (now, project_key, canonical_root)
+                self._path_aliases.move_to_end(path_alias)
+                while len(self._path_aliases) > self._MAX_PATH_ALIASES:
+                    self._path_aliases.popitem(last=False)
+
+            cached = self._project_catalogs.get(project_key)
+            if (cached is not None and now - cached[0] < self._TTL_SECONDS and
+                    cached[1] == self._builtin_version):
+                self._project_catalogs.move_to_end(project_key)
+                return cached[2]
+
+            result = self._builtin_skills.copy()
+            for skill in _scan_skill_dir(_project_skills_dir(canonical_root)):
+                result[skill.name] = skill
+
+            self._project_catalogs[project_key] = (now, self._builtin_version, result)
+            self._project_catalogs.move_to_end(project_key)
+            while len(self._project_catalogs) > self._MAX_PROJECT_CATALOGS:
+                self._project_catalogs.popitem(last=False)
+            return result
 
     def clear(self) -> None:
-        self._skills = {}
-        self._stamp = 0
+        with self._lock:
+            self._builtin_skills = None
+            self._builtin_stamp = 0.0
+            self._builtin_version = 0
+            self._project_catalogs.clear()
+            self._path_aliases.clear()
 
 
 _skill_cache = _SkillCache()

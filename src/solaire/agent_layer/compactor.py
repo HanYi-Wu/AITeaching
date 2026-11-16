@@ -6,16 +6,88 @@ import json
 from typing import Any
 
 
-def _json_size(obj: Any) -> int:
+_SMALL_JSON_FAST_PATH_CHARS = 4096
+
+
+def _small_json_candidate(obj: Any, *, limit: int) -> bool:
+    """Quickly reject common large shapes before using the C JSON encoder."""
+    if type(obj) is not dict or len(obj) > 64:
+        return False
+
+    for key, value in obj.items():
+        if type(key) not in (str, bool, int, float) and key is not None:
+            return False
+        if type(key) is str and len(key) > limit:
+            return False
+        if type(value) is str:
+            if len(value) > limit:
+                return False
+            continue
+        if type(value) not in (dict, list, tuple):
+            if value is None or type(value) in (bool, int, float):
+                continue
+            return False
+        if len(value) > 64:
+            return False
+        children = value.values() if type(value) is dict else value
+        for child in children:
+            if type(child) is str:
+                if len(child) > limit:
+                    return False
+                continue
+            if child is None or type(child) in (bool, int, float):
+                continue
+            if type(child) not in (dict, list, tuple) or len(child) > 64:
+                return False
+            grandchildren = child.values() if type(child) is dict else child
+            for grandchild in grandchildren:
+                if type(grandchild) is str:
+                    if len(grandchild) > limit:
+                        return False
+                elif grandchild is not None and type(grandchild) not in (bool, int, float, dict, list, tuple):
+                    return False
+                elif type(grandchild) in (dict, list, tuple) and len(grandchild) > 64:
+                    return False
+                elif type(grandchild) in (dict, list, tuple):
+                    leaves = grandchild.values() if type(grandchild) is dict else grandchild
+                    for leaf in leaves:
+                        if type(leaf) is str:
+                            if len(leaf) > limit:
+                                return False
+                        elif leaf is not None and type(leaf) not in (bool, int, float):
+                            return False
+    return True
+
+
+def _json_size(obj: Any, *, stop_after: int | None = None) -> int:
+    """Measure the same JSON text as ``json.dumps`` without joining fragments.
+
+    When only testing a budget, return as soon as the lower bound exceeds it.
+    This avoids allocating a serialized copy of very large tool payloads.
+    """
     try:
-        return len(json.dumps(obj, ensure_ascii=False, default=str))
+        fast_limit = _SMALL_JSON_FAST_PATH_CHARS
+        if stop_after is not None:
+            fast_limit = min(fast_limit, stop_after)
+        if _small_json_candidate(obj, limit=fast_limit):
+            encoded = json.dumps(obj, ensure_ascii=False, default=str)
+            if stop_after is None or len(encoded) <= stop_after:
+                return len(encoded)
+
+        encoder = json.JSONEncoder(ensure_ascii=False, default=str)
+        size = 0
+        for fragment in encoder.iterencode(obj):
+            size += len(fragment)
+            if stop_after is not None and size > stop_after:
+                return size
+        return size
     except Exception:
         return len(str(obj))
 
 
 def compact_for_llm(payload: Any, *, max_chars: int = 12000) -> tuple[Any, bool]:
     """Return (possibly truncated payload, was_truncated)."""
-    if _json_size(payload) <= max_chars:
+    if _json_size(payload, stop_after=max_chars) <= max_chars:
         return payload, False
     if isinstance(payload, dict):
         return _compact_dict(payload, max_chars=max_chars)
@@ -84,7 +156,7 @@ def _compact_graph_nodes_dict(d: dict[str, Any], *, max_chars: int) -> dict[str,
                 slim.append({"_raw": str(n)[:200]})
     out["nodes"] = slim
     # 若仍过大，只保留更短样本
-    while _json_size(out) > max_chars and head_n > 8:
+    while _json_size(out, stop_after=max_chars) > max_chars and head_n > 8:
         head_n = max(8, head_n // 2)
         tail_n = min(tail_n, 3)
         slim = []
@@ -138,7 +210,7 @@ def _compact_graph_relations_dict(d: dict[str, Any], *, max_chars: int) -> dict[
             else:
                 slim.append({"_raw": str(r)[:200]})
     out["relations"] = slim
-    while _json_size(out) > max_chars and head_n > 10:
+    while _json_size(out, stop_after=max_chars) > max_chars and head_n > 10:
         head_n = max(10, head_n // 2)
         tail_n = min(tail_n, 3)
         slim = []
@@ -198,9 +270,9 @@ def _compact_dict(d: dict[str, Any], *, max_chars: int) -> tuple[dict[str, Any],
                     s = {**s, "points": pts[:10] + [{"_truncated": len(pts) - 10}]}
             series.append(s)
         out["series"] = series
-    if "raw" in d and _json_size(d["raw"]) > max_chars // 2:
+    if "raw" in d and _json_size(d["raw"], stop_after=max_chars // 2) > max_chars // 2:
         out["raw"] = {"_omitted": "体量过大，已省略；如需请用专用工具重新拉取。"}
-    if _json_size(out) > max_chars:
+    if _json_size(out, stop_after=max_chars) > max_chars:
         return {"_truncated": True, "preview_keys": list(d.keys())[:20]}, True
     return out, True
 

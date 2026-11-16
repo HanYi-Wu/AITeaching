@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -12,6 +13,24 @@ _LINE_BREAKS: Final[frozenset[str]] = frozenset(
 )
 
 _DEFAULT_CHUNK_SIZE: Final[int] = 65536
+
+
+def iter_file_lines(
+    path: Path,
+    *,
+    encoding: str = "utf-8",
+    errors: str = "replace",
+) -> Iterator[str]:
+    """Yield text lines with the same separators as ``str.splitlines()``.
+
+    Text file iteration handles CR/LF/CRLF with the same universal-newline
+    translation used by ``Path.read_text``. Splitting each physical line also
+    recognizes Python's additional Unicode line separators while keeping the
+    whole file out of memory.
+    """
+    with open(path, "r", encoding=encoding, errors=errors) as file:
+        for physical_line in file:
+            yield from physical_line.splitlines()
 
 
 def read_file_window(

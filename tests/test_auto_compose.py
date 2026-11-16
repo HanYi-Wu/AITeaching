@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from solaire.common.actor_context import actor
 from solaire.web import platform_db
-from solaire.web.auto_compose.service import check_paper_duplicates, generate_paper
+from solaire.web.auto_compose.service import check_paper_duplicates, compose_options, generate_paper
 from solaire.web.schemas.auto_compose import AutoComposeBody, DuplicateCheckBody
 
 
@@ -435,6 +435,24 @@ def test_unlabelled_difficulty_is_unknown_not_medium(tmp_path: Path) -> None:
     assert result["goals"]["difficulty"]["actual"]["unknown"] == 1
     assert result["goals"]["difficulty"]["actual"]["medium"] == 0
     assert any("未标注" in warning for warning in result["warnings"])
+
+
+def test_empty_difficulty_choice_does_not_warn_or_fail_on_unlabelled_questions(tmp_path: Path) -> None:
+    _write_template(tmp_path, _basic_sections(fill_count=1, choice_count=0, reasoning_count=0))
+    _write_question(tmp_path, "unlabelled", "fill", difficulty=None)
+    _write_question(tmp_path, "harder", "single_choice", difficulty="较难")
+
+    options = compose_options(tmp_path, "数学")
+    assert options["difficulty_counts"]["hard"] == 1
+
+    result = generate_paper(
+        tmp_path,
+        _body(total_count=1, difficulty_distribution={}, section_counts={"choice": 0, "fill": 1}, seed=5),
+    )
+
+    assert result["complete"] is True
+    assert result["goals"]["difficulty"]["met"] is True
+    assert not any("未标注" in warning for warning in result["warnings"])
 
 
 def test_seed_makes_selection_reproducible(tmp_path: Path) -> None:

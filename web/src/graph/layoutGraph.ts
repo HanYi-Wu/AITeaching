@@ -221,25 +221,33 @@ export function layoutWithForceDirected(
   }
 
   /** 有边相连的节点对：仅用弹簧定距，避免斥力把相邻节点再推开。 */
-  // Base-n pair keys are unique while their maximum remains a safe JS integer.
-  // Retain the old string representation as a correctness fallback for unusually
-  // large graphs whose pair indexes would exceed Number.MAX_SAFE_INTEGER.
-  const numericPairKeysSafe = n <= Math.floor(Math.sqrt(Number.MAX_SAFE_INTEGER));
-  const adjacentPair = new Set<number | string>();
+  // Store neighbors by node so the hot pair loop avoids rebuilding and encoding
+  // a pair key on every iteration. Memory stays O(nodes + edges), including for
+  // large sparse graphs; the spring list below still retains duplicate edges.
+  const adjacentNodes = new Array<Set<number> | undefined>(n);
+  const edgeRestLengths: number[] = [];
   for (const { si, ti } of edgeIdxs) {
-    const a = Math.min(si, ti);
-    const b = Math.max(si, ti);
-    adjacentPair.add(numericPairKeysSafe ? a * n + b : `${a},${b}`);
+    (adjacentNodes[si] ??= new Set()).add(ti);
+    (adjacentNodes[ti] ??= new Set()).add(si);
+    const rs = radii[si];
+    const rt = radii[ti];
+    /** 相邻两圆边到边间距 = 较小圆直径 ⇒ 圆心距 = r_s + r_t + min(d_s, d_t) */
+    edgeRestLengths.push(rs + rt + 2 * Math.min(rs, rt));
   }
 
   const repulsionBase = FORCE_DEFAULT.repulsionBase;
+  // Keep the original multiplication order while moving its node-only factor
+  // out of the O(n²) loop.
+  const repulsionByRadius = radii.map((radius) => repulsionBase * radius);
   const spring = FORCE_DEFAULT.spring;
   const pad = FORCE_DEFAULT.collisionPad;
   const repDamp = FORCE_DEFAULT.repulsionDistDamping;
+  const fx = new Float64Array(n);
+  const fy = new Float64Array(n);
 
   for (let iter = 0; iter < iterations; iter++) {
-    const fx = new Float64Array(n);
-    const fy = new Float64Array(n);
+    fx.fill(0);
+    fy.fill(0);
 
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
@@ -250,12 +258,11 @@ export function layoutWithForceDirected(
         const dist = Math.sqrt(distSq);
         const ri = radii[i];
         const rj = radii[j];
-        const pairKey = numericPairKeysSafe ? i * n + j : `${i},${j}`;
-        const isAdjacent = adjacentPair.has(pairKey);
+        const isAdjacent = adjacentNodes[i]?.has(j) ?? false;
 
         if (!isAdjacent) {
           /** 1/dist^2 在远距离过弱、近距离过强；加阻尼项使中距离斥力更可控 */
-          const rep = (repulsionBase * ri * rj) / (distSq + repDamp);
+          const rep = (repulsionByRadius[i] * rj) / (distSq + repDamp);
           const rx = (dx / dist) * rep;
           const ry = (dy / dist) * rep;
           fx[i] -= rx;
@@ -279,15 +286,12 @@ export function layoutWithForceDirected(
       }
     }
 
-    for (const { si, ti } of edgeIdxs) {
+    for (let edgeIndex = 0; edgeIndex < edgeIdxs.length; edgeIndex++) {
+      const { si, ti } = edgeIdxs[edgeIndex];
       let dx = cx[ti] - cx[si];
       let dy = cy[ti] - cy[si];
       const dist = Math.hypot(dx, dy) || 0.01;
-      const rs = radii[si];
-      const rt = radii[ti];
-      /** 相邻两圆边到边间距 = 较小圆直径 ⇒ 圆心距 = r_s + r_t + min(d_s, d_t) */
-      const ideal = rs + rt + 2 * Math.min(rs, rt);
-      const f = spring * (dist - ideal);
+      const f = spring * (dist - edgeRestLengths[edgeIndex]);
       dx = (dx / dist) * f;
       dy = (dy / dist) * f;
       fx[si] += dx;

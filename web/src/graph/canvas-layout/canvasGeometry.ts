@@ -25,18 +25,30 @@ export function canvasGeometry(
   };
 }
 
-export function sameCanvasGeometry(before: CanvasGeometry | null, after: CanvasGeometry): boolean {
-  if (!before || before.scope !== after.scope || before.focus !== after.focus || before.nonce !== after.nonce ||
-      before.nodes.length !== after.nodes.length || before.edges.length !== after.edges.length) return false;
-  for (let index = 0; index < after.nodes.length; index++) {
+/** Compare live rows to the saved signature without allocating a second signature. */
+export function sameCanvasGeometry(
+  before: CanvasGeometry | null,
+  nodes: GraphNodeRow[],
+  edges: GraphRelationRow[],
+  sizes: Map<string, { w: number; h: number }>,
+  focus: boolean,
+  nonce: number,
+  scope: string,
+): boolean {
+  if (!before || before.scope !== scope || before.focus !== focus || before.nonce !== nonce ||
+      before.nodes.length !== nodes.length || before.edges.length !== edges.length) return false;
+  for (let index = 0; index < nodes.length; index++) {
     const left = before.nodes[index];
-    const right = after.nodes[index];
-    for (let field = 0; field < right.length; field++) if (!Object.is(left[field], right[field])) return false;
+    const node = nodes[index];
+    const size = sizes.get(node.id)!;
+    if (left[0] !== node.id || left[1] !== size.w || left[2] !== size.h ||
+        !Object.is(left[3], node.layout_x) || !Object.is(left[4], node.layout_y)) return false;
   }
-  for (let index = 0; index < after.edges.length; index++) {
+  for (let index = 0; index < edges.length; index++) {
     const left = before.edges[index];
-    const right = after.edges[index];
-    for (let field = 0; field < right.length; field++) if (left[field] !== right[field]) return false;
+    const edge = edges[index];
+    if (left[0] !== edge.id || left[1] !== edge.from_node_id || left[2] !== edge.to_node_id ||
+        left[3] !== edge.relation_type) return false;
   }
   return true;
 }

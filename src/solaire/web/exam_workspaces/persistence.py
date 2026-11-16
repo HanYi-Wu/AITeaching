@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import json
 from pathlib import Path
 import shutil
@@ -54,7 +55,12 @@ def _default_config(
 
 
 def _read_config(project_root: Path, exam_id: str) -> dict[str, Any] | None:
-    p = config_json_path(project_root, exam_id)
+    return _read_config_file(config_json_path(project_root, exam_id))
+
+
+def _read_config_file(path: Path) -> dict[str, Any] | None:
+    """Read an already-resolved config path using the regular config fallback policy."""
+    p = path
     if not p.is_file():
         return None
     try:
@@ -63,6 +69,29 @@ def _read_config(project_root: Path, exam_id: str) -> dict[str, Any] | None:
         return raw if isinstance(raw, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _workspace_read_paths(project_root: Path, exam_id: str) -> tuple[Path, Path]:
+    """Resolve one guarded workspace directory for both read-only file paths."""
+    directory = workspace_dir(project_root, exam_id)
+    return directory / "config.json", directory / "exam.yaml"
+
+
+def _iter_exam_workspace_dirs(
+    exams_root: Path,
+) -> Iterator[tuple[str, Path]]:
+    """Yield two-level workspace ids and their discovered directory paths."""
+    if not exams_root.is_dir():
+        return
+    for label_dir in exams_root.iterdir():
+        if not label_dir.is_dir():
+            continue
+        for subject_dir in label_dir.iterdir():
+            if subject_dir.is_dir():
+                yield (
+                    f"{label_dir.name}/{subject_dir.name}",
+                    subject_dir,
+                )
 
 
 def _write_config(project_root: Path, exam_id: str, cfg: dict[str, Any]) -> None:
@@ -95,41 +124,34 @@ def label_subject_taken(
         return False
     excl = _safe_exam_id(exclude_exam_id) if exclude_exam_id else None
     root = _exams_root(project_root)
-    if not root.is_dir():
-        return False
     target_dir = (root / exam_id_from_labels(export_label, subject)).resolve()
-    for label_dir in root.iterdir():
-        if not label_dir.is_dir():
+    for eid, subj_dir in _iter_exam_workspace_dirs(root):
+        if excl and eid == excl:
             continue
-        for subj_dir in label_dir.iterdir():
-            if not subj_dir.is_dir():
-                continue
-            eid = f"{label_dir.name}/{subj_dir.name}"
-            if excl and eid == excl:
+        try:
+            config_path, _ = _workspace_read_paths(project_root, eid)
+            cfg = _read_config_file(config_path)
+        except (PermissionError, ValueError):
+            # 不读取其他教师的内容；仍保留其目录名，避免同名创建覆盖已有试卷。
+            if subj_dir.resolve() == target_dir:
+                return True
+            continue
+        if cfg:
+            got = label_subject_pair(str(cfg.get("exam_label") or ""), str(cfg.get("subject") or ""))
+        else:
+            yp = subj_dir / "exam.yaml"
+            if not yp.is_file():
                 continue
             try:
-                cfg = _read_config(project_root, eid)
-            except (PermissionError, ValueError):
-                # 不读取其他教师的内容；仍保留其目录名，避免同名创建覆盖已有试卷。
-                if subj_dir.resolve() == target_dir:
-                    return True
+                with yp.open(encoding="utf-8") as f:
+                    raw = yaml.safe_load(f)
+            except OSError:
                 continue
-            if cfg:
-                got = label_subject_pair(str(cfg.get("exam_label") or ""), str(cfg.get("subject") or ""))
-            else:
-                yp = subj_dir / "exam.yaml"
-                if not yp.is_file():
-                    continue
-                try:
-                    with yp.open(encoding="utf-8") as f:
-                        raw = yaml.safe_load(f)
-                except OSError:
-                    continue
-                if not isinstance(raw, dict):
-                    continue
-                got = label_subject_pair(str(raw.get("export_label") or ""), str(raw.get("subject") or ""))
-            if _same_identity(want, got):
-                return True
+            if not isinstance(raw, dict):
+                continue
+            got = label_subject_pair(str(raw.get("export_label") or ""), str(raw.get("subject") or ""))
+        if _same_identity(want, got):
+            return True
     return False
 
 

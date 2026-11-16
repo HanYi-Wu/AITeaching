@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRef, useRef, useState } from "react";
 
 import { LatexRichTextField } from "./LatexRichTextField";
-import { serializeEditor } from "./latexField/contentPreview";
+import { createMathWidget, serializeEditor } from "./latexField/contentPreview";
 
 vi.mock("mathlive", () => ({
   MathfieldElement: class MockMathfieldElement extends HTMLElement {
@@ -239,5 +239,60 @@ describe("LatexRichTextField widget deletion", () => {
       serializedWithBreak.length - 1,
       serializedWithBreak.length - 1,
     );
+  });
+
+  it("projects edited markup and both native selection endpoints together", () => {
+    const { editor, onChange, textAreaRef } = renderField("0123456789012345");
+    const block = document.createElement("div");
+    const prefix = document.createTextNode("left");
+    const formula = createMathWidget("x+y");
+    const lineBreak = document.createElement("br");
+    const tail = document.createTextNode("right");
+    block.append(prefix, formula, lineBreak, tail);
+    editor.replaceChildren(block);
+
+    const range = document.createRange();
+    range.setStart(prefix, 2);
+    range.setEnd(tail, 3);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.input(editor, { inputType: "insertText", data: "!" });
+
+    expect(onChange).toHaveBeenLastCalledWith("left$x+y$\nright");
+    expect(textAreaRef.current?.selectionStart).toBe(2);
+    expect(textAreaRef.current?.selectionEnd).toBe(13);
+  });
+
+  it("keeps intermediate pinyin and commits Chinese text during source-mode IME composition", () => {
+    const onChange = vi.fn();
+    function ControlledSourceField() {
+      const [val, setVal] = useState("初始");
+      const textAreaRef = useRef<HTMLTextAreaElement>(null);
+      return (
+        <LatexRichTextField
+          value={val}
+          onChange={(next) => {
+            setVal(next);
+            onChange(next);
+          }}
+          textAreaRef={textAreaRef}
+        />
+      );
+    }
+    const { container, getByText } = render(<ControlledSourceField />);
+
+    fireEvent.click(getByText("源码"));
+    const sourceTa = container.querySelector("textarea:not(.sr-only)") as HTMLTextAreaElement;
+
+    fireEvent.compositionStart(sourceTa);
+    fireEvent.change(sourceTa, { target: { value: "初始ti" } });
+    expect(sourceTa.value).toBe("初始ti");
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(sourceTa, { target: { value: "初始题干" } });
+    expect(sourceTa.value).toBe("初始题干");
+    expect(onChange).toHaveBeenLastCalledWith("初始题干");
   });
 });

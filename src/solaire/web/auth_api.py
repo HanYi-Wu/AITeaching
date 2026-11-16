@@ -114,7 +114,7 @@ def teacher_guide_progress(body: TeacherGuideBody, user: Annotated[dict[str, Any
         con.execute('BEGIN IMMEDIATE')
         row = con.execute('SELECT teacher_guide_step FROM users WHERE id=?', (user['id'],)).fetchone()
         current = int(row['teacher_guide_step'])
-        if body.step != 0 and body.step not in {current, current + 1}:
+        if body.step not in {0, current, current + 1, 8}:
             raise HTTPException(status_code=400, detail='请按顺序完成引导')
         con.execute('UPDATE users SET teacher_guide_step=? WHERE id=?', (body.step, user['id']))
     return {'user': _with_management_permissions(root, get_user_profile(root, str(user['id'])))}

@@ -1,5 +1,5 @@
 import type { MetadataFilters } from "../../../lib/metadataFilters";
-import { matchesMetadataFilters } from "../../../lib/metadataFilters";
+import { compileMetadataFilters } from "../../../lib/metadataFilters";
 import type { BankListItem } from "../bankModel";
 
 export function getSearchText(
@@ -62,8 +62,11 @@ export function filterBankList(
   const query = deferredSearch.trim().toLowerCase();
   const hasCategory = filterCategory !== "__all__";
   const hasQuery = query.length > 0;
+  const metadataMatcher = activeMetadataFilters
+    ? compileMetadataFilters(activeMetadataFilters)
+    : null;
 
-  if (!hasCategory && !activeMetadataFilters && !hasQuery) {
+  if (!hasCategory && !metadataMatcher && !hasQuery) {
     return metadataScopeItems.slice();
   }
 
@@ -76,8 +79,8 @@ export function filterBankList(
       continue;
     }
     if (
-      activeMetadataFilters &&
-      !matchesMetadataFilters(item.metadata, activeMetadataFilters)
+      metadataMatcher &&
+      !metadataMatcher(item.metadata)
     ) {
       continue;
     }

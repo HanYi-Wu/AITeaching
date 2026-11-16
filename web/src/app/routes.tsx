@@ -73,11 +73,13 @@ export function BankRoute({
   onRefreshInfo,
   onError,
   onOpenGraphNode,
+  active = true,
 }: {
   info: ProjectInfo | null;
   onRefreshInfo: () => Promise<void>;
   onError: (s: string | null) => void;
   onOpenGraphNode?: (nodeId: string) => void;
+  active?: boolean;
 }) {
   const { t } = useTranslation("app");
   const { setPageContext } = useAgentActions();
@@ -96,7 +98,16 @@ export function BankRoute({
       </div>
     );
   }
-  return <BankWorkspace key={info.root || info.project_id || "unbound"} onError={onError} onOpenGraphNode={onOpenGraphNode} />;
+  const projectScope = info.root || info.project_id || null;
+  return (
+    <BankWorkspace
+      key={projectScope ?? "unbound"}
+      active={active}
+      projectScope={projectScope}
+      onError={onError}
+      onOpenGraphNode={onOpenGraphNode}
+    />
+  );
 }
 
 export function TemplateRoute({

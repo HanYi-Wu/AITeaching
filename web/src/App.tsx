@@ -17,6 +17,7 @@ import {
   Sparkles,
   Users,
   X,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { DesktopTitleBar } from "./components/DesktopTitleBar";
@@ -36,6 +37,11 @@ import { cn } from "./lib/utils";
 import { isTauriShell } from "./lib/tauriEnv";
 import { trackWorkspaceAnimation } from "./lib/workspaceWorkScheduler";
 import type { AppPage } from "./app/appPages";
+import {
+  invalidateTeacherWarmCaches,
+  preloadTeacherWorkspaceChunks,
+  scheduleTeacherWorkspaceWarmup,
+} from "./app/preloadTeacherModules";
 import { BankRoute, ComposeRoute, GraphRoute, TemplateRoute } from "./app/routes";
 import {
   getCurrentUser,
@@ -66,6 +72,9 @@ const PapersWorkspace = lazy(() =>
 const TeacherStudentInsightsWorkspace = lazy(() =>
   import("./pages/platform/insights/TeacherStudentInsightsWorkspace").then((module) => ({ default: module.TeacherStudentInsightsWorkspace })),
 );
+const ClassroomToolsWorkspace = lazy(() =>
+  import("./pages/tools/ClassroomToolsWorkspace").then((module) => ({ default: module.ClassroomToolsWorkspace })),
+);
 const PlatformLogin = lazy(() =>
   import("./pages/platform/login/PlatformLogin").then((module) => ({ default: module.PlatformLogin })),
 );
@@ -82,10 +91,7 @@ const TeacherWorkspace = lazy(() =>
 function preloadAuthenticatedWorkspace(user: PlatformUser): Promise<unknown>[] {
   switch (user.role) {
     case "teacher":
-      return [
-        import("./pages/platform/TeacherWorkspace"),
-        import("./pages/platform/papers/PapersWorkspace"),
-      ];
+      return preloadTeacherWorkspaceChunks();
     case "student":
       return [import("./pages/platform/student/StudentWorkspace")];
     case "school":
@@ -117,6 +123,9 @@ function AppShell() {
   const pageBodyRef = useRef<HTMLElement>(null);
   const navigationRef = useRef<HTMLElement>(null);
   const [composeOwner, setComposeOwner] = useState<string | null>(null);
+  const [bankOwner, setBankOwner] = useState<string | null>(null);
+  const [analysisOwner, setAnalysisOwner] = useState<string | null>(null);
+  const [toolsOwner, setToolsOwner] = useState<string | null>(null);
   const [info, setInfo] = useState<ProjectInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [graphFocusNodeId, setGraphFocusNodeId] = useState<string | null>(null);
@@ -265,6 +274,11 @@ function AppShell() {
   }, [sidebarOpen, setSidebarOpen]);
 
   const onAuthenticated = useCallback((user: PlatformUser) => {
+    invalidateTeacherWarmCaches();
+    setComposeOwner(null);
+    setBankOwner(null);
+    setAnalysisOwner(null);
+    setToolsOwner(null);
     setAssistantMounted(false);
     setPlatformLoading(false);
     setErr(null);
@@ -287,6 +301,11 @@ function AppShell() {
   }, []);
 
   const onLogout = useCallback(async () => {
+    invalidateTeacherWarmCaches();
+    setComposeOwner(null);
+    setBankOwner(null);
+    setAnalysisOwner(null);
+    setToolsOwner(null);
     setAssistantMounted(false);
     platformRequestId.current += 1;
     setCurrentUser(null);
@@ -317,7 +336,7 @@ function AppShell() {
     }
   }, [platformRoute]);
 
-  const mobileMoreActive = sidebarOpen || ["template", "students", "analysis", "help", "settings"].includes(page);
+  const mobileMoreActive = sidebarOpen || ["template", "students", "analysis", "tools", "help", "settings"].includes(page);
   const navigationSelector = isMobileNavigation
     ? '[data-mobile-primary="true"][aria-current="page"], [data-mobile-more][aria-current="page"]'
     : '[aria-current="page"]';
@@ -332,8 +351,22 @@ function AppShell() {
   const closeMoreLabel = (i18n.language || "zh").startsWith("zh") ? "关闭更多菜单" : "Close more menu";
 
   useEffect(() => {
-    if (info?.bound && currentUser && page === 'compose') setComposeOwner(currentUser.id);
+    if (info?.bound && currentUser && page === "compose") setComposeOwner(currentUser.id);
+    if (currentUser && page === "bank") setBankOwner(currentUser.id);
+    if (currentUser && page === "analysis") setAnalysisOwner(currentUser.id);
+    if (currentUser && page === "tools") setToolsOwner(currentUser.id);
   }, [info?.bound, currentUser?.id, page]);
+
+  useEffect(() => {
+    if (platformRoute !== "teacher" || !currentUser) return;
+    void Promise.allSettled(preloadTeacherWorkspaceChunks());
+    if (infoAccountId !== currentUser.id) return;
+    return scheduleTeacherWorkspaceWarmup({
+      ownerId: currentUser.id,
+      projectId: info?.bound ? info.root || info.project_id : null,
+      warmBank: Boolean(info?.bound),
+    });
+  }, [platformRoute, currentUser?.id, infoAccountId, info?.bound, info?.root, info?.project_id]);
 
   // Opening navigation or the assistant must not re-render the active editor.
   // Its own data, account, project and route changes still update normally.
@@ -349,7 +382,18 @@ function AppShell() {
             />
           </div>
         )}
-        {page === "bank" && <BankRoute info={info} onRefreshInfo={refreshInfo} onError={setErr} onOpenGraphNode={(nodeId) => { setGraphFocusNodeId(nodeId); setPage("graph"); }} />}
+        {(page === "bank" || Boolean(bankOwner && bankOwner === currentUser?.id)) && (
+          <div className={cn("h-full min-h-0 min-w-0 overflow-hidden", page !== "bank" && "hidden")} aria-hidden={page !== "bank"}>
+            <BankRoute
+              key={currentUser?.id ?? "local"}
+              info={info}
+              onRefreshInfo={refreshInfo}
+              onError={setErr}
+              active={page === "bank"}
+              onOpenGraphNode={(nodeId) => { setGraphFocusNodeId(nodeId); setPage("graph"); }}
+            />
+          </div>
+        )}
         {page === "template" && <TemplateRoute info={info} onRefreshInfo={refreshInfo} onError={setErr} />}
         {page === "graph" && <GraphRoute info={info} accountId={currentUser?.id ?? null} onRefreshInfo={refreshInfo} onError={setErr} focusNodeId={graphFocusNodeId} onFocusConsumed={() => setGraphFocusNodeId(null)} />}
         {page === "papers" && (
@@ -366,16 +410,30 @@ function AppShell() {
         {page === "students" && <TeacherStudentInsightsWorkspace onError={setErr} onOpenPaper={(target) => { setPaperOpenTarget(target); setPage("papers"); }} onAssignStudent={(target) => { setStudentPracticeTarget(target); setPage("papers"); }} />}
         {page === "settings" && <SettingsWorkspace onError={setErr} userRole={currentUser?.role} onProfileUpdated={setCurrentUser} />}
         {page === "help" && <HelpWorkspace onError={setErr} />}
-        {page === "analysis" && (
-          <AnalysisWorkspace
-            allowHostTools={!platformStatus?.public_mode && currentUser?.role === "admin"}
-            ownerId={currentUser?.id ?? null} projectId={info?.bound ? info.root || info.project_id : null}
-            onOpenExamInCompose={(examId) => { setComposeOpenExamId(examId); setPage("compose"); }}
-          />
+        {(page === "analysis" || Boolean(analysisOwner && analysisOwner === currentUser?.id)) && (
+          <div className={cn("h-full min-h-0 min-w-0 overflow-hidden", page !== "analysis" && "hidden")} aria-hidden={page !== "analysis"}>
+            <AnalysisWorkspace
+              key={currentUser?.id ?? "local"}
+              active={page === "analysis"}
+              allowHostTools={!platformStatus?.public_mode && currentUser?.role === "admin"}
+              ownerId={currentUser?.id ?? null}
+              projectId={info?.bound ? info.root || info.project_id : null}
+              onOpenExamInCompose={(examId) => { setComposeOpenExamId(examId); setPage("compose"); }}
+            />
+          </div>
+        )}
+        {(page === "tools" || Boolean(toolsOwner && toolsOwner === currentUser?.id)) && (
+          <div className={cn("h-full min-h-0 min-w-0 overflow-hidden", page !== "tools" && "hidden")} aria-hidden={page !== "tools"}>
+            <ClassroomToolsWorkspace
+              key={currentUser?.id ?? "local"}
+              active={page === "tools"}
+              onError={setErr}
+            />
+          </div>
         )}
       </Suspense>
     </WorkspaceLoadBoundary>
-  ), [page, info, infoAccountId, currentUser?.id, currentUser?.role, composeOwner, composeOpenExamId, graphFocusNodeId, paperOpenTarget, studentPracticeTarget, platformStatus?.public_mode, refreshInfo, openPapersPage, onOpenExamConsumed]);
+  ), [page, info, infoAccountId, currentUser?.id, currentUser?.role, composeOwner, bankOwner, analysisOwner, toolsOwner, composeOpenExamId, graphFocusNodeId, paperOpenTarget, studentPracticeTarget, platformStatus?.public_mode, refreshInfo, openPapersPage, onOpenExamConsumed]);
 
   return (
     <div
@@ -518,6 +576,14 @@ function AppShell() {
                     mobileOverflow
                   />
                   <SidebarNavButton
+                    icon={Wrench}
+                    label={t("app:nav.tools")}
+                    active={page === "tools"}
+                    onClick={() => setPage("tools")}
+                    title={t("app:nav.toolsTitle")}
+                    mobileOverflow
+                  />
+                  <SidebarNavButton
                     icon={Sparkles}
                     label={t("app:nav.assistant")}
                     active={sidebarOpen}
@@ -598,6 +664,13 @@ function AppShell() {
                     active={page === "analysis"}
                     onClick={closeMoreAnd(() => setPage("analysis"))}
                     title={t("app:nav.analysisTitle")}
+                  />
+                  <SidebarNavButton
+                    icon={Wrench}
+                    label={t("app:nav.tools")}
+                    active={page === "tools"}
+                    onClick={closeMoreAnd(() => setPage("tools"))}
+                    title={t("app:nav.toolsTitle")}
                   />
                   <SidebarNavButton
                     icon={Sparkles}

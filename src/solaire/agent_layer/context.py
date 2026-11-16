@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from solaire.agent_layer.compactor import compact_for_llm
+from solaire.agent_layer.compactor import _json_size, compact_for_llm
 from solaire.agent_layer.llm.message_utils import ensure_assistant_tool_calls_have_reasoning as _ensure_assistant_tool_calls_have_reasoning
 from solaire.agent_layer.models import ChatMessage, SessionState
 from solaire.agent_layer.prompts import build_system_prompt, build_system_prompt_cached
@@ -49,9 +49,10 @@ def _fold_tool_outputs_outside_recent_chains(
     keep_recent: int,
     general_stub: str,
     skill_stub: str,
+    chain_spans: list[tuple[int, int]] | None = None,
 ) -> list[int]:
     """保留最近几条完整工具链的输出；更旧链内 tool.content 收紧为占位（不改变 tool_call_id / 顺序）。"""
-    spans = _tool_chain_spans(messages, start=start)
+    spans = chain_spans if chain_spans is not None else _tool_chain_spans(messages, start=start)
     if len(spans) <= keep_recent:
         return []
     protect = {(a, b) for a, b in spans[-keep_recent:]}
@@ -81,9 +82,10 @@ def _fold_reasoning_non_tool_assistants(
     *,
     start: int,
     keep_recent_tool_chains: int,
+    chain_spans: list[tuple[int, int]] | None = None,
 ) -> None:
     """对「早于最近完整工具链」的非工具助手轮次，清空 reasoning_content。"""
-    spans = _tool_chain_spans(messages, start=start)
+    spans = chain_spans if chain_spans is not None else _tool_chain_spans(messages, start=start)
     if len(spans) <= keep_recent_tool_chains:
         return
     cutoff = spans[-keep_recent_tool_chains][0]
@@ -98,43 +100,47 @@ def _fold_reasoning_non_tool_assistants(
 def _sanitize_tool_chains(messages: list[dict[str, Any]], *, start: int) -> None:
     """移除「孤儿」tool 消息（前方无 assistant+tool_calls 锚点的），
     然后为每个 assistant+tool_calls 补全缺失的 tool 响应占位；start 为非负历史起点。"""
-    # Pass 1: 删除孤儿 tool。读写游标压缩有效消息，避免逐项 pop 引起反复搬移。
+    # Rebuild the suffix once: filtering orphan responses and appending missing
+    # placeholders in-place with list.insert can otherwise shift the same tail
+    # repeatedly when a damaged history has many incomplete tool chains.
     anchor_valid = False
     if 0 < start <= len(messages):
         anchor = messages[start - 1]
         anchor_valid = anchor.get("role") == "assistant" and bool(anchor.get("tool_calls"))
-    write = start
-    for read in range(start, len(messages)):
-        message = messages[read]
-        if message.get("role") == "tool":
-            if not anchor_valid:
-                continue
-        else:
-            anchor_valid = message.get("role") == "assistant" and bool(message.get("tool_calls"))
-        messages[write] = message
-        write += 1
-    del messages[write:]
-
-    # Pass 2: 确保每个 assistant+tool_calls 的所有 tool_call_id 都有对应 tool 响应
+    sanitized = messages[:start]
     i = start
     while i < len(messages):
-        m = messages[i]
-        if m.get("role") != "assistant" or not m.get("tool_calls"):
+        message = messages[i]
+        if message.get("role") == "tool":
+            if anchor_valid:
+                sanitized.append(message)
             i += 1
             continue
-        expected_ids = {tc.get("id") for tc in m["tool_calls"] if tc.get("id")}
+
+        sanitized.append(message)
+        if message.get("role") != "assistant" or not message.get("tool_calls"):
+            anchor_valid = False
+            i += 1
+            continue
+
+        # Copy the complete existing response block in order and remove IDs as
+        # they are satisfied. Missing IDs are appended at the same boundary as
+        # before, using the same set iteration order.
+        expected_ids = {tc.get("id") for tc in message["tool_calls"] if tc.get("id")}
         j = i + 1
         while j < len(messages) and messages[j].get("role") == "tool":
+            sanitized.append(messages[j])
             expected_ids.discard(messages[j].get("tool_call_id"))
             j += 1
         for missing_id in expected_ids:
-            messages.insert(j, {
+            sanitized.append({
                 "role": "tool",
                 "tool_call_id": missing_id,
                 "content": '{"error": "结果已丢失，请重新调用相应工具。"}',
             })
-            j += 1
+        anchor_valid = True
         i = j
+    messages[:] = sanitized
 
 
 def _drop_oldest_history_segment(messages: list[dict[str, Any]], *, prefix_len: int) -> bool:
@@ -142,31 +148,30 @@ def _drop_oldest_history_segment(messages: list[dict[str, Any]], *, prefix_len: 
     if len(messages) <= prefix_len + 1:
         return False
     start = prefix_len
-    role0 = messages[start].get("role")
+    end = _history_segment_end(messages, start)
+    del messages[start:end]
+    return True
 
+
+def _history_segment_end(messages: list[dict[str, Any]], start: int) -> int:
+    """Return the end of the oldest indivisible history segment at ``start``."""
+    role0 = messages[start].get("role")
     if role0 == "tool":
         end = start
         while end < len(messages) and messages[end].get("role") == "tool":
             end += 1
-        del messages[start:end]
-        return True
-
+        return end
     if role0 == "assistant" and messages[start].get("tool_calls"):
         end = start + 1
         while end < len(messages) and messages[end].get("role") == "tool":
             end += 1
-        del messages[start:end]
-        return True
-
+        return end
     if role0 == "user":
         end = start + 1
         while end < len(messages) and messages[end].get("role") != "user":
             end += 1
-        del messages[start:end]
-        return True
-
-    del messages[start]
-    return True
+        return end
+    return start + 1
 
 
 class ContextManager:
@@ -311,12 +316,14 @@ class ContextManager:
             estimated_tokens += updated - previous
 
         if estimated_tokens > self.HISTORY_SOFT_BUDGET_TOKENS:
+            chain_spans = _tool_chain_spans(messages, start=prefix)
             changed_content_indices = _fold_tool_outputs_outside_recent_chains(
                 messages,
                 start=prefix,
                 keep_recent=self.KEEP_RECENT_TOOL_CHAINS_SOFT,
                 general_stub=stub,
                 skill_stub=stub_skill,
+                chain_spans=chain_spans,
             )
             for i in changed_content_indices:
                 previous = token_costs[i]
@@ -327,25 +334,37 @@ class ContextManager:
                 messages,
                 start=prefix,
                 keep_recent_tool_chains=self.KEEP_RECENT_TOOL_CHAINS_SOFT,
+                chain_spans=chain_spans,
             )
 
+        cursor = prefix
         while estimated_tokens > self.TOKEN_BUDGET_TOTAL and len(messages) > prefix + min_tail:
-            stubbed = False
-            for i in range(prefix, max(prefix, len(messages) - 1)):
+            for i in range(cursor, max(cursor, len(messages) - 1)):
                 m = messages[i]
                 if m.get("role") == "tool" and (m.get("content") or "") not in (stub, stub_skill):
                     _replace_content(i, stub)
-                    stubbed = True
+                    cursor = i + 1
                     break
-            if stubbed:
-                continue
-            previous_length = len(messages)
-            if not _drop_oldest_history_segment(messages, prefix_len=prefix):
+            else:
+                # All eligible tool outputs are now stubs. Predict the exact
+                # old-segment removals against the original indices, then shift
+                # the history only once instead of repeated list deletions.
+                drop_end = prefix
+                projected_len = len(messages)
+                while estimated_tokens > self.TOKEN_BUDGET_TOTAL and projected_len > prefix + min_tail:
+                    segment_end = _history_segment_end(messages, drop_end)
+                    if segment_end <= drop_end:
+                        break
+                    removed_tokens = sum(token_costs[drop_end:segment_end])
+                    estimated_tokens -= removed_tokens
+                    projected_len -= segment_end - drop_end
+                    drop_end = segment_end
+                if drop_end > prefix:
+                    del messages[prefix:drop_end]
+                    del token_costs[prefix:drop_end]
                 break
-            removed_count = previous_length - len(messages)
-            removed_tokens = sum(token_costs[prefix:prefix + removed_count])
-            del token_costs[prefix:prefix + removed_count]
-            estimated_tokens -= removed_tokens
+            if estimated_tokens <= self.TOKEN_BUDGET_TOTAL:
+                continue
 
 
 def _paper_submissions_for_llm(data: dict[str, Any]) -> dict[str, Any]:
@@ -356,6 +375,10 @@ def _paper_submissions_for_llm(data: dict[str, Any]) -> dict[str, Any]:
         return data
     items: list[dict[str, Any]] = []
     truncated = False
+    # Exact json.dumps length of the empty wrapper; each item adds its own
+    # encoded length and, after the first, the standard ", " list separator.
+    serialized_items_size = _json_size({"items": []})
+    max_serialized_items_size = 8500
     for raw in raw_items[:100]:
         if not isinstance(raw, dict):
             continue
@@ -411,11 +434,16 @@ def _paper_submissions_for_llm(data: dict[str, Any]) -> dict[str, Any]:
                 "reviewed_question_ids": answer_statuses["reviewed"],
                 "image_answer_count": image_answer_count,
             }
-        candidate = items + [compact_item]
-        if len(json.dumps({"items": candidate}, ensure_ascii=False, default=str)) > 8500:
+        separator_size = 2 if items else 0
+        item_size = _json_size(
+            compact_item,
+            stop_after=max_serialized_items_size - serialized_items_size - separator_size,
+        )
+        if serialized_items_size + separator_size + item_size > max_serialized_items_size:
             truncated = True
             break
         items.append(compact_item)
+        serialized_items_size += separator_size + item_size
     result: dict[str, Any] = {
         "items": items,
         "total": len(raw_items),

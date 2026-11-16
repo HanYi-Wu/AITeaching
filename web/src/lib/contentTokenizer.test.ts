@@ -59,6 +59,14 @@ describe("tokenizeContent", () => {
     expect(image.type === "image" && `:::${image.kind}:${image.path}:::`).toBe(raw);
   });
 
+  it("keeps image placeholders opaque when an opening math delimiter is unclosed", () => {
+    expect(tokenizeContent("$before :::EMBED_IMG:/math.png::: after")).toEqual([
+      { type: "text", content: "$before " },
+      { type: "image", kind: "EMBED_IMG", path: "/math.png", raw: ":::EMBED_IMG:/math.png:::" },
+      { type: "text", content: " after" },
+    ]);
+  });
+
   it("Mermaid 围栏", () => {
     const src = "graph TD\n  A --> B";
     const result = tokenizeContent("图表：\n```mermaid\n" + src + "\n```\n完毕");

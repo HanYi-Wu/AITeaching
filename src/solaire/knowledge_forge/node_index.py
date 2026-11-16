@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from solaire.knowledge_forge.models import ConceptNode, GraphState
 from solaire.knowledge_forge.storage import _load_meta
-from solaire.knowledge_forge.storage import _load_subject_state
+from solaire.knowledge_forge.storage import _load_subject_state_snapshot
 from solaire.knowledge_forge.paths import _slugify_name
 from solaire.knowledge_forge.subjects import create_graph
 from solaire.knowledge_forge.migration import ensure_graph_layout
@@ -18,21 +19,28 @@ def _collect_node_ids_and_kinds(project_root: Path) -> tuple[set[str], dict[str,
     all_ids: set[str] = set()
     kinds: dict[str, str] = {}
     for sm in meta.subjects:
-        state = _load_subject_state(project_root, sm.slug)
+        state = _load_subject_state_snapshot(project_root, sm.slug)
         for n in state.nodes:
             all_ids.add(n.id)
             kinds[n.id] = n.node_kind
     return all_ids, kinds
 
 
-def _find_node_slug(project_root: Path, node_id: str) -> str | None:
-    """找到节点所在的科目 slug。"""
+def _find_node_state(project_root: Path, node_id: str) -> tuple[str, GraphState, ConceptNode] | None:
+    """Find the first matching node and its cache-owned subject snapshot."""
     meta = _load_meta(project_root)
     for sm in meta.subjects:
-        state = _load_subject_state(project_root, sm.slug)
-        if any(n.id == node_id for n in state.nodes):
-            return sm.slug
+        state = _load_subject_state_snapshot(project_root, sm.slug)
+        for node in state.nodes:
+            if node.id == node_id:
+                return sm.slug, state, node
     return None
+
+
+def _find_node_slug(project_root: Path, node_id: str) -> str | None:
+    """找到节点所在的科目 slug。"""
+    match = _find_node_state(project_root, node_id)
+    return match[0] if match is not None else None
 
 
 def generate_unique_node_id(project_root: Path, parent_node_id: str, canonical_name: str) -> str:

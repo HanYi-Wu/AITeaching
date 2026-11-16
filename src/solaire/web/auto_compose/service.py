@@ -129,7 +129,7 @@ def generate_paper(root: Path, body: AutoComposeBody) -> dict[str, Any]:
     if not types_met:
         warnings.append("题型比例未完全达标，请查看各小节的缺题数量。")
     unknown_count = actual_difficulty["unknown"]
-    if unknown_count:
+    if difficulty_target and unknown_count:
         warnings.append(f"已选 {unknown_count} 道题未标注可识别的难度，单独计入“未标注”。")
     goals_met = count_met and difficulty_met and coverage_met and types_met
     duplicate_report = _duplicates(bank, history, [item.qid for item in flat], body.similarity_threshold, scan_warnings)

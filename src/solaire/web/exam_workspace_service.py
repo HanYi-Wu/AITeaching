@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from contextlib import closing
+import os
 from pathlib import Path
+import stat
 from typing import Any
 
 import yaml
@@ -41,7 +43,9 @@ from solaire.web.exam_workspaces.paths import (
 )
 from solaire.web.exam_workspaces.persistence import (
     _default_config,
+    _iter_exam_workspace_dirs,
     _read_config,
+    _read_config_file,
     _write_config,
     _write_exam_yaml,
     assert_unique_exam_identity,
@@ -50,6 +54,7 @@ from solaire.web.exam_workspaces.persistence import (
     load_exam_workspace,
     mark_exported,
     persist_exam_document,
+    _workspace_read_paths,
 )
 
 __all__ = [
@@ -93,6 +98,56 @@ __all__ = [
 ]
 
 
+def _project_workspace_listing_row(
+    exam_id: str,
+    config: dict[str, Any] | None,
+    legacy_yaml: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str]:
+    if config:
+        row = {
+            "exam_id": exam_id,
+            "name": str(config.get("display_name") or exam_id),
+            "subject": str(config.get("subject") or ""),
+            "export_label": str(config.get("exam_label") or ""),
+            "template_ref": None,
+            "template_path": None,
+            "updated_at": str(config.get("updated_at") or ""),
+        }
+        status = str(config.get("status") or "draft")
+        return row, status if status in ("draft", "exported") else "draft"
+
+    legacy = legacy_yaml or {}
+    return (
+        {
+            "exam_id": exam_id,
+            "name": str(legacy.get("name") or exam_id),
+            "subject": str(legacy.get("subject") or ""),
+            "export_label": str(legacy.get("export_label") or ""),
+            "template_ref": legacy.get("template_ref"),
+            "template_path": legacy.get("template_path"),
+            "updated_at": str(legacy.get("updated_at") or ""),
+        },
+        "draft",
+    )
+
+
+def _workspace_artifact_flags(directory: Path) -> tuple[bool, bool]:
+    has_pdf = False
+    has_docx = False
+    try:
+        for artifact in directory.iterdir():
+            name = os.path.normcase(artifact.name)
+            if not has_pdf and name.endswith(os.path.normcase(".pdf")):
+                has_pdf = True
+            if not has_docx and name.endswith(os.path.normcase(".docx")):
+                has_docx = True
+            if has_pdf and has_docx:
+                break
+    except OSError:
+        return False, False
+    return has_pdf, has_docx
+
+
 def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
     """Newest ``updated_at`` first."""
     from solaire.common.actor_context import actor
@@ -113,74 +168,50 @@ def list_exam_workspaces(project_root: Path) -> list[dict[str, Any]]:
     root = _exams_root(project_root)
     if not root.is_dir():
         return []
-    rows: list[tuple[float, dict[str, Any], bool]] = []
-    for label_dir in root.iterdir():
-        if not label_dir.is_dir():
+    rows: list[tuple[float, dict[str, Any], bool, Path]] = []
+    for eid, subj_dir in _iter_exam_workspace_dirs(root):
+        if eid.casefold() in hidden:
             continue
-        for subj_dir in label_dir.iterdir():
-            if not subj_dir.is_dir():
+        try:
+            config_path, yp = _workspace_read_paths(project_root, eid)
+            cfg = _read_config_file(config_path)
+        except (PermissionError, ValueError):
+            continue
+        try:
+            yaml_stat = yp.stat()
+            if not stat.S_ISREG(yaml_stat.st_mode):
                 continue
-            eid = f"{label_dir.name}/{subj_dir.name}"
-            if eid.casefold() in hidden:
-                continue
-            try:
-                cfg = _read_config(project_root, eid)
-                yp = exam_yaml_path(project_root, eid)
-            except (PermissionError, ValueError):
-                continue
-            if not yp.is_file():
-                continue
-            try:
-                mtime = yp.stat().st_mtime
-                template_ref = None
-                template_path = None
-                needs_template_read = bool(cfg)
-                if cfg:
-                    updated = str(cfg.get("updated_at") or "")
-                    status = str(cfg.get("status") or "draft")
-                    display = str(cfg.get("display_name") or eid)
-                    el = str(cfg.get("exam_label") or "")
-                    sub = str(cfg.get("subject") or "")
-                else:
-                    with yp.open(encoding="utf-8") as f:
-                        raw = safe_load_yaml(f)
-                    if not isinstance(raw, dict):
-                        continue
-                    template_ref = raw.get("template_ref")
-                    template_path = raw.get("template_path")
-                    updated = str(raw.get("updated_at") or "")
-                    status = "draft"
-                    display = str(raw.get("name") or eid)
-                    el = str(raw.get("export_label") or "")
-                    sub = str(raw.get("subject") or "")
-                rows.append(
-                    (
-                        mtime,
-                        {
-                            "exam_id": eid,
-                            "name": display,
-                            "subject": sub,
-                            "export_label": el,
-                            "template_ref": template_ref,
-                            "template_path": template_path,
-                            "updated_at": updated,
-                            "has_pdf": any(subj_dir.glob("*.pdf")),
-                            "has_docx": any(subj_dir.glob("*.docx")),
-                            "status": status if status in ("draft", "exported") else "draft",
-                        },
-                        needs_template_read,
-                    ),
-                )
-            except OSError:
-                continue
+            needs_template_read = bool(cfg)
+            legacy_raw = None
+            if not cfg:
+                with yp.open(encoding="utf-8") as f:
+                    raw = safe_load_yaml(f)
+                if not isinstance(raw, dict):
+                    continue
+                legacy_raw = raw
+            row, status = _project_workspace_listing_row(eid, cfg, legacy_raw)
+            has_pdf, has_docx = _workspace_artifact_flags(subj_dir)
+            rows.append(
+                (
+                    yaml_stat.st_mtime,
+                    {
+                        **row,
+                        "has_pdf": has_pdf,
+                        "has_docx": has_docx,
+                        "status": status,
+                    },
+                    needs_template_read,
+                    yp,
+                ),
+            )
+        except OSError:
+            continue
     rows.sort(key=lambda x: x[0], reverse=True)
     out = [r[1] for r in rows]
     for row in out:
         _fill_identity_from_exam_path_fields(row, str(row["exam_id"]))
-    for _, row, needs_template_read in rows:
+    for _, row, needs_template_read, yp in rows:
         if needs_template_read:
-            eid = row["exam_id"]
-            yp = exam_yaml_path(project_root, eid)
             try:
                 with yp.open(encoding="utf-8") as f:
                     raw = safe_load_yaml(f)

@@ -8,6 +8,7 @@ import {
   createTableWidget,
   escapeHtml,
   getSerializedCaretOffset,
+  getSerializedSelectionOffsets,
   isCollapsedCaretAtEditorEnd,
   isWidget,
   renderMathHtml,
@@ -126,6 +127,71 @@ describe("contentPreview", () => {
     r2.collapse(true);
     // prefix (7) + $x+y$ (5) + ' s' (2) = 14
     expect(getSerializedCaretOffset(root, r2)).toBe(14);
+  });
+
+  it("serializes content and maps both selection endpoints consistently", () => {
+    const root = document.createElement("div");
+    const prefix = document.createTextNode("left");
+    const formula = createMathWidget("x+y");
+    const lineBreak = document.createElement("br");
+    const block = document.createElement("span");
+    const tail = document.createTextNode("right");
+    block.appendChild(tail);
+    root.append(prefix, formula, lineBreak, block);
+
+    const selection = document.createRange();
+    selection.setStart(prefix, 2);
+    selection.setEnd(tail, 3);
+
+    expect(serializeEditor(root)).toBe("left$x+y$\nright");
+    expect(getSerializedSelectionOffsets(root, selection)).toEqual({ start: 2, end: 13 });
+  });
+
+  it("retains widget, break, root-boundary, and generic-element caret mappings", () => {
+    const root = document.createElement("div");
+    const prefix = document.createTextNode("a");
+    const formula = createMathWidget("x");
+    const lineBreak = document.createElement("br");
+    const nested = document.createElement("span");
+    const tail = document.createTextNode("z");
+    nested.appendChild(tail);
+    root.append(prefix, formula, lineBreak, nested);
+
+    const offsetAt = (container: Node, offset: number) => {
+      const range = document.createRange();
+      range.setStart(container, offset);
+      range.collapse(true);
+      return getSerializedCaretOffset(root, range);
+    };
+
+    expect(offsetAt(root, 1)).toBe(1);
+    expect(offsetAt(formula, 0)).toBe(1);
+    expect(offsetAt(formula, 1)).toBe(4);
+    expect(offsetAt(lineBreak, 0)).toBe(4);
+    // Generic element endpoints retain the prior end-of-document fallback.
+    expect(offsetAt(nested, 0)).toBe(6);
+    expect(offsetAt(tail, 0)).toBe(5);
+    expect(offsetAt(tail, 1)).toBe(6);
+  });
+
+  it("keeps the start-only caret lookup from walking to a distant selection end", () => {
+    const root = document.createElement("div");
+    const prefix = document.createTextNode("prefix");
+    const distant = document.createElement("span");
+    const tail = document.createTextNode("tail");
+    distant.appendChild(tail);
+    root.append(prefix, distant);
+    const selection = document.createRange();
+    selection.setStart(prefix, 2);
+    selection.setEnd(tail, 2);
+    Object.defineProperty(distant, "childNodes", {
+      configurable: true,
+      get() {
+        throw new Error("start-only lookup traversed past its endpoint");
+      },
+    });
+
+    expect(getSerializedCaretOffset(root, selection)).toBe(2);
   });
 
   it("recognizes only a collapsed caret at the serialized end across nested blocks, formulas, and trailing breaks", () => {

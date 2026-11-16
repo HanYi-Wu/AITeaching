@@ -44,7 +44,13 @@ import { notifyContentLibraryChanged } from "../../lib/contentEvents";
 import { downloadPlatformBlob, listTaggedItems, type ContentTag } from "../../platform/auth";
 import { loadSessionToken } from "../../platform/session";
 import { isChoiceQuestionType } from "../../lib/questionTypes";
-import { defaultItemsForNewGroup, type BankListItem } from "./bankModel";
+import {
+  defaultItemsForNewGroup,
+  extractQuestionNamespace,
+  nextSequentialQuestionId,
+  validateQuestionIdInCollection,
+  type BankListItem,
+} from "./bankModel";
 import { pruneStaleSelection } from "./bankOperationModel";
 import { useBankList } from "./useBankList";
 import { BankToolbar } from "./BankToolbar";
@@ -56,15 +62,18 @@ import "../../ui-redesign/g48/g48-bank.css";
 const ignoreDraftChanges = (_listener: () => void) => () => undefined;
 
 function BankPageContextSync({
+  active = true,
   selectedId,
   draftStore,
   setPageContext,
 }: {
+  active?: boolean;
   selectedId: string | null;
   draftStore: BankEditorDraftStore;
   setPageContext: ReturnType<typeof useAgentActions>["setPageContext"];
 }) {
   const { t } = useTranslation(["bank"]);
+  const wasActiveRef = useRef(active);
   const { detail } = useSyncExternalStore(
     draftStore.subscribe,
     draftStore.getSnapshot,
@@ -72,6 +81,15 @@ function BankPageContextSync({
   );
 
   useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (wasActive && !active) {
+      setPageContext(null);
+    }
+  }, [active, setPageContext]);
+
+  useEffect(() => {
+    if (!active) return;
     const timer = window.setTimeout(() => {
       if (selectedId && detail?.qualified_id === selectedId) {
         const raw = typeof detail.question?.content === "string" ? detail.question.content : detail.qualified_id;
@@ -91,7 +109,7 @@ function BankPageContextSync({
       }
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [selectedId, detail, setPageContext, t]);
+  }, [active, selectedId, detail, setPageContext, t]);
 
   useEffect(() => () => setPageContext(null), [setPageContext]);
   return null;
@@ -205,6 +223,8 @@ function BankQuestionPreview({
 export function BankWorkspace(props: {
   onError: (s: string | null) => void;
   onOpenGraphNode?: (nodeId: string) => void;
+  active?: boolean;
+  projectScope?: string | null;
 }) {
   const sessionScope = loadSessionToken() ?? "local-session";
   return <BankWorkspaceSession key={sessionScope} {...props} />;
@@ -213,16 +233,23 @@ export function BankWorkspace(props: {
 function BankWorkspaceSession({
   onError,
   onOpenGraphNode,
+  active = true,
+  projectScope = null,
 }: {
   onError: (s: string | null) => void;
   onOpenGraphNode?: (nodeId: string) => void;
+  active?: boolean;
+  projectScope?: string | null;
 }) {
   const { t } = useTranslation(["bank", "lib", "common"]);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const listErrorRef = useRef<string | null>(null);
   const bankListRefreshSourceRef = useRef<object>({});
   const handleBankListError = useCallback(
     (msg: string | null) => {
       listErrorRef.current = msg;
+      if (!activeRef.current && msg !== null) return;
       onError(msg);
     },
     [onError]
@@ -249,6 +276,8 @@ function BankWorkspaceSession({
     setSearchInput,
     commitSearch,
     graphLinkIndex,
+    loading,
+    hasLoaded,
     loadList,
     metadataFilterDefinitions,
     filtered,
@@ -256,7 +285,17 @@ function BankWorkspaceSession({
   } = useBankList({
     onError: handleBankListError,
     ignoreContentChangeSource: bankListRefreshSourceRef.current,
+    projectScope,
   });
+
+  const wasActiveRef = useRef(active);
+  useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (!wasActive && active) {
+      void loadList();
+    }
+  }, [active, loadList]);
 
   const robustLoadList = useCallback(async () => {
     listErrorRef.current = null;
@@ -321,15 +360,35 @@ function BankWorkspaceSession({
     return detailState;
   }, []);
 
+  const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
+  /** 已打开的题目标签（多窗口编辑） */
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
+  const skipReloadSelectedIdRef = useRef<string | null>(null);
+
+  const handleQuestionRenamed = useCallback((oldQid: string, newQid: string) => {
+    skipReloadSelectedIdRef.current = newQid;
+    setOpenTabs((prev) => {
+      const next = prev.map((id) => (id === oldQid ? newQid : id));
+      return Array.from(new Set(next));
+    });
+    setSelectedExportIds((prev) => {
+      const next = prev.map((id) => (id === oldQid ? newQid : id));
+      return Array.from(new Set(next));
+    });
+  }, []);
+
   const putItemApi = useCallback(
     async (qid: string, body: unknown, headers?: Record<string, string>) => {
       const enc = encodeURIComponent(qid);
       return headers
-        ? apiPut<{ version?: string }>(`/api/bank/items/${enc}`, body, headers)
-        : apiPut<{ version?: string }>(`/api/bank/items/${enc}`, body);
+        ? apiPut<{ version?: string; qualified_id?: string }>(`/api/bank/items/${enc}`, body, headers)
+        : apiPut<{ version?: string; qualified_id?: string }>(`/api/bank/items/${enc}`, body);
     },
     []
   );
+
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   const {
     selectedId,
@@ -363,6 +422,16 @@ function BankWorkspaceSession({
     fetchDetailApi: fetchDetail,
     putItemApi,
     refreshListApi: refreshListAndNotify,
+    onQuestionRenamed: handleQuestionRenamed,
+    validateBeforeSave: (currentDetail, source) => {
+      if (source !== "form" || currentDetail.question_group) return null;
+      return validateQuestionIdInCollection({
+        items: itemsRef.current,
+        subject: extractQuestionNamespace(currentDetail.qualified_id),
+        rawId: currentDetail.question.id,
+        excludeQualifiedId: currentDetail.qualified_id,
+      });
+    },
   });
 
   const {
@@ -393,13 +462,10 @@ function BankWorkspaceSession({
   }, []);
   useEffect(() => refreshTags(), [refreshTags]);
 
-  const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
   const [mobileBankPanel, setMobileBankPanel] = useState<"list" | "editor">("list");
   const [bankListCollapsed, setBankListCollapsed] = useState(false);
   const bankListInnerRef = useCollapsedPanelInert(bankListCollapsed, 1024);
   const mobileBankPanelRef = useRef<HTMLDivElement>(null);
-  /** 已打开的题目标签（多窗口编辑） */
-  const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [opBusy, setOpBusy] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
   const busy = opBusy || imageBusy || saving || importBusy;
@@ -412,7 +478,23 @@ function BankWorkspaceSession({
   const [manageDraftCollection, setManageDraftCollection] = useState("");
   const [newSubject, setNewSubject] = useState(() => i18n.t("bank:defaultSubject"));
   const [newCollection] = useState("默认");
-  const [newId, setNewId] = useState("new_question_001");
+  const [newIdEdited, setNewIdEdited] = useState(false);
+  const [newId, setNewIdState] = useState(() =>
+    nextSequentialQuestionId([], i18n.t("bank:defaultSubject"), "默认")
+  );
+  const suggestedNewId = useMemo(
+    () => nextSequentialQuestionId(items, newSubject, newCollection),
+    [items, newSubject, newCollection]
+  );
+  useEffect(() => {
+    if (!newIdEdited && newId !== suggestedNewId) {
+      setNewIdState(suggestedNewId);
+    }
+  }, [newIdEdited, newId, suggestedNewId]);
+  const handleNewIdChange = useCallback((next: string) => {
+    setNewIdEdited(true);
+    setNewIdState(next);
+  }, []);
   const [newType, setNewType] = useState("single_choice");
   /** 新建题组：混编或同型 */
   const [newGroupUnified, setNewGroupUnified] = useState<string>("single_choice");
@@ -481,6 +563,28 @@ function BankWorkspaceSession({
     return () => window.removeEventListener("keydown", onKey);
   }, [bankManageOpen]);
 
+  useEffect(() => {
+    if (!pendingDeleteItem) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) {
+        setPendingDeleteItem(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pendingDeleteItem, busy]);
+
+  useEffect(() => {
+    if (!editorModalOpen || pendingDeleteItem || mathOpen || mermaidOpen || primeBrushOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) {
+        setEditorModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editorModalOpen, pendingDeleteItem, mathOpen, mermaidOpen, primeBrushOpen, busy]);
+
   /** 导入目标科目：接口科目 + 列表中已出现的科目 */
   const importSubjectList = useMemo(() => {
     const fromItems = [...new Set(items.map((i) => i.subject).filter(Boolean) as string[])];
@@ -516,6 +620,14 @@ function BankWorkspaceSession({
       setEditorModalOpen(false);
       return;
     }
+    if (skipReloadSelectedIdRef.current === selectedId) {
+      void Promise.resolve().then(() => {
+        if (skipReloadSelectedIdRef.current === selectedId) {
+          skipReloadSelectedIdRef.current = null;
+        }
+      });
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
@@ -536,11 +648,22 @@ function BankWorkspaceSession({
   }, [selectedId, loadQuestionDetail, clearSessionDraft, onError]);
 
   async function createQuestion() {
-    setOpBusy(true);
-    onError(null);
     const subj = newSubject.trim();
     const coll = newCollection.trim();
     const qid = newId.trim();
+    const createIdError = validateQuestionIdInCollection({
+      items,
+      subject: subj,
+      collection: coll,
+      rawId: newId,
+      groupMemberCount: newType === "group" ? 1 : 0,
+    });
+    if (createIdError) {
+      onError(createIdError);
+      return false;
+    }
+    setOpBusy(true);
+    onError(null);
     try {
       let body: { subject: string; collection: string; question: QuestionJson | QuestionGroupJson };
       if (newType === "group") {
@@ -574,6 +697,7 @@ function BankWorkspaceSession({
       }
       const r = await apiPost<{ ok: boolean; qualified_id: string }>("/api/bank/items", body);
       await loadList();
+      setNewIdEdited(false);
       notifyContentLibraryChanged("question");
       openModalAfterCreateRef.current = true;
       setOpenTabs((prev) => (prev.includes(r.qualified_id) ? prev : [...prev, r.qualified_id]));
@@ -599,6 +723,8 @@ function BankWorkspaceSession({
       }
       if (recovered) {
         await loadList();
+        setNewIdEdited(false);
+        notifyContentLibraryChanged("question");
         openModalAfterCreateRef.current = true;
         setOpenTabs((prev) => (prev.includes(qualifiedId) ? prev : [...prev, qualifiedId]));
         clearSessionDraft();
@@ -894,6 +1020,7 @@ function BankWorkspaceSession({
   }, [workView, setEditorTab]);
 
   useEffect(() => {
+    if (!active) return;
     const onSave = () => {
       if (!draftRef.current.selectedId || !getCurrentDraftDetail() || !isCurrentDraftDirty()) return;
       if (editorModalOpen) {
@@ -906,7 +1033,7 @@ function BankWorkspaceSession({
     };
     window.addEventListener(SOLAIRE_SAVE_EVENT, onSave);
     return () => window.removeEventListener(SOLAIRE_SAVE_EVENT, onSave);
-  }, [draftRef, getCurrentDraftDetail, isCurrentDraftDirty, workView, editorModalOpen, editorTab, saveModalEditor]);
+  }, [active, draftRef, getCurrentDraftDetail, isCurrentDraftDirty, workView, editorModalOpen, editorTab, saveModalEditor]);
 
   const tabItems: TabItem[] = useMemo(
     () =>
@@ -938,11 +1065,13 @@ function BankWorkspaceSession({
   return (
     <>
       <BankPageContextSync
+        active={active}
         selectedId={selectedId}
         draftStore={draftStore}
         setPageContext={setPageContext}
       />
       <BankToolbar
+        active={active}
         busy={busy}
         selectedExportIds={selectedExportIds}
         onExport={doExportSelection}
@@ -968,7 +1097,7 @@ function BankWorkspaceSession({
         newSubjectSelectValue={newSubjectSelectValue}
         newCollection={newCollection}
         newId={newId}
-        setNewId={setNewId}
+        setNewId={handleNewIdChange}
         newType={newType}
         setNewType={setNewType}
         newGroupUnified={newGroupUnified}
@@ -1043,6 +1172,7 @@ function BankWorkspaceSession({
               onRefresh={loadList}
               onError={onError}
               busy={busy}
+              loading={!hasLoaded || (loading && items.length === 0)}
               graphLinkIndex={graphLinkIndex}
               taggedItems={taggedItems}
               onOpenGraphNode={onOpenGraphNode}
@@ -1162,6 +1292,7 @@ function BankWorkspaceSession({
                       panelMode="form"
                       detail={detail}
                       setDetail={setDetail}
+                      existingItems={items}
                       draftStore={draftStore}
                       busy={busy}
                       editorTab="form"
@@ -1195,6 +1326,7 @@ function BankWorkspaceSession({
                       panelMode="yaml"
                       detail={detail}
                       setDetail={setDetail}
+                      existingItems={items}
                       draftStore={draftStore}
                       busy={busy}
                       editorTab="yaml"
@@ -1229,13 +1361,16 @@ function BankWorkspaceSession({
 
       {detail && editorModalOpen && (
         <div
-          className="or-dialog-backdrop fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 backdrop-blur-xs p-4"
-          onClick={() => setEditorModalOpen(false)}
+          className="or-dialog-backdrop fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/40 backdrop-blur-xs p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !busy) {
+              setEditorModalOpen(false);
+            }
+          }}
           role="presentation"
         >
           <div
-            className="or-dialog or-g48-dialog mt-4 w-full max-w-3xl max-h-[min(92vh,100%)] overflow-y-auto p-4"
-            onClick={(e) => e.stopPropagation()}
+            className="or-dialog or-g48-dialog w-full max-w-3xl max-h-[min(92vh,100%)] overflow-y-auto p-4"
             role="dialog"
             aria-modal="true"
           >
@@ -1243,6 +1378,7 @@ function BankWorkspaceSession({
             <BankQuestionEditorPanel
               detail={detail}
               setDetail={setDetail}
+              existingItems={items}
               draftStore={draftStore}
               busy={busy}
               editorTab={editorTab}
@@ -1273,7 +1409,7 @@ function BankWorkspaceSession({
 
       {bankManageOpen ? (
         <div
-          className="or-dialog-backdrop fixed inset-0 z-[90] flex items-center justify-center bg-[color-mix(in_srgb,var(--or-primary)_40%,transparent)] backdrop-blur-xs p-4"
+          className="or-dialog-backdrop fixed inset-0 z-[90] flex items-center justify-center bg-black/45 backdrop-blur-xs p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="bank-manage-title"
@@ -1355,7 +1491,7 @@ function BankWorkspaceSession({
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
                             <p className="font-semibold text-sm text-[var(--or-text)]">{c.label}</p>
-                            <p className="font-mono text-[13px] text-[var(--or-muted)]">{c.id}</p>
+                            <p className="text-[13px] text-[var(--or-muted)]">{c.id}</p>
                           </div>
                           <div className="flex shrink-0 gap-1.5">
                             <button
@@ -1395,10 +1531,15 @@ function BankWorkspaceSession({
 
       {pendingDeleteItem ? (
         <div
-          className="or-dialog-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-[color-mix(in_srgb,var(--or-primary)_40%,transparent)] backdrop-blur-xs p-4"
+          className="or-dialog-backdrop fixed inset-0 z-[110] flex items-center justify-center bg-black/45 backdrop-blur-xs p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-delete-title"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !busy) {
+              setPendingDeleteItem(null);
+            }
+          }}
         >
           <div className="or-dialog or-g48-dialog w-full max-w-sm p-5">
             <h2 id="confirm-delete-title" className="text-base font-semibold text-[var(--or-text)]">

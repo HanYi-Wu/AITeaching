@@ -477,7 +477,6 @@ export function SettingsWorkspace({
 
       <div className="mt-6 border-t border-[var(--or-outline)] pt-5">
         <h3 className="text-base font-semibold text-[var(--or-text)]">修改登录密码</h3>
-        <p className="mt-1 text-xs sm:text-sm text-[var(--or-muted)]">密码至少 6 位，建议同时包含字母和数字。</p>
         <div className="mt-4 grid gap-3.5 sm:grid-cols-3">
           <label className="text-sm font-medium text-[var(--or-text)]">
             当前密码
@@ -589,18 +588,6 @@ export function SettingsWorkspace({
                   {languagePanel}
                   {personalizationPanel}
 
-                  {data ? (
-                    data.persist_scope === "global" ? (
-                      <div className="rounded-[12px] border border-[var(--or-outline)] bg-[var(--or-block)] px-4 py-2.5 text-sm text-[var(--or-text)]">
-                        {t("settings:saveScopeGlobalHint")}
-                      </div>
-                    ) : (
-                      <div className="rounded-[12px] border border-[var(--or-outline)] bg-[var(--or-block)] px-4 py-2.5 text-sm text-[var(--or-text)]">
-                        {t("settings:saveScopeProjectHint")}
-                      </div>
-                    )
-                  ) : null}
-
                   <AgentModelSettingsForm
                     ref={modelFormRef}
                     variant="settings"
@@ -613,7 +600,6 @@ export function SettingsWorkspace({
 
                   <div className="or-surface rounded-[16px] border border-[var(--or-outline)] bg-[var(--or-card)] p-4 sm:p-6 shadow-sm">
                     <label className="block text-base font-semibold text-[var(--or-text)]">{t("settings:safetyTitle")}</label>
-                    <p className="mt-1 text-xs sm:text-sm text-[var(--or-muted)]">{t("settings:safetyHint")}</p>
                     <div className="mt-3.5 space-y-2.5">
                       {safetyOptions.map((op) => {
                         const isSelected = safetyMode === op.id;
