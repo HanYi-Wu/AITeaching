@@ -57,6 +57,7 @@
   },
   "moveUp": "上移选中项",
   "moveDown": "下移选中项",
+  "addShort": "加入",
   "removeShort": "删除",
   "moveUpShort": "上移",
   "moveDownShort": "下移",

@@ -32,6 +32,7 @@ def test_precompressed_hashed_assets_and_uncached_html(tmp_path, monkeypatch):
 def test_static_assets_spa_missing_files_and_release_identity(tmp_path, monkeypatch):
     (tmp_path / 'index.html').write_text('EducationHelper')
     (tmp_path / 'asset.js').write_text('asset')
+    (tmp_path / 'classroom-tools.html').write_text('OriginReach Classroom Tools')
     (tmp_path / '.secret').write_text('private')
     monkeypatch.setattr(frontend, 'ROOT', tmp_path)
     monkeypatch.setenv('EH_RELEASE_ID', 'release-test')
@@ -39,6 +40,10 @@ def test_static_assets_spa_missing_files_and_release_identity(tmp_path, monkeypa
         assert client.get('/').text == 'EducationHelper'
         assert client.get('/teacher/papers').text == 'EducationHelper'
         assert client.get('/asset.js').text == 'asset'
+        download = client.get('/classroom-tools.html')
+        assert download.text == 'OriginReach Classroom Tools'
+        assert download.headers['content-disposition'] == 'attachment'
+        assert download.headers['content-security-policy'] == 'sandbox allow-scripts'
         assert client.get('/missing.js').status_code == 404
         assert client.get('/.secret').status_code == 404
         assert client.get('/_eh_release').json() == {'release_id': 'release-test'}

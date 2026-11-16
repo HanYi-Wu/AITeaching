@@ -1,6 +1,9 @@
 {
   "title": "Classroom tools",
-  "subtitle": "Random student selector and countdown timer that stay active across workspace tabs",
+  "offline": {
+    "downloadLabel": "Download offline copy",
+    "filename": "OriginReach Classroom Tools.html"
+  },
   "tabs": {
     "rollCall": "Roll call",
     "timer": "Timer"

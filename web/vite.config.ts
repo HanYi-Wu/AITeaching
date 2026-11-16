@@ -5,6 +5,7 @@ import { cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "nod
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { classroomToolsDownload } from "./vite.classroom-tools.ts";
 
 function configValue(key: string): string | undefined {
   if (process.env[key]) return process.env[key];
@@ -23,7 +24,7 @@ const apiProxy = {
 };
 
 export default defineConfig({
-  plugins: [react(), {
+  plugins: [react(), classroomToolsDownload(), {
     name: "local-pdf-font-assets",
     configResolved(config) {
       for (const directory of ["cmaps", "standard_fonts", "wasm"]) {
@@ -35,7 +36,7 @@ export default defineConfig({
   }, {
     name: 'precompressed-static-assets-and-build-stamp',
     apply: 'build',
-    closeBundle() {
+    writeBundle() {
       const root = path.resolve('.');
       const repoRoot = path.resolve('..');
       const excludedDirs = new Set(['dist', 'node_modules', '.git', '.turbo', '.vite', '.cache', 'coverage', '__pycache__', 'pdfjs']);

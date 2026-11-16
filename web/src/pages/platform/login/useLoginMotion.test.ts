@@ -68,25 +68,19 @@ describe("useLoginMotion", () => {
     vi.useRealTimers();
   });
 
-  it("plays the desktop splash, diagonal slice, and card reveal on the reference timeline", async () => {
+  it("starts the desktop login ready without a delayed splash", async () => {
     vi.useFakeTimers();
     setupMedia();
     setupAnimationFrames();
 
     const { result } = renderHook(() => useLoginMotion());
-    expect(result.current.phase).toBe("splash");
+    expect(result.current.phase).toBe("ready");
 
-    await act(async () => vi.advanceTimersByTimeAsync(1000));
-    expect(result.current.phase).toBe("brand-exit");
-
-    await act(async () => vi.advanceTimersByTimeAsync(440));
-    expect(result.current.phase).toBe("revealing");
-
-    await act(async () => vi.advanceTimersByTimeAsync(730));
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
     expect(result.current.phase).toBe("ready");
   });
 
-  it("renders the splash phase on the first commit when motion is allowed", () => {
+  it("renders the ready phase on the first commit when motion is allowed", () => {
     setupMedia(false, false);
     setupAnimationFrames();
     const renderedPhases: string[] = [];
@@ -97,8 +91,8 @@ describe("useLoginMotion", () => {
       return motion;
     });
 
-    expect(renderedPhases[0]).toBe("splash");
-    expect(result.current.phase).toBe("splash");
+    expect(renderedPhases[0]).toBe("ready");
+    expect(result.current.phase).toBe("ready");
   });
 
   it("starts ready for reduced motion and falls back to ready if motion setup is unavailable", () => {
@@ -126,10 +120,10 @@ describe("useLoginMotion", () => {
     expect(noAnimationFrame.result.current.phase).toBe("ready");
   });
 
-  it("waits 880ms before the successful PC crack and keeps it through a breakpoint change", async () => {
+  it("uses a short response hold before the reference card fade and resolves after it", async () => {
     vi.useFakeTimers();
     const media = setupMedia();
-    const frames = setupAnimationFrames();
+    setupAnimationFrames();
 
     const { result } = renderHook(() => useLoginMotion());
     let handoff!: Promise<void>;
@@ -141,33 +135,35 @@ describe("useLoginMotion", () => {
     });
 
     act(() => media.setMobile(true));
-    expect(result.current.phase).toBe("splash");
+    expect(result.current.phase).toBe("ready");
 
-    await act(async () => vi.advanceTimersByTimeAsync(879));
-    expect(result.current.phase).toBe("splash");
+    await act(async () => vi.advanceTimersByTimeAsync(84));
+    expect(result.current.phase).toBe("ready");
     expect(completed).toBe(false);
 
     await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(result.current.phase).toBe("leaving");
     expect(completed).toBe(false);
 
-    const splitStartedAt = performance.now();
-    act(() => frames.frame(splitStartedAt + 186));
+    await act(async () => vi.advanceTimersByTimeAsync(339));
     expect(completed).toBe(false);
-    act(() => frames.frame(splitStartedAt + 316));
-    await act(async () => handoff);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await handoff;
+    });
     expect(completed).toBe(true);
   });
 
-  it("stops the intro and resets to a usable login when reduced motion is enabled", async () => {
+  it("keeps the static login ready when reduced motion is enabled", async () => {
     vi.useFakeTimers();
     const media = setupMedia();
     const frames = setupAnimationFrames();
 
     const { result } = renderHook(() => useLoginMotion());
-    expect(result.current.phase).toBe("splash");
+    expect(result.current.phase).toBe("ready");
     await act(async () => vi.advanceTimersByTimeAsync(1220));
-    expect(frames.callbacks.size).toBeGreaterThan(0);
+    expect(frames.callbacks.size).toBe(0);
 
     act(() => media.setReduced(true));
     expect(frames.callbacks.size).toBe(0);

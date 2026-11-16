@@ -1,6 +1,6 @@
 import type { MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, ChevronRight, Redo2, Undo2 } from "lucide-react";
+import { AlertCircle, Redo2, Undo2 } from "lucide-react";
 import { ContentTags } from "../../components/ContentTags";
 import { KatexPlainPreview } from "../../components/KatexText";
 import { QuestionHoverDetails } from "../../components/QuestionHoverDetails";
@@ -167,12 +167,10 @@ export function ComposePaperEditorPanel({
             <button
               type="button"
               title={t("compose:addToSection")}
-              aria-label={t("compose:addToSection")}
               onClick={onAddFromLeft}
-              className="or-g49-add-from-left flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-2 text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)]"
+              className="or-g49-add-from-left inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] px-3 text-center text-xs font-medium text-[var(--or-text)] shadow-sm transition-colors hover:bg-[var(--or-page)]"
             >
-              <ChevronRight className="h-4 w-4 shrink-0" />
-              <span className="or-g49-compose-action-label whitespace-nowrap text-xs">{t("compose:addToSection")}</span>
+              <span className="whitespace-nowrap">{t("compose:addShort")}</span>
             </button>
           </>
         ) : null}

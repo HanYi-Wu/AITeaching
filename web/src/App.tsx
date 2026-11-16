@@ -138,10 +138,17 @@ function AppShell() {
   const [infoAccountId, setInfoAccountId] = useState<string | null>(null);
   const [assistantMounted, setAssistantMounted] = useState(false);
   const [platformLoading, setPlatformLoading] = useState(true);
-  const [loginHandoff, setLoginHandoff] = useState(false);
+  const [loginHandoff, setLoginHandoff] = useState<"enter" | "exit" | null>(null);
+  const [loginLeaving, setLoginLeaving] = useState(false);
+  const [logoutReturning, setLogoutReturning] = useState(false);
+  const [loginLeavingMode, setLoginLeavingMode] = useState<"bootstrap" | "login">("login");
   const [adminProjectMode, setAdminProjectMode] = useState(false);
   const projectInfoRequestId = useRef(0);
   const platformRequestId = useRef(0);
+  const loginLeavingRef = useRef(false);
+  const logoutReturningRef = useRef(false);
+  const loginHandoffRef = useRef(false);
+  loginHandoffRef.current = loginHandoff !== null;
   const assistantScope = JSON.stringify([
     currentUser?.id ?? null,
     infoAccountId === (currentUser?.id ?? "local") && info?.bound ? info.root || info.project_id || null : null,
@@ -154,7 +161,7 @@ function AppShell() {
   useLayoutEffect(() => installAppearance(currentUser), [currentUser?.id, currentUser?.preferences]);
 
   useLayoutEffect(() => {
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    if (loginHandoffRef.current || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     const animation = pageBodyRef.current?.animate?.([{ opacity: 0.6 }, { opacity: 1 }], { duration: 220, easing: "ease-in-out" });
     const stopTracking = trackWorkspaceAnimation(animation ?? null);
     return () => {
@@ -288,13 +295,51 @@ function AppShell() {
     setPage(user.role === "teacher" ? "papers" : user.role);
   }, []);
 
-  const onLoginAuthenticated = useCallback(async (user: PlatformUser) => {
-    platformRequestId.current += 1;
+  const prepareLoginWorkspace = useCallback(async (user: PlatformUser) => {
     await Promise.allSettled(preloadAuthenticatedWorkspace(user));
-    setLoginHandoff(true);
+  }, []);
+
+  const onLoginHandoffStart = useCallback((user: PlatformUser) => {
+    platformRequestId.current += 1;
+    logoutReturningRef.current = false;
+    setLogoutReturning(false);
+    loginLeavingRef.current = true;
+    loginHandoffRef.current = true;
+    setLoginLeavingMode(platformRouteRef.current === "bootstrap" ? "bootstrap" : "login");
+    setLoginLeaving(true);
+    setLoginHandoff("enter");
     onAuthenticated(user);
   }, [onAuthenticated]);
-  const finishLoginHandoff = useCallback(() => setLoginHandoff(false), []);
+
+  const onLoginAuthenticated = useCallback(async (user: PlatformUser) => {
+    logoutReturningRef.current = false;
+    setLogoutReturning(false);
+    if (loginLeavingRef.current) {
+      loginLeavingRef.current = false;
+      setLoginLeaving(false);
+      return;
+    }
+    platformRequestId.current += 1;
+    await prepareLoginWorkspace(user);
+    loginHandoffRef.current = true;
+    setLoginHandoff("enter");
+    onAuthenticated(user);
+  }, [onAuthenticated, prepareLoginWorkspace]);
+
+  const finishLoginHandoff = useCallback(() => {
+    if (logoutReturningRef.current) {
+      logoutReturningRef.current = false;
+      setLogoutReturning(false);
+      loginHandoffRef.current = false;
+      setLoginHandoff(null);
+      setCurrentUser(null);
+      setAdminProjectMode(false);
+      setPage("papers");
+      return;
+    }
+    loginHandoffRef.current = false;
+    setLoginHandoff(null);
+  }, []);
 
   const onManagementProfileUpdated = useCallback((profile: PlatformUser) => {
     setCurrentUser((current) => current?.id === profile.id ? { ...current, ...profile } : current);
@@ -308,11 +353,33 @@ function AppShell() {
     setToolsOwner(null);
     setAssistantMounted(false);
     platformRequestId.current += 1;
-    setCurrentUser(null);
-    setAdminProjectMode(false);
-    setPage("papers");
+    loginLeavingRef.current = false;
+    setLoginLeaving(false);
+
+    const canAnimate =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (!canAnimate) {
+      logoutReturningRef.current = false;
+      setLogoutReturning(false);
+      loginHandoffRef.current = false;
+      setLoginHandoff(null);
+      setCurrentUser(null);
+      setAdminProjectMode(false);
+      setPage("papers");
+      setSidebarOpen(false);
+      await logoutPlatform();
+      return;
+    }
+
+    logoutReturningRef.current = true;
+    loginHandoffRef.current = true;
+    setLogoutReturning(true);
+    setLoginHandoff("exit");
     setSidebarOpen(false);
-    await logoutPlatform();
+    void logoutPlatform();
   }, [setSidebarOpen]);
 
   const openPapersPage = useCallback(() => {
@@ -329,6 +396,14 @@ function AppShell() {
     userRole: currentUser?.role ?? null,
     adminProjectMode,
   });
+  const platformRouteRef = useRef(platformRoute);
+  platformRouteRef.current = platformRoute;
+  const showLoginScreen = platformRoute === "bootstrap" || platformRoute === "login";
+  const showAuthenticatedWorkspace =
+    platformRoute === "admin" ||
+    platformRoute === "school" ||
+    platformRoute === "student" ||
+    platformRoute === "teacher";
 
   useLayoutEffect(() => {
     if (platformRoute !== "loading" && platformRoute !== "login" && platformRoute !== "bootstrap") {
@@ -444,8 +519,13 @@ function AppShell() {
     >
       <DesktopTitleBar />
 
-      <div className={cn("relative flex min-h-0 flex-1 flex-col md:flex-row", loginHandoff && "or-login-workspace-entering")}>
-        <Suspense fallback={<AppLoadingFallback />}>
+      <div
+        className={cn(
+          "relative flex min-h-0 flex-1 flex-col md:flex-row",
+          loginHandoff === "enter" && "or-login-workspace-entering",
+          loginHandoff === "exit" && "or-login-workspace-leaving",
+        )}
+      >
         {platformRoute === "loading" ? (
           <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-sm text-[var(--or-muted)]">
             {t("app:loading.permissions")}
@@ -465,288 +545,312 @@ function AppShell() {
               </button>
             </div>
           </div>
-        ) : platformRoute === "bootstrap" ? (
-          <PlatformLogin mode="bootstrap" onAuthenticated={onLoginAuthenticated} onError={setErr} />
-        ) : platformRoute === "login" ? (
-          <PlatformLogin mode="login" onAuthenticated={onLoginAuthenticated} onError={setErr} />
-        ) : platformRoute === "admin" && currentUser ? (
-          <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
-            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              <WorkspaceErrorBanner error={err} />
-              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-                <AdminWorkspace
-                  user={currentUser}
-                  onLogout={() => void onLogout()}
-                  onError={setErr}
-                  onProfileUpdated={onManagementProfileUpdated}
-                />
-              </div>
-            </div>
-          </WorkspaceLoadBoundary>
-        ) : platformRoute === "school" && currentUser ? (
-          <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
-            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              <WorkspaceErrorBanner error={err} />
-              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-                <SchoolWorkspace user={currentUser} onLogout={() => void onLogout()} onError={setErr} onProfileUpdated={onManagementProfileUpdated} />
-              </div>
-            </div>
-          </WorkspaceLoadBoundary>
-        ) : platformRoute === "student" && currentUser ? (
-          <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
-            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              <WorkspaceErrorBanner error={err} />
-              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-                <StudentWorkspace user={currentUser} onLogout={() => void onLogout()} />
-              </div>
-            </div>
-          </WorkspaceLoadBoundary>
-        ) : (
-          <TeacherWorkspace>
-            <Dialog.Root open={moreOpen} onOpenChange={setMoreOpen}>
-            <aside
-              className={cn("or-sidebar or-mobile-nav", navCollapsed && "is-collapsed")}
-              aria-hidden={moreOpen || undefined}
-            >
-              <div className="or-sidebar-brand">
-                <span className="or-brand-icon" aria-hidden="true">
-                  <img src="/splash-logo.png" alt="" width={28} height={28} draggable={false} />
-                </span>
-                <span className="or-brand-name">源远</span>
-                <button type="button" className="or-sidebar-toggle or-icon-button" aria-label={navCollapsed ? "展开导航" : "收起导航"} aria-expanded={!navCollapsed} onClick={() => setNavCollapsed(!navCollapsed)}>
-                  {navCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-                </button>
-              </div>
-              {currentUser ? <TeacherUserBadge user={currentUser} /> : null}
-              <nav ref={navigationRef} className="or-sidebar-nav no-scrollbar" aria-label="教师工作区导航">
-                <SelectionIndicator rootRef={navigationRef} selector={navigationSelector} className="or-navigation-indicator" />
-                <div className="or-sidebar-primary">
-                  <SidebarNavButton
-                    icon={Network}
-                    label={t("app:nav.graph")}
-                    active={page === "graph"}
-                    onClick={() => setPage("graph")}
-                    mobilePrimary
-                  />
-                  <SidebarNavButton
-                    icon={BookMarked}
-                    label={t("app:nav.bank")}
-                    active={page === "bank"}
-                    onClick={() => setPage("bank")}
-                    mobilePrimary
-                  />
-                  <SidebarNavButton
-                    icon={FileStack}
-                    label={t("app:nav.template")}
-                    active={page === "template"}
-                    onClick={() => setPage("template")}
-                    mobileOverflow
-                  />
-                  <SidebarNavButton
-                    icon={Layers}
-                    label={t("app:nav.compose")}
-                    active={page === "compose"}
-                    onClick={() => setPage("compose")}
-                    mobilePrimary
-                  />
-                  <SidebarNavButton
-                    icon={ClipboardList}
-                    label={t("app:nav.papers")}
-                    active={page === "papers"}
-                    onClick={() => setPage("papers")}
-                    testId="nav-papers"
-                    title={t("app:nav.papersTitle")}
-                    mobilePrimary
-                  />
-                  <SidebarNavButton
-                    icon={Users}
-                    label={t("app:nav.students")}
-                    active={page === "students"}
-                    onClick={() => setPage("students")}
-                    testId="nav-students"
-                    title={t("app:nav.studentsTitle")}
-                    mobileOverflow
-                  />
-                  <SidebarNavButton
-                    icon={BarChart3}
-                    label={t("app:nav.analysis")}
-                    active={page === "analysis"}
-                    onClick={() => setPage("analysis")}
-                    title={t("app:nav.analysisTitle")}
-                    mobileOverflow
-                  />
-                  <SidebarNavButton
-                    icon={Wrench}
-                    label={t("app:nav.tools")}
-                    active={page === "tools"}
-                    onClick={() => setPage("tools")}
-                    title={t("app:nav.toolsTitle")}
-                    mobileOverflow
-                  />
-                  <SidebarNavButton
-                    icon={Sparkles}
-                    label={t("app:nav.assistant")}
-                    active={sidebarOpen}
-                    onClick={() => toggleSidebar()}
-                    title={t("app:nav.assistantTitle")}
-                    mobileOverflow
-                  />
-                </div>
-                <Dialog.Trigger asChild>
-                  <button
-                    type="button"
-                    data-mobile-more
-                    aria-label={moreLabel}
-                    aria-current={isMobileNavigation && mobileMoreActive ? "page" : undefined}
-                    aria-haspopup="dialog"
-                    className={cn("or-nav-item or-mobile-more-trigger", isMobileNavigation && mobileMoreActive && "is-active")}
-                  >
-                    <MoreHorizontal className="h-5 w-5 shrink-0" strokeWidth={1.75} />
-                    <span className="or-nav-label">{moreLabel}</span>
-                  </button>
-                </Dialog.Trigger>
-                <div className="or-sidebar-secondary">
-                  <SidebarNavButton
-                    icon={BookOpen}
-                    label={t("app:nav.help")}
-                    active={page === "help"}
-                    onClick={() => setPage("help")}
-                    title={t("app:nav.helpTitle")}
-                    mobileOverflow
-                  />
-                  <SidebarNavButton
-                    icon={Settings}
-                    label={t("app:nav.settings")}
-                    active={page === "settings"}
-                    onClick={() => setPage("settings")}
-                    title={t("app:nav.settingsTitle")}
-                    mobileOverflow
-                  />
-                  <SidebarNavButton
-                    icon={LogOut}
-                    label={t("app:nav.logout")}
-                    onClick={() => void onLogout()}
-                    title={t("app:nav.logoutTitle")}
-                    mobileOverflow
-                  />
-                </div>
-              </nav>
-            </aside>
-            <Dialog.Portal>
-              <Dialog.Overlay className="or-mobile-more-backdrop" />
-              <Dialog.Content className="or-mobile-more-sheet" aria-describedby={undefined}>
-                <div className="or-mobile-more-header">
-                  <Dialog.Title className="or-mobile-more-title">{moreLabel}</Dialog.Title>
-                  <Dialog.Close asChild>
-                    <button type="button" className="or-mobile-more-close" aria-label={closeMoreLabel}>
-                      <X className="h-5 w-5" aria-hidden />
-                    </button>
-                  </Dialog.Close>
-                </div>
-                <div className="or-mobile-more-grid">
-                  <SidebarNavButton
-                    icon={FileStack}
-                    label={t("app:nav.template")}
-                    active={page === "template"}
-                    onClick={closeMoreAnd(() => setPage("template"))}
-                    title={t("app:nav.template")}
-                  />
-                  <SidebarNavButton
-                    icon={Users}
-                    label={t("app:nav.students")}
-                    active={page === "students"}
-                    onClick={closeMoreAnd(() => setPage("students"))}
-                    title={t("app:nav.studentsTitle")}
-                  />
-                  <SidebarNavButton
-                    icon={BarChart3}
-                    label={t("app:nav.analysis")}
-                    active={page === "analysis"}
-                    onClick={closeMoreAnd(() => setPage("analysis"))}
-                    title={t("app:nav.analysisTitle")}
-                  />
-                  <SidebarNavButton
-                    icon={Wrench}
-                    label={t("app:nav.tools")}
-                    active={page === "tools"}
-                    onClick={closeMoreAnd(() => setPage("tools"))}
-                    title={t("app:nav.toolsTitle")}
-                  />
-                  <SidebarNavButton
-                    icon={Sparkles}
-                    label={t("app:nav.assistant")}
-                    active={sidebarOpen}
-                    onClick={closeMoreAnd(() => toggleSidebar())}
-                    title={t("app:nav.assistantTitle")}
-                  />
-                  <SidebarNavButton
-                    icon={BookOpen}
-                    label={t("app:nav.help")}
-                    active={page === "help"}
-                    onClick={closeMoreAnd(() => setPage("help"))}
-                    title={t("app:nav.helpTitle")}
-                  />
-                  <SidebarNavButton
-                    icon={Settings}
-                    label={t("app:nav.settings")}
-                    active={page === "settings"}
-                    onClick={closeMoreAnd(() => setPage("settings"))}
-                    title={t("app:nav.settingsTitle")}
-                  />
-                  <SidebarNavButton
-                    icon={LogOut}
-                    label={t("app:nav.logout")}
-                    onClick={closeMoreAnd(() => { void onLogout(); })}
-                    title={t("app:nav.logoutTitle")}
-                  />
-                </div>
-              </Dialog.Content>
-            </Dialog.Portal>
-            </Dialog.Root>
-
-            <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-              <WorkspaceToolBar />
-
-              {err && (
-                <div
-                  className="flex shrink-0 items-center gap-2 border-b border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_90%,transparent)] dark:bg-red-950/40 dark:border-red-900/40 px-4 py-2"
-                  role="alert"
-                >
-                  <p className="min-w-0 flex-1 truncate text-sm leading-snug text-[var(--or-on-error)] dark:text-red-300">{err}</p>
-                  <span className="shrink-0 whitespace-nowrap text-xs sm:text-[13px] text-[color-mix(in_srgb,var(--or-on-error)_90%,transparent)] dark:text-[var(--or-on-error)]">
-                    {t("app:errorBannerLogHint")}
-                  </span>
-                </div>
-              )}
-
-              {currentUser?.role === 'teacher' ? (
-                <TeacherFirstUseGuide
-                  key={currentUser.id}
-                  user={currentUser}
-                  onUpdated={setCurrentUser}
-                  onNavigate={setPage}
-                  onOpenAssistant={() => setSidebarOpen(true)}
-                />
-              ) : null}
-
-              <div
-                ref={setAssistantOverlayHost}
-                className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
-              >
-                <main ref={pageBodyRef} className="or-workspace-content min-h-0 min-w-0 flex-1 overflow-hidden">
-                  {workspaceContent}
-                </main>
-                <WorkspaceLoadBoundary>
-                <Suspense fallback={null}>
-                  {(sidebarOpen || assistantMounted) && <AgentSidebar key={assistantScope} projectBound mode="dock" overlayHost={assistantOverlayHost} />}
-                </Suspense>
+        ) : showAuthenticatedWorkspace ? (
+          <div className="or-login-workspace-stage flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
+            <Suspense fallback={<AppLoadingFallback />}>
+              {platformRoute === "admin" && currentUser ? (
+                <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
+                  <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                    <WorkspaceErrorBanner error={err} />
+                    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                      <AdminWorkspace
+                        user={currentUser}
+                        onLogout={() => void onLogout()}
+                        onError={setErr}
+                        onProfileUpdated={onManagementProfileUpdated}
+                      />
+                    </div>
+                  </div>
                 </WorkspaceLoadBoundary>
-              </div>
-            </div>
-          </TeacherWorkspace>
+              ) : platformRoute === "school" && currentUser ? (
+                <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
+                  <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                    <WorkspaceErrorBanner error={err} />
+                    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                      <SchoolWorkspace user={currentUser} onLogout={() => void onLogout()} onError={setErr} onProfileUpdated={onManagementProfileUpdated} />
+                    </div>
+                  </div>
+                </WorkspaceLoadBoundary>
+              ) : platformRoute === "student" && currentUser ? (
+                <WorkspaceLoadBoundary resetKey={`${platformRoute}:${currentUser.id}`}>
+                  <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                    <WorkspaceErrorBanner error={err} />
+                    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                      <StudentWorkspace user={currentUser} onLogout={() => void onLogout()} />
+                    </div>
+                  </div>
+                </WorkspaceLoadBoundary>
+              ) : (
+                <TeacherWorkspace>
+                  <Dialog.Root open={moreOpen} onOpenChange={setMoreOpen}>
+                  <aside
+                    className={cn("or-sidebar or-mobile-nav", navCollapsed && "is-collapsed")}
+                    aria-hidden={moreOpen || undefined}
+                  >
+                    <div className="or-sidebar-brand">
+                      <span className="or-brand-icon" aria-hidden="true">
+                        <img src="/splash-logo.png" alt="" width={28} height={28} draggable={false} />
+                      </span>
+                      <span className="or-brand-name">源远</span>
+                      <button type="button" className="or-sidebar-toggle or-icon-button" aria-label={navCollapsed ? "展开导航" : "收起导航"} aria-expanded={!navCollapsed} onClick={() => setNavCollapsed(!navCollapsed)}>
+                        {navCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+                      </button>
+                    </div>
+                    {currentUser ? <TeacherUserBadge user={currentUser} /> : null}
+                    <nav ref={navigationRef} className="or-sidebar-nav no-scrollbar" aria-label="教师工作区导航">
+                      <SelectionIndicator rootRef={navigationRef} selector={navigationSelector} className="or-navigation-indicator" />
+                      <div className="or-sidebar-primary">
+                        <SidebarNavButton
+                          icon={Network}
+                          label={t("app:nav.graph")}
+                          active={page === "graph"}
+                          onClick={() => setPage("graph")}
+                          mobilePrimary
+                        />
+                        <SidebarNavButton
+                          icon={BookMarked}
+                          label={t("app:nav.bank")}
+                          active={page === "bank"}
+                          onClick={() => setPage("bank")}
+                          mobilePrimary
+                        />
+                        <SidebarNavButton
+                          icon={FileStack}
+                          label={t("app:nav.template")}
+                          active={page === "template"}
+                          onClick={() => setPage("template")}
+                          mobileOverflow
+                        />
+                        <SidebarNavButton
+                          icon={Layers}
+                          label={t("app:nav.compose")}
+                          active={page === "compose"}
+                          onClick={() => setPage("compose")}
+                          mobilePrimary
+                        />
+                        <SidebarNavButton
+                          icon={ClipboardList}
+                          label={t("app:nav.papers")}
+                          active={page === "papers"}
+                          onClick={() => setPage("papers")}
+                          testId="nav-papers"
+                          title={t("app:nav.papersTitle")}
+                          mobilePrimary
+                        />
+                        <SidebarNavButton
+                          icon={Users}
+                          label={t("app:nav.students")}
+                          active={page === "students"}
+                          onClick={() => setPage("students")}
+                          testId="nav-students"
+                          title={t("app:nav.studentsTitle")}
+                          mobileOverflow
+                        />
+                        <SidebarNavButton
+                          icon={BarChart3}
+                          label={t("app:nav.analysis")}
+                          active={page === "analysis"}
+                          onClick={() => setPage("analysis")}
+                          title={t("app:nav.analysisTitle")}
+                          mobileOverflow
+                        />
+                        <SidebarNavButton
+                          icon={Wrench}
+                          label={t("app:nav.tools")}
+                          active={page === "tools"}
+                          onClick={() => setPage("tools")}
+                          title={t("app:nav.toolsTitle")}
+                          mobileOverflow
+                        />
+                        <SidebarNavButton
+                          icon={Sparkles}
+                          label={t("app:nav.assistant")}
+                          active={sidebarOpen}
+                          onClick={() => toggleSidebar()}
+                          title={t("app:nav.assistantTitle")}
+                          mobileOverflow
+                        />
+                      </div>
+                      <Dialog.Trigger asChild>
+                        <button
+                          type="button"
+                          data-mobile-more
+                          aria-label={moreLabel}
+                          aria-current={isMobileNavigation && mobileMoreActive ? "page" : undefined}
+                          aria-haspopup="dialog"
+                          className={cn("or-nav-item or-mobile-more-trigger", isMobileNavigation && mobileMoreActive && "is-active")}
+                        >
+                          <MoreHorizontal className="h-5 w-5 shrink-0" strokeWidth={1.75} />
+                          <span className="or-nav-label">{moreLabel}</span>
+                        </button>
+                      </Dialog.Trigger>
+                      <div className="or-sidebar-secondary">
+                        <SidebarNavButton
+                          icon={BookOpen}
+                          label={t("app:nav.help")}
+                          active={page === "help"}
+                          onClick={() => setPage("help")}
+                          title={t("app:nav.helpTitle")}
+                          mobileOverflow
+                        />
+                        <SidebarNavButton
+                          icon={Settings}
+                          label={t("app:nav.settings")}
+                          active={page === "settings"}
+                          onClick={() => setPage("settings")}
+                          title={t("app:nav.settingsTitle")}
+                          mobileOverflow
+                        />
+                        <SidebarNavButton
+                          icon={LogOut}
+                          label={t("app:nav.logout")}
+                          onClick={() => void onLogout()}
+                          title={t("app:nav.logoutTitle")}
+                          mobileOverflow
+                        />
+                      </div>
+                    </nav>
+                  </aside>
+                  <Dialog.Portal>
+                    <Dialog.Overlay className="or-mobile-more-backdrop" />
+                    <Dialog.Content className="or-mobile-more-sheet" aria-describedby={undefined}>
+                      <div className="or-mobile-more-header">
+                        <Dialog.Title className="or-mobile-more-title">{moreLabel}</Dialog.Title>
+                        <Dialog.Close asChild>
+                          <button type="button" className="or-mobile-more-close" aria-label={closeMoreLabel}>
+                            <X className="h-5 w-5" aria-hidden />
+                          </button>
+                        </Dialog.Close>
+                      </div>
+                      <div className="or-mobile-more-grid">
+                        <SidebarNavButton
+                          icon={FileStack}
+                          label={t("app:nav.template")}
+                          active={page === "template"}
+                          onClick={closeMoreAnd(() => setPage("template"))}
+                          title={t("app:nav.template")}
+                        />
+                        <SidebarNavButton
+                          icon={Users}
+                          label={t("app:nav.students")}
+                          active={page === "students"}
+                          onClick={closeMoreAnd(() => setPage("students"))}
+                          title={t("app:nav.studentsTitle")}
+                        />
+                        <SidebarNavButton
+                          icon={BarChart3}
+                          label={t("app:nav.analysis")}
+                          active={page === "analysis"}
+                          onClick={closeMoreAnd(() => setPage("analysis"))}
+                          title={t("app:nav.analysisTitle")}
+                        />
+                        <SidebarNavButton
+                          icon={Wrench}
+                          label={t("app:nav.tools")}
+                          active={page === "tools"}
+                          onClick={closeMoreAnd(() => setPage("tools"))}
+                          title={t("app:nav.toolsTitle")}
+                        />
+                        <SidebarNavButton
+                          icon={Sparkles}
+                          label={t("app:nav.assistant")}
+                          active={sidebarOpen}
+                          onClick={closeMoreAnd(() => toggleSidebar())}
+                          title={t("app:nav.assistantTitle")}
+                        />
+                        <SidebarNavButton
+                          icon={BookOpen}
+                          label={t("app:nav.help")}
+                          active={page === "help"}
+                          onClick={closeMoreAnd(() => setPage("help"))}
+                          title={t("app:nav.helpTitle")}
+                        />
+                        <SidebarNavButton
+                          icon={Settings}
+                          label={t("app:nav.settings")}
+                          active={page === "settings"}
+                          onClick={closeMoreAnd(() => setPage("settings"))}
+                          title={t("app:nav.settingsTitle")}
+                        />
+                        <SidebarNavButton
+                          icon={LogOut}
+                          label={t("app:nav.logout")}
+                          onClick={closeMoreAnd(() => { void onLogout(); })}
+                          title={t("app:nav.logoutTitle")}
+                        />
+                      </div>
+                    </Dialog.Content>
+                  </Dialog.Portal>
+                  </Dialog.Root>
+
+                  <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+                    <WorkspaceToolBar />
+
+                    {err && (
+                      <div
+                        className="flex shrink-0 items-center gap-2 border-b border-[var(--or-error)] bg-[color-mix(in_srgb,var(--or-error-container)_90%,transparent)] dark:bg-red-950/40 dark:border-red-900/40 px-4 py-2"
+                        role="alert"
+                      >
+                        <p className="min-w-0 flex-1 truncate text-sm leading-snug text-[var(--or-on-error)] dark:text-red-300">{err}</p>
+                        <span className="shrink-0 whitespace-nowrap text-xs sm:text-[13px] text-[color-mix(in_srgb,var(--or-on-error)_90%,transparent)] dark:text-[var(--or-on-error)]">
+                          {t("app:errorBannerLogHint")}
+                        </span>
+                      </div>
+                    )}
+
+                    {currentUser?.role === 'teacher' ? (
+                      <TeacherFirstUseGuide
+                        key={currentUser.id}
+                        user={currentUser}
+                        onUpdated={setCurrentUser}
+                        onNavigate={setPage}
+                        onOpenAssistant={() => setSidebarOpen(true)}
+                      />
+                    ) : null}
+
+                    <div
+                      ref={setAssistantOverlayHost}
+                      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
+                    >
+                      <main ref={pageBodyRef} className="or-workspace-content min-h-0 min-w-0 flex-1 overflow-hidden">
+                        {workspaceContent}
+                      </main>
+                      <WorkspaceLoadBoundary>
+                      <Suspense fallback={null}>
+                        {(sidebarOpen || assistantMounted) && <AgentSidebar key={assistantScope} projectBound mode="dock" overlayHost={assistantOverlayHost} />}
+                      </Suspense>
+                      </WorkspaceLoadBoundary>
+                    </div>
+                  </div>
+                </TeacherWorkspace>
+              )}
+            </Suspense>
+          </div>
+        ) : null}
+        {(showLoginScreen || loginLeaving || logoutReturning) && (
+          <div
+            className={cn(
+              loginLeaving
+                ? "pointer-events-none absolute inset-0 z-[120] flex min-h-0 min-w-0 overflow-hidden"
+                : logoutReturning
+                  ? "absolute inset-0 z-[120] flex min-h-0 min-w-0 overflow-hidden"
+                  : "flex min-h-0 min-w-0 flex-1",
+            )}
+          >
+            <Suspense fallback={<AppLoadingFallback />}>
+              <PlatformLogin
+                mode={showLoginScreen ? platformRoute : loginLeaving ? loginLeavingMode : (platformStatus?.admin_exists === false ? "bootstrap" : "login")}
+                enterMotion={logoutReturning ? "return" : "initial"}
+                returningOverlay={logoutReturning}
+                prepareWorkspace={prepareLoginWorkspace}
+                onHandoffStart={onLoginHandoffStart}
+                onAuthenticated={onLoginAuthenticated}
+                onError={setErr}
+              />
+            </Suspense>
+          </div>
         )}
-        </Suspense>
-        {loginHandoff && <LoginHandoff onFinished={finishLoginHandoff} />}
+        {loginHandoff && <LoginHandoff key={loginHandoff} direction={loginHandoff} onFinished={finishLoginHandoff} />}
       </div>
     </div>
   );

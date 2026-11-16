@@ -1,6 +1,9 @@
 {
   "title": "课堂工具",
-  "subtitle": "随机抽学号与课堂倒计时，支持切换标签页后台保持运行",
+  "offline": {
+    "downloadLabel": "下载离线版",
+    "filename": "源远课堂工具.html"
+  },
   "tabs": {
     "rollCall": "抽学号",
     "timer": "计时器"

@@ -309,10 +309,6 @@
   display: none;
 }
 
-.or-g49-compose-action-label {
-  display: inline;
-}
-
 .or-g49-compose-paper-body {
   min-height: 0;
   min-width: 0;
@@ -497,10 +493,6 @@
     padding-inline: 0.625rem;
     justify-content: center;
     text-align: center;
-  }
-
-  .or-g49-compose-action-label {
-    display: none;
   }
 
   .or-g49-add-from-left {

@@ -246,6 +246,12 @@ describe("ComposeWorkspace automatic composition and duplicate scope", () => {
     expect(checkBtn.className).toContain("justify-center");
     expect(checkBtn.className).toContain("text-center");
 
+    await user.click(screen.getByRole("button", { name: "题库" }));
+    const addBtn = screen.getByRole("button", { name: "加入" });
+    expect(addBtn).toHaveAttribute("title", "加入当前小节");
+    expect(addBtn.className).toContain("justify-center");
+    expect(addBtn.className).toContain("text-center");
+
     const removeBtn = screen.getByRole("button", { name: "删除" });
     const upBtn = screen.getByRole("button", { name: "上移" });
     const downBtn = screen.getByRole("button", { name: "下移" });

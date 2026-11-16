@@ -73,6 +73,9 @@ async def static(request: Request):
                    if relative.startswith('assets/') and re.search(r'-[\w-]{8,}\.', target.name)
                    else 'no-cache',
                    'Vary': 'Accept-Encoding'}
+        if relative == 'classroom-tools.html':
+            headers['Content-Disposition'] = 'attachment'
+            headers['Content-Security-Policy'] = 'sandbox allow-scripts'
         accepted = request.headers.get('accept-encoding', '')
         encodings = {}
         for part in accepted.split(','):

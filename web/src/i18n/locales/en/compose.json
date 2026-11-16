@@ -57,6 +57,7 @@
   },
   "moveUp": "Move selected up",
   "moveDown": "Move selected down",
+  "addShort": "Add",
   "removeShort": "Remove",
   "moveUpShort": "Up",
   "moveDownShort": "Down",

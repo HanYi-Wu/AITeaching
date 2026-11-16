@@ -14,11 +14,23 @@ import { useLoginMotion } from "./useLoginMotion";
 
 type Props = {
   mode: "bootstrap" | "login";
+  enterMotion?: "initial" | "return";
+  returningOverlay?: boolean;
+  prepareWorkspace?: (user: PlatformUser) => Promise<void>;
+  onHandoffStart?: (user: PlatformUser) => void;
   onAuthenticated: (user: PlatformUser) => void;
   onError: (message: string | null) => void;
 };
 
-export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
+export function PlatformLogin({
+  mode,
+  enterMotion = "initial",
+  returningOverlay = false,
+  prepareWorkspace,
+  onHandoffStart,
+  onAuthenticated,
+  onError,
+}: Props) {
   const [username, setUsername] = useState(mode === "bootstrap" ? "admin" : "");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState(mode === "bootstrap" ? "管理员" : "");
@@ -26,26 +38,16 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [initialArriving] = useState(() => enterMotion === "initial");
+  const [liftingIn, setLiftingIn] = useState(() => enterMotion === "return");
   const isBootstrap = mode === "bootstrap";
   const inFlightRef = useRef(false);
   const mountedRef = useRef(true);
-  const { phase, sceneRef, mobilePathRef, desktopSvgRef, sceneHeight, beginSubmitting, cancelSubmitting, finish } = useLoginMotion();
-  const [chromeBottomPaper, setChromeBottomPaper] = useState(() => phase !== "splash" && phase !== "brand-exit");
+  const { phase, sceneRef, mobilePathRef, sceneHeight, beginSubmitting, cancelSubmitting, finish } = useLoginMotion();
 
   useEffect(() => {
     delete document.documentElement.dataset.orBootLogin;
-    if (phase === "splash") {
-      setChromeBottomPaper(false);
-      return;
-    }
-    if (phase === "brand-exit") {
-      // 在黑色幕布即将从底部上收前 120ms 提前将 html/body 切为纸色 #f2f2f2，
-      // 顶部状态栏由 .or-login-chrome-top 固定条保持黑色，底部地址栏则在幕布抬起第一帧即为白色。
-      const timer = window.setTimeout(() => setChromeBottomPaper(true), 170);
-      return () => window.clearTimeout(timer);
-    }
-    setChromeBottomPaper(true);
-  }, [phase]);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -53,6 +55,15 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (enterMotion !== "return") return;
+    setLiftingIn(true);
+    const liftTimer = window.setTimeout(() => {
+      if (mountedRef.current) setLiftingIn(false);
+    }, 90);
+    return () => window.clearTimeout(liftTimer);
+  }, [enterMotion]);
 
   function showError(message: string) {
     setFormError(message);
@@ -98,7 +109,9 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
         result = await loginPlatform({ username: cleanUsername, password });
       }
       saveSessionToken(result.token);
-      await finish(submittedAt);
+      await prepareWorkspace?.(result.user);
+      if (!mountedRef.current) return;
+      await finish(submittedAt, () => onHandoffStart?.(result.user));
       if (mountedRef.current) onAuthenticated(result.user);
     } catch (e) {
       cancelSubmitting();
@@ -123,7 +136,10 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
       className="or-login"
       data-phase={phase}
       data-mode={mode}
-      data-chrome-bottom={chromeBottomPaper || (phase !== "splash" && phase !== "brand-exit") ? "paper" : "accent"}
+      data-chrome-bottom="paper"
+      data-arriving={initialArriving ? "true" : undefined}
+      data-returning={returningOverlay ? "true" : undefined}
+      data-lifting={liftingIn ? "true" : undefined}
     >
       {/* iOS Safari：顶部 60px 固定色条（位于黑色弧形幕布内部），让灵动岛状态栏始终保持品牌黑 */}
       <div className="or-login-chrome-top" aria-hidden="true" />
@@ -137,7 +153,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
         >
           <path ref={mobilePathRef} d="M0 0 L390 0 L390 66 Q185 330 0 176 Z" />
         </svg>
-        <DesktopLoginBackdrop svgRef={desktopSvgRef} />
+        <DesktopLoginBackdrop />
 
         <div className="or-login-corner-logo" aria-hidden="true">
           <img src="/splash-logo.png" alt="" width="128" height="128" draggable="false" />
@@ -152,13 +168,6 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
           </div>
         </section>
 
-        <div className="or-login-splash" aria-hidden="true">
-          <span className="or-login-splash-logo">
-            <img src="/splash-logo.png" alt="" width="56" height="56" draggable="false" />
-          </span>
-          <span>源远教学平台</span>
-        </div>
-
         <div className="or-login-form-pane">
           <form
             className={`or-login-form or-login-desktop-card${busy ? " is-submitting" : ""}`}
@@ -166,7 +175,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
             aria-busy={busy}
             onSubmit={(submitEvent) => void submit(submitEvent)}
           >
-          <div className="or-login-heading-wrap" data-or-stagger="1">
+          <div className="or-login-heading-wrap">
             <span className="or-login-heading-mark" aria-hidden="true">源 远</span>
             <div>
               <h1 className="or-login-heading">
@@ -183,7 +192,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
             </div>
           </div>
 
-          <div className="or-login-field" data-or-stagger="2">
+          <div className="or-login-field">
             <label className="or-login-label" htmlFor="platform-login-username">
               {isBootstrap ? "用户名" : (
                 <>
@@ -212,7 +221,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
           </div>
 
           {isBootstrap ? (
-            <div className="or-login-field" data-or-stagger="3">
+            <div className="or-login-field">
               <label className="or-login-label" htmlFor="platform-login-display-name">显示名称</label>
               <div className="or-login-input-wrap">
                 <input
@@ -230,7 +239,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
             </div>
           ) : null}
 
-          <div className="or-login-field" data-or-stagger="3">
+          <div className="or-login-field">
             <label className="or-login-label" htmlFor="platform-login-password">密码</label>
             <div className="or-login-input-wrap">
               <input
@@ -271,7 +280,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
           </div>
 
           {!isBootstrap ? (
-            <div className="or-login-recovery" data-or-stagger="3">
+            <div className="or-login-recovery">
               <button
                 className="or-login-recovery-toggle"
                 type="button"
@@ -294,7 +303,7 @@ export function PlatformLogin({ mode, onAuthenticated, onError }: Props) {
             </div>
           ) : null}
 
-          <div className="or-login-button-track" data-or-stagger="4">
+          <div className="or-login-button-track">
             <button
               className="or-login-submit"
               type="submit"

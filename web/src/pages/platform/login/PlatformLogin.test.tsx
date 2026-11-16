@@ -102,7 +102,7 @@ describe("PlatformLogin", () => {
     expect(container.querySelector(".or-login-error-slot")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("mounts the animated login in splash before revealing the desktop card", () => {
+  it("mounts the login card immediately with a short, calm entrance", () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query.startsWith("(prefers-reduced-motion") ? false : false,
       addEventListener: vi.fn(),
@@ -116,7 +116,7 @@ describe("PlatformLogin", () => {
 
     const root = container.querySelector<HTMLElement>(".or-login");
     const card = container.querySelector(".or-login-form.or-login-desktop-card");
-    expect(root).toHaveAttribute("data-phase", "splash");
+    expect(root).toHaveAttribute("data-phase", "ready");
     expect(card).toBeInTheDocument();
     expect(card).toHaveClass("or-login-desktop-card");
   });
