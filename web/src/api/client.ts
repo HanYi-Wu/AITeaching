@@ -542,6 +542,7 @@ export type SystemExtensionStatus = {
 
 export type SystemExtensionsResponse = {
   extensions: SystemExtensionStatus[];
+  host_control_allowed?: boolean;
 };
 
 export async function apiSystemExtensions(): Promise<SystemExtensionsResponse> {
@@ -677,9 +678,20 @@ export async function apiAgentSessionsList(): Promise<{ sessions: AgentSessionLi
   return apiGet<{ sessions: AgentSessionListItem[] }>("/api/agent/sessions");
 }
 
+export type AgentQuestionConfirmationPreview = {
+  kind: "question_creation";
+  questions: Array<{ id: string; type: string; subject: string; content: string; answer: string; analysis: string;
+    options: Array<{ label: string; text: string }> }>;
+};
+
+export type AgentQuestionReview = {
+  index: number; content?: string; answer?: string; analysis?: string; options?: Record<string, string>;
+};
+
 export type AgentSessionSnapshot = {
   session: {
     session_id: string;
+    pending_confirmations?: Record<string, { tool_name: string; description: string; preview?: AgentQuestionConfirmationPreview | null }>;
     messages: Array<{
       role: string;
       content?: string | null;
@@ -751,6 +763,8 @@ export type AgentPageContextForApi = {
   selected_resource_type?: string | null;
   selected_resource_id?: string | null;
   summary?: string | null;
+  selected_control?: { tag: string; role?: string; label: string; text: string };
+  visible_page_text?: string;
 };
 
 export type AgentFileAttachment = {
@@ -765,6 +779,7 @@ export type AgentChatStreamBody = {
   mode?: string;
   confirm_action_id?: string | null;
   confirm_accepted?: boolean | null;
+  confirm_questions?: AgentQuestionReview[];
   /** 教师当前界面与选中资源，供助手理解上下文 */
   page_context?: AgentPageContextForApi | null;
   /** 内置技能，收窄助手能力范围 */

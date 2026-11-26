@@ -293,6 +293,7 @@ def query_papers(
     status: str | None = None,
     subject: str | None = None,
     folder_id: str | None = None,
+    paper_id: str | None = None,
     page: int = 1,
     page_size: int = 10,
 ) -> dict[str, Any]:
@@ -304,6 +305,8 @@ def query_papers(
         _paper_candidate_metadata(record)
         for record in candidate_adaptives
     ]
+    if paper_id:
+        papers = [paper for paper in papers if paper.get("paper_id") == paper_id]
     if delivery_mode and delivery_mode != "all":
         papers = [paper for paper in papers if str(paper.get("delivery_mode") or "") == delivery_mode]
     if status and status != "all":
@@ -817,6 +820,15 @@ def analyze_paper(
             """,
             (paper_id, *event_params),
         ).fetchall()
+        review_rows = con.execute(
+            f"""SELECT signal.*, ep.id AS publication_id
+                FROM student_review_signals signal
+                JOIN student_attempts sa ON sa.id = signal.attempt_id
+                JOIN exam_publications ep ON ep.id = sa.publication_id
+                WHERE ep.paper_id = ? AND {attempt_access}
+                ORDER BY signal.occurred_at""",
+            (paper_id, *attempt_params),
+        ).fetchall()
         answer_rows = con.execute(
             f"SELECT ans.attempt_id, ans.question_id, ans.score, ans.answer_payload, ans.is_correct, "
             f"sa.score AS attempt_score FROM student_answers ans "
@@ -859,6 +871,12 @@ def analyze_paper(
     event_rows = [row for row in event_rows if str(row["publication_id"]) in allowed_publication_ids]
 
     events_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    review_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    for row in review_rows:
+        if str(row["publication_id"]) in allowed_publication_ids:
+            review_by_attempt.setdefault(str(row["attempt_id"]), []).append({
+                field: row[field] for field in ("occurred_at", "idle_seconds", "burst_seconds", "changed_questions", "context_signal")
+            })
     scores_by_attempt: dict[str, dict[str, float | None]] = {}
     answer_counts_by_attempt: dict[str, list[int]] = {}
     for answer in answer_rows:
@@ -1020,6 +1038,7 @@ def analyze_paper(
                 "integrity_event_count": len(attempt_events),
                 "integrity_event_type_counts": dict(sorted(event_type_counts.items())),
                 "integrity_risk_score": integrity_risk_score,
+                "answer_rhythm_review": review_by_attempt.get(str(attempt.get("id")), []),
             }
         )
     students.sort(

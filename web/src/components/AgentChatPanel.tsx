@@ -1,26 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertCircle,
-  BookMarked,
   History,
+  ImagePlus,
+  Info,
   Loader2,
+  MousePointer2,
   Paperclip,
+  Plus,
   Sparkles,
   X,
 } from "lucide-react";
 import {
   apiAgentConfig,
   apiAgentCreateSession,
-  apiAgentMemoryIndexGet,
-  apiAgentMemoryTopicList,
   apiAgentSessionDelete,
   apiAgentSessionsList,
-  apiAgentSkillsList,
   apiPostFormData,
   type AgentConfig,
   type AgentSessionListItem,
-  type AgentSkillInfo,
+  type AgentQuestionReview,
   type apiAgentChatStream,
 } from "../api/client";
 import { useAgentContext } from "../contexts/AgentContext";
@@ -38,8 +38,6 @@ import {
   ASSISTANT_PROSE_CLASS,
   AgentAttachmentList,
   AgentChatComposer,
-  AgentContextRing,
-  AgentMemoryDrawer,
   AgentMessageItem,
   AgentSessionHistoryMenu,
   useAgentChatStream,
@@ -47,17 +45,28 @@ import {
   type FileAttachment,
 } from "./agent-chat";
 import "../ui-redesign/g55/g55.css";
+import { getPageSelectionTarget, keyboardPageTargets, readPageSelection, type PageSelection } from "./agent-chat/pageSelection";
 
 export { ASSISTANT_PROSE_CLASS };
+export type AgentWindowDragProps = Pick<HTMLAttributes<HTMLDivElement>,
+  "role" | "aria-label" | "tabIndex" | "onPointerDown" | "onPointerMove" | "onPointerUp" |
+  "onPointerCancel" | "onLostPointerCapture" | "onKeyDown"
+> & { "data-agent-window-drag": true };
 
 export function AgentChatPanel({
   projectBound = false,
   onRequestCollapse,
   onReady,
+  tucked = false,
+  windowControls,
+  windowDrag,
 }: {
   projectBound?: boolean;
   onRequestCollapse?: () => void;
   onReady?: () => void;
+  tucked?: boolean;
+  windowControls?: ReactNode;
+  windowDrag?: AgentWindowDragProps;
 } = {}) {
   const { t } = useTranslation("agent");
   const { pageContext, sidebarOpen, prefillRequest, notifyAgentBackground } = useAgentContext();
@@ -66,25 +75,95 @@ export function AgentChatPanel({
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const composerPresetIdRef = useRef(0);
   const [composerPreset, setComposerPreset] = useState<{ id: number; text: string } | null>(null);
-  const [skills, setSkills] = useState<AgentSkillInfo[]>([]);
-  const [activeSkillId, setActiveSkillId] = useState<string | null>(null);
   const [sessionList, setSessionList] = useState<AgentSessionListItem[]>([]);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [fileDragActive, setFileDragActive] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [selection, setSelection] = useState<PageSelection | null>(null);
+  const pickerButton = useRef<HTMLButtonElement>(null);
 
-  // Memory state
-  const [memoryOpen, setMemoryOpen] = useState(false);
-  const [memoryTab, setMemoryTab] = useState<"index" | "topic">("index");
-  const [indexDraft, setIndexDraft] = useState("");
-  const [topicDraft, setTopicDraft] = useState("");
-  const [topicPick, setTopicPick] = useState("");
-  const [topicOptions, setTopicOptions] = useState<string[]>([]);
-  const [memoryBusy, setMemoryBusy] = useState(false);
-  const [memoryMsg, setMemoryMsg] = useState<string | null>(null);
+  useEffect(() => {
+    if (!picking || !sidebarOpen || tucked) return;
+    document.body.classList.add("or-agent-picking");
+    let highlighted: Element | null = null;
+    let temporaryTabTarget: Element | null = null;
+    const highlight = (element: Element | null) => {
+      const target = getPageSelectionTarget(element);
+      if (target === highlighted) return;
+      highlighted?.removeAttribute("data-agent-highlight");
+      highlighted = target;
+      highlighted?.setAttribute("data-agent-highlight", "");
+    };
+    const finish = (target?: PageSelection) => {
+      if (target) setSelection(target);
+      setPicking(false);
+      pickerButton.current?.focus({ preventScroll: true });
+    };
+    const click = (event: MouseEvent) => {
+      const element = event.target instanceof Element ? event.target : null;
+      if (element?.closest(".or-assistant-drawer,.or-g55-agent-panel,.or-assistant-edge-tab")) return;
+      const chosen = readPageSelection(element, pageContext?.current_page);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (chosen) finish(chosen);
+    };
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault(); event.stopImmediatePropagation(); finish();
+      } else if (event.key === "Tab") {
+        const controls = [...new Set(Array.from(document.querySelectorAll<HTMLElement>(keyboardPageTargets))
+          .map((target) => getPageSelectionTarget(target))
+          .filter((target): target is HTMLElement => target instanceof HTMLElement && target.getClientRects().length > 0 &&
+            getComputedStyle(target).visibility === "visible"))];
+        if (!controls.length) return;
+        const current = controls.indexOf(document.activeElement as HTMLElement);
+        const index = current < 0 ? (event.shiftKey ? controls.length - 1 : 0)
+          : (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+        const target = controls[index];
+        temporaryTabTarget?.removeAttribute("tabindex");
+        temporaryTabTarget = null;
+        if (!target.hasAttribute("tabindex")) { target.setAttribute("tabindex", "-1"); temporaryTabTarget = target; }
+        event.preventDefault(); event.stopImmediatePropagation(); target.focus(); highlight(target);
+      } else if (event.key === "Enter") {
+        const chosen = readPageSelection(document.activeElement, pageContext?.current_page);
+        if (chosen) { event.preventDefault(); event.stopImmediatePropagation(); finish(chosen); }
+      }
+    };
+    const pointer = (event: PointerEvent) => highlight(event.target instanceof Element ? event.target : null);
+    const preventUnderlyingPress = (event: PointerEvent) => {
+      const element = event.target instanceof Element ? event.target : null;
+      if (!element || element.closest(".or-assistant-drawer,.or-g55-agent-panel,.or-assistant-edge-tab")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const target = getPageSelectionTarget(element);
+      if (target?.matches(":disabled")) {
+        const chosen = readPageSelection(target, pageContext?.current_page);
+        if (chosen) finish(chosen);
+      }
+    };
+    document.addEventListener("pointerover", pointer, true);
+    document.addEventListener("pointerdown", preventUnderlyingPress, true);
+    document.addEventListener("click", click, true);
+    document.addEventListener("keydown", keydown, true);
+    return () => {
+      document.body.classList.remove("or-agent-picking");
+      highlighted?.removeAttribute("data-agent-highlight");
+      temporaryTabTarget?.removeAttribute("tabindex");
+      document.removeEventListener("pointerover", pointer, true);
+      document.removeEventListener("pointerdown", preventUnderlyingPress, true);
+      document.removeEventListener("click", click, true);
+      document.removeEventListener("keydown", keydown, true);
+    };
+  }, [picking, sidebarOpen, tucked, pageContext?.current_page]);
+
+  useEffect(() => { if (!sidebarOpen || tucked) setPicking(false); }, [sidebarOpen, tucked]);
+
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const assistantEnabled = config?.llm_configured !== false;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const fileDragDepthRef = useRef(0);
   const sendGateRef = useRef<ReturnType<typeof createAgentSubmissionGate> | null>(null);
   if (sendGateRef.current === null) sendGateRef.current = createAgentSubmissionGate();
@@ -93,7 +172,7 @@ export function AgentChatPanel({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
-  const historyShellRef = useRef<HTMLDivElement>(null);
+  const historyButtonRef = useRef<HTMLButtonElement>(null);
   const fallbackLineKeysRef = useRef(new WeakMap<ChatLine, string>());
   const fallbackLineSerialRef = useRef(0);
 
@@ -108,12 +187,10 @@ export function AgentChatPanel({
 
   const stream = useAgentChatStream({
     sidebarOpen,
-    activeSkillId,
-    setActiveSkillId,
     pageContext,
     notifyAgentBackground,
-    refreshSessionList,
-    onErrorMsg: setMemoryMsg,
+    refreshSessionList: async () => { if (sessionMenuOpen) await refreshSessionList(); },
+    onErrorMsg: setChatError,
   });
 
   const {
@@ -131,6 +208,7 @@ export function AgentChatPanel({
     contextLimit,
     contextMeterRefreshing,
     currentFocus,
+    turnUsage,
     runStream,
     confirm,
     planAction,
@@ -143,9 +221,6 @@ export function AgentChatPanel({
     void apiAgentConfig()
       .then(setConfig)
       .catch(() => setConfig(null));
-    void apiAgentSkillsList()
-      .then((r) => setSkills(r.skills || []))
-      .catch(() => setSkills([]));
   }, [projectBound]);
 
   useEffect(() => {
@@ -162,56 +237,8 @@ export function AgentChatPanel({
   }, []);
 
   useEffect(() => {
-    void refreshSessionList();
-  }, [refreshSessionList]);
-
-  useEffect(() => {
-    if (!sessionMenuOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSessionMenuOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [sessionMenuOpen]);
-
-  useEffect(() => {
-    if (!sessionMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const el = historyShellRef.current;
-      if (!el?.contains(e.target as Node)) setSessionMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [sessionMenuOpen]);
-
-  const refreshMemoryIndex = useCallback(async () => {
-    setMemoryBusy(true);
-    setMemoryMsg(null);
-    try {
-      const { content } = await apiAgentMemoryIndexGet();
-      setIndexDraft(content);
-    } catch (e) {
-      setMemoryMsg(e instanceof Error ? e.message : t("memoryIndexLoadErr"));
-    } finally {
-      setMemoryBusy(false);
-    }
-  }, [t]);
-
-  const refreshTopicList = useCallback(async () => {
-    try {
-      const { topics } = await apiAgentMemoryTopicList();
-      setTopicOptions(topics);
-      setTopicPick((prev) => prev || topics[0] || "");
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!memoryOpen) return;
-    void refreshMemoryIndex();
-    void refreshTopicList();
-  }, [memoryOpen, refreshMemoryIndex, refreshTopicList]);
+    if (tucked) setSessionMenuOpen(false);
+  }, [tucked]);
 
   const ensureSession = useCallback(async () => {
     if (sessionIdRef.current) return sessionIdRef.current;
@@ -220,9 +247,8 @@ export function AgentChatPanel({
     if (epoch !== conversationEpochRef.current) throw new DOMException("Conversation replaced", "AbortError");
     sessionIdRef.current = session_id;
     setSessionId(session_id);
-    void refreshSessionList();
     return session_id;
-  }, [refreshSessionList, sessionIdRef, setSessionId, conversationEpochRef]);
+  }, [sessionIdRef, setSessionId, conversationEpochRef]);
 
   const startNewChat = useCallback(() => {
     sendGateRef.current = createAgentSubmissionGate();
@@ -230,7 +256,7 @@ export function AgentChatPanel({
   }, [newChat]);
 
   const handleConfirm = useCallback(
-    (actionId: string, accepted: boolean) => confirm(actionId, accepted, ensureSession),
+    (actionId: string, accepted: boolean, review?: AgentQuestionReview[]) => confirm(actionId, accepted, ensureSession, review),
     [confirm, ensureSession],
   );
   const handlePlanAction = useCallback(
@@ -306,10 +332,12 @@ export function AgentChatPanel({
         if (!shouldDispatchAgentMessage(typedInput, filesToUpload.length, attachments.length)) return;
 
         setLines((prev) => [...prev, { kind: "user", text: msgText }]);
+        if (selection) setSelection((current) => current === selection ? null : current);
         await runStream({
           session_id: sid,
           message: msgText,
           mode: "execute",
+          ...(selection ? { page_context: selection.context } : {}),
           ...(attachments.length > 0 ? { file_attachments: attachments } : {}),
         } as Parameters<typeof apiAgentChatStream>[0]);
       } catch (e) {
@@ -331,6 +359,7 @@ export function AgentChatPanel({
     ensureSession,
     conversationEpochRef,
     pendingFiles,
+    selection,
     runStream,
     setBusy,
     setLines,
@@ -344,11 +373,6 @@ export function AgentChatPanel({
     }
     setComposerPreset({ id: ++composerPresetIdRef.current, text: prefillRequest.message });
   }, [startNewChat, prefillRequest]);
-
-  const pickSkill = useCallback((s: AgentSkillInfo) => {
-    setActiveSkillId(s.id);
-    setComposerPreset({ id: ++composerPresetIdRef.current, text: s.suggested_user_input });
-  }, []);
 
   const removeHistorySession = useCallback(
     async (id: string) => {
@@ -369,11 +393,25 @@ export function AgentChatPanel({
   );
 
   const sendLabel = i18n.language.startsWith("zh") ? "发送消息" : "Send message";
+  const closeHistory = () => {
+    setSessionMenuOpen(false);
+    historyButtonRef.current?.focus({ preventScroll: true });
+  };
+  const queueFiles = (input: HTMLInputElement) => {
+    const files = Array.from(input.files ?? []);
+    if (files.length) setPendingFiles((prev) => [...prev, ...files]);
+    input.value = "";
+  };
 
   return (
     <div
-      className="or-g55-agent-panel relative flex h-full min-h-[320px] flex-col bg-[var(--or-card)] text-[var(--or-text)]"
+      className="or-g55-agent-panel relative flex h-full min-h-0 flex-col bg-[var(--or-card)] text-[var(--or-text)]"
       data-testid="agent-file-drop-surface"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && sessionMenuOpen) {
+          event.preventDefault(); event.stopPropagation(); closeHistory();
+        }
+      }}
       onDragEnter={(e) => {
         if (!isFileDrag(Array.from(e.dataTransfer.types))) return;
         e.preventDefault();
@@ -410,93 +448,36 @@ export function AgentChatPanel({
         </div>
       ) : null}
 
-      {/* Header Bar */}
-      <div ref={historyShellRef} className="relative shrink-0 border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_90%,transparent)] px-3 py-2.5 backdrop-blur-md  ">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-or-primary-container text-or-primary">
-              <Sparkles className="h-4 w-4" />
-            </span>
-            <span className="truncate text-sm font-bold tracking-tight text-[var(--or-text)] ">
-              {t("title")}
-            </span>
-          </div>
-          {onRequestCollapse ? (
-            <button
-              type="button"
-              data-assistant-close
-              title={t("collapseSidebar")}
-              aria-label={t("collapseSidebar")}
-              onClick={() => onRequestCollapse()}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--or-muted)] transition hover:bg-[var(--or-block)]"
-            >
-              <X className="h-4 w-4" strokeWidth={2} />
-            </button>
-          ) : null}
-        </div>
-
-        <div className="mt-2 flex items-center gap-2">
-          <button
-            type="button"
-            title={t("history")}
-            aria-label={t("history")}
-            aria-expanded={sessionMenuOpen}
-            onClick={() => {
-              setSessionMenuOpen((o) => {
-                if (!o) void refreshSessionList();
-                return !o;
-              });
-            }}
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--or-outline)] text-[var(--or-muted)] transition hover:bg-[var(--or-block)]"
-          >
-            <History className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            title={t("longTermMemory")}
-            aria-label={t("longTermMemory")}
-            aria-expanded={memoryOpen}
-            onClick={() => setMemoryOpen((o) => !o)}
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--or-outline)] text-[var(--or-muted)] transition hover:bg-[var(--or-block)]"
-          >
-            <BookMarked className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={startNewChat}
-            className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center rounded-lg bg-or-primary-container px-3 text-xs font-semibold text-or-on-container transition hover:brightness-95"
-          >
-            {t("newChat")}
-          </button>
-        </div>
-
+      <div className="or-agent-header" {...windowDrag}>
+        <span className="or-agent-header-title"><Sparkles className="h-4 w-4 shrink-0 text-or-primary" /><span className="truncate">{t("title")}</span></span>
+        <button ref={historyButtonRef} type="button" className="or-agent-icon" aria-expanded={sessionMenuOpen}
+          aria-label={t("history")} title={t("history")}
+          onClick={() => { if (sessionMenuOpen) closeHistory(); else { setSessionMenuOpen(true); void refreshSessionList(); } }}>
+          <History className="h-4 w-4" />
+        </button>
+        <button type="button" className="or-agent-icon or-agent-new-chat" onClick={() => { startNewChat(); setSessionMenuOpen(false); }}
+          title={t("newChat")} aria-label={t("newChat")}><Plus className="h-4 w-4" /></button>
+        {windowControls}
+        {onRequestCollapse && <button type="button" data-assistant-close className="or-agent-icon"
+          title={t("collapseSidebar")} aria-label={t("collapseSidebar")} onClick={onRequestCollapse}><X className="h-4 w-4" /></button>}
+      </div>
         <AgentSessionHistoryMenu
           isOpen={sessionMenuOpen}
-          onClose={() => setSessionMenuOpen(false)}
+          onClose={closeHistory}
           sessionList={sessionList}
           busy={busy}
           onLoadSession={async (id) => {
-            await loadHistorySession(id, () => setSessionMenuOpen(false));
+            await loadHistorySession(id, closeHistory);
           }}
           onRemoveSession={removeHistorySession}
+          footer={(turnUsage || contextTokensEst !== null) ? <>
+            {turnUsage && <p>最近一轮：{turnUsage.total.toLocaleString()} tokens
+              {turnUsage.input !== null && turnUsage.output !== null ? `（输入 ${turnUsage.input.toLocaleString()} · 输出 ${turnUsage.output.toLocaleString()}）` : ""}</p>}
+            {contextTokensEst !== null && <p>上下文估算：{contextTokensEst.toLocaleString()}{contextLimit ? ` / ${contextLimit.toLocaleString()}` : ""}{contextMeterRefreshing ? "（更新中）" : ""}</p>}
+          </> : undefined}
         />
-      </div>
 
-      <AgentMemoryDrawer
-        isOpen={memoryOpen}
-        memoryTab={memoryTab}
-        setMemoryTab={setMemoryTab}
-        memoryMsg={memoryMsg}
-        setMemoryMsg={setMemoryMsg}
-        indexDraft={indexDraft}
-        setIndexDraft={setIndexDraft}
-        topicDraft={topicDraft}
-        setTopicDraft={setTopicDraft}
-        topicPick={topicPick}
-        setTopicPick={setTopicPick}
-        topicOptions={topicOptions}
-        memoryBusy={memoryBusy}
-      />
+      {chatError && <p role="alert" className="px-3 py-2 text-xs text-or-error">{chatError}</p>}
 
       {config && !config.llm_configured && (
         <div className="or-g55-status-warning mx-3 mt-3 flex items-start gap-2.5 rounded-xl p-3 text-xs">
@@ -518,22 +499,6 @@ export function AgentChatPanel({
           </div>
         )}
 
-        {activeSkillId && (
-          <div className="flex items-center justify-between rounded-xl border border-or-primary/25 bg-or-primary-container px-3 py-1.5 text-xs text-or-on-container">
-            <div>
-              <span className="font-medium">{t("quickAssist")}</span>
-              <span>{skills.find((x) => x.id === activeSkillId)?.label ?? activeSkillId}</span>
-            </div>
-            <button
-              type="button"
-              className="font-medium text-or-primary underline hover:text-or-primary"
-              onClick={() => setActiveSkillId(null)}
-            >
-              {t("clear")}
-            </button>
-          </div>
-        )}
-
         {taskSteps && taskSteps.length > 0 && (
           <div className="rounded-xl border border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_80%,transparent)] p-3 text-xs text-[var(--or-text)]   ">
             <div className="font-semibold text-[var(--or-text)] ">{t("currentSteps")}</div>
@@ -547,33 +512,8 @@ export function AgentChatPanel({
           </div>
         )}
 
-        {pageContext?.summary && (
-          <div className="rounded-xl border border-[var(--or-outline)] bg-[var(--or-page)] px-3 py-1.5 text-xs text-[var(--or-muted)]   ">
-            {t("currentUi", { summary: pageContext.summary })}
-          </div>
-        )}
-
-        {lines.length === 0 && skills.length > 0 && (
-          <div className="space-y-2 pt-2">
-            <p className="text-xs font-medium text-[var(--or-muted)] ">{t("quickStart")}</p>
-            <div className="flex flex-wrap gap-2">
-              {skills.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  title={s.description}
-                  onClick={() => pickSkill(s)}
-                  className="or-g55-pill border border-[var(--or-outline)] bg-[var(--or-card)] px-3 py-1.5 text-xs font-medium text-[var(--or-muted)] shadow-sm transition hover:border-or-primary hover:text-or-primary   "
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {lines.length === 0 && (
-          <p className="pt-2 text-xs leading-relaxed text-[var(--or-muted)] ">{t("freeformHint")}</p>
+          <p className="pt-2 text-sm leading-relaxed text-[var(--or-muted)]">{t("freeformHint")}</p>
         )}
 
         {lines.map((ln) => (
@@ -605,68 +545,58 @@ export function AgentChatPanel({
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_90%,transparent)] p-3 backdrop-blur-md   or-g55-safe-bottom">
+      <div className="shrink-0 border-t border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 or-g55-safe-bottom">
         <input
           ref={fileInputRef}
           type="file"
           multiple
           className="hidden"
           accept={AGENT_UPLOAD_ACCEPT}
-          onChange={(e) => {
-            const files = Array.from(e.target.files ?? []);
-            if (files.length > 0) setPendingFiles((prev) => [...prev, ...files]);
-            e.target.value = "";
-          }}
+          onChange={(e) => queueFiles(e.currentTarget)}
         />
+        <input ref={imageInputRef} type="file" multiple className="hidden"
+          accept=".png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.gif" onChange={(event) => queueFiles(event.currentTarget)} />
 
         <AgentAttachmentList
           files={pendingFiles}
           onRemove={(i) => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
         />
 
-        <div className="flex items-end gap-2">
-          <div className="flex shrink-0 flex-col items-center gap-1.5 pb-1">
-            {sessionId != null &&
-            (contextTokensEst != null ||
-              contextLimit != null ||
-              contextMeterRefreshing) ? (
-              <AgentContextRing
-                used={contextTokensEst}
-                limit={contextLimit}
-                refreshing={contextMeterRefreshing}
-                title={
-                  contextLimit != null
-                    ? t("contextMeterTooltip", {
-                        used: (contextTokensEst ?? 0).toLocaleString(),
-                        cap: contextLimit.toLocaleString(),
-                      })
-                    : t("contextMeterTooltipNoCap", {
-                        used: (contextTokensEst ?? 0).toLocaleString(),
-                      })
-                }
-                ariaLabel={
-                  contextLimit != null
-                    ? t("contextMeterAria", {
-                        used: (contextTokensEst ?? 0).toLocaleString(),
-                        cap: contextLimit.toLocaleString(),
-                      })
-                    : t("contextMeterAriaNoCap", {
-                        used: (contextTokensEst ?? 0).toLocaleString(),
-                      })
-                }
-              />
-            ) : null}
+        {picking && <p role="status" className="mb-2 text-xs">点击高亮内容，或按 Tab 选择、Enter 确认、Esc 退出。</p>}
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <button ref={pickerButton} type="button" disabled={!assistantEnabled || busy} aria-pressed={picking}
+            className="or-agent-tool or-agent-picker-button"
+            onClick={() => setPicking((value) => !value)}><MousePointer2 className="h-3.5 w-3.5" aria-hidden="true" />{picking ? "退出选取" : "选取页面内容"}</button>
+          <button type="button" className="or-agent-tool" disabled={!assistantEnabled || busy} onClick={() => imageInputRef.current?.click()}>
+            <ImagePlus className="h-3.5 w-3.5" aria-hidden="true" />上传图片
+          </button>
+        </div>
+        {selection && <div className="or-agent-reference mb-2">
+          <details className="min-w-0 flex-1">
+            <summary className="flex cursor-pointer items-center gap-1 truncate text-xs"><Info className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">引用：{selection.label}</span>
+            </summary>
+            <div className="or-agent-reference-preview">
+              <p>发送时附带以下控件与页面文字：</p>
+              <p className="font-medium">结构：{selection.context.selected_control?.tag} · {selection.label}</p>
+              {selection.context.selected_control?.text && <p>{selection.context.selected_control.text}</p>}
+              <p>{selection.context.visible_page_text || "没有可读取的页面文字。"}</p>
+            </div>
+          </details>
+          <button type="button" className="or-agent-icon" onClick={() => setSelection(null)}
+            aria-label={`移除引用：${selection.label}`}><X className="h-3.5 w-3.5" /></button>
+        </div>}
+        <div className="or-agent-composer-row">
             <button
               type="button"
               title={t("addAttachment")}
               aria-label={t("addAttachment")}
               disabled={!assistantEnabled}
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-page)] text-[var(--or-muted)] transition hover:bg-[var(--or-block)] hover:text-[var(--or-text)] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:text-[var(--or-text)]"
+              className="or-agent-composer-action"
             >
               <Paperclip className="h-4 w-4" />
             </button>
-          </div>
 
           <AgentChatComposer
             busy={busy}

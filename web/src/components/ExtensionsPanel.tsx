@@ -54,6 +54,7 @@ function ExtensionCard({
   pathBusyId,
   recheckBusy,
   nativePathPickerAvailable,
+  hostControlAllowed,
   manualPathValues,
   onManualPathChange,
   onSaveManualPath,
@@ -67,6 +68,7 @@ function ExtensionCard({
   pathBusyId: string | null;
   recheckBusy: boolean;
   nativePathPickerAvailable: boolean;
+  hostControlAllowed: boolean;
   manualPathValues: Record<"dir" | "file", string>;
   onManualPathChange: (kind: "dir" | "file", value: string) => void;
   onSaveManualPath: (id: string, kind: "dir" | "file", path: string) => void;
@@ -156,7 +158,7 @@ function ExtensionCard({
           <ExternalLink className="h-3.5 w-3.5" />
           {t("ext.manualDownload")}
         </button>
-        {ext.can_auto_install ? (
+        {hostControlAllowed && ext.can_auto_install ? (
           <button
             type="button"
             disabled={installBusy || pathBusy || recheckBusy}
@@ -178,7 +180,7 @@ function ExtensionCard({
             {t("ext.copyInstallCommand")}
           </button>
         ) : null}
-        {nativePathPickerAvailable ? ext.id === "latex" ? (
+        {hostControlAllowed && (nativePathPickerAvailable ? ext.id === "latex" ? (
           <>
             <button
               type="button"
@@ -259,8 +261,8 @@ function ExtensionCard({
               </form>
             ))}
           </div>
-        )}
-        {ext.has_manual_paths ? (
+        ))}
+        {hostControlAllowed && ext.has_manual_paths ? (
           <button
             type="button"
             disabled={pathBusy || recheckBusy}
@@ -283,6 +285,7 @@ type Props = {
 export function ExtensionsPanel({ onError }: Props) {
   const { t } = useTranslation(["settings", "common"]);
   const [extensions, setExtensions] = useState<SystemExtensionStatus[] | null>(null);
+  const [hostControlAllowed, setHostControlAllowed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [recheckBusy, setRecheckBusy] = useState(false);
   const [installBusyId, setInstallBusyId] = useState<string | null>(null);
@@ -306,9 +309,11 @@ export function ExtensionsPanel({ onError }: Props) {
       await ensureApiBase();
       const data = await apiSystemExtensions();
       setExtensions(data.extensions);
+      setHostControlAllowed(data.host_control_allowed !== false);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
       setExtensions(null);
+      setHostControlAllowed(false);
     }
   }, [onError]);
 
@@ -508,6 +513,7 @@ export function ExtensionsPanel({ onError }: Props) {
         </p>
       ) : null}
 
+      {extensions && !hostControlAllowed && <p role="status" className="text-sm text-or-muted">远程会话可检查扩展或复制安装命令；安装与修改路径请在服务器本机完成。</p>}
       <div className="space-y-4">
         {(extensions ?? []).map((ext) => (
           <ExtensionCard
@@ -521,6 +527,7 @@ export function ExtensionsPanel({ onError }: Props) {
             pathBusyId={pathBusyId}
             recheckBusy={recheckBusy}
             nativePathPickerAvailable={nativePathPickerAvailable}
+            hostControlAllowed={hostControlAllowed}
             manualPathValues={{
               dir: manualPathDrafts[`${ext.id}:dir`] ?? "",
               file: manualPathDrafts[`${ext.id}:file`] ?? "",

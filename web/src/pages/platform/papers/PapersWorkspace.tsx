@@ -1057,6 +1057,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           page: targetQuery.page,
           pageSize: targetQuery.pageSize,
           folderId: targetFolderId,
+          ...(targetQuery.directId ? { paperId: targetQuery.directId, q: null, folderId: null } : {}),
         }),
         listTeacherAssignedClasses(),
       ]);
@@ -1092,17 +1093,19 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     if (!accountProfileReady) return;
     void refresh(paperQuery, browserFolderId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize, browserFolderId, paperFolderScopeKey, accountProfileReady]);
+  }, [paperQuery.q, paperQuery.deliveryMode, paperQuery.status, paperQuery.page, paperQuery.pageSize, paperQuery.directId, browserFolderId, paperFolderScopeKey, accountProfileReady]);
 
   useEffect(() => {
     if (!openTarget) return;
-    setPaperQuery((current) => ({ ...current, q: openTarget.title, deliveryMode: "all", status: "all", page: 1 }));
+    setPaperQuery((current) => ({ ...current, q: openTarget.title, directId: openTarget.paperId, deliveryMode: "all", status: "all", page: 1 }));
+    setBrowserFolderId(null);
   }, [openTarget?.paperId]);
 
   useEffect(() => {
     if (!openTarget || !papers.some((paper) => paper.paper_id === openTarget.paperId)) return;
     setSelectedPaperId(openTarget.paperId);
     setPaperDetailView("grading");
+    setMobileTab("detail");
   }, [openTarget?.paperId, papers]);
 
   useEffect(() => {
@@ -1905,7 +1908,7 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
   invalidateAnalysisLifecycleRef.current = invalidateAnalysisLifecycle;
   const onSelectPaperListFolder = useCallback((id: string | null) => {
     setBrowserFolderId(id);
-    setPaperQuery((query) => ({ ...query, page: 1 }));
+    setPaperQuery((query) => ({ ...query, directId: undefined, page: 1 }));
   }, []);
   const onPaperFolderCreated = useCallback((folder: ContentFolder) => {
     setFolders((current) => [...current, folder]);
@@ -1942,13 +1945,13 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
     reportErrorRef.current(error);
   }, []);
   const onPaperSearchChange = useCallback((q: string) => {
-    setPaperQuery((current) => ({ ...current, q, page: 1 }));
+    setPaperQuery((current) => ({ ...current, q, directId: undefined, page: 1 }));
   }, []);
   const onPaperDeliveryModeChange = useCallback((deliveryMode: PaperQuery["deliveryMode"]) => {
-    setPaperQuery((current) => ({ ...current, deliveryMode, page: 1 }));
+    setPaperQuery((current) => ({ ...current, deliveryMode, directId: undefined, page: 1 }));
   }, []);
   const onPaperStatusChange = useCallback((status: string) => {
-    setPaperQuery((current) => ({ ...current, status, page: 1 }));
+    setPaperQuery((current) => ({ ...current, status, directId: undefined, page: 1 }));
   }, []);
   const onPaperSelect = useCallback((paper: PlatformPaperRecord) => {
     invalidateAnalysisLifecycleRef.current();
@@ -2192,7 +2195,8 @@ export function PapersWorkspace({ openTarget, onOpenTargetConsumed, onOpenAnalys
           {detailContentAvailable ? (
             selectedPaper ? (
             <div className="mx-auto flex max-w-6xl flex-col gap-5">
-              <section className="or-g51-surface p-4 sm:p-6 shadow-sm or-g51-static-card">
+              <section className="or-g51-surface p-4 sm:p-6 shadow-sm or-g51-static-card" tabIndex={-1}
+                data-agent-target="paper-detail" data-agent-resource-id={selectedPaper.paper_id}>
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-[var(--or-on-container)]">{formatSubjectLabel(selectedPaper.subject, "综合学科")}</p>

@@ -118,13 +118,17 @@ def _is_host_control(path: str, method: str) -> bool:
         return True
     if path.startswith("/api/exams/") and path.endswith(("/open-pdf", "/open-docx")):
         return True
+    if path.startswith("/api/system/extensions/"):
+        return method in {"POST", "PUT", "DELETE"}
     return False
 
 
 def _is_admin_configuration(path: str, method: str) -> bool:
+    if path.startswith("/api/admin/") or path == "/api/system/extensions" or path.startswith("/api/system/extensions/"):
+        return True
     if method == "GET":
         return False
-    return path in _ADMIN_CONFIGURATION_EXACT or path.startswith("/api/system/extensions")
+    return path in _ADMIN_CONFIGURATION_EXACT
 
 
 def student_request_allowed(path: str, method: str) -> bool:

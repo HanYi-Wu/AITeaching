@@ -312,6 +312,9 @@ export type TeacherStudentProfile = {
   };
   recent_exams: Array<{
     attempt_id: string;
+    publication_id?: string | null;
+    grading_completed_at?: string | null;
+    can_assign_wrong_question_practice?: number;
     paper_id: string;
     title: string;
     subject?: string | null;
@@ -464,6 +467,8 @@ export type PlatformPaperAnalysis = {
     integrity_event_count?: number;
     integrity_event_type_counts?: Record<string, number>;
     integrity_risk_score?: number;
+    answer_rhythm_review?: Array<{ occurred_at: string; idle_seconds: number; burst_seconds: number;
+      changed_questions: number; context_signal: "none" | "visibility" | "paste" }>;
     publication_id?: string | null;
     publication_title?: string | null;
     class_names?: string[];

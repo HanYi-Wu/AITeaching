@@ -1,146 +1,83 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  apiAgentMemoryIndexPut,
-  apiAgentMemoryTopicGet,
-  apiAgentMemoryTopicPut,
+  apiAgentMemoryIndexGet, apiAgentMemoryIndexPut,
+  apiAgentMemoryTopicGet, apiAgentMemoryTopicList, apiAgentMemoryTopicPut,
 } from "../../api/client";
-import "../../ui-redesign/g55/g55.css";
 import { Select as AppSelect } from "../ui/select";
 
-export interface AgentMemoryDrawerProps {
-  isOpen: boolean;
-  memoryTab: "index" | "topic";
-  setMemoryTab: (t: "index" | "topic") => void;
-  memoryMsg: string | null;
-  setMemoryMsg: (m: string | null) => void;
-  indexDraft: string;
-  setIndexDraft: (s: string) => void;
-  topicDraft: string;
-  setTopicDraft: (s: string) => void;
-  topicPick: string;
-  setTopicPick: (s: string) => void;
-  topicOptions: string[];
-  memoryBusy: boolean;
+export function AgentMemoryDrawer() {
+  const [open, setOpen] = useState(false);
+  return <section className="rounded-2xl border border-or-outline bg-or-card p-4 sm:p-6">
+    <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer font-semibold">智能体主题与记忆</summary>
+      {open && <MemoryEditor />}
+    </details>
+  </section>;
 }
 
-export function AgentMemoryDrawer({
-  isOpen,
-  memoryTab,
-  setMemoryTab,
-  memoryMsg,
-  setMemoryMsg,
-  indexDraft,
-  setIndexDraft,
-  topicDraft,
-  setTopicDraft,
-  topicPick,
-  setTopicPick,
-  topicOptions,
-  memoryBusy,
-}: AgentMemoryDrawerProps) {
+function MemoryEditor() {
   const { t } = useTranslation("agent");
+  const [tab, setTab] = useState<"index" | "topic">("index");
+  const [index, setIndex] = useState<string | null>(null);
+  const [topics, setTopics] = useState<string[] | null>(null);
+  const [topic, setTopic] = useState("");
+  const [draft, setDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
 
-  if (!isOpen) return null;
+  async function run(action: () => Promise<void>) {
+    setBusy(true);
+    setMessage(null);
+    try { await action(); }
+    catch (error) { setMessage({ text: error instanceof Error ? error.message : String(error), error: true }); }
+    finally { setBusy(false); }
+  }
 
-  return (
-    <div className="border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-page)_70%,transparent)] p-3 text-xs text-[var(--or-muted)]   ">
-      <div className="mb-2 flex items-center gap-1.5">
-        <button
-          type="button"
-          className={`or-g55-pill px-3 py-1 font-semibold transition ${
-            memoryTab === "index"
-              ? "bg-or-primary text-or-on-primary shadow-sm"
-              : "bg-[color-mix(in_srgb,var(--or-inset)_80%,transparent)] text-[var(--or-muted)] hover:bg-[color-mix(in_srgb,var(--or-outline)_80%,transparent)]  "
-          }`}
-          onClick={() => setMemoryTab("index")}
-        >
-          {t("memoryIndex")}
-        </button>
-        <button
-          type="button"
-          className={`or-g55-pill px-3 py-1 font-semibold transition ${
-            memoryTab === "topic"
-              ? "bg-or-primary text-or-on-primary shadow-sm"
-              : "bg-[color-mix(in_srgb,var(--or-inset)_80%,transparent)] text-[var(--or-muted)] hover:bg-[color-mix(in_srgb,var(--or-outline)_80%,transparent)]  "
-          }`}
-          onClick={() => setMemoryTab("topic")}
-        >
-          {t("topicNotes")}
-        </button>
-      </div>
-      {memoryMsg && <p className="mb-2 text-xs font-medium text-or-error">{memoryMsg}</p>}
-      {memoryTab === "index" && (
-        <div className="space-y-2">
-          <textarea
-            value={indexDraft}
-            onChange={(e) => setIndexDraft(e.target.value)}
-            rows={5}
-            disabled={memoryBusy}
-            className="w-full resize-y rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 font-mono text-xs text-[var(--or-text)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus   "
-          />
-          <button
-            type="button"
-            disabled={memoryBusy}
-            onClick={() =>
-              void apiAgentMemoryIndexPut(indexDraft).then(() =>
-                setMemoryMsg(t("indexSaved")),
-              )
-            }
-            className="inline-flex h-8 items-center justify-center rounded-lg bg-or-primary px-3.5 text-xs font-semibold text-or-on-primary shadow-sm transition hover:brightness-95 disabled:opacity-50"
-          >
-            {t("saveIndex")}
-          </button>
-        </div>
-      )}
-      {memoryTab === "topic" && (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <AppSelect
-              value={topicPick}
-              onValueChange={(value) => setTopicPick(value)}
-              className="h-8 max-w-[12rem] rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-2.5 text-xs text-[var(--or-text)] outline-none transition focus:border-or-focus   "
-            >
-              {topicOptions.map((topic) => (
-                <option key={topic} value={topic}>
-                  {topic}
-                </option>
-              ))}
-            </AppSelect>
-            <button
-              type="button"
-              disabled={memoryBusy || !topicPick}
-              onClick={() =>
-                void apiAgentMemoryTopicGet(topicPick).then((r) => {
-                  setTopicDraft(r.content);
-                  setMemoryMsg(null);
-                })
-              }
-              className="inline-flex h-8 items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] px-3 text-xs font-medium text-[var(--or-muted)] transition hover:bg-[var(--or-block)] disabled:opacity-50   "
-            >
-              {t("load")}
-            </button>
-          </div>
-          <textarea
-            value={topicDraft}
-            onChange={(e) => setTopicDraft(e.target.value)}
-            rows={5}
-            placeholder={t("topicDraftPh")}
-            className="w-full resize-y rounded-lg border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 font-mono text-xs text-[var(--or-text)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus   "
-          />
-          <button
-            type="button"
-            disabled={memoryBusy || !topicPick}
-            onClick={() =>
-              void apiAgentMemoryTopicPut(topicPick, topicDraft).then(() =>
-                setMemoryMsg(t("topicSaved")),
-              )
-            }
-            className="inline-flex h-8 items-center justify-center rounded-lg bg-or-primary px-3.5 text-xs font-semibold text-or-on-primary shadow-sm transition hover:brightness-95 disabled:opacity-50"
-          >
-            {t("saveTopic")}
-          </button>
-        </div>
-      )}
+  const loadIndex = () => run(async () => { setIndex((await apiAgentMemoryIndexGet()).content); });
+  const loadTopics = () => run(async () => {
+    const { topics: names } = await apiAgentMemoryTopicList();
+    setTopics(names);
+    setTopic(names[0] ?? "");
+    setDraft(null);
+  });
+  return <div className="mt-4 space-y-3">
+    <div className="flex flex-wrap gap-2">
+      <button type="button" disabled={busy} aria-pressed={tab === "index"}
+        className={tab === "index" ? "or-button or-button-primary" : "or-button or-button-outline"}
+        onClick={() => { setTab("index"); setMessage(null); }}>{t("memoryIndex")}</button>
+      <button type="button" disabled={busy} aria-pressed={tab === "topic"}
+        className={tab === "topic" ? "or-button or-button-primary" : "or-button or-button-outline"}
+        onClick={() => { setTab("topic"); setMessage(null); if (!topics) void loadTopics(); }}>{t("topicNotes")}</button>
     </div>
-  );
+    {message && <p role={message.error ? "alert" : "status"} className={message.error ? "text-sm text-or-error" : "text-sm text-or-muted"}>{message.text}</p>}
+    {tab === "index" && (index === null
+      ? <button type="button" className="or-button or-button-outline" disabled={busy} onClick={() => void loadIndex()}>{t("load")}{t("memoryIndex")}</button>
+      : <>
+          <textarea aria-label={t("memoryIndex")} value={index} onChange={(e) => setIndex(e.target.value)}
+            rows={6} disabled={busy} className="or-input w-full resize-y rounded-lg border border-or-outline p-3 font-mono text-sm" />
+          <button type="button" className="or-button or-button-primary" disabled={busy} onClick={() => void run(async () => {
+            await apiAgentMemoryIndexPut(index); setMessage({ text: t("indexSaved") });
+          })}>{t("saveIndex")}</button>
+        </>)}
+    {tab === "topic" && <>
+      {topics === null && <button type="button" className="or-button or-button-outline" disabled={busy} onClick={() => void loadTopics()}>{t("load")}{t("topicNotes")}</button>}
+      {topics?.length === 0 && <p className="text-sm text-or-muted">暂无主题记录。</p>}
+      {!!topics?.length && <div className="flex flex-wrap gap-2">
+        <AppSelect aria-label={t("topicNotes")} value={topic} disabled={busy}
+          onValueChange={(name) => { setTopic(name); setDraft(null); setMessage(null); }}>
+          {topics.map((name) => <option key={name} value={name}>{name}</option>)}
+        </AppSelect>
+        <button type="button" className="or-button or-button-outline" disabled={busy || !topic}
+          onClick={() => void run(async () => setDraft((await apiAgentMemoryTopicGet(topic)).content))}>{t("load")}</button>
+      </div>}
+      {draft !== null && <>
+        <textarea aria-label={t("topicNotes")} value={draft} onChange={(e) => setDraft(e.target.value)} rows={6}
+          disabled={busy} className="or-input w-full resize-y rounded-lg border border-or-outline p-3 font-mono text-sm" />
+        <button type="button" className="or-button or-button-primary" disabled={busy || !topic} onClick={() => void run(async () => {
+          await apiAgentMemoryTopicPut(topic, draft); setMessage({ text: t("topicSaved") });
+        })}>{t("saveTopic")}</button>
+      </>}
+    </>}
+  </div>;
 }

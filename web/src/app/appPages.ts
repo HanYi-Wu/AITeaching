@@ -1,5 +1,6 @@
 export type AppPage =
   | "compose"
+  | "teacher-home"
   | "papers"
   | "students"
   | "bank"

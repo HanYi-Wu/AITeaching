@@ -19,6 +19,6 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "EducationHelper $GITHUB_REF_NAME" \
+            --title "OriginReach $GITHUB_REF_NAME" \
             --notes-file "docs/release-${GITHUB_REF_NAME#v}.md" \
             --verify-tag

@@ -6,7 +6,8 @@ entry point delegates here so desktop and server launch commands stay stable.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,18 +24,26 @@ from solaire.web.public_access import allowed_origins
 from solaire.web.request_context import bind_request_context
 from solaire.web.result_service import ResultServiceAdapter
 from solaire.web.routing import register_routes
+from solaire.web.management.update_discovery import ReleaseDiscovery
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     state.init_from_env()
-    yield
+    worker = asyncio.create_task(_app.state.release_discovery.run())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
 
 
 def create_app() -> FastAPI:
     """Build an independent ASGI application with the standard API contract."""
     configure(result_port=ResultServiceAdapter())
     app = FastAPI(title="OriginReach API", version=__version__, lifespan=lifespan)
+    app.state.release_discovery = ReleaseDiscovery()
 
     @app.exception_handler(PermissionError)
     async def permission_denied(_request, exc: PermissionError):

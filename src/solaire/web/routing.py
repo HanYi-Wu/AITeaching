@@ -13,6 +13,8 @@ from solaire.web.management.access_routes import router as management_access_rou
 from solaire.web.management.audit_routes import router as management_audit_router
 from solaire.web.management.settings_routes import router as management_settings_router
 from solaire.web.management.help_routes import router as management_help_router
+from solaire.web.management.update_discovery import router as update_discovery_router
+from solaire.web.management.update_inbox import router as update_inbox_router
 from solaire.web.routers.learning_progress import router as learning_progress_router
 from solaire.web.routers import (
     ai_pregrade_tasks,
@@ -38,6 +40,8 @@ def register_routes(app: FastAPI) -> None:
         management_audit_router,
         management_settings_router,
         management_help_router,
+        update_discovery_router,
+        update_inbox_router,
         paper_router,
         student_router,
         learning_progress_router,

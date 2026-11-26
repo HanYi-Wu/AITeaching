@@ -54,7 +54,7 @@
   "currentSteps": "Current steps",
   "currentUi": "Current screen: {{summary}}",
   "quickStart": "Quick start (tap a phrase; edit before send):",
-  "freeformHint": "Or type freely, e.g. list available exams, run knowledge diagnosis, find a question and link it.",
+  "freeformHint": "Planning a lesson, building an exam, or reviewing grades? Tell OriginReach what you need.",
   "subtaskPrefix": "Subtask · ",
   "needConfirm": "Confirmation needed: {{name}}",
   "accepted": "Confirmed.",

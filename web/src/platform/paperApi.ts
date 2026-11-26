@@ -72,7 +72,7 @@ export function normalizePaper(raw: Partial<PlatformPaperRecord> & { id?: string
 }
 
 export async function listPlatformPapers(
-  params: (ListQuery & { deliveryMode?: "offline" | "online" | "all" | null; subject?: string | null; folderId?: string | null }) = {},
+  params: (ListQuery & { deliveryMode?: "offline" | "online" | "all" | null; subject?: string | null; folderId?: string | null; paperId?: string | null }) = {},
 ): Promise<{ papers: PlatformPaperRecord[] } & PagedResult> {
   const data = await platformRequest<
     { papers: Array<Partial<PlatformPaperRecord> & { id?: string }> } & PagedResult
@@ -83,6 +83,7 @@ export async function listPlatformPapers(
       delivery_mode: params.deliveryMode,
       subject: params.subject,
       folder_id: params.folderId,
+      paper_id: params.paperId,
       page: params.page,
       page_size: params.pageSize,
     })}`,
@@ -248,7 +249,7 @@ type AdaptivePracticePublishPayload = {
 };
 
 export function publishWrongQuestionPractice(
-  payload: AdaptivePracticePublishPayload & { source_publication_id: string; max_questions_per_student?: number },
+  payload: AdaptivePracticePublishPayload & { source_publication_id: string; max_questions_per_student?: number; student_id?: string },
 ): Promise<{
   publication: PaperPublicationRecord & { practice_kind: "wrong_questions" };
   assigned_student_count: number;

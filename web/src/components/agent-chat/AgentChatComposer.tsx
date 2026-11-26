@@ -51,7 +51,8 @@ export function AgentChatComposer({
         }}
         rows={2}
         placeholder={inputPlaceholder}
-        className="min-h-[46px] min-w-0 flex-1 resize-none rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] p-2.5 text-[16px] sm:text-[15px] text-[var(--or-text)] outline-none transition focus:border-or-focus focus:ring-2 focus:ring-or-focus disabled:cursor-not-allowed disabled:bg-[var(--or-page)] disabled:text-[var(--or-muted)]"
+        aria-label={inputPlaceholder}
+        className="or-agent-composer-input"
       />
 
       {busy ? (
@@ -60,7 +61,7 @@ export function AgentChatComposer({
           title={stopLabel}
           aria-label={stopLabel}
           onClick={() => void onStop()}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--or-outline)] bg-[var(--or-card)] text-[var(--or-muted)] shadow-sm transition hover:bg-[var(--or-page)]"
+          className="or-agent-composer-action"
         >
           <Square className="h-4 w-4 fill-current text-or-error" />
         </button>
@@ -71,7 +72,7 @@ export function AgentChatComposer({
           onClick={send}
           aria-label={sendLabel}
           title={sendLabel}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-or-primary text-or-on-primary shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:bg-[var(--or-page)] disabled:text-[var(--or-muted)] disabled:opacity-100 disabled:shadow-none"
+          className="or-agent-composer-action or-agent-composer-send"
         >
           <Send className="h-4 w-4" />
         </button>

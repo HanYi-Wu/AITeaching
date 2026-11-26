@@ -1423,7 +1423,8 @@ export function ComposeWorkspace({
   const wordOpenExamId = wordExamId ?? (activeDocumentSummary?.has_docx ? activeDocumentExamId : null);
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col" data-agent-target={currentExamId ? "compose-draft" : undefined}
+      data-agent-resource-id={currentExamId ?? undefined} tabIndex={currentExamId ? -1 : undefined}>
       <NewPaperDialog
         open={newPaperDialogOpen} busy={busy} mode={dlgMode} onModeChange={setDlgMode}
         exportLabel={dlgExportLabel} onExportLabelChange={setDlgExportLabel}

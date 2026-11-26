@@ -16,6 +16,31 @@ def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_teacher_workbench_counts_only_owned_released_work(web_client: TestClient, tmp_path: Path):
+    school_headers, _ = _school_headers(web_client, _bootstrap_admin(web_client))
+    class_id, account = _create_teacher_class_student(web_client, school_headers)
+    _write_online_exam(tmp_path)
+    teacher = _teacher_headers(web_client)
+    paper = web_client.get("/api/papers", headers=teacher).json()["papers"][0]
+    publication = web_client.post(f"/api/papers/{paper['paper_id']}/publish", json={"class_ids": [class_id]}, headers=teacher).json()["publication"]
+    url = "/api/teacher/workbench"
+    assert web_client.get(url, headers=teacher).json()["outstanding_attempts"] == 1
+    student = _headers(web_client.post("/api/auth/login", json=account).json()["token"])
+    assert web_client.get(url, headers=student).status_code == 403
+    attempt = web_client.post(f"/api/student/publications/{publication['id']}/start", headers=student).json()["attempt"]
+    # Mixed exam submission: grading has not been released yet.
+    with connect(default_platform_root()) as db:
+        db.execute("UPDATE student_attempts SET status='submitted', submitted_at=? WHERE id=?", (datetime.now(UTC).isoformat(), attempt["id"]))
+    result = web_client.get(url, headers=teacher).json()
+    assert result["pending_total"] == 1 and result["outstanding_attempts"] == 0
+    assert result["queue"][0]["paper_id"] == paper["paper_id"] and result["queue"][0]["attempt_id"] == attempt["id"]
+    other = {"username": "teacher_other", "password": "teacher321"}
+    assert web_client.post("/api/school/teachers", json={**other, "display_name": "Other", "subjects": ["Math"]}, headers=school_headers).status_code == 200
+    other_token = _headers(web_client.post("/api/auth/login", json=other).json()["token"])
+    assert web_client.get(url, headers=other_token).json()["queue"] == []
+    assert web_client.get("/api/papers", params={"paper_id": paper["paper_id"]}, headers=other_token).json()["papers"] == []
+
+
 def _bootstrap_admin(client: TestClient) -> str:
     r = client.post(
         "/api/auth/bootstrap-admin",
@@ -663,7 +688,18 @@ def test_proctor_events_are_validated_deduplicated_and_only_visibility_counts_as
         assert duplicate.status_code == 200
         assert duplicate.json()["event"]["deduplicated"] is True
 
-    analysis = web_client.get(f"/api/papers/{paper['paper_id']}/analysis", headers=teacher_headers)
+    analysis_url = f"/api/papers/{paper['paper_id']}/analysis"
+    baseline = web_client.get(analysis_url, headers=teacher_headers).json()["analysis"]["students"][0]
+    event_url = f"/api/student/attempts/{attempt_id}/proctor-events"
+    rhythm = {"idle_seconds": 52, "burst_seconds": 5, "changed_questions": 3, "context_signal": "paste"}
+    rejected = web_client.post(event_url, headers=student_headers,
+        json={"event_type": "answer_resume_burst", "payload": {**rhythm, "text": "do not retain"}})
+    assert rejected.status_code == 400
+    captured = web_client.post(event_url, headers=student_headers, json={"event_type": "answer_resume_burst", "payload": rhythm})
+    assert captured.json()["event"]["recorded"] is True
+    duplicate = web_client.post(event_url, headers=student_headers, json={"event_type": "answer_resume_burst", "payload": rhythm})
+    assert duplicate.json()["event"]["recorded"] is False
+    analysis = web_client.get(analysis_url, headers=teacher_headers)
     assert analysis.status_code == 200
     integrity = analysis.json()["analysis"]["proctoring"]
     assert integrity["screen_switch_count"] == 1
@@ -679,3 +715,6 @@ def test_proctor_events_are_validated_deduplicated_and_only_visibility_counts_as
     assert student["screen_switch_count"] == 1
     assert student["screen_switch_exceeded"] is False
     assert student["integrity_risk_score"] > 0
+    assert student["integrity_risk_score"] == baseline["integrity_risk_score"]
+    assert student["score"] == baseline["score"]
+    assert student["answer_rhythm_review"] == [{**rhythm, "occurred_at": captured.json()["event"]["occurred_at"]}]

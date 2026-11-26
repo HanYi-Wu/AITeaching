@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from solaire.agent_layer.llm.llm_overrides import load_overrides_raw, mask_api_key, save_overrides_raw
 from solaire.agent_layer.llm.user_llm_overrides import load_user_overrides_raw, save_user_overrides_raw
@@ -98,13 +98,22 @@ def _owned_session(root: Path, session_id: str, request: Request):
     return session
 
 
-class AgentPageContextBody(BaseModel):
-    """教师当前前端界面上下文（由 Web 传入，注入系统提示）。"""
+class AgentSelectedControlBody(BaseModel):
+    tag: str = Field(max_length=40)
+    role: str | None = Field(default=None, max_length=40)
+    label: str = Field(max_length=100)
+    text: str = Field(max_length=600)
 
-    current_page: str | None = None
-    selected_resource_type: str | None = None
-    selected_resource_id: str | None = None
-    summary: str | None = None
+
+class AgentPageContextBody(BaseModel):
+    """Volatile UI context supplied with the current user turn."""
+
+    current_page: str | None = Field(default=None, max_length=100)
+    selected_resource_type: str | None = Field(default=None, max_length=100)
+    selected_resource_id: str | None = Field(default=None, max_length=512)
+    summary: str | None = Field(default=None, max_length=4000)
+    selected_control: AgentSelectedControlBody | None = None
+    visible_page_text: str | None = Field(default=None, max_length=3600)
 
 
 class FileAttachment(BaseModel):
@@ -113,12 +122,22 @@ class FileAttachment(BaseModel):
     original_name: str | None = None
 
 
+class QuestionReviewEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    index: int = Field(ge=0, lt=50, strict=True)
+    content: str | None = Field(default=None, max_length=20_000)
+    answer: str | None = Field(default=None, max_length=20_000)
+    analysis: str | None = Field(default=None, max_length=20_000)
+    options: dict[str, str] | None = None
+
+
 class AgentChatBody(BaseModel):
     session_id: str | None = None
     message: str | None = None
     mode: str = Field(default="execute", description="execute 或 suggest")
     confirm_action_id: str | None = None
     confirm_accepted: bool | None = None
+    confirm_questions: list[QuestionReviewEdit] | None = Field(default=None, min_length=1, max_length=50)
     page_context: AgentPageContextBody | None = None
     skill_id: str | None = Field(default=None, description="内置技能标识，收窄工具与指引")
     file_attachments: list[FileAttachment] | None = Field(default=None, description="附件文件列表")
@@ -585,6 +604,7 @@ async def agent_chat(body: AgentChatBody, request: Request) -> StreamingResponse
             mode=body.mode,
             confirm_action_id=body.confirm_action_id,
             confirm_accepted=body.confirm_accepted,
+            confirm_questions=[q.model_dump(exclude_none=True) for q in body.confirm_questions] if body.confirm_questions else None,
         )) as events:
             async for chunk in events:
                 yield chunk

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import i18n from "../../i18n/i18n";
 import {
   apiAgentChatStream, apiAgentSessionCancel, apiAgentSessionContextMeter, apiAgentSessionGet,
+  type AgentQuestionReview,
 } from "../../api/client";
 import type { AgentPageContextPayload } from "../../contexts/AgentContext";
 import { notifyAgentContentChanged } from "../../lib/contentEvents";
@@ -11,8 +12,8 @@ import type { ChatLine, TaskStep } from "./types";
 
 export interface UseAgentChatStreamOptions {
   sidebarOpen?: boolean;
-  activeSkillId: string | null;
-  setActiveSkillId: (id: string | null) => void;
+  activeSkillId?: string | null;
+  setActiveSkillId?: (id: string | null) => void;
   pageContext?: AgentPageContextPayload | null;
   notifyAgentBackground: (msg: string, type?: "info" | "warning" | "success") => void;
   refreshSessionList: () => Promise<void>;
@@ -20,6 +21,18 @@ export interface UseAgentChatStreamOptions {
 }
 
 type ChatBody = Parameters<typeof apiAgentChatStream>[0];
+
+export type TurnUsage = { input: number | null; output: number | null; total: number };
+
+export function readTurnUsage(raw: unknown): TurnUsage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const values = raw as Record<string, unknown>;
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const input = count(values.prompt_tokens);
+  const output = count(values.completion_tokens);
+  const total = count(values.total_tokens) ?? (input !== null && output !== null ? input + output : null);
+  return total !== null && total > 0 ? { input, output, total } : null;
+}
 type StreamRun = {
   controller: AbortController;
   text: ReturnType<typeof createTextDeltaBuffer>;
@@ -38,6 +51,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
   const [contextTokensEst, setContextTokensEst] = useState<number | null>(null);
   const [contextLimit, setContextLimit] = useState<number | null>(null);
   const [contextMeterRefreshing, setContextMeterRefreshing] = useState(false);
+  const [turnUsage, setTurnUsage] = useState<TurnUsage | null>(null);
   const [currentFocus, setCurrentFocus] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
@@ -78,6 +92,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
     const epoch = ++generation.current;
     ++meterRequest.current;
     setContextMeterRefreshing(false);
+    setTurnUsage(null);
     const current = () => activeRun.current === run && generation.current === epoch;
     const run: StreamRun = {
       controller: new AbortController(),
@@ -96,7 +111,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
     const context = latest.current;
     const payload: ChatBody = { ...body };
     if (context.activeSkillId) payload.skill_id = context.activeSkillId;
-    if (context.pageContext) {
+    if (payload.page_context === undefined && context.pageContext) {
       const page = context.pageContext;
       payload.page_context = {
         current_page: page.current_page,
@@ -187,13 +202,18 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
           case "confirm_needed": {
             const action_id = String(data.action_id ?? "");
             const line: ChatLine = { kind: "confirm", key: nextKey(), action_id,
-              tool_name: String(data.tool_name ?? ""), description: String(data.description ?? "") };
+              tool_name: String(data.tool_name ?? ""), description: String(data.description ?? ""),
+              preview: (data.preview ?? null) as Extract<ChatLine, { kind: "confirm" }>["preview"] };
             setLines((previous) => previous.some((item) => item.kind === "confirm" && item.action_id === action_id)
               ? previous : [...previous, line]);
             notify(i18n.t("agent:confirmOpenSidebar"), "warning");
             break;
           }
           case "error": {
+            if (data.code === "invalid_question_review") {
+              setLines((previous) => previous.map((line) => line.kind === "confirm" && line.action_id === data.action_id
+                ? { ...line, resolved: undefined } : line));
+            }
             const message = String(data.message ?? i18n.t("agent:unknownErr"));
             append({ kind: "system", text: message });
             notify(i18n.t("agent:assistantHint", { msg: message.slice(0, 100) }), "warning");
@@ -201,6 +221,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
           }
           case "done":
             setThinkingText(null);
+            setTurnUsage(readTurnUsage(data.usage));
             updateMetrics(data, true);
             void latest.current.refreshSessionList();
             if (sessionIdRef.current) void refreshContextMeter(sessionIdRef.current);
@@ -253,7 +274,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
     }
   }, [refreshContextMeter, setBusy]);
 
-  const confirm = useCallback(async (action_id: string, accepted: boolean, ensureSession: () => Promise<string>) => {
+  const confirm = useCallback(async (action_id: string, accepted: boolean, ensureSession: () => Promise<string>, review?: AgentQuestionReview[]) => {
     if (busyRef.current) return;
     setLines((previous) => previous.map((line) => line.kind === "confirm" && line.action_id === action_id
       ? { ...line, resolved: accepted ? "accepted" : "rejected" } : line));
@@ -261,7 +282,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
     let sid: string;
     try { sid = await ensureSession(); }
     catch (error) { if (epoch !== generation.current) return; throw error; }
-    if (epoch === generation.current) await runStream({ session_id: sid, message: "", confirm_action_id: action_id, confirm_accepted: accepted });
+    if (epoch === generation.current) await runStream({ session_id: sid, message: "", confirm_action_id: action_id,
+      confirm_accepted: accepted, ...(accepted && review ? { confirm_questions: review } : {}) });
   }, [runStream]);
 
   const planAction = useCallback(async (
@@ -299,9 +321,10 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
     setThinkingText(null);
     setCurrentFocus(null);
     setBusy(false);
-    latest.current.setActiveSkillId(null);
+    latest.current.setActiveSkillId?.(null);
     setContextTokensEst(null);
     setContextLimit(null);
+    setTurnUsage(null);
     setContextMeterRefreshing(false);
   }, [setBusy]);
 
@@ -326,12 +349,16 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
       if (epoch !== generation.current) return;
       sessionIdRef.current = id;
       setSessionId(id);
-      setLines(mapSessionMessagesToLines(snapshot.session?.messages ?? []).map((line) => ({ ...line, key: nextKey() })));
+      const pending: ChatLine[] = Object.entries(snapshot.session?.pending_confirmations ?? {}).map(([action_id, action]) => ({
+        kind: "confirm", action_id, tool_name: action.tool_name, description: action.description, preview: action.preview,
+      }));
+      setLines([...mapSessionMessagesToLines(snapshot.session?.messages ?? []), ...pending].map((line) => ({ ...line, key: nextKey() })));
       setTaskSteps(null);
       setThinkingText(null);
       setCurrentFocus(null);
       setContextTokensEst(null);
       setContextLimit(null);
+      setTurnUsage(null);
       void refreshContextMeter(id);
     } catch (error) {
       if (epoch === generation.current) latest.current.onErrorMsg?.(error instanceof Error ? error.message : i18n.t("agent:sessionLoadErr"));
@@ -348,7 +375,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions) {
 
   return {
     sessionId, setSessionId, sessionIdRef, conversationEpochRef, lines, setLines, busy, setBusy, taskSteps, setTaskSteps,
-    thinkingText, contextTokensEst, contextLimit, contextMeterRefreshing, currentFocus,
+    thinkingText, contextTokensEst, contextLimit, contextMeterRefreshing, currentFocus, turnUsage,
     runStream, confirm, planAction, newChat, stopStream, loadHistorySession, refreshContextMeter,
   };
 }

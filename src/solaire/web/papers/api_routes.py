@@ -26,6 +26,7 @@ from solaire.web.papers.api_models import PaperUpdateBody, PaperFromExamBody, Pa
 from solaire.web.papers.api_support import OFFLINE_SCAN_EXTENSIONS, OFFLINE_SCAN_MAX_FILES, OFFLINE_SCAN_MAX_FILE_BYTES, OFFLINE_SCAN_MAX_TOTAL_BYTES, OFFLINE_UPLOADER_EXE, _normalize_offline_scan, _optimize_normalized_png, _raise_api_error, require_content_project_root, current_organizer_teacher
 from solaire.web.content_organizer import assign_content_items
 from solaire.web.papers.api_models import FolderItemsMoveBody
+from solaire.web.papers.teacher_workbench import teacher_workbench
 
 # Bound simultaneously decoded scans across requests, including their retained output.
 _scan_upload_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="offline-scan")
@@ -146,6 +147,7 @@ def papers_list(
     status: str | None = None,
     subject: str | None = None,
     folder_id: str | None = None,
+    paper_id: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
 ) -> dict[str, Any]:
@@ -161,6 +163,7 @@ def papers_list(
             status=status,
             subject=subject,
             folder_id=folder_id,
+            paper_id=paper_id,
             page=page,
             page_size=page_size,
         )
@@ -442,6 +445,11 @@ def papers_publications_revoke(
     except (ValueError, PermissionError, sqlite3.IntegrityError) as e:
         _raise_api_error(e)
     return {"publication": publication}
+
+@router.get("/teacher/workbench")
+def read_teacher_workbench(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:
+    return teacher_workbench(require_platform_root(), user)
+
 
 @router.get("/teacher/classes")
 def teacher_classes_list(user: Annotated[dict[str, Any], Depends(current_platform_user)]) -> dict[str, Any]:

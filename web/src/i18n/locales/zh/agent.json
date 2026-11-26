@@ -54,7 +54,7 @@
   "currentSteps": "当前任务步骤",
   "currentUi": "当前界面：{{summary}}",
   "quickStart": "快捷开始（点击填入示例说法，可随时修改后再发送）：",
-  "freeformHint": "也可直接输入：例如「列出当前可用的考试成绩」「对这场考试运行知识点诊断」「帮我在题库中找一道题并挂到知识要点」。",
+  "freeformHint": "备课、组卷、看成绩，有什么要做的，直接告诉源远智能体。",
   "subtaskPrefix": "子任务 · ",
   "needConfirm": "需要确认：{{name}}",
   "accepted": "已确认执行。",

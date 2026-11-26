@@ -975,8 +975,8 @@ describe("PapersWorkspace", () => {
       score: 4,
       answers: [{ question_id: "math/q1", score: 4, grading_status: "reviewed", feedback: "第二份评语", images: [] }],
     };
-    mocks.listPlatformPapers.mockImplementation((params: { q?: string }) =>
-      Promise.resolve({ papers: params.q === "Final" ? [secondPaper] : [firstPaper] }),
+    mocks.listPlatformPapers.mockImplementation((params: { paperId?: string }) =>
+      Promise.resolve({ papers: params.paperId === "p2" ? [secondPaper] : [firstPaper] }),
     );
     mocks.listPaperSubmissions.mockImplementation((paperId: string) =>
       Promise.resolve({ submissions: paperId === "p2" ? [secondSubmission] : [firstSubmission] }),
@@ -1017,8 +1017,8 @@ describe("PapersWorkspace", () => {
       answers: [{ question_id: "math/q1", score: null, feedback: null, grading_status: "pending", images: [] }],
     };
     const secondSubmission = { ...firstSubmission, attempt_id: "a2", student_name: "Student Two" };
-    mocks.listPlatformPapers.mockImplementation((params: { q?: string }) =>
-      Promise.resolve({ papers: params.q === "Final" ? [secondPaper] : [firstPaper] }),
+    mocks.listPlatformPapers.mockImplementation((params: { paperId?: string }) =>
+      Promise.resolve({ papers: params.paperId === "p2" ? [secondPaper] : [firstPaper] }),
     );
     mocks.listPaperSubmissions.mockImplementation((paperId: string) =>
       Promise.resolve({ submissions: paperId === "p2" ? [secondSubmission] : [firstSubmission] }),

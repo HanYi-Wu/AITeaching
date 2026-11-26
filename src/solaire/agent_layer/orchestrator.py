@@ -299,6 +299,7 @@ async def _handle_confirmation_resume(
     confirm_action_id: str,
     confirm_accepted: bool,
     emit: EmitFn,
+    confirm_questions: list[dict] | None = None,
 ) -> str | None:
     """Handle confirmation resume. Returns user_message override (or None on early exit)."""
     return await handle_confirmation_resume(
@@ -307,6 +308,7 @@ async def _handle_confirmation_resume(
         ctx=ctx,
         confirm_action_id=confirm_action_id,
         confirm_accepted=confirm_accepted,
+        confirm_questions=confirm_questions,
         emit=emit,
     )
 
@@ -321,6 +323,7 @@ async def run_agent_turn(
     router: ModelRouter | None = None,
     confirm_action_id: str | None = None,
     confirm_accepted: bool | None = None,
+    confirm_questions: list[dict] | None = None,
     max_llm_rounds: int = 14,
     emit: EmitFn,
 ) -> None:
@@ -405,6 +408,7 @@ async def run_agent_turn(
             ctx=ctx,
             confirm_action_id=confirm_action_id,
             confirm_accepted=confirm_accepted is True,
+            confirm_questions=confirm_questions,
             emit=emit,
         )
         if user_message is None:

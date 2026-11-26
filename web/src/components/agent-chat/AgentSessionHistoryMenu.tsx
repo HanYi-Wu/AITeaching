@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import type { ReactNode } from "react";
 import { Trash2, X } from "lucide-react";
 import type { AgentSessionListItem } from "../../api/client";
 import "../../ui-redesign/g55/g55.css";
@@ -10,6 +11,7 @@ export interface AgentSessionHistoryMenuProps {
   busy: boolean;
   onLoadSession: (id: string) => Promise<void>;
   onRemoveSession: (id: string) => Promise<void>;
+  footer?: ReactNode;
 }
 
 export function AgentSessionHistoryMenu({
@@ -19,6 +21,7 @@ export function AgentSessionHistoryMenu({
   busy,
   onLoadSession,
   onRemoveSession,
+  footer,
 }: AgentSessionHistoryMenuProps) {
   const { t } = useTranslation("agent");
 
@@ -26,7 +29,7 @@ export function AgentSessionHistoryMenu({
 
   return (
     <div
-      className="absolute left-0 right-0 top-full z-30 max-h-[min(52vh,22rem)] overflow-hidden border-b border-[var(--or-outline)] bg-[color-mix(in_srgb,var(--or-card)_95%,transparent)] text-xs shadow-lg backdrop-blur-md  "
+      className="or-agent-history"
       role="region"
       aria-label={t("historyDialogTitle")}
     >
@@ -42,7 +45,7 @@ export function AgentSessionHistoryMenu({
           <X className="h-4 w-4" strokeWidth={2} />
         </button>
       </div>
-      <ul className="max-h-[min(46vh,18rem)] overflow-y-auto py-1">
+      <ul className="min-h-0 flex-1 overflow-y-auto py-1">
         {sessionList.length === 0 && (
           <li className="px-3 py-6 text-center text-xs text-[var(--or-muted)]">{t("noHistory")}</li>
         )}
@@ -73,6 +76,7 @@ export function AgentSessionHistoryMenu({
           </li>
         ))}
       </ul>
+      {footer && <div className="shrink-0 space-y-1 border-t border-or-outline px-3 py-2 text-xs text-or-muted">{footer}</div>}
     </div>
   );
 }

@@ -23,7 +23,8 @@ test('walkthrough requires acknowledgement, navigates and persists the next step
   const updated = vi.fn(), navigate = vi.fn();
   vi.mocked(apiPost).mockResolvedValue({ user: { ...user, teacher_guide_step: 1 } });
   render(<TeacherFirstUseGuide user={user} onUpdated={updated} onNavigate={navigate} onOpenAssistant={vi.fn()} />);
-  expect(navigate).toHaveBeenCalledWith('settings');
+  expect(navigate).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog', { name: /使用引导/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '下一步' })).toBeDisabled();
   fireEvent.click(screen.getByRole('checkbox'));
   fireEvent.click(screen.getByRole('button', { name: '下一步' }));
@@ -31,16 +32,26 @@ test('walkthrough requires acknowledgement, navigates and persists the next step
   expect(updated).toHaveBeenCalled();
 });
 
-test('walkthrough can be postponed and reopened from settings without becoming a modal', async () => {
+test('walkthrough is a dismissible modal that resumes without resetting progress', async () => {
+  vi.mocked(apiPost).mockClear();
   vi.mocked(apiPost).mockResolvedValue({ user });
   render(<TeacherFirstUseGuide user={user} onUpdated={vi.fn()} onNavigate={vi.fn()} onOpenAssistant={vi.fn()} />);
 
-  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(screen.getByRole('dialog', { name: /使用引导/ })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '稍后继续使用引导' }));
   expect(screen.queryByLabelText('教师使用引导')).not.toBeInTheDocument();
 
   window.dispatchEvent(new Event('eh-replay-teacher-guide'));
   expect(await screen.findByLabelText('教师使用引导')).toBeInTheDocument();
+  expect(apiPost).not.toHaveBeenCalled();
+});
+
+test('entering the relevant page closes the modal without completing a step', () => {
+  const navigate = vi.fn();
+  render(<TeacherFirstUseGuide user={user} onUpdated={vi.fn()} onNavigate={navigate} onOpenAssistant={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: '进入对应页面' }));
+  expect(navigate).toHaveBeenCalledWith('settings');
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
 
 test('dismissing forever removes collapse toggle, uses pale-red styling, and persists step 8', async () => {

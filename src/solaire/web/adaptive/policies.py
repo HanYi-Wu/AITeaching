@@ -64,7 +64,8 @@ def list_practice_history(root: Path, *, class_id: str, user: dict[str, Any]) ->
             JOIN paper_records pr ON pr.id = ep.paper_id
             LEFT JOIN student_attempts sa ON sa.publication_id = ep.id
             LEFT JOIN student_answers ans ON ans.attempt_id = sa.id
-            WHERE pc.class_id = ? AND ep.status IN ('published', 'closed') {teacher_clause}
+            WHERE pc.class_id = ? AND ep.recipient_scope = 'class'
+              AND ep.status IN ('published', 'closed') {teacher_clause}
             GROUP BY ep.id, ep.paper_id, ep.title, ep.created_at, ep.status, ep.practice_kind, pr.subject
             ORDER BY ep.created_at DESC, ep.id DESC
             """,

@@ -10,7 +10,7 @@ from typing import Any
 
 from solaire.web import recent_projects
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 CLASS_MEMBERSHIP_VIEW_SQL = """
 CREATE VIEW IF NOT EXISTS attempt_class_memberships AS
@@ -301,6 +301,18 @@ CREATE TABLE IF NOT EXISTS proctor_events (
 
 CREATE INDEX IF NOT EXISTS idx_proctor_events_attempt_type_time
 ON proctor_events(attempt_id, event_type, occurred_at);
+
+CREATE TABLE IF NOT EXISTS student_review_signals (
+  id TEXT PRIMARY KEY,
+  attempt_id TEXT NOT NULL REFERENCES student_attempts(id) ON DELETE CASCADE,
+  occurred_at TEXT NOT NULL,
+  idle_seconds INTEGER NOT NULL,
+  burst_seconds INTEGER NOT NULL,
+  changed_questions INTEGER NOT NULL,
+  context_signal TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_student_review_signals_attempt_time
+ON student_review_signals(attempt_id, occurred_at);
 
 CREATE TABLE IF NOT EXISTS ai_audit_events (
   id TEXT PRIMARY KEY,

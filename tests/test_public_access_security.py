@@ -88,7 +88,7 @@ def test_public_mode_host_control_requires_admin_token(
     assert allowed.status_code == 200
 
 
-def test_public_mode_admin_configuration_uses_admin_session_without_host_token(
+def test_public_mode_separates_platform_configuration_from_host_control(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from solaire.web import state
@@ -108,8 +108,24 @@ def test_public_mode_admin_configuration_uses_admin_session_without_host_token(
         "/api/system/extensions/not-a-real-id/manual-path",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert extension_preferences.status_code == 400
-    assert "Local control token required" not in extension_preferences.text
+    assert extension_preferences.status_code == 403
+    assert "Local control token required" in extension_preferences.text
+    local_extension_preferences = client.delete(
+        "/api/system/extensions/not-a-real-id/manual-path",
+        headers={"Authorization": f"Bearer {token}", "X-Solaire-Control-Token": "test-control-token"},
+    )
+    assert local_extension_preferences.status_code == 400
+
+    monkeypatch.setattr("solaire.web.extension_registry.detect_all", lambda: {"extensions": [
+        {"id": "latex", "manual_paths": {"bin_dir": "/private"}, "executables": [{"path": "/private/latexmk"}]},
+    ]})
+    public_extension = client.get("/api/system/extensions", headers={"Authorization": f"Bearer {token}"}).json()
+    assert public_extension["host_control_allowed"] is False
+    assert "/private" not in str(public_extension)
+    local_extension = client.get("/api/system/extensions", headers={"Authorization": f"Bearer {token}",
+                                 "X-Solaire-Control-Token": "test-control-token"}).json()
+    assert local_extension["host_control_allowed"] is True
+    assert local_extension["extensions"][0]["manual_paths"]["bin_dir"] == "/private"
 
 
 @pytest.mark.parametrize(
@@ -118,6 +134,9 @@ def test_public_mode_admin_configuration_uses_admin_session_without_host_token(
         ("/api/agent/llm-settings", "PUT"),
         ("/api/agent/safety-mode", "PUT"),
         ("/api/system/extensions/latex/manual-path", "DELETE"),
+        ("/api/system/extensions", "GET"),
+        ("/api/system/extensions/pick-path", "POST"),
+        ("/api/admin/system/updates", "GET"),
     ],
 )
 def test_public_mode_teacher_cannot_change_admin_configuration(

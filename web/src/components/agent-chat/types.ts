@@ -1,3 +1,5 @@
+import type { AgentQuestionConfirmationPreview } from "../../api/client";
+
 export type FileAttachment = {
   path: string;
   mime_type: string | null;
@@ -22,6 +24,7 @@ type ChatLineContent =
       action_id: string;
       tool_name: string;
       description: string;
+      preview?: AgentQuestionConfirmationPreview | null;
       resolved?: "accepted" | "rejected";
     }
   | {

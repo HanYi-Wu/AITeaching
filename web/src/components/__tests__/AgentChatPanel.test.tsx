@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestI18n, TestI18nProvider } from "../../test/i18nTestUtils";
 import { AgentChatPanel } from "../AgentChatPanel";
+import { AgentConfirmCard } from "../agent-chat/AgentCards";
 import * as clientApi from "../../api/client";
 
 // Mock API client
@@ -63,15 +64,93 @@ describe("AgentChatPanel", () => {
     } as any);
   });
 
-  it("renders header, quick starts, and user input field", async () => {
+  it("renders chat and history without loading quick starts", async () => {
     render(
       <TestI18nProvider>
         <AgentChatPanel />
       </TestI18nProvider>,
     );
 
-    expect(await screen.findByText("整理考点")).toBeInTheDocument();
+    expect(await screen.findByText("源远智能体")).toBeInTheDocument();
+    expect(screen.queryByText("整理考点")).not.toBeInTheDocument();
+    expect(clientApi.apiAgentSkillsList).not.toHaveBeenCalled();
     expect(screen.getByRole("textbox")).toBeInTheDocument();
+    expect(clientApi.apiAgentSessionsList).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /长期记忆/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "历史对话" })).not.toBeInTheDocument();
+    const history = screen.getByRole("button", { name: "历史" });
+    await userEvent.click(history);
+    expect(await screen.findByText("第一轮对话")).toBeVisible();
+    expect(clientApi.apiAgentSessionsList).toHaveBeenCalledOnce();
+    await userEvent.keyboard("{Escape}");
+    expect(history).toHaveFocus();
+    expect(screen.queryByRole("region", { name: "历史对话" })).not.toBeInTheDocument();
+  });
+
+  it("shows all batch contents with one write confirmation", async () => {
+    const confirm = vi.fn(async () => {});
+    const questions = Array.from({ length: 10 }, (_, i) => ({
+      id: `question-${i}`, type: "single_choice", subject: "数学", content: `题干 ${i}`,
+      options: [{ label: "A", text: `选项 ${i}` }], answer: `答案 ${i}`, analysis: `解析 ${i}`,
+    }));
+    render(<TestI18nProvider><AgentConfirmCard action_id="batch" tool_name="bank.create_items" description="审核整批"
+      preview={{ kind: "question_creation", questions }} busy={false} onConfirm={confirm} /></TestI18nProvider>);
+    expect(screen.getByText("题干 9")).toBeVisible();
+    expect(screen.getByText("A. 选项 9")).toBeVisible();
+    expect(screen.getByText("答案 9", { exact: false })).toBeVisible();
+    expect(screen.getByText("解析 9", { exact: false })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "确认写入 10 道题" }));
+    expect(confirm).toHaveBeenCalledExactlyOnceWith("batch", true);
+  });
+
+  it("passes edited selected questions together in one confirmation", async () => {
+    const confirm = vi.fn(async () => {});
+    const questions = [0, 1].map((i) => ({ id: `q-${i}`, type: "short_answer", subject: "数学", content: `题干 ${i}`,
+      options: [], answer: `答案 ${i}`, analysis: "" }));
+    render(<TestI18nProvider><AgentConfirmCard action_id="batch" tool_name="bank.create_items" description="审核整批"
+      preview={{ kind: "question_creation", questions }} busy={false} onConfirm={confirm} /></TestI18nProvider>);
+    await userEvent.click(screen.getByRole("checkbox", { name: "写入第 1 题" }));
+    await userEvent.click(screen.getByRole("button", { name: "编辑第 2 题" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "题干" }), { target: { value: "修改的题干" } });
+    await userEvent.click(screen.getByRole("button", { name: "确认写入 1 道题" }));
+    expect(confirm).toHaveBeenCalledExactlyOnceWith("batch", true, [{ index: 1, content: "修改的题干" }]);
+  });
+
+  it("sends the chosen control plus visible page text without activating the control", async () => {
+    const underlying = vi.fn();
+    vi.mocked(clientApi.apiAgentChatStream).mockResolvedValue(undefined);
+    render(<TestI18nProvider>
+      <main><button aria-label="删除试卷" onClick={underlying}>删除试卷</button>
+        <p>当前试卷进度</p><input type="password" value="private password" readOnly hidden /></main>
+      <AgentChatPanel />
+    </TestI18nProvider>);
+    const rangeMock = Object.defineProperty(document.createRange(), "getClientRects", {
+      value: () => [new DOMRect(10, 10, 100, 20)],
+    });
+    const range = vi.spyOn(document, "createRange").mockReturnValueOnce(rangeMock).mockReturnValueOnce(rangeMock);
+    fireEvent.click(screen.getByRole("button", { name: "选取页面内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除试卷" }));
+    expect(underlying).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "移除引用：删除试卷" })).toBeInTheDocument();
+    range.mockRestore();
+    await userEvent.type(screen.getByRole("textbox"), "分析这份试卷");
+    await userEvent.click(screen.getByRole("button", { name: "发送消息" }));
+    await waitFor(() => expect(clientApi.apiAgentChatStream).toHaveBeenCalled());
+    const [payload] = vi.mocked(clientApi.apiAgentChatStream).mock.calls[0];
+    expect(payload.page_context).toMatchObject({ current_page: "graph",
+      selected_control: { tag: "button", label: "删除试卷", text: "删除试卷" },
+      visible_page_text: "删除试卷\n当前试卷进度" });
+    expect(JSON.stringify(payload)).not.toContain("private password");
+  });
+
+  it("queues images using the dedicated picker", async () => {
+    const { container } = render(<TestI18nProvider><AgentChatPanel /></TestI18nProvider>);
+    const input = container.querySelector<HTMLInputElement>('input[accept^=".png"]')!;
+    const openPicker = vi.spyOn(input, "click");
+    await userEvent.click(screen.getByRole("button", { name: "上传图片" }));
+    expect(openPicker).toHaveBeenCalledOnce();
+    await userEvent.upload(input, new File(["image"], "diagram.png", { type: "image/png" }));
+    expect(screen.getByText("diagram.png")).toBeInTheDocument();
   });
 
   it("adds and removes file attachments properly", async () => {

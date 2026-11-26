@@ -1,12 +1,15 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import "./design-system/workspace-overlays.css";
 import { useTranslation } from "react-i18next";
 import {
   BarChart3,
   BookMarked,
   BookOpen,
   ClipboardList,
+  Compass,
   FileStack,
+  Home,
   Layers,
   LogOut,
   MoreHorizontal,
@@ -69,6 +72,7 @@ const AdminWorkspace = lazy(() =>
 const PapersWorkspace = lazy(() =>
   import("./pages/platform/papers/PapersWorkspace").then((module) => ({ default: module.PapersWorkspace })),
 );
+const TeacherWorkbench = lazy(() => import("./pages/platform/teacher/TeacherWorkbench").then((module) => ({ default: module.TeacherWorkbench })));
 const TeacherStudentInsightsWorkspace = lazy(() =>
   import("./pages/platform/insights/TeacherStudentInsightsWorkspace").then((module) => ({ default: module.TeacherStudentInsightsWorkspace })),
 );
@@ -117,6 +121,9 @@ function AppShell() {
   const [page, setPage] = useState<AppPage>("compose");
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [teacherSettingsOpen, setTeacherSettingsOpen] = useState(false);
+  const [teacherSettingsError, setTeacherSettingsError] = useState<string | null>(null);
+  const settingsOrigin = useRef<HTMLElement | null>(null);
   const [isMobileNavigation, setIsMobileNavigation] = useState(
     () => window.matchMedia?.("(max-width: 767px)").matches ?? false,
   );
@@ -135,6 +142,15 @@ function AppShell() {
   const [assistantOverlayHost, setAssistantOverlayHost] = useState<HTMLDivElement | null>(null);
   const [platformStatus, setPlatformStatus] = useState<PlatformStatus | null>(null);
   const [currentUser, setCurrentUser] = useState<PlatformUser | null>(null);
+  useEffect(() => { setTeacherSettingsOpen(false); setTeacherSettingsError(null); }, [currentUser?.id]);
+  const openSettings = useCallback(() => {
+    if (currentUser?.role === "teacher") {
+      settingsOrigin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setTeacherSettingsError(null);
+      setTeacherSettingsOpen(true);
+    } else setPage("settings");
+  }, [currentUser?.role]);
+  const openGuide = () => window.dispatchEvent(new Event("eh-replay-teacher-guide"));
   const [infoAccountId, setInfoAccountId] = useState<string | null>(null);
   const [assistantMounted, setAssistantMounted] = useState(false);
   const [platformLoading, setPlatformLoading] = useState(true);
@@ -220,6 +236,7 @@ function AppShell() {
       if (requestId !== platformRequestId.current) return;
       setPlatformStatus(status);
       setCurrentUser(user);
+      if (user?.role === "teacher") setPage("teacher-home");
     } catch (e) {
       if (requestId !== platformRequestId.current) return;
       setErr(e instanceof Error ? e.message : String(e));
@@ -292,7 +309,7 @@ function AppShell() {
     setPlatformStatus((status) => status ? { ...status, admin_exists: true } : status);
     setCurrentUser(user);
     setAdminProjectMode(false);
-    setPage(user.role === "teacher" ? "papers" : user.role);
+    setPage(user.role === "teacher" ? "teacher-home" : user.role);
   }, []);
 
   const prepareLoginWorkspace = useCallback(async (user: PlatformUser) => {
@@ -411,7 +428,7 @@ function AppShell() {
     }
   }, [platformRoute]);
 
-  const mobileMoreActive = sidebarOpen || ["template", "students", "analysis", "tools", "help", "settings"].includes(page);
+  const mobileMoreActive = sidebarOpen || teacherSettingsOpen || ["template", "students", "analysis", "tools", "help", "settings"].includes(page);
   const navigationSelector = isMobileNavigation
     ? '[data-mobile-primary="true"][aria-current="page"], [data-mobile-more][aria-current="page"]'
     : '[aria-current="page"]';
@@ -434,7 +451,6 @@ function AppShell() {
 
   useEffect(() => {
     if (platformRoute !== "teacher" || !currentUser) return;
-    void Promise.allSettled(preloadTeacherWorkspaceChunks());
     if (infoAccountId !== currentUser.id) return;
     return scheduleTeacherWorkspaceWarmup({
       ownerId: currentUser.id,
@@ -448,6 +464,9 @@ function AppShell() {
   const workspaceContent = useMemo(() => (
     <WorkspaceLoadBoundary resetKey={page}>
       <Suspense fallback={<AppLoadingFallback />}>
+        {page === "teacher-home" && currentUser?.role === "teacher" && <TeacherWorkbench key={currentUser.id}
+          onOpenGrading={(target) => { setPaperOpenTarget(target); setPage("papers"); }}
+          onOpenPapers={() => setPage("papers")} onOpenStudents={() => setPage("students")} />}
         {info?.bound && (page === "compose" || Boolean(composeOwner && composeOwner === currentUser?.id)) && (
           <div className={cn("h-full min-h-0 min-w-0 overflow-hidden", page !== "compose" && "hidden")} aria-hidden={page !== "compose"}>
             <ComposeRoute
@@ -600,6 +619,8 @@ function AppShell() {
                     <nav ref={navigationRef} className="or-sidebar-nav no-scrollbar" aria-label="教师工作区导航">
                       <SelectionIndicator rootRef={navigationRef} selector={navigationSelector} className="or-navigation-indicator" />
                       <div className="or-sidebar-primary">
+                        {currentUser?.role === "teacher" && <SidebarNavButton icon={Home} label="工作台" active={page === "teacher-home"}
+                          onClick={() => setPage("teacher-home")} mobileOverflow />}
                         <SidebarNavButton
                           icon={Network}
                           label={t("app:nav.graph")}
@@ -685,6 +706,8 @@ function AppShell() {
                         </button>
                       </Dialog.Trigger>
                       <div className="or-sidebar-secondary">
+                        {currentUser?.role === "teacher" && <SidebarNavButton icon={Compass} label="引导"
+                          onClick={openGuide} title="教师使用引导" mobileOverflow />}
                         <SidebarNavButton
                           icon={BookOpen}
                           label={t("app:nav.help")}
@@ -696,8 +719,8 @@ function AppShell() {
                         <SidebarNavButton
                           icon={Settings}
                           label={t("app:nav.settings")}
-                          active={page === "settings"}
-                          onClick={() => setPage("settings")}
+                          active={page === "settings" || teacherSettingsOpen}
+                          onClick={openSettings}
                           title={t("app:nav.settingsTitle")}
                           mobileOverflow
                         />
@@ -723,6 +746,8 @@ function AppShell() {
                         </Dialog.Close>
                       </div>
                       <div className="or-mobile-more-grid">
+                        {currentUser?.role === "teacher" && <SidebarNavButton icon={Home} label="工作台" active={page === "teacher-home"}
+                          onClick={closeMoreAnd(() => setPage("teacher-home"))} />}
                         <SidebarNavButton
                           icon={FileStack}
                           label={t("app:nav.template")}
@@ -758,6 +783,8 @@ function AppShell() {
                           onClick={closeMoreAnd(() => toggleSidebar())}
                           title={t("app:nav.assistantTitle")}
                         />
+                        {currentUser?.role === "teacher" && <SidebarNavButton icon={Compass} label="引导"
+                          onClick={closeMoreAnd(openGuide)} title="教师使用引导" />}
                         <SidebarNavButton
                           icon={BookOpen}
                           label={t("app:nav.help")}
@@ -768,8 +795,8 @@ function AppShell() {
                         <SidebarNavButton
                           icon={Settings}
                           label={t("app:nav.settings")}
-                          active={page === "settings"}
-                          onClick={closeMoreAnd(() => setPage("settings"))}
+                          active={page === "settings" || teacherSettingsOpen}
+                          onClick={closeMoreAnd(openSettings)}
                           title={t("app:nav.settingsTitle")}
                         />
                         <SidebarNavButton
@@ -803,10 +830,33 @@ function AppShell() {
                         key={currentUser.id}
                         user={currentUser}
                         onUpdated={setCurrentUser}
-                        onNavigate={setPage}
+                        onNavigate={(target) => { if (target === "settings") openSettings(); else setPage(target); }}
                         onOpenAssistant={() => setSidebarOpen(true)}
                       />
                     ) : null}
+
+                    {currentUser?.role === "teacher" && <Dialog.Root open={teacherSettingsOpen} onOpenChange={setTeacherSettingsOpen}>
+                      <Dialog.Portal>
+                        <Dialog.Overlay className="or-modal-backdrop" />
+                        <Dialog.Content className="or-modal-surface or-teacher-settings-modal" aria-describedby={undefined}
+                          onCloseAutoFocus={(event) => {
+                            event.preventDefault();
+                            if (settingsOrigin.current?.isConnected) settingsOrigin.current.focus({ preventScroll: true });
+                            else document.querySelector<HTMLElement>(".or-mobile-more-trigger")?.focus({ preventScroll: true });
+                          }}>
+                          <header className="or-modal-header">
+                            <Dialog.Title className="text-base font-semibold">{t("app:nav.settings")}</Dialog.Title>
+                            <Dialog.Close className="or-modal-close" aria-label="关闭设置"><X className="h-5 w-5" /></Dialog.Close>
+                          </header>
+                          {teacherSettingsError && <p role="alert" className="px-4 py-2 text-sm text-or-error">{teacherSettingsError}</p>}
+                          <div className="or-modal-scroll" tabIndex={0} aria-label="设置内容">
+                            <WorkspaceLoadBoundary><Suspense fallback={<AppLoadingFallback />}>
+                              <SettingsWorkspace embedded onError={setTeacherSettingsError} userRole="teacher" onProfileUpdated={setCurrentUser} />
+                            </Suspense></WorkspaceLoadBoundary>
+                          </div>
+                        </Dialog.Content>
+                      </Dialog.Portal>
+                    </Dialog.Root>}
 
                     <div
                       ref={setAssistantOverlayHost}
@@ -817,7 +867,7 @@ function AppShell() {
                       </main>
                       <WorkspaceLoadBoundary>
                       <Suspense fallback={null}>
-                        {(sidebarOpen || assistantMounted) && <AgentSidebar key={assistantScope} projectBound mode="dock" overlayHost={assistantOverlayHost} />}
+                        {(sidebarOpen || assistantMounted) && <AgentSidebar key={assistantScope} projectBound mode="overlay" overlayHost={assistantOverlayHost} />}
                       </Suspense>
                       </WorkspaceLoadBoundary>
                     </div>

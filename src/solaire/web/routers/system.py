@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse
+from solaire.exam_compiler import __version__
 from solaire.primebrush.api import parse_primebrush, render as render_primebrush
 from solaire.web import extension_registry, help_docs, system_tools
 from fastapi import APIRouter
 from solaire.web.host_dialogs import _pick_directory_dialog
 from solaire.web.host_dialogs import _pick_executable_dialog
+from solaire.web.public_access import public_mode_enabled
 from solaire.web.schemas.system import ExtensionManualPathBody, ExtensionPickDialogBody, PrimeBrushRenderBody
 
 router = APIRouter()
@@ -24,6 +26,7 @@ def health() -> dict[str, str]:
     """
     return {
         "status": "ok",
+        "version": __version__,
         "product": "education_helper",
         "exam_workspace_layout": "two_level",
     }
@@ -51,9 +54,16 @@ def api_tex_install() -> dict[str, Any]:
 
 
 @router.get("/api/system/extensions")
-def api_system_extensions() -> dict[str, Any]:
+def api_system_extensions(request: Request) -> dict[str, Any]:
     """Detect optional host extensions (LaTeX, Pandoc, OCR, Mermaid renderer)."""
-    return extension_registry.detect_all()
+    allowed = not public_mode_enabled() or bool(getattr(request.state, "host_control_authorized", False))
+    result = extension_registry.detect_all()
+    if not allowed:
+        result = {**result, "extensions": [
+            {**extension, "manual_paths": {}, "executables": [{**tool, "path": None} for tool in extension.get("executables", [])]}
+            for extension in result["extensions"]
+        ]}
+    return {**result, "host_control_allowed": allowed}
 
 
 @router.post("/api/system/extensions/{ext_id}/install")

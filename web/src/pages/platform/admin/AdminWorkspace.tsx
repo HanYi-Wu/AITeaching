@@ -23,6 +23,7 @@ import { PlatformShell } from "../PlatformShell";
 import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import "../../../ui-redesign/g53/g53.css";
 import { Select as AppSelect } from "../../../components/ui/select";
+import { ReleaseDiscoveryPanel } from "./ReleaseDiscoveryPanel";
 
 const ExtensionsPanel = lazy(() => import("../../../components/ExtensionsPanel").then((module) => ({ default: module.ExtensionsPanel })));
 const AgentModelSettingsForm = lazy(() => import("../../../components/settings/AgentModelSettingsForm").then((module) => ({ default: module.AgentModelSettingsForm })));
@@ -636,7 +637,7 @@ export function AdminWorkspace({ user, onLogout, onError, onProfileUpdated }: Pr
           {([
             ["schools", "学校与账号"],
             ["ai", "平台 AI"],
-            ["extensions", "扩展组件"],
+            ["extensions", "系统维护"],
             ["audit", "操作日志"],
             ["access", "权限管理"],
             ["settings", "学科与设置"],
@@ -865,6 +866,7 @@ export function AdminWorkspace({ user, onLogout, onError, onProfileUpdated }: Pr
             </div>
           ) : null}
 
+          {activeSection === "extensions" ? <ReleaseDiscoveryPanel /> : null}
           {activeSection === "extensions" ? (
             <div className="mx-auto w-full max-w-6xl">
               <section className="or-g53-card p-4 sm:p-6">

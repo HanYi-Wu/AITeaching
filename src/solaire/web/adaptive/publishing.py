@@ -55,6 +55,7 @@ def _publish_personalized(
     max_screen_switches: int,
     time_limit_minutes: int | None,
     project_root: Path | None = None,
+    recipient_scope: str = "class",
 ) -> dict[str, Any]:
     if practice_kind not in PRACTICE_KINDS:
         raise ValueError("Unsupported practice kind")
@@ -80,8 +81,8 @@ def _publish_personalized(
             INSERT INTO exam_publications
               (id, paper_id, teacher_id, title, start_at, end_at, show_results_immediately,
                submission_mode, max_screen_switches, time_limit_minutes, practice_kind,
-               source_publication_ids_json, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
+               source_publication_ids_json, recipient_scope, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
             """,
             (
                 publication_id,
@@ -96,6 +97,7 @@ def _publish_personalized(
                 max(0, int(time_limit_minutes or 0)) or None,
                 practice_kind,
                 json.dumps(source_publication_ids),
+                recipient_scope,
                 now,
                 now,
             ),
@@ -159,6 +161,7 @@ def _publish_personalized(
         "title": title,
         "class_ids": [class_id],
         "practice_kind": practice_kind,
+        "recipient_scope": recipient_scope,
         "source_publication_ids": source_publication_ids,
         "status": "published",
         "submission_mode": clean_submission_mode,
@@ -177,6 +180,7 @@ def publish_wrong_question_practice(
     user: dict[str, Any],
     title: str,
     max_questions_per_student: int = 20,
+    student_id: str | None = None,
     **settings: Any,
 ) -> dict[str, Any]:
     clean_source_id = str(source_publication_id).strip()
@@ -189,11 +193,16 @@ def publish_wrong_question_practice(
     if len(sources) != 1:
         raise ValueError("Select one historical publication")
     students = _class_students(root, class_id)
+    if student_id is not None:
+        students = [student for student in students if str(student["id"]) == student_id]
+        if not students:
+            raise PermissionError("学生不在教师可管理的发布班级中")
     with closing(connect(root)) as con, con:
         read_context = load_online_source_read_context(
             con,
             source_publication_ids=[clean_source_id],
             student_ids=[str(student["id"]) for student in students],
+            require_grading_completed=student_id is not None,
         )
     assignments: list[dict[str, Any]] = []
     for student in students:
@@ -225,6 +234,7 @@ def publish_wrong_question_practice(
         source_publication_ids=[clean_source_id],
         assignments=assignments,
         project_root=project_root,
+        recipient_scope="student" if student_id is not None else "class",
         **settings,
     )
     result["skipped_student_count"] = len(students) - len(assignments)

@@ -86,6 +86,7 @@ class PracticePublishBase(BaseModel):
 
 class WrongQuestionPracticeBody(PracticePublishBase):
     source_publication_id: str = Field(..., min_length=1)
+    student_id: str | None = Field(default=None, min_length=1, max_length=100)
     max_questions_per_student: int = Field(default=20, ge=1, le=100)
 
 class ReinforcementPracticeBody(PracticePublishBase):

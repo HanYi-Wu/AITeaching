@@ -178,6 +178,7 @@ async def handle_confirmation_resume(
     confirm_action_id: str,
     confirm_accepted: bool,
     emit: EmitFn,
+    confirm_questions: list[dict] | None = None,
 ) -> str | None:
     """Handle confirmation resume with authoritative policy verification.
 
@@ -186,18 +187,30 @@ async def handle_confirmation_resume(
     from solaire.agent_layer.audit import append_audit
     from solaire.agent_layer.compactor import summarize_tool_result
     from solaire.agent_layer.context import tool_result_to_content
-    from solaire.agent_layer.guardrails import register_approval
+    from solaire.agent_layer.guardrails import register_approval, apply_question_review
     from solaire.agent_layer.registry import invoke_registered_tool
     from solaire.agent_layer.session import save_session
     from solaire.agent_layer.tools import analysis_tools
 
     confirm_accepted = confirm_accepted is True
-    pending = session.pending_confirmations.pop(confirm_action_id, None)
+    pending = session.pending_confirmations.get(confirm_action_id)
     if pending is None:
         await emit("error", {"code": "unknown_action", "message": "无效或已过期的确认项"})
         save_session(project_root, session)
         await emit("done", {"usage": {}})
         return None
+
+    if confirm_accepted and confirm_questions is not None:
+        try:
+            if pending.tool_name != "bank.create_items":
+                raise ValueError("当前确认项不支持逐题修改")
+            reviewed = apply_question_review(pending.arguments, confirm_questions)
+            pending = pending.model_copy(update={"arguments": reviewed})
+        except ValueError as error:
+            await emit("error", {"code": "invalid_question_review", "action_id": confirm_action_id, "message": str(error)})
+            await emit("done", {"usage": {}, "awaiting_confirmation": True})
+            return None
+    session.pending_confirmations.pop(confirm_action_id)
 
     if confirm_accepted is False:
         await emit("text_delta", {"text": "已取消该操作。"})

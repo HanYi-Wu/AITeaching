@@ -493,11 +493,15 @@ def test_docx_content_resource_layer_semantic_golden_markdown(tmp_path: Path) ->
 def test_docx_content_real_pandoc_golden_docx_structure(tmp_path: Path) -> None:
     """
     End-to-end golden verification against real Pandoc output.
-    This integration check is skipped when the Word converter is unavailable.
+    Requires the real Word converter and the Mermaid renderer used by the fixture.
     """
     pandoc_exe = shutil.which("pandoc") or resolve_exe("pandoc", "pandoc")
     if not pandoc_exe:
         pytest.skip("Real Pandoc executable is not installed in the environment (reported integration threshold)")
+    from solaire.exam_compiler.pipeline.mermaid_expand import _find_mmdr
+
+    if not _find_mmdr():
+        pytest.skip("Real Mermaid renderer (mmdr) is not installed for the DOCX golden fixture")
 
     exam_yaml = _write_comprehensive_exam_fixture(tmp_path)
     out_dir = tmp_path / "out"

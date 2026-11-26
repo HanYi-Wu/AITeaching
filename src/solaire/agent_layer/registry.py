@@ -394,9 +394,9 @@ def openai_tools_payload(tools: list[RegisteredTool] | None = None) -> list[dict
 
 
 def tool_descriptions_for_prompt(tools: list[RegisteredTool] | None = None) -> str:
-    tlist = tools or all_registered_tools()
-    # Descriptions and argument schemas already travel in the tools field.
-    return "工具参数与说明见 tools 定义。多题创建优先 bank.create_items，一次确认整批；不要重复读取无变化数据。\n" + ", ".join(t.name for t in tlist)
+    # The provider receives the exact allowed names, descriptions and argument
+    # schemas in `tools`; repeating the catalog in the instructions adds tokens.
+    return "仅使用 tools 中的工具。多题创建优先调用 bank.create_items，一次确认整批。已知且未变化的数据不要重复读取。"
 
 
 def invoke_registered_tool(name: str, args: dict[str, Any], ctx: InvocationContext) -> ToolResult:

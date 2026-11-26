@@ -602,6 +602,17 @@ function StudentRows({ analysis, compact }: { analysis: PlatformPaperAnalysis; c
                       </G52Pill>
                     );
                   })()}
+                  {!!student.answer_rhythm_review?.length && <details className="mt-1 text-left text-xs">
+                    <summary className="cursor-pointer text-[var(--or-primary)]">作答节奏线索（{student.answer_rhythm_review.length}）</summary>
+                    <p className="mt-1 text-[var(--or-muted)]">仅供复核；正常思考也可能触发，不计入风险分或成绩。</p>
+                    <ol className="mt-1 max-h-36 space-y-1 overflow-auto">
+                      {student.answer_rhythm_review.map((signal, index) => <li key={`${signal.occurred_at}:${index}`}>
+                        <time dateTime={signal.occurred_at}>{new Date(signal.occurred_at).toLocaleTimeString()}</time>
+                        {` · 停顿 ${signal.idle_seconds} 秒后，${signal.burst_seconds} 秒内修改 ${signal.changed_questions} 题`}
+                        {signal.context_signal === "paste" ? " · 浏览器另记录了粘贴" : signal.context_signal === "visibility" ? " · 浏览器另记录了页面返回" : " · 无其他浏览器线索"}
+                      </li>)}
+                    </ol>
+                  </details>}
                 </td>
               </tr>
             );

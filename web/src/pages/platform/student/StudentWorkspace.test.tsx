@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -344,6 +344,23 @@ describe("StudentWorkspace", () => {
     expect(await screen.findByRole("heading", { name: "首次使用清单" })).toBeInTheDocument();
     expect(screen.getByText("完成改密、查看待答试卷并提交第一份答卷")).toBeInTheDocument();
     expect(screen.getAllByText("已完成").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("continues the active exam from home before unopened or unavailable tasks", async () => {
+    const paper = { attempt_id: "a", exam_id: "math", subject: "数学", question_count: 2,
+      time_spent_seconds: 0, show_results: true, status: "not_started" };
+    mocks.listStudentPapers.mockResolvedValue({ papers: [
+      { ...paper, publication_id: "blocked", title: "已暂停", can_answer: false, end_at: "2026-11-26T05:00:00Z" },
+      { ...paper, publication_id: "new", title: "新试卷", can_answer: true, end_at: "2026-11-26T06:00:00Z" },
+      { ...paper, publication_id: "active", title: "接着做的练习", status: "in_progress", can_answer: true, recipient_scope: "student" },
+    ] });
+    mocks.startStudentPaper.mockRejectedValueOnce(new Error("测试用离线"));
+    render(<StudentWorkspace user={{ id: "s1", role: "student", username: "stu", display_name: "Student", status: "active" }} onLogout={vi.fn()} />);
+    const next = await screen.findByRole("region", { name: "下一项任务" });
+    expect(within(next).getByRole("heading", { name: "接着做的练习" })).toBeVisible();
+    expect(within(next).getByText(/个人练习/)).toBeVisible();
+    await userEvent.click(within(next).getByRole("button", { name: "继续答题" }));
+    expect(mocks.startStudentPaper).toHaveBeenCalledWith("active");
   });
 
   it("shows every graded question and can filter the review to wrong answers", async () => {

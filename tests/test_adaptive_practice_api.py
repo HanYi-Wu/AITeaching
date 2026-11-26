@@ -330,6 +330,43 @@ def test_wrong_question_practice_limits_each_students_question_count(web_client:
     assert len(started["questions"]) == 1
 
 
+def test_personal_wrong_question_practice_does_not_enter_class_history_or_analysis(
+    web_client: TestClient, tmp_path: Path
+) -> None:
+    context = _setup(web_client, tmp_path)
+    class_id = context["class"]["id"]
+    teacher = context["teacher_headers"]
+    target, classmate = context["students"]
+    source_id = context["source_publication"]["id"]
+    path = "/api/teacher/practice-publications/wrong-questions"
+    body = {"class_id": class_id, "source_publication_id": source_id, "title": "个人错题练习"}
+    profile = web_client.get(f"/api/teacher/classes/{class_id}/students/{target['id']}/profile", headers=teacher)
+    assert profile.status_code == 200
+    assert profile.json()["profile"]["recent_exams"][0]["can_assign_wrong_question_practice"] == 1
+    assert web_client.post(path, json={**body, "student_id": "invalid"}, headers=teacher).status_code == 403
+    assert web_client.post(path, json={**body, "student_id": classmate["id"]}, headers=teacher).status_code == 400
+
+    response = web_client.post(path, json={**body, "student_id": target["id"]}, headers=teacher)
+    assert response.status_code == 200, response.text
+    publication = response.json()["publication"]
+    assert publication["recipient_scope"] == "student"
+    assert response.json()["assigned_student_count"] == 1
+    history = web_client.get(f"/api/teacher/classes/{class_id}/practice-history", headers=teacher).json()
+    assert [item["id"] for item in history["publications"]] == [source_id]
+    papers = web_client.get("/api/student/papers", headers=classmate["headers"]).json()["papers"]
+    assert publication["id"] not in {item["publication_id"] for item in papers}
+    start = f"/api/student/publications/{publication['id']}/start"
+    assert web_client.post(start, headers=classmate["headers"]).status_code in {403, 404}
+    attempt = web_client.post(start, headers=target["headers"])
+    assert attempt.status_code == 200
+    assert [item["question_id"] for item in attempt.json()["questions"]] == ["math/q1"]
+    analysis_url = f"/api/papers/{publication['paper_id']}/analysis"
+    analysis = web_client.get(analysis_url, headers=teacher, params={"class_id": class_id})
+    assert analysis.status_code == 403
+    personal_profile = web_client.get(f"/api/teacher/classes/{class_id}/students/{target['id']}/profile", headers=teacher)
+    assert publication["id"] in {exam["publication_id"] for exam in personal_profile.json()["profile"]["recent_exams"]}
+
+
 def test_all_correct_reinforcement_source_requires_every_selected_exam_to_be_fully_graded(
     web_client: TestClient, tmp_path: Path
 ) -> None:

@@ -161,11 +161,12 @@ EXAM_TOOLS: list[RegisteredTool] = [
             ),
     _fn(
                 "paper.publish_wrong_question_practice",
-                "按每位学生在一条历史发布中的错题，发布个性化历史错题卷。",
+                "按一条历史发布的错题布置练习。若明确只给一名学生，必须填写 student_id；否则面向班级。",
                 _teacher_schema(
                     {
                         "class_id": _S,
                         "source_publication_id": _S,
+                        "student_id": _S,
                         "title": _S,
                         "max_questions_per_student": {"type": "integer", "minimum": 1, "maximum": 100},
                         "start_at": _S,
@@ -178,6 +179,7 @@ EXAM_TOOLS: list[RegisteredTool] = [
                     ["class_id", "source_publication_id", "title"],
                 ),
                 teacher_tools.tool_paper_publish_wrong_question_practice,
+                requires_confirmation_override=True,
             ),
     _fn(
                 "paper.publish_reinforcement_practice",

@@ -15,10 +15,12 @@ import { ContentWithPrimeBrush as KatexText } from "../../../components/ContentW
 import { useAgentActions } from "../../../contexts/AgentContext";
 import { SelectionIndicator } from "../../../design-system/SelectionIndicator";
 import { cn } from "../../../lib/utils";
+import { confirmDialog } from "../../../lib/confirmDialog";
 import {
   getTeacherStudentProfile,
   listTeacherAssignedClasses,
   listTeacherClassStudents,
+  publishWrongQuestionPractice,
   type TeacherClassRecord,
   type TeacherClassStudentRecord,
   type TeacherStudentProfile,
@@ -56,10 +58,33 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssign
   const [dateTo, setDateTo] = useState("");
   const [weakModalOpen, setWeakModalOpen] = useState(false);
   const [weakPaperId, setWeakPaperId] = useState("all");
+  const [practiceSource, setPracticeSource] = useState("");
+  const [practiceBusy, setPracticeBusy] = useState(false);
+  const [practiceNotice, setPracticeNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const studentListRequestIdRef = useRef(0);
   const profileRequestIdRef = useRef(0);
   const { setPageContext } = useAgentActions();
+
+  const practiceSources = useMemo(() => {
+    return (profile?.recent_exams ?? []).filter((exam) => exam.publication_id && exam.can_assign_wrong_question_practice
+      && (weakPaperId === "all" || exam.paper_id === weakPaperId));
+  }, [profile, weakPaperId]);
+
+  async function assignWrongQuestions() {
+    const source = practiceSources.find((exam) => exam.publication_id === practiceSource);
+    if (!profile || !source?.publication_id || practiceBusy) return;
+    setPracticeBusy(true);
+    setPracticeNotice("");
+    try {
+      if (!await confirmDialog(`只向 ${profile.student.display_name} 发布「${source.title}」中最多 5 道已确认错题；不计入班级分析。`, "布置个人错题练习")) return;
+      await publishWrongQuestionPractice({ class_id: profile.class_id, student_id: profile.student.id,
+        source_publication_id: source.publication_id, title: `${source.title.slice(0, 180)} · 个人错题练习`, max_questions_per_student: 5 });
+      setPracticeNotice("已发布个人错题练习。");
+    } catch (error) {
+      setPracticeNotice(error instanceof Error ? error.message : "发布失败");
+    } finally { setPracticeBusy(false); }
+  }
 
   useEffect(() => {
     let active = true;
@@ -382,7 +407,11 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssign
                   <h3 className="font-semibold text-[var(--or-text)] text-sm tracking-tight">考试记录</h3>
                   <button
                     type="button"
-                    onClick={() => setWeakModalOpen(true)}
+                    onClick={() => {
+                      setPracticeSource("");
+                      setPracticeNotice("");
+                      setWeakModalOpen(true);
+                    }}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--or-error-container)] border border-[var(--or-error)] px-3 py-1.5 text-xs font-medium text-[var(--or-on-error)] hover:bg-[var(--or-error-container)] transition-colors"
                   >
                     查看薄弱题排名
@@ -496,6 +525,17 @@ export function TeacherStudentInsightsWorkspace({ onError, onOpenPaper, onAssign
                   </option>
                 ))}
               </AppSelect>
+              {practiceSources.length > 0 && <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
+                <AppSelect aria-label="错题练习来源" value={practiceSource} onValueChange={setPracticeSource}>
+                  <option value="">选择一次已批改的考试</option>
+                  {practiceSources.map((exam) => <option key={exam.publication_id} value={exam.publication_id!}>
+                    {exam.title}{exam.submitted_at ? ` · ${new Date(exam.submitted_at).toLocaleDateString()}` : ""}
+                  </option>)}
+                </AppSelect>
+                <button type="button" disabled={!practiceSources.some((exam) => exam.publication_id === practiceSource) || practiceBusy}
+                  className="or-button or-button-primary px-3 py-2 text-xs" onClick={() => void assignWrongQuestions()}>布置个人错题练习</button>
+                {practiceNotice && <p role="status" className="w-full text-xs">{practiceNotice}</p>}
+              </div>}
               <div className="space-y-3.5">
                 {weakQuestions.map((item, index) => (
                   <article

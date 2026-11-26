@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Sparkles, X } from 'lucide-react';
 import { apiPost } from '../api/client';
@@ -35,19 +35,21 @@ export function TeacherFirstUseGuide({
   const [error, setError] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const step = user.teacher_guide_step ?? 0;
   const requiredPassword = Boolean(user.must_change_password);
 
   useEffect(() => {
     setAcknowledged(false);
-    if (!requiredPassword && step < steps.length) onNavigate(steps[step].page);
-  }, [user.id, step, requiredPassword, onNavigate]);
+  }, [user.id, step]);
 
   useEffect(() => {
     const replay = async () => {
       try {
-        const result = await apiPost<{ user: PlatformUser }>('/api/auth/teacher-guide', { step: 0 });
-        onUpdated(result.user);
+        if (step >= steps.length) {
+          const result = await apiPost<{ user: PlatformUser }>('/api/auth/teacher-guide', { step: 0 });
+          onUpdated(result.user);
+        }
         setDismissed(false);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -55,7 +57,7 @@ export function TeacherFirstUseGuide({
     };
     window.addEventListener('eh-replay-teacher-guide', replay);
     return () => window.removeEventListener('eh-replay-teacher-guide', replay);
-  }, [onUpdated]);
+  }, [onUpdated, step]);
 
   async function changePassword() {
     if (password.length < 6 || password !== confirmation || password === currentPassword) {
@@ -194,17 +196,21 @@ export function TeacherFirstUseGuide({
   }
 
   if (step >= steps.length) return null;
-  if (dismissed) return null;
 
   return (
-    <section
+    <Dialog.Root open={!dismissed} onOpenChange={(open) => { if (!open) setDismissed(true); }}>
+      <Dialog.Portal>
+      <Dialog.Overlay className="or-modal-backdrop" />
+    <Dialog.Content
       aria-label="教师使用引导"
-      className="or-g55-guide mx-3 mt-2 w-[calc(100%-1.5rem)] shrink-0 space-y-3 rounded-2xl border border-[var(--or-outline)] bg-[var(--or-card)] p-3 shadow-sm sm:mx-4 sm:w-[calc(100%-2rem)] sm:p-4"
+      className="or-modal-surface or-guide-modal p-5 sm:p-6"
+      onOpenAutoFocus={(event) => { event.preventDefault(); titleRef.current?.focus({ preventScroll: true }); }}
     >
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[var(--or-outline)] pb-2">
-        <h2 className="min-w-0 truncate text-sm font-bold text-[var(--or-text)]">
-          使用引导 {step + 1}/{steps.length} · {steps[step].title}
-        </h2>
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[var(--or-outline)] pb-3">
+        <Dialog.Title ref={titleRef} tabIndex={-1} className="min-w-0 flex-1 text-base font-bold text-[var(--or-text)]">
+          <span className="mb-1 block text-xs text-or-muted">使用引导 {step + 1}/{steps.length}</span>
+          {steps[step].title}
+        </Dialog.Title>
         <button
           type="button"
           disabled={busy}
@@ -224,14 +230,14 @@ export function TeacherFirstUseGuide({
           <span>稍后继续</span>
         </button>
       </div>
-      <div className="or-g55-guide-content">
+      <div className="pt-4">
         <div className="space-y-3">
-            <p className="text-sm leading-relaxed text-[var(--or-muted)]">{steps[step].text}</p>
+            <Dialog.Description className="text-sm leading-relaxed text-[var(--or-muted)]">{steps[step].text}</Dialog.Description>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 className="inline-flex min-h-11 items-center justify-center rounded-lg border border-[var(--or-outline)] bg-[var(--or-page)] px-3 text-xs font-medium text-[var(--or-muted)] transition hover:bg-[var(--or-block)]"
-                onClick={() => onNavigate(steps[step].page)}
+                onClick={() => { setDismissed(true); onNavigate(steps[step].page); }}
               >
                 进入对应页面
               </button>
@@ -239,7 +245,7 @@ export function TeacherFirstUseGuide({
                 <button
                   type="button"
                   className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-or-primary-container px-3 text-xs font-semibold text-or-on-container transition hover:brightness-95"
-                  onClick={onOpenAssistant}
+                  onClick={() => { setDismissed(true); onOpenAssistant(); }}
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                   打开AI助手
@@ -270,6 +276,8 @@ export function TeacherFirstUseGuide({
             </button>
         </div>
       </div>
-    </section>
+    </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

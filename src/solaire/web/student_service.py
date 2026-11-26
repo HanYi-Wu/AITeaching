@@ -51,6 +51,43 @@ MAX_PROCTOR_EVENTS_PER_ATTEMPT = 1_000
 MAX_PROCTOR_EVENTS_PER_MINUTE = 120
 
 
+def _record_answer_rhythm(root: Path, attempt_id: str, student_id: str, payload: dict) -> dict:
+    if set(payload) != {"idle_seconds", "burst_seconds", "changed_questions", "context_signal"}:
+        raise ValueError("Invalid answer rhythm payload")
+    for key, low, high in (("idle_seconds", 45, 600), ("burst_seconds", 0, 12), ("changed_questions", 3, 12)):
+        if type(payload[key]) is not int or not low <= payload[key] <= high:
+            raise ValueError("Answer rhythm measurements are out of range")
+    if payload["context_signal"] not in ("none", "visibility", "paste"):
+        raise ValueError("Unsupported answer rhythm context")
+    with closing(connect(root)) as con, con:
+        con.execute("BEGIN IMMEDIATE")
+        attempt = _attempt_for_student_in_connection(con, attempt_id, student_id)
+        if attempt.get("status") != "in_progress":
+            raise ValueError("Review signals require an in-progress attempt")
+        count, recent = con.execute(
+            "SELECT COUNT(*), MAX(datetime(occurred_at) >= datetime('now','-30 seconds')) "
+            "FROM student_review_signals WHERE attempt_id = ?", (attempt_id,),
+        ).fetchone()
+        if count >= 30 or recent:
+            return {"recorded": False}
+        context_signal = payload["context_signal"]
+        if context_signal != "none":
+            event_type, window = ("paste", "-35 seconds") if context_signal == "paste" else ("visibility_hidden", "-11 minutes")
+            corroborated = con.execute(
+                "SELECT 1 FROM proctor_events WHERE attempt_id = ? AND event_type = ? "
+                "AND datetime(occurred_at) >= datetime('now', ?) LIMIT 1", (attempt_id, event_type, window),
+            ).fetchone()
+            if not corroborated:
+                context_signal = "none"
+        identity, now = _new_id(), utc_now()
+        con.execute(
+            "INSERT INTO student_review_signals VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (identity, attempt_id, now, payload["idle_seconds"], payload["burst_seconds"],
+             payload["changed_questions"], context_signal),
+        )
+    return {"recorded": True, "id": identity, "occurred_at": now}
+
+
 
 
 
@@ -98,6 +135,8 @@ def record_student_proctor_event(
     now = utc_now()
     event_id = _new_id()
     clean_type = event_type.strip() or "unknown"
+    if clean_type == "answer_resume_burst":
+        return _record_answer_rhythm(root, attempt_id, str(student["id"]), payload or {})
     if clean_type not in PROCTOR_EVENT_TYPES:
         raise ValueError(f"Unsupported proctor event type: {clean_type}")
     clean_duration = int(duration_ms or 0)

@@ -40,6 +40,14 @@ class AuditAction:
 # Keep this list explicit. Adding a mutation to the activity metric requires a
 # deliberate, reviewed entry; ordinary reads and authentication are absent.
 _ACTION_ROWS = (
+    ("admin.update.upload", "上传系统更新包", "POST", "/admin/system/update-package", "system_update", None, None),
+    ("admin.update.schedule", "预约系统更新", "POST", "/admin/system/update-package/schedule", "system_update", None, None),
+    ("admin.update.github", "预约 GitHub 更新", "POST", "/admin/system/update-package/github", "system_update", None, None),
+    ("admin.update.package.discard", "结束更新任务并清理暂存包", "DELETE", "/admin/system/update-package/{package_id}", "system_update", "package_id", None),
+    ("admin.update.rollback", "申请版本回滚", "POST", "/admin/system/update-package/rollback", "system_update", None, None),
+    ("admin.extension.install", "安装主机扩展", "POST", "/system/extensions/{ext_id}/install", "host_extension", "ext_id", None),
+    ("admin.extension.path.update", "修改主机扩展路径", "PUT", "/system/extensions/{ext_id}/manual-path", "host_extension", "ext_id", None),
+    ("admin.extension.path.clear", "清除主机扩展路径", "DELETE", "/system/extensions/{ext_id}/manual-path", "host_extension", "ext_id", None),
     ("admin.school.create", "创建学校", "POST", "/schools", "school", None, None),
     ("admin.school_account.create", "创建学校账号", "POST", "/schools/{school_id}/school-users", "school_account", None, "school_id"),
     ("admin.school_account.update", "更新学校账号", "PATCH", "/schools/{school_id}/school-users/{user_id}", "school_account", "user_id", "school_id"),

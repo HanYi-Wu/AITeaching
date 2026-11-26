@@ -3,13 +3,14 @@ import { Bot } from "lucide-react";
 import { ASSISTANT_PROSE_CLASS, type ChatLine } from "./types";
 import { AgentConfirmCard, AgentPlanCard, AgentToolCard } from "./AgentCards";
 import "../../ui-redesign/g55/g55.css";
+import type { AgentQuestionReview } from "../../api/client";
 
 const AgentMarkdown = lazy(() => import("./AgentMarkdown"));
 
 export interface AgentMessageItemProps {
   line: ChatLine;
   busy: boolean;
-  onConfirm: (actionId: string, accepted: boolean) => Promise<void>;
+  onConfirm: (actionId: string, accepted: boolean, review?: AgentQuestionReview[]) => Promise<void>;
   onPlanAction: (action: "execute" | "modify" | "cancel", planPath: string) => Promise<void>;
 }
 
@@ -67,6 +68,7 @@ export const AgentMessageItem = memo(function AgentMessageItem({
         action_id={line.action_id}
         tool_name={line.tool_name}
         description={line.description}
+        preview={line.preview}
         resolved={line.resolved}
         busy={busy}
         onConfirm={onConfirm}

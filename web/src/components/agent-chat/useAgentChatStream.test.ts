@@ -1,13 +1,19 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiAgentChatStream, apiAgentSessionContextMeter, apiAgentSessionGet } from "../../api/client";
-import { useAgentChatStream, type UseAgentChatStreamOptions } from "./useAgentChatStream";
+import { readTurnUsage, useAgentChatStream, type UseAgentChatStreamOptions } from "./useAgentChatStream";
 
 vi.mock("../../api/client", () => ({
   apiAgentChatStream: vi.fn(), apiAgentSessionCancel: vi.fn().mockResolvedValue({}),
   apiAgentSessionContextMeter: vi.fn(), apiAgentSessionGet: vi.fn(),
 }));
 vi.mock("../../lib/contentEvents", () => ({ notifyAgentContentChanged: vi.fn() }));
+
+it("does not turn estimates or absent provider usage into billed tokens", () => {
+  expect(readTurnUsage({ context_tokens_est: 1200 })).toBeNull();
+  expect(readTurnUsage({ prompt_tokens: 100, completion_tokens: 25 })).toEqual({ input: 100, output: 25, total: 125 });
+  expect(readTurnUsage({ total_tokens: 0 })).toBeNull();
+});
 
 type PendingRun = {
   emit: Parameters<typeof apiAgentChatStream>[1];

@@ -126,16 +126,15 @@ export function SchoolWorkspace({ user, onLogout, onError, onProfileUpdated }: P
         actions={actions}
         onLogout={onLogout}
       >
-        <div className={`or-workspace-content ${!hasAside ? "space-y-6" : "grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"}`}>
-          <section className="or-workspace-content min-w-0 space-y-6">
-            {!managementPage ? <div className="grid gap-2.5 grid-cols-2 md:grid-cols-4">
+        <div className="or-school-layout">
+            {data.activePage === "overview" ? <div className="or-school-metrics">
               <Metric label="教师" value={data.schoolStats?.teachers ?? data.teacherMeta.total} />
               <Metric label="班级" value={data.schoolStats?.classes ?? data.classMeta.total} />
               <Metric label="学生" value={data.schoolStats?.students ?? data.studentMeta.total} />
               <Metric label="分配" value={data.schoolStats?.assignments ?? data.assignmentMeta.total} />
             </div> : null}
 
-            <nav className="management-section-nav grid gap-2 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6" aria-label="学校管理页面导航">
+            <nav className="management-section-nav or-school-nav" aria-label="学校管理页面导航">
               {pages.map((page) => {
                 const selected = data.activePage === page.id;
                 return (
@@ -156,6 +155,8 @@ export function SchoolWorkspace({ user, onLogout, onError, onProfileUpdated }: P
                 );
               })}
             </nav>
+          <div className={`or-school-body ${hasAside ? "or-school-body-split" : ""}`} key={data.activePage}>
+          <section className="or-workspace-content min-w-0 space-y-4">
 
             {data.activePage === "overview" ? (
               <OverviewPanel
@@ -287,6 +288,7 @@ export function SchoolWorkspace({ user, onLogout, onError, onProfileUpdated }: P
             ) : null}
           </section>
 
+          {hasAside && <aside className="or-school-aside min-w-0">
           {data.activePage === "teachers" && canManage(user, "school.teachers.manage") ? (
             <TeachersAsidePanel
               busy={data.busy}
@@ -351,6 +353,8 @@ export function SchoolWorkspace({ user, onLogout, onError, onProfileUpdated }: P
               handleFile={data.handleFile}
             />
           ) : null}
+          </aside>}
+          </div>
         </div>
       </PlatformShell>
     </div>

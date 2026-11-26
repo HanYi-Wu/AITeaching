@@ -31,6 +31,7 @@ import { GettingStartedChecklist } from "../GettingStartedChecklist";
 import { StudentNavButton, StudentAnalysisVisual, StudentResultDetails } from "./StudentPanels";
 import { StudentExamPanel } from "./StudentExamPanel";
 import { useStudentExam } from "./useStudentExam";
+import { prioritizeStudentTasks } from "./taskPriority";
 import { DeferredMount } from "../../../components/DeferredMount";
 import "../../../ui-redesign/g54/g54.css";
 import { Select as AppSelect } from "../../../components/ui/select";
@@ -90,10 +91,11 @@ export function StudentWorkspace({ user, onLogout }: Props) {
   }
 
   const pendingPapers = useMemo(
-    () => papers.filter((paper) => paper.status !== "submitted" && paper.status !== "completed"),
+    () => prioritizeStudentTasks(papers),
     [papers],
   );
-  const latestResult = results[0] ?? null;
+  const nextTask = pendingPapers.find((paper) => paper.can_answer !== false) ?? null;
+  const latestResult = results.find((result) => result.score_percent != null) ?? null;
   const mustChangePassword = Boolean(profile.must_change_password);
   const shouldRefreshResults = activeView === "results" && results.length > 0;
   const resultSubjects = useMemo(
@@ -525,6 +527,20 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                   刷新
                 </button>
               </div>
+              {nextTask && <section aria-label="下一项任务" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--or-outline)] bg-[var(--or-page)] p-4">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-[var(--or-muted)]">{nextTask.status === "in_progress" ? "继续上次作答" : "优先完成"}</p>
+                  <h3 className="mt-1 break-words font-semibold">{nextTask.title}</h3>
+                  <p className="mt-1 text-xs text-[var(--or-muted)]">
+                    {nextTask.end_at ? `截止 ${formatLocaleDateTime(nextTask.end_at)}` : "无截止时间"}{nextTask.recipient_scope === "student" ? " · 个人练习" : ""}
+                  </p>
+                </div>
+                <button type="button" disabled={busy !== null} className="or-button or-button-primary px-3 py-2 text-sm"
+                  onClick={() => void startPaper(nextTask)}>{nextTask.status === "in_progress" ? "继续答题" : "开始答题"}</button>
+              </section>}
+              {!loading && !nextTask && <p className="mt-4 text-sm text-[var(--or-muted)]">
+                {pendingPapers.length ? "当前没有可开始的试卷，可在待答试卷查看安排。" : "暂无待完成的试卷。"}
+              </p>}
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 <button
                   type="button"
@@ -551,8 +567,9 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                     <BarChart3 className="h-5 w-5 text-[var(--or-muted)] group-hover:text-[var(--or-muted)] transition-colors" />
                   </div>
                   <p className="mt-2 text-3xl font-semibold tracking-tight text-[var(--or-text)] font-mono">
-                    {latestResult?.score_percent ?? "-"}%
+                    {latestResult?.score_percent != null ? `${latestResult.score_percent}%` : "—"}
                   </p>
+                  {latestResult && <p className="mt-1 truncate text-xs text-[var(--or-muted)]">{latestResult.title}</p>}
                 </button>
               </div>
             </section>
@@ -601,7 +618,10 @@ export function StudentWorkspace({ user, onLogout }: Props) {
                         </span>
                         <span className="or-g54-pill bg-[var(--or-block)] text-[var(--or-muted)]">{statusLabel(paper.status)}</span>
                         {paper.can_answer === false ? (
-                          <span className="or-g54-pill bg-[var(--or-error-container)] text-[var(--or-on-error)] font-semibold">暂不可答</span>
+                          <span className="or-g54-pill bg-[var(--or-error-container)] text-[var(--or-on-error)] font-semibold">
+                            {paper.publication_status === "paused" ? "教师已暂停" : paper.start_at && Date.parse(paper.start_at) > Date.now()
+                              ? `开放 ${formatLocaleDateTime(paper.start_at)}` : "暂不可答"}
+                          </span>
                         ) : null}
                       </div>
                     </div>

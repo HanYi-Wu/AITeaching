@@ -1,6 +1,7 @@
 import { type PaperPublicationRecord, type PlatformPaperRecord } from "../../../platform/auth";
 
 export type PaperQuery = {
+  directId?: string;
   q: string;
   deliveryMode: "all" | "offline" | "online";
   status: string;

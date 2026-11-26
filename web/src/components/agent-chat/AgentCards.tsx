@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, Loader2, Pencil, Play } from "lucide-react";
 import { downloadPlatformBlob } from "../../platform/auth";
 import { formatToolLineLabel } from "./formatTool";
+import type { AgentQuestionReview } from "../../api/client";
 import "../../ui-redesign/g55/g55.css";
 
 export interface AgentToolCardProps {
@@ -74,25 +76,77 @@ export interface AgentConfirmCardProps {
   action_id: string;
   tool_name: string;
   description: string;
+  preview?: import("../../api/client").AgentQuestionConfirmationPreview | null;
   resolved?: "accepted" | "rejected";
   busy: boolean;
-  onConfirm: (actionId: string, accepted: boolean) => Promise<void>;
+  onConfirm: (actionId: string, accepted: boolean, review?: AgentQuestionReview[]) => Promise<void>;
 }
 
 export function AgentConfirmCard({
   action_id,
   tool_name,
   description,
+  preview,
   resolved,
   busy,
   onConfirm,
 }: AgentConfirmCardProps) {
   const { t } = useTranslation("agent");
+  const questions = preview?.kind === "question_creation" && Array.isArray(preview.questions) ? preview.questions : [];
+  const [excluded, setExcluded] = useState<number[]>([]);
+  const [edits, setEdits] = useState<Record<number, Omit<AgentQuestionReview, "index">>>({});
+  const [editIndex, setEditIndex] = useState<number | null>(null);
+  const canReview = tool_name === "bank.create_items" && questions.length > 0;
+  const count = questions.length - excluded.length;
+  const patch = (index: number, change: Omit<AgentQuestionReview, "index">) =>
+    setEdits((current) => ({ ...current, [index]: { ...current[index], ...change } }));
+  const accept = () => {
+    if (!canReview || (!excluded.length && !Object.keys(edits).length)) return onConfirm(action_id, true);
+    const review = questions.flatMap((_, index) => excluded.includes(index) ? [] : [{ index, ...edits[index] }]);
+    return onConfirm(action_id, true, review);
+  };
 
   return (
     <div className="or-g55-status-warning ml-2 sm:ml-6 rounded-xl p-3 text-xs">
       <div className="font-semibold">{t("needConfirm", { name: tool_name })}</div>
       <div className="mt-1 leading-relaxed">{description}</div>
+      {questions.length > 0 && <details className="mt-2" open={!resolved}>
+        <summary className="cursor-pointer font-semibold">预览 {questions.length} 道待写入题目</summary>
+        <ol className="mt-2 max-h-72 space-y-2 overflow-y-auto" aria-label="待写入题目">
+          {questions.map((question, index) => {
+            const changed = edits[index];
+            const selected = !excluded.includes(index);
+            return <li key={`${index}:${question.id}`} className="space-y-1 rounded-lg border border-or-outline bg-or-card p-2 text-or-text">
+              <div className="flex flex-wrap items-center gap-2 font-semibold break-words">
+                {canReview && !resolved && <input type="checkbox" checked={selected} disabled={busy} aria-label={`写入第 ${index + 1} 题`}
+                  onChange={(event) => { const checked = event.target.checked; setExcluded((old) => checked ? old.filter((i) => i !== index) : [...old, index]); }} />}
+                {index + 1}. {question.id} · {question.subject}
+                {canReview && !resolved && <button type="button" className="ml-auto rounded border px-2 py-1" disabled={!selected || busy}
+                  onClick={() => setEditIndex(editIndex === index ? null : index)}>{editIndex === index ? "收起编辑" : `编辑第 ${index + 1} 题`}</button>}
+                {!selected && <span className="text-or-muted">不写入</span>}
+              </div>
+              {editIndex === index && !resolved ? <div className="grid gap-1">
+                {([ ["content", "题干"], ["answer", "答案"], ["analysis", "解析"] ] as const).map(([key, label]) =>
+                  <label key={key}>{label}<textarea className="block w-full rounded border bg-or-card p-1" maxLength={20000}
+                    value={changed?.[key] ?? question[key]} disabled={busy || !selected}
+                    onChange={(event) => patch(index, { [key]: event.target.value })} /></label>)}
+                {question.options.map((option) => <label key={option.label}>选项 {option.label}
+                  <input className="block w-full rounded border bg-or-card p-1" maxLength={20000} disabled={busy || !selected}
+                    value={changed?.options?.[option.label] ?? option.text} onChange={(event) => patch(index, { options: {
+                      ...Object.fromEntries(question.options.map((item) => [item.label, item.text])), ...changed?.options,
+                      [option.label]: event.target.value,
+                    } })} /></label>)}
+              </div> : <>
+                <p className="whitespace-pre-wrap break-words">{changed?.content ?? question.content}</p>
+                {question.options.length > 0 && <ul className="space-y-0.5">{question.options.map((option) =>
+                  <li key={option.label} className="whitespace-pre-wrap break-words">{option.label}. {changed?.options?.[option.label] ?? option.text}</li>)}</ul>}
+                <p className="whitespace-pre-wrap break-words"><strong>答案：</strong>{(changed?.answer ?? question.answer) || "—"}</p>
+                <p className="whitespace-pre-wrap break-words"><strong>解析：</strong>{(changed?.analysis ?? question.analysis) || "—"}</p>
+              </>}
+            </li>;
+          })}
+        </ol>
+      </details>}
       {resolved ? (
         <div className="mt-2.5 font-medium">
           {resolved === "accepted" ? t("accepted") : t("rejected")}
@@ -101,11 +155,11 @@ export function AgentConfirmCard({
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={busy}
-            onClick={() => void onConfirm(action_id, true)}
+            disabled={busy || (canReview && !count)}
+            onClick={() => void accept()}
             className="inline-flex h-8 items-center justify-center rounded-lg bg-or-primary px-3.5 text-xs font-semibold text-or-on-primary shadow-sm transition hover:brightness-95 disabled:opacity-50"
           >
-            {t("confirmBtn")}
+            {questions.length > 0 ? `确认写入 ${count} 道题` : t("confirmBtn")}
           </button>
           <button
             type="button"

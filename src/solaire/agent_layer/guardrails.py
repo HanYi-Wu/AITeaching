@@ -221,6 +221,9 @@ def check_tool_call(
 
 
 def human_confirmation_message(tool_name: str, args: dict) -> str:
+    if tool_name == "paper.publish_wrong_question_practice":
+        recipient = f"仅学生 {args['student_id']}" if args.get("student_id") else f"班级 {args.get('class_id') or '未指定'}"
+        return f"发布错题练习「{args.get('title') or '未命名'}」给{recipient}？来源发布：{args.get('source_publication_id') or '未指定'}。"
     if tool_name == "exam.publish_online_paper":
         paper = str(args.get("paper_title") or args.get("title") or args.get("paper_id") or args.get("exam_id") or "未指定试卷")
         folder = str(args.get("folder_name") or args.get("folder_id") or "未指定文件夹")
@@ -236,6 +239,66 @@ def human_confirmation_message(tool_name: str, args: dict) -> str:
     rt = _tool_registry().get_registered_tool(tool_name)
     label = (rt.action_label if rt and rt.action_label else None) or "一项可能影响数据的操作"
     return f"助手请求执行：{label}。请确认是否继续。"
+
+
+def question_confirmation_preview(tool_name: str, args: dict) -> dict | None:
+    if tool_name not in {"bank.create_item", "bank.create_items"}:
+        return None
+    questions = args.get("questions") if tool_name == "bank.create_items" else [args]
+    if not isinstance(questions, list) or not 1 <= len(questions) <= 50:
+        raise ValueError("题目预览必须包含 1 至 50 道题")
+    preview = []
+    for question in questions:
+        if not isinstance(question, dict):
+            raise ValueError("题目必须为对象")
+        options = question.get("options") or {}
+        if isinstance(options, str):
+            options = json.loads(options) if options.strip() else {}
+        if not isinstance(options, dict):
+            raise ValueError("选项必须为对象")
+        subject = str(question.get("subject") or args.get("subject") or "通用").strip() or "通用"
+        preview.append({
+            "id": str(question.get("question_id") or "").strip(),
+            "type": str(question.get("question_type") or "").strip(),
+            "subject": subject,
+            "content": str(question.get("content") or ""),
+            "answer": str(question.get("answer") or ""),
+            "analysis": str(question.get("analysis") or ""),
+            "options": [{"label": str(label), "text": str(text)} for label, text in options.items()],
+        })
+    value = {"kind": "question_creation", "questions": preview}
+    if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 256_000:
+        raise ValueError("这批题目的完整预览过长，请拆分批次后再提交")
+    return value
+
+
+def apply_question_review(args: dict, review: list[dict]) -> dict:
+    originals = args.get("questions")
+    if not isinstance(originals, list) or not 1 <= len(review) <= len(originals) <= 50:
+        raise ValueError("请选择原批次中的至少一道题")
+    chosen = {}
+    for edit in review:
+        index = edit.get("index")
+        if type(index) is not int or not 0 <= index < len(originals) or index in chosen:
+            raise ValueError("待确认题目的序号无效或重复")
+        if set(edit) - {"index", "content", "answer", "analysis", "options"}:
+            raise ValueError("不能修改题目编号、题型、学科或写入位置")
+        original = originals[index]
+        fields = {key: value for key, value in edit.items() if key != "index"}
+        for key in {"content", "answer", "analysis"} & fields.keys():
+            if not isinstance(fields[key], str) or len(fields[key]) > 20_000 or (key == "content" and not fields[key].strip()):
+                raise ValueError("题干不能为空，且题目字段不能超出长度限制")
+        if "options" in fields:
+            options = fields["options"]
+            old = original.get("options") or {}
+            if not isinstance(options, dict) or not isinstance(old, dict) or options.keys() != old.keys() or any(
+                not isinstance(value, str) or not value.strip() or len(value) > 20_000 for value in options.values()
+            ):
+                raise ValueError("只能修改原有选项的文字，且选项不能为空")
+        chosen[index] = {**original, **fields}
+    merged = {**args, "questions": [chosen[index] for index in sorted(chosen)]}
+    question_confirmation_preview("bank.create_items", merged)
+    return merged
 
 
 _MAX_APPROVED_KEYS = 50

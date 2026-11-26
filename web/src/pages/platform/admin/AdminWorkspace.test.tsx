@@ -139,7 +139,8 @@ describe("AdminWorkspace", () => {
     expect(mocks.apiAgentLlmSettingsGet).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "平台 AI" }));
     expect(await screen.findByTestId("admin-model-settings-form")).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "扩展组件" }));
+    await user.click(screen.getByRole("tab", { name: "系统维护" }));
+    expect(screen.getByRole("heading", { name: "版本更新" })).toBeInTheDocument();
     expect(await screen.findByTestId("admin-extensions-panel")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "教师端" })).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.apiAgentLlmSettingsGet).toHaveBeenCalled());

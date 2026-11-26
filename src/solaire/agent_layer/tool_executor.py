@@ -20,6 +20,7 @@ from solaire.agent_layer.guardrails import (
     SAFETY_MODE_VIVACE,
     check_tool_call,
     human_confirmation_message,
+    question_confirmation_preview,
     vivace_fast_review,
     vivace_needs_fast_model_review,
 )
@@ -356,17 +357,27 @@ async def _execute_single_tool(
                 confirm_extra = f"（安全复核提示：{reason}）"
                 await emit("thinking", {"message": f"已触发安全复核：{reason}"})
         if dec != GuardrailDecision.AUTO_APPROVE:
+            try:
+                preview = question_confirmation_preview(name, args)
+            except ValueError as exc:
+                error_payload = {"error": str(exc), "error_code": "invalid_confirmation_preview"}
+                session.draft_tool_results.append(_build_tool_result_dict(tid, name, error_payload))
+                await _post_tool_events(emit=emit, project_root=project_root, session_id=sid,
+                                        name=name, tid=tid, status="failed", payload=error_payload, ctx=ctx)
+                return False, None
             aid = uuid.uuid4().hex
             session.pending_confirmations[aid] = PendingConfirmation(
                 tool_call_id=tid, tool_name=name, arguments=args,
                 description=human_confirmation_message(name, args) + confirm_extra,
+                preview=preview,
             )
+            save_session(project_root, session)
             await emit("confirm_needed", {
                 "action_id": aid, "tool_name": name,
                 "description": session.pending_confirmations[aid].description,
                 "risk": "write_or_destructive",
+                **({"preview": preview} if preview else {}),
             })
-            save_session(project_root, session)
             await emit("done", {"usage": {}, "awaiting_confirmation": True})
             return True, None
 

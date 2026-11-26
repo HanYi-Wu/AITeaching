@@ -366,6 +366,11 @@ def teacher_student_profile_query(
             SELECT sa.id AS attempt_id, sa.status, sa.score, sa.max_score, sa.started_at,
                    sa.submitted_at, sa.time_spent_seconds, ep.id AS publication_id,
                    ep.submission_mode, pr.id AS paper_id, pr.exam_id, pr.title, COALESCE(ep.subject, pr.subject) AS subject,
+                   CASE WHEN ep.recipient_scope = 'class' AND ep.status IN ('published', 'closed')
+                     AND sa.status = 'submitted' AND sa.grading_completed_at IS NOT NULL
+                     AND sa.grading_completed_at != ''
+                     AND EXISTS (SELECT 1 FROM student_answers aa WHERE aa.attempt_id = sa.id AND aa.is_correct = 0)
+                     THEN 1 ELSE 0 END AS can_assign_wrong_question_practice,
                    (SELECT COUNT(*) FROM attempt_scan_images asi WHERE asi.attempt_id = sa.id) AS scan_image_count,
                    (SELECT COUNT(*) FROM proctor_events pe WHERE pe.attempt_id = sa.id) AS integrity_event_count,
                    (SELECT COUNT(*) FROM student_answers aa WHERE aa.attempt_id = sa.id) AS answer_count,

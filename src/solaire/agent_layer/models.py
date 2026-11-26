@@ -47,6 +47,7 @@ class PendingConfirmation(BaseModel):
     tool_name: str
     arguments: dict[str, Any]
     description: str
+    preview: dict[str, Any] | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

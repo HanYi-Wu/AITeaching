@@ -4,14 +4,7 @@ import { invalidateBankPrefetch, prefetchBankListData } from "../pages/bank/bank
 export function preloadTeacherWorkspaceChunks(): Promise<unknown>[] {
   return [
     import("../pages/platform/TeacherWorkspace"),
-    import("../pages/platform/papers/PapersWorkspace"),
-    import("../pages/bank/BankWorkspace"),
-    import("../pages/analysis/AnalysisWorkspace"),
-    import("../pages/compose/ComposeWorkspace"),
-    import("../pages/template/TemplateWorkspace"),
-    import("../pages/graph/GraphWorkspace"),
-    import("../pages/platform/insights/TeacherStudentInsightsWorkspace"),
-    import("../pages/tools/ClassroomToolsWorkspace"),
+    import("../pages/platform/teacher/TeacherWorkbench"),
   ];
 }
 
@@ -42,6 +35,9 @@ export function scheduleTeacherWorkspaceWarmup(options: {
       cancelled = true;
     };
   }
+
+  const connection = (window.navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+  if (connection?.saveData || ["slow-2g", "2g", "3g"].includes(connection?.effectiveType ?? "")) return () => {};
 
   const idleWindow = window as Window & {
     requestIdleCallback?: (callback: () => void, opts?: { timeout: number }) => number;

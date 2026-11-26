@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { resolveApiUrl } from "../../../api/client";
 import { compressImageFileToDataUrl } from "../../../lib/imageCompression";
+import { createAnswerRhythm } from "./answerRhythm";
 import {
   loadSessionToken, recordStudentProctorEvent, saveStudentAnswers, submitStudentAttempt,
   type PlatformUser, type StudentAnswerImage, type StudentAttemptRecord, type StudentQuestionRecord,
@@ -133,6 +134,7 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
   const autoSubmitTriggeredRef = useRef(false);
   const answerRevisionRef = useRef(0);
   const draftSaveInFlightRef = useRef(false);
+  const rhythmRef = useRef<ReturnType<typeof createAnswerRhythm> | null>(null);
   const filePickerActiveRef = useRef(false);
   const pendingImageWorkRef = useRef<Promise<void>[]>([]);
   const imageWorkByIdentityRef = useRef(new Map<string, Set<Promise<void>>>());
@@ -330,6 +332,14 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
   }
 
   const setAnswer = useCallback((questionId: string, value: string) => {
+    const attempt = activeAttemptRef.current;
+    if (attempt?.status === "in_progress" && navigator.onLine !== false && !document.hidden && !filePickerActiveRef.current
+      && (answersRef.current[questionId] ?? "") !== value) {
+      const signal = rhythmRef.current?.change(questionId, performance.now());
+      if (signal) void recordStudentProctorEvent(attempt.id, {
+        event_type: "answer_resume_burst", duration_ms: null, payload: signal,
+      }).catch(() => { /* Never hold up answering or retry telemetry offline. */ });
+    }
     answerRevisionRef.current += 1;
     const next = { ...answersRef.current, [questionId]: value };
     const conflicts = { ...textConflictsRef.current };
@@ -744,6 +754,9 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
   useEffect(() => {
     if (!activeAttempt || activeAttempt.status !== "in_progress") return;
     const attemptId = activeAttempt.id;
+    const rhythm = createAnswerRhythm();
+    rhythmRef.current = rhythm;
+    const resetRhythm = () => rhythm.reset();
     const sendEvent = (eventType: string, durationMs?: number | null, payload?: Record<string, unknown>) => {
       void Promise.resolve(recordStudentProctorEvent(attemptId, {
         event_type: eventType, duration_ms: durationMs ?? null, payload: payload ?? null,
@@ -757,6 +770,7 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
       } else if (hiddenAtRef.current != null) {
         const duration = Date.now() - hiddenAtRef.current;
         hiddenAtRef.current = null;
+        rhythm.note("visibility", performance.now());
         sendEvent("visibility_return", duration, { source: "visibilitychange", phase: "visible" });
       }
     };
@@ -764,7 +778,7 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
     const onBlur = () => { if (!filePickerActiveRef.current) sendEvent("window_blur", 0, { source: "window.blur" }); };
     const onFocus = () => { window.setTimeout(() => { filePickerActiveRef.current = false; }, 0); };
     const onCopy = () => sendEvent("copy", 0, { source: "document.copy" });
-    const onPaste = () => sendEvent("paste", 0, { source: "document.paste" });
+    const onPaste = () => { rhythm.note("paste", performance.now()); sendEvent("paste", 0, { source: "document.paste" }); };
     const onContextMenu = () => sendEvent("context_menu", 0, { source: "document.contextmenu" });
     const onFullscreenChange = () => { if (!document.fullscreenElement) sendEvent("fullscreen_exit", 0, { source: "fullscreenchange" }); };
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -775,7 +789,10 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
     window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("offline", resetRhythm);
+    window.addEventListener("online", resetRhythm);
     return () => {
+      if (rhythmRef.current === rhythm) rhythmRef.current = null;
       document.removeEventListener("visibilitychange", onVisibilityChange);
       document.removeEventListener("copy", onCopy);
       document.removeEventListener("paste", onPaste);
@@ -784,6 +801,8 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("offline", resetRhythm);
+      window.removeEventListener("online", resetRhythm);
     };
   }, [activeAttempt]);
 
@@ -878,7 +897,7 @@ export function useStudentExam({ user, onMessage, onSubmitted }: StudentExamCall
     unconfirmedTexts: currentUnconfirmedTexts, unconfirmedImages: currentUnconfirmedImages,
     open, setAnswer, setQuestionImages, recoverConflictingText, recoverConflictingImages, saveActiveDraft,
     submitActiveAttempt,
-    onFileDialogOpen: useCallback(() => { filePickerActiveRef.current = true; }, []),
+    onFileDialogOpen: useCallback(() => { filePickerActiveRef.current = true; rhythmRef.current?.reset(); }, []),
     onFileDialogClose: useCallback(() => { window.setTimeout(() => { filePickerActiveRef.current = false; }, 0); }, []),
   };
 }

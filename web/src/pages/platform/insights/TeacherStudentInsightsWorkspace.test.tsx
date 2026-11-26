@@ -9,7 +9,11 @@ const mocks = vi.hoisted(() => ({
   listTeacherAssignedClasses: vi.fn(),
   listTeacherClassStudents: vi.fn(),
   getTeacherStudentProfile: vi.fn(),
+  publishWrongQuestionPractice: vi.fn(),
+  confirmDialog: vi.fn(),
 }));
+
+vi.mock("../../../lib/confirmDialog", () => ({ confirmDialog: mocks.confirmDialog }));
 
 vi.mock("../../../platform/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../platform/auth")>()),
@@ -42,11 +46,32 @@ describe("TeacherStudentInsightsWorkspace", () => {
         },
         radar: [{ id: "score", label: "得分表现", value: 82.5 }],
         recent_exams: [
-          { attempt_id: "a1", paper_id: "p1", title: "期中考试", subject: "数学", status: "submitted", score_percent: 82.5 },
+          { attempt_id: "a1", publication_id: "pub1", can_assign_wrong_question_practice: 1,
+            paper_id: "p1", title: "期中考试", subject: "数学", status: "submitted", score_percent: 82.5 },
         ],
         weak_questions: [{ paper_id: "p1", paper_title: "期中考试", question_id: "math/q2", attempt_count: 2, wrong_count: 2, average_score_percent: 40 }],
       },
     });
+  });
+
+  it("confirms the exact student and source before assigning a personal practice", async () => {
+    mocks.confirmDialog.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    mocks.publishWrongQuestionPractice.mockResolvedValue({});
+    render(<AgentProvider><TeacherStudentInsightsWorkspace /></AgentProvider>);
+    await userEvent.click(await screen.findByText("演示学生1"));
+    await userEvent.click(await screen.findByRole("button", { name: "查看薄弱题排名" }));
+    const publish = screen.getByRole("button", { name: "布置个人错题练习" });
+    expect(publish).toBeDisabled();
+    await userEvent.click(screen.getByRole("combobox", { name: "错题练习来源" }));
+    await userEvent.click(await screen.findByRole("option", { name: "期中考试" }));
+    await userEvent.click(publish);
+    expect(mocks.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("演示学生1"), "布置个人错题练习");
+    expect(mocks.publishWrongQuestionPractice).not.toHaveBeenCalled();
+    await userEvent.click(publish);
+    expect(await screen.findByText("已发布个人错题练习。")).toBeInTheDocument();
+    expect(mocks.publishWrongQuestionPractice).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      class_id: "c1", student_id: "s1", source_publication_id: "pub1", max_questions_per_student: 5,
+    }));
   });
 
   it("shows a permitted class student profile and analysis", async () => {

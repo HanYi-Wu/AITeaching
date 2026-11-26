@@ -1193,7 +1193,8 @@ function BankWorkspaceSession({
 
         {/* 中：多标签 + 字段 / 浏览 / 源文件 */}
         <div className="or-g48-bank-editor-panel">
-        <section className="flex min-h-[260px] min-w-0 flex-1 flex-col overflow-hidden border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] lg:border-r">
+        <section data-agent-target={selectedId ? "bank-question" : undefined} data-agent-resource-id={selectedId ?? undefined} tabIndex={selectedId ? -1 : undefined}
+          className="flex min-h-[260px] min-w-0 flex-1 flex-col overflow-hidden border-[color-mix(in_srgb,var(--or-outline)_80%,transparent)] bg-[color-mix(in_srgb,var(--or-page)_50%,transparent)] lg:border-r">
           {diagnostics.length > 0 && (
             <details className="shrink-0 border-b border-[var(--or-warning)] bg-[color-mix(in_srgb,var(--or-warning-container)_90%,transparent)] px-4 py-2.5 text-sm text-[var(--or-on-warning)]">
               <summary className="cursor-pointer font-semibold">{t("fileIssues", { count: diagnostics.length })}</summary>

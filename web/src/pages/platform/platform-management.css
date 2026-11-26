@@ -231,12 +231,63 @@
   width: min(36rem, calc(100vw - 2rem));
   max-height: min(54rem, calc(100dvh - 2rem));
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
   padding: 1.5rem;
   border: 1px solid var(--or-outline);
   border-radius: 1.25rem;
   background: var(--or-card);
   color: var(--or-text);
   box-shadow: 0 24px 80px rgb(0 0 0 / 20%);
+}
+.management-dialog::-webkit-scrollbar { display: none; }
+
+.or-school-layout {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  max-width: 100rem;
+  margin-inline: auto;
+  container-type: inline-size;
+}
+.or-school-metrics, .management-shell .or-school-nav {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.25rem), 1fr));
+  gap: .5rem;
+}
+.or-school-nav > button { min-width: 0; }
+.or-school-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+@container (min-width: 67rem) {
+  .or-school-body-split { grid-template-columns: minmax(0, 1fr) minmax(18rem, 27%); }
+}
+.management-shell .or-school-nav > button:not([aria-current="page"]),
+.or-school-layout .or-g53-btn-tonal,
+.management-shell .management-page-actions .or-g53-btn-tonal,
+.management-shell .management-topbar .or-button-outline {
+  border: 1px solid color-mix(in srgb, var(--or-text) 27%, var(--or-outline));
+  background: color-mix(in srgb, var(--or-primary) 10%, var(--or-card));
+  color: var(--or-text);
+}
+.management-shell .or-school-nav > button:not([aria-current="page"]):hover,
+.or-school-layout .or-g53-btn-tonal:hover:not(:disabled),
+.management-shell .management-page-actions .or-g53-btn-tonal:hover:not(:disabled) {
+  border-color: var(--or-primary);
+  background: color-mix(in srgb, var(--or-primary) 18%, var(--or-card));
+}
+.or-school-layout .management-toolbar > .management-field { min-width: 0; max-width: 100%; }
+@container (max-width: 35rem) {
+  .or-school-layout .management-panel-header { flex-wrap: wrap; }
+  .or-school-layout .management-toolbar > .management-search-field { flex-basis: 100%; }
+  .or-school-layout .management-toolbar > .management-field:not(.management-search-field) { flex: 1 1 8rem; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .or-school-body { animation: or-overlay-fade 155ms ease-out both; }
+  .or-school-layout button { transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease; }
 }
 
 .management-dialog-header {

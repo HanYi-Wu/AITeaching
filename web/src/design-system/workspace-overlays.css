@@ -1,0 +1,69 @@
+.or-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgb(10 15 25 / 44%);
+}
+
+.or-modal-surface {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 101;
+  transform: translate(-50%, -50%);
+  width: min(42rem, calc(100vw - 1.5rem));
+  max-height: calc(100dvh - 1.5rem);
+  border: 1px solid var(--or-outline);
+  border-radius: 1.25rem;
+  overflow: hidden;
+  background: var(--or-card);
+  color: var(--or-text);
+  box-shadow: 0 20px 64px rgb(0 0 0 / 25%);
+}
+
+.or-guide-modal { overflow-y: auto; scrollbar-width: none; }
+.or-teacher-settings-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(60rem, calc(100vw - 1.5rem));
+}
+.or-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex: none;
+  padding: .75rem 1.125rem;
+  border-bottom: 1px solid var(--or-outline);
+}
+.or-modal-close {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid var(--or-outline);
+  border-radius: .65rem;
+  background: var(--or-block);
+  color: var(--or-text);
+}
+.or-modal-close:hover { background: var(--or-primary-container); color: var(--or-on-container); }
+.or-modal-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
+}
+.or-modal-scroll::-webkit-scrollbar, .or-guide-modal::-webkit-scrollbar { display: none; }
+.or-modal-scroll:focus-visible { outline: 2px solid var(--or-focus); outline-offset: -2px; }
+
+@keyframes or-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes or-modal-enter {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)) scale(.985); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :is(.or-modal-backdrop, .management-dialog-overlay)[data-state="open"] { animation: or-overlay-fade 150ms ease-out both; }
+  :is(.or-modal-surface, .management-dialog)[data-state="open"] { animation: or-modal-enter 190ms cubic-bezier(.2,.72,.23,1) both; }
+  :is(.or-modal-backdrop, .management-dialog-overlay)[data-state="closed"] { animation: or-overlay-fade 100ms ease-in reverse both; }
+  :is(.or-modal-surface, .management-dialog)[data-state="closed"] { animation: or-modal-enter 125ms ease-in reverse both; }
+}

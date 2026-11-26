@@ -1,5 +1,7 @@
 import inspect
 import asyncio
+import json
+from unittest.mock import MagicMock
 from solaire.agent_layer.models import InvocationContext, ToolRisk
 from solaire.agent_layer.registry import get_registered_tool, select_tools_for_turn, tool_descriptions_for_prompt
 from solaire.agent_layer.tools.bank_tools import tool_bank_create_items
@@ -18,11 +20,75 @@ def test_batch_create_is_one_confirmable_write_and_reports_each_result(tmp_path)
     assert len(repeated.data['results']) == 3
 
 
+def test_batch_stream_previews_all_questions_before_one_write(tmp_path):
+    from solaire.agent_layer.models import ChatMessage, SessionState
+    from solaire.web.bank_service import get_question_detail
+
+    questions = [{"question_id": f"review{i}", "question_type": "short_answer", "content": f"题干 {i}",
+                  "answer": f"答案 {i}", "analysis": f"解析 {i}"} for i in range(10)]
+    args = {"subject": "数学", "questions": questions}
+    session = SessionState(session_id="review-batch", messages=[ChatMessage(role="user", content="生成十道数学题")])
+    session.draft_assistant = {"content": None, "tool_calls": [{"id": "batch-1", "function": {
+        "name": "bank.create_items", "arguments": json.dumps(args, ensure_ascii=False),
+    }}]}
+    seen = []
+
+    async def emit(event, payload):
+        seen.append((event, payload))
+
+    asyncio.run(orchestrator.run_agent_turn(tmp_path, session, user_message=None, project_ctx={},
+                                          router=MagicMock(), emit=emit, max_llm_rounds=1))
+    confirmations = [payload for event, payload in seen if event == "confirm_needed"]
+    assert len(confirmations) == 1
+    action = confirmations[0]
+    preview = action["preview"]["questions"]
+    assert [question["content"] for question in preview] == [question["content"] for question in questions]
+    assert preview[-1]["analysis"] == "解析 9"
+    assert not list(tmp_path.rglob("review*.yaml"))
+    asyncio.run(orchestrator._handle_confirmation_resume(project_root=tmp_path, session=session,
+        ctx=InvocationContext(project_root=tmp_path, session_id="review-batch", session=session),
+        confirm_action_id=action["action_id"], confirm_accepted=True, emit=emit))
+    for question in questions:
+        saved = get_question_detail(tmp_path, f"数学/默认/{question['question_id']}")
+        assert saved["question"]["content"] == question["content"]
+
+
+def test_review_can_select_and_edit_but_cannot_redirect_the_batch(tmp_path):
+    from solaire.agent_layer.models import PendingConfirmation, SessionState
+    from solaire.web.bank_service import get_question_detail
+
+    session = SessionState(session_id="filtered")
+    questions = [{"question_id": f"ret{i}", "question_type": "short_answer", "content": f"题干 {i}",
+                  "answer": f"答案 {i}"} for i in range(2)]
+    session.pending_confirmations["pending"] = PendingConfirmation(tool_call_id="c", tool_name="bank.create_items",
+        arguments={"subject": "数学", "questions": questions}, description="Preview")
+    seen = []
+
+    async def emit(event, data):
+        seen.append((event, data))
+
+    def confirm(review):
+        return asyncio.run(orchestrator._handle_confirmation_resume(project_root=tmp_path, session=session,
+            ctx=InvocationContext(project_root=tmp_path, session_id="filtered", session=session),
+            confirm_action_id="pending", confirm_accepted=True, confirm_questions=review, emit=emit))
+
+    confirm([{"index": 1, "question_id": "unauthorized"}])
+    assert "pending" in session.pending_confirmations
+    assert seen[0][1]["code"] == "invalid_question_review"
+    assert not list(tmp_path.rglob("ret*.yaml"))
+    confirm([{"index": 1, "content": "教师改后的题干", "answer": "更正答案"}])
+    assert "pending" not in session.pending_confirmations
+    assert not list(tmp_path.rglob("ret0.yaml"))
+    saved = get_question_detail(tmp_path, "数学/默认/ret1")["question"]
+    assert saved["content"] == "教师改后的题干" and saved["answer"] == "更正答案"
+
+
 def test_delete_and_batch_are_discoverable_without_focus_roundtrip():
     tools = select_tools_for_turn(skill_id=None, include_subtask=False)
     assert {'exam.workspace_delete','bank.create_items'} <= {tool.name for tool in tools}
     prompt = tool_descriptions_for_prompt(tools)
     assert len(prompt) < sum(len(tool.description) for tool in tools)
+    assert 'paper.find_submissions' not in prompt
 
 
 def test_confirmation_false_is_not_overridden():

@@ -122,6 +122,7 @@ describe("role-specific project requests", () => {
     mocks.getCurrentUser.mockResolvedValue({ user: { ...school, id: "teacher-user", role: "teacher" } });
     const user = userEvent.setup();
     renderApp();
+    await user.click(await screen.findByRole("button", { name: "组卷" }));
     await screen.findByRole("button", { name: "刷新项目范围" });
     await waitFor(() => expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith("/teacher-project"));
     mocks.composeRender.mockClear();
@@ -134,6 +135,7 @@ describe("role-specific project requests", () => {
     mocks.getCurrentUser.mockResolvedValue({ user: { ...school, id: "teacher-user", role: "teacher" } });
     const user = userEvent.setup();
     renderApp();
+    await user.click(await screen.findByRole("button", { name: "组卷" }));
     await screen.findByRole("button", { name: "刷新项目范围" });
     await waitFor(() => expect(mocks.composeRender).toHaveBeenCalled());
     mocks.composeRender.mockClear();
@@ -330,6 +332,7 @@ describe("role-specific project requests", () => {
     await waitFor(() => expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith("/project-a"));
     const resetsBeforeScopeChange = mocks.resetAgentContext.mock.calls.length;
 
+    await user.click(await screen.findByRole("button", { name: "组卷" }));
     await user.click(await screen.findByRole("button", { name: "刷新项目范围" }));
     await waitFor(() => expect(mocks.setPlatformProjectRoot).toHaveBeenLastCalledWith("/project-b"));
     await waitFor(() => expect(mocks.resetAgentContext.mock.calls.length).toBeGreaterThan(resetsBeforeScopeChange));

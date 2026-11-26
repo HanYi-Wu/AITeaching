@@ -1,5 +1,5 @@
 import { GettingStartedChecklist } from "../../GettingStartedChecklist";
-import { SummaryTile, type PageMeta } from "../SchoolControls";
+import type { PageMeta } from "../SchoolControls";
 import type { SchoolAiResponse, SchoolAiSettings } from "../../../../platform/auth";
 import type { SchoolPage } from "../hooks/useSchoolWorkspaceData";
 import "../../../../ui-redesign/g53/g53.css";
@@ -34,7 +34,13 @@ export function OverviewPanel({
   const assignments = schoolStats?.assignments ?? assignmentMeta.total;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      <div className="or-g53-card flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+        <h2 className="text-base font-semibold text-or-text">学校管理总览</h2>
+        <span className="rounded-full border border-or-outline bg-or-primary-container px-3 py-1 text-xs font-semibold text-or-on-container">
+          AI {aiSettings?.ai_enabled ? "已开启" : aiSettings?.ai_available ? "可开启" : "未配置"}
+        </span>
+      </div>
       <GettingStartedChecklist
         steps={[
           { label: "创建教师账号", complete: teachers > 0, actionLabel: teacherWrite ? "创建教师" : undefined, onAction: teacherWrite ? () => onNavigate("teachers") : undefined },
@@ -43,15 +49,6 @@ export function OverviewPanel({
           { label: "分配任课教师", complete: assignments > 0, actionLabel: assignmentWrite ? "分配任课教师" : undefined, onAction: assignmentWrite ? () => onNavigate("assignments") : undefined },
         ]}
       />
-      <section className="or-g53-card p-4 sm:p-5">
-        <h2 className="text-base font-semibold text-or-text">学校管理总览</h2>
-        <div className="mt-4 grid gap-2.5 sm:gap-3 grid-cols-2 xl:grid-cols-4">
-          <SummaryTile label="AI 状态" value={aiSettings?.ai_enabled ? "已开启" : aiSettings?.ai_available ? "可开启" : "未配置"} />
-          <SummaryTile label="教师账号" value={`${teachers} 个`} />
-          <SummaryTile label="班级" value={`${classes} 个`} />
-          <SummaryTile label="学生账号" value={`${students} 个`} />
-        </div>
-      </section>
     </div>
   );
 }

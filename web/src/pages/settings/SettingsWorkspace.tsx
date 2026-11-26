@@ -15,6 +15,7 @@ import {
 } from "../../components/settings/AgentModelSettingsForm";
 import { ExtensionsPanel } from "../../components/ExtensionsPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { AgentMemoryDrawer } from "../../components/agent-chat/AgentMemoryDrawer";
 import { useAgentActions } from "../../contexts/AgentContext";
 import { changeAppLanguage } from "../../i18n/changeLanguage";
 import type { AppLang } from "../../i18n/tauriLocale";
@@ -41,12 +42,14 @@ export function SettingsWorkspace({
   onSwitchProject,
   userRole,
   onProfileUpdated,
+  embedded = false,
 }: {
   onError: (msg: string | null) => void;
   /** 可选：切换内容目录并回到入口页 */
   onSwitchProject?: () => void | Promise<void>;
   userRole?: PlatformRole;
   onProfileUpdated?: (profile: PlatformUser) => void;
+  embedded?: boolean;
 }) {
   const { t, i18n } = useTranslation(["settings", "common"]);
   const { setPageContext } = useAgentActions();
@@ -395,15 +398,6 @@ export function SettingsWorkspace({
     <div className="or-surface rounded-[16px] border border-[var(--or-outline)] bg-[var(--or-card)] p-4 sm:p-6 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold text-[var(--or-text)]">个性化与账号资料</h2>
-        {userRole === 'teacher' ? (
-          <button
-            type="button"
-            className="or-button or-button-tonal rounded-[8px] px-3 py-1.5 text-xs sm:text-sm font-medium"
-            onClick={() => window.dispatchEvent(new Event('eh-replay-teacher-guide'))}
-          >
-            重新打开教师使用引导
-          </button>
-        ) : null}
       </div>
 
       <div className="mt-5 grid gap-5 sm:grid-cols-2">
@@ -532,11 +526,11 @@ export function SettingsWorkspace({
   ) : null;
 
   return (
-    <div className="h-full overflow-auto bg-[var(--or-page)] p-4 sm:p-8">
+    <div className={embedded ? "bg-[var(--or-page)] p-4 sm:p-6" : "or-modal-scroll h-full bg-[var(--or-page)] p-4 sm:p-8"}>
       <div className="mx-auto max-w-4xl space-y-5 sm:space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-[var(--or-text)]">{t("title")}</h1>
+            {!embedded && <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-[var(--or-text)]">{t("title")}</h1>}
 
           </div>
           {onSwitchProject && (
@@ -654,6 +648,8 @@ export function SettingsWorkspace({
             {personalizationPanel}
           </div>
         )}
+
+        {(userRole === "teacher" || userRole === "admin") && <AgentMemoryDrawer />}
 
         <div className="pt-2">
           <LogWorkspace embedded />
