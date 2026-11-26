@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import secrets
 import sqlite3
 from contextlib import closing
 from datetime import date
@@ -136,7 +135,8 @@ def test_denied_admin_cross_school_request_is_not_attributed_to_target(platform_
 def test_failed_or_denied_path_token_is_not_saved_as_resource_id(
     platform_root: Path, status: int, outcome: str,
 ):
-    token = secrets.token_urlsafe(32)
+    # A path segment that passes the syntax filter, but is not a verified ID.
+    token = "unverified-id-ThisMustNeverAppearInTheAuditLog"
     assert audit._safe_id(token) == token
     request = _request(
         "POST",
